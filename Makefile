@@ -86,7 +86,7 @@ clean:
 	$(GOCLEAN)
 	rm -rf $(BUILD_DIR)
 	rm -f coverage.out coverage.html
-	rm -f gateway.db
+	rm -f conduit.db *.db
 
 # Download Go dependencies
 deps:
@@ -95,10 +95,14 @@ deps:
 	go mod tidy
 	go mod verify
 
-# Install channel adapter dependencies
+# Install channel adapter dependencies (if any TypeScript adapters exist)
 channel-deps:
-	@echo "Installing channel adapter dependencies..."
-	cd channels/adapters && npm install
+	@if [ -f channels/adapters/package.json ]; then \
+		echo "Installing channel adapter dependencies..."; \
+		cd channels/adapters && npm install; \
+	else \
+		echo "No TypeScript channel adapters configured (skipping)"; \
+	fi
 
 # Install all dependencies
 install-deps: deps channel-deps
@@ -125,7 +129,7 @@ init-workspace:
 init-config:
 	@if [ ! -f config.json ]; then \
 		echo "Creating config.json from example..."; \
-		cp config.example.json config.json; \
+		cp configs/examples/config.example.json config.json; \
 		echo "Edit config.json with your API keys"; \
 	else \
 		echo "config.json already exists"; \
