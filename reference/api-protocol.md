@@ -30,7 +30,7 @@ Response:
 ### Metrics
 
 ```bash
-curl -H "Authorization: Bearer claw_v1_..." http://localhost:18789/metrics
+curl -H "Authorization: Bearer conduit_v1_..." http://localhost:18789/metrics
 ```
 
 Response includes:
@@ -45,7 +45,7 @@ Response includes:
 Server-sent events stream for real-time diagnostics:
 
 ```bash
-curl -H "Authorization: Bearer claw_v1_..." http://localhost:18789/diagnostics
+curl -H "Authorization: Bearer conduit_v1_..." http://localhost:18789/diagnostics
 ```
 
 ## WebSocket API
@@ -58,7 +58,7 @@ Send auth token in the handshake:
 
 ```javascript
 const ws = new WebSocket('ws://localhost:18789/ws', [], {
-  headers: { 'Authorization': 'Bearer claw_v1_...' }
+  headers: { 'Authorization': 'Bearer conduit_v1_...' }
 });
 ```
 
@@ -67,7 +67,7 @@ Or include in first message:
 ```json
 {
   "type": "auth",
-  "token": "claw_v1_..."
+  "token": "conduit_v1_..."
 }
 ```
 

@@ -17,7 +17,7 @@ The TUI is a full-featured terminal chat client powered by [BubbleTea](https://g
 # Save the token output
 
 # 3. Launch the TUI (in another terminal)
-./bin/gateway tui --token "claw_v1_..."
+./bin/gateway tui --token "conduit_v1_..."
 ```
 
 On subsequent runs, the token is saved to `~/.conduit/tui.json` and reused automatically:
@@ -95,7 +95,7 @@ The gateway can serve the TUI over SSH using [Wish](https://github.com/charmbrac
 ```bash
 ./bin/gateway ssh-server \
   --listen ":2222" \
-  --gateway-token "claw_v1_..."
+  --gateway-token "conduit_v1_..."
 ```
 
 **Integrated** (starts with the gateway):

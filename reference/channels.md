@@ -185,7 +185,7 @@ channelManager.RegisterFactory(yourplatform.NewFactory())
 Check channel health via API:
 
 ```bash
-curl -H "Authorization: Bearer claw_v1_..." \
+curl -H "Authorization: Bearer conduit_v1_..." \
   http://localhost:18789/api/channels/status
 ```
 

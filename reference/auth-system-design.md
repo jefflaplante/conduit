@@ -66,11 +66,11 @@ The API key approach better meets the immediate requirements for easy revocation
 
 ### Token Format
 ```
-Format: claw_<version>_<base58(16-byte-random)>
-Example: claw_v1_8KzABCdefghijk123456789
+Format: conduit_<version>_<base58(16-byte-random)>
+Example: conduit_v1_8KzABCdefghijk123456789
 ```
 
-- **Prefix**: `claw_` for easy identification
+- **Prefix**: `conduit_` for easy identification
 - **Version**: `v1` for future format evolution  
 - **Random**: 16 bytes = 128 bits entropy (base58 encoded)
 - **Length**: ~28 characters total
@@ -79,7 +79,7 @@ Example: claw_v1_8KzABCdefghijk123456789
 ```json
 {
   "tokens": {
-    "claw_v1_8KzABCdefghijk123456789": {
+    "conduit_v1_8KzABCdefghijk123456789": {
       "client_name": "jules-main",
       "created_at": "2026-02-07T19:46:00Z",
       "expires_at": "2027-02-07T19:46:00Z",
@@ -94,7 +94,7 @@ Example: claw_v1_8KzABCdefghijk123456789
   },
   "revoked": [
     {
-      "token_id": "claw_v1_oldtoken123456789",
+      "token_id": "conduit_v1_oldtoken123456789",
       "revoked_at": "2026-02-07T19:30:00Z",
       "reason": "rotation"
     }
@@ -144,19 +144,19 @@ conduit token export <token_prefix> [--format env|json|curl]
 # Create token for Jules
 $ conduit token create --client-name "jules-main" --expires-in "1y"
 Created token for client 'jules-main':
-  Token: claw_v1_8KzABCdefghijk123456789
+  Token: conduit_v1_8KzABCdefghijk123456789
   Expires: 2027-02-07 19:46:00 UTC
   
 # Export for easy setup
-$ conduit token export claw_v1_8KzABCdefghijk123456789 --format env
-export CONDUIT_TOKEN="claw_v1_8KzABCdefghijk123456789"
+$ conduit token export conduit_v1_8KzABCdefghijk123456789 --format env
+export CONDUIT_TOKEN="conduit_v1_8KzABCdefghijk123456789"
 export CONDUIT_URL="ws://localhost:18890/ws"
 
 # List all tokens
 $ conduit token list
 CLIENT NAME    TOKEN PREFIX      CREATED              EXPIRES              LAST USED
-jules-main     claw_v1_8KzABC... 2026-02-07 19:46    2027-02-07 19:46    2026-02-07 20:15
-human-browser  claw_v1_9LbDEF... 2026-02-06 10:30    2027-02-06 10:30    never
+jules-main     conduit_v1_8KzABC... 2026-02-07 19:46    2027-02-07 19:46    2026-02-07 20:15
+human-browser  conduit_v1_9LbDEF... 2026-02-06 10:30    2027-02-06 10:30    never
 ```
 
 ## Authentication Middleware Architecture
@@ -352,10 +352,10 @@ CONDUIT_RATELIMIT_HEALTH_RPM=200
 conduit token create --client-name "jules-main" --expires-in "1y"
 
 # 2. Export configuration
-conduit token export claw_v1_8KzABCdefghijk123456789 --format env > jules.env
+conduit token export conduit_v1_8KzABCdefghijk123456789 --format env > jules.env
 
 # 3. Add to secrets
-echo "export CONDUIT_TOKEN=claw_v1_8KzABCdefghijk123456789" >> ~/.conduit-secrets.env
+echo "export CONDUIT_TOKEN=conduit_v1_8KzABCdefghijk123456789" >> ~/.conduit-secrets.env
 echo "export CONDUIT_URL=ws://localhost:18890/ws" >> ~/.conduit-secrets.env
 ```
 
@@ -365,10 +365,10 @@ echo "export CONDUIT_URL=ws://localhost:18890/ws" >> ~/.conduit-secrets.env
 conduit token create --client-name "my-browser" --expires-in "1y"
 
 # 2. Export as curl examples
-conduit token export claw_v1_9LbDEF123456789 --format curl
+conduit token export conduit_v1_9LbDEF123456789 --format curl
 # Outputs:
-# WebSocket: wscat -c "ws://localhost:18890/ws" -H "Authorization: Bearer claw_v1_9LbDEF123456789"
-# API: curl -H "Authorization: Bearer claw_v1_9LbDEF123456789" http://localhost:18890/api/channels/status
+# WebSocket: wscat -c "ws://localhost:18890/ws" -H "Authorization: Bearer conduit_v1_9LbDEF123456789"
+# API: curl -H "Authorization: Bearer conduit_v1_9LbDEF123456789" http://localhost:18890/api/channels/status
 ```
 
 ### For Development
@@ -386,7 +386,7 @@ conduit token create --client-name "dev" --expires-in "1d"
 ### Token Generation
 - **Entropy**: 16 bytes (128 bits) using crypto/rand
 - **Format**: Base58 encoding (no confusing characters)
-- **Prefix**: `claw_v1_` for identification and versioning
+- **Prefix**: `conduit_v1_` for identification and versioning
 
 ### Storage Security
 - **File permissions**: 600 (owner read/write only)
