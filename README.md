@@ -5,41 +5,40 @@ A clean, high-performance rewrite of the Conduit gateway core in Go, with native
 ## Architecture
 
 ```
-                    ┌──────────┐  ┌──────────┐  ┌──────────────┐
-                    │ Telegram │  │ TUI Chat │  │ SSH (Wish)   │
-                    │  Client  │  │  Client  │  │   Client     │
-                    └────┬─────┘  └────┬─────┘  └──────┬───────┘
-                         │             │               │
-┌────────────────────────┼─────────────┼───────────────┼──────┐
-│                   Conduit Go Gateway                       │
-│                        │             │               │      │
-│  ┌─────────────────────┴─────────────┴───────────────┴──┐   │
-│  │            Channel Manager / WebSocket API            │   │
-│  │         Unified adapter lifecycle management          │   │
-│  └───────────────────────────────────────────────────────┘   │
-│                           │                                  │
-│           ┌───────────────┴───────────────┐                  │
-│           ▼                               ▼                  │
-│  ┌─────────────────────┐    ┌─────────────────────────┐      │
-│  │  Native Go          │    │  TypeScript Process     │      │
-│  │     Adapters        │    │      Adapters           │      │
-│  │                     │    │                         │      │
-│  │ • Telegram          │    │ • WhatsApp (Baileys)    │      │
-│  │   (go-telegram/bot) │    │ • Signal                │      │
-│  │ • Discord (planned) │    │ • Other legacy          │      │
-│  │ • Slack (planned)   │    │                         │      │
-│  └─────────────────────┘    └─────────────────────────┘      │
-│                                                              │
-│  ┌───────────────────────────────────────────────────────┐   │
-│  │  Core Services                                        │   │
-│  │  • Session Store (SQLite)  • AI Router (Anthropic/OAI)│   │
-│  │  • Tool Registry           • WebSocket API            │   │
-│  │  • Config Management       • HTTP Endpoints           │   │
-│  │  • Authentication System   • Web Search Integration   │   │
-│  │  • Heartbeat Monitoring    • Alert Processing         │   │
-│  │  • SSH Server (Wish)       • TUI (BubbleTea)          │   │
-│  └───────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────┘
+                  ┌────────────┐  ┌────────────┐  ┌────────────┐
+                  │  Telegram  │  │  TUI Chat  │  │ SSH (Wish) │
+                  │   Client   │  │   Client   │  │   Client   │
+                  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘
+                        │               │               │
+┌───────────────────────┼───────────────┼───────────────┼───────┐
+│                         Conduit Go Gateway                    │
+│                       │               │               │       │
+│  ┌────────────────────┴───────────────┴───────────────┴────┐  │
+│  │              Channel Manager / WebSocket API            │  │
+│  │           Unified adapter lifecycle management          │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                               │                               │
+│               ┌───────────────┴───────────────┐               │
+│               ▼                               ▼               │
+│  ┌─────────────────────────┐    ┌─────────────────────────┐   │
+│  │   Native Go Adapters    │    │   TypeScript Adapters   │   │
+│  │                         │    │                         │   │
+│  │  • Telegram             │    │  • WhatsApp (Baileys)   │   │
+│  │    (go-telegram/bot)    │    │  • Signal               │   │
+│  │  • Discord (planned)    │    │  • Other legacy         │   │
+│  │  • Slack (planned)      │    │                         │   │
+│  └─────────────────────────┘    └─────────────────────────┘   │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │  Core Services                                          │  │
+│  │  • Session Store (SQLite)   • AI Router (Anthropic/OAI) │  │
+│  │  • Tool Registry            • WebSocket API             │  │
+│  │  • Config Management        • HTTP Endpoints            │  │
+│  │  • Authentication System    • Web Search Integration    │  │
+│  │  • Heartbeat Monitoring     • Alert Processing          │  │
+│  │  • SSH Server (Wish)        • TUI (BubbleTea)           │  │
+│  └─────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ## Performance
