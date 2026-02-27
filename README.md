@@ -68,7 +68,7 @@ make build
 ./bin/gateway tui --token "conduit_v1_..."
 ```
 
-See [Getting Started](docs/getting-started.md) for detailed setup instructions.
+See [Getting Started](reference/getting-started.md) for detailed setup instructions.
 
 ## Features
 
@@ -99,26 +99,24 @@ See [Getting Started](docs/getting-started.md) for detailed setup instructions.
 
 | Document | Description |
 |----------|-------------|
-| [Getting Started](docs/getting-started.md) | Installation and first-time setup |
-| [CLI Reference](docs/cli-reference.md) | All CLI commands and options |
-| [Tools Reference](docs/tools-reference.md) | Built-in AI tools documentation |
-| [Configuration](docs/configuration.md) | Full configuration reference |
-| [TUI & SSH](docs/tui-ssh.md) | Terminal UI and SSH access |
-| [Channels](docs/channels.md) | Channel system and adapters |
-| [API & Protocol](docs/api-protocol.md) | HTTP endpoints and WebSocket protocol |
-| [Skills System](docs/skills.md) | Creating and using skills |
-| [Authentication](docs/authentication.md) | Token and OAuth setup |
-| [Security](docs/security.md) | Security considerations |
+| [Getting Started](reference/getting-started.md) | Installation and first-time setup |
+| [CLI Reference](reference/cli-reference.md) | All CLI commands and options |
+| [Tools Reference](reference/tools-reference.md) | Built-in AI tools documentation |
+| [Configuration](reference/configuration.md) | Full configuration reference |
+| [TUI & SSH](reference/tui-ssh.md) | Terminal UI and SSH access |
+| [Channels](reference/channels.md) | Channel system and adapters |
+| [API & Protocol](reference/api-protocol.md) | HTTP endpoints and WebSocket protocol |
+| [Skills System](reference/skills.md) | Creating and using skills |
+| [Authentication](reference/authentication.md) | Token and OAuth setup |
+| [Security](reference/security.md) | Security considerations |
 
 ### Guides
-- [Environment & Secrets](docs/guides/ENV_AND_SECRETS.md) — Environment configuration
-- [OAuth Setup](docs/guides/OAUTH_SETUP_GUIDE.md) — OAuth device flow setup
-- [Telegram Adapter](docs/TELEGRAM_ADAPTER.md) — Telegram bot configuration
+- [Environment & Secrets](reference/guides/ENV_AND_SECRETS.md) — Environment configuration
+- [OAuth Setup](reference/guides/OAUTH_SETUP_GUIDE.md) — OAuth device flow setup
+- [Telegram Adapter](reference/TELEGRAM_ADAPTER.md) — Telegram bot configuration
 
 ### Development
-- [Architecture](docs/development/ARCHITECTURE.md) — System design details
-- [Core Tools Implementation](docs/development/CORE_TOOLS_IMPLEMENTATION.md)
-- [Agent System](docs/development/AGENT_SYSTEM_IMPLEMENTATION.md)
+- [Tool Execution Integration](reference/development/TOOL_EXECUTION_INTEGRATION.md) — Tool execution system details
 
 ## Project Structure
 
@@ -137,7 +135,7 @@ conduit/
 │   ├── config/            # Configuration management
 │   └── ...
 ├── vecgo/                 # Vector database library (standalone)
-├── docs/                  # Documentation
+├── reference/             # Documentation
 ├── configs/               # Example configurations
 └── Makefile
 ```
