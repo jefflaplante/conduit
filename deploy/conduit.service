@@ -1,0 +1,46 @@
+[Unit]
+Description=Conduit Gateway
+Documentation=https://github.com/conduit/conduit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jules
+Group=jules
+WorkingDirectory=/home/jules/conduit
+
+# Binary and config
+ExecStart=/home/jules/conduit/bin/conduit server --config /home/jules/conduit/config.json
+
+# Environment
+Environment=PATH=/usr/local/go/bin:/usr/bin:/bin:/usr/local/bin
+EnvironmentFile=-/home/jules/conduit/.conduit-secrets.env
+# Optional: override default data directory (~/.conduit/)
+# Environment=CONDUIT_DATA_DIR=/home/jules/.conduit
+
+# Graceful shutdown (gateway handles SIGTERM)
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/jules/
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=conduit
+
+[Install]
+WantedBy=multi-user.target

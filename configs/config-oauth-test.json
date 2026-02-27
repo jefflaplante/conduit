@@ -1,0 +1,36 @@
+{
+  "port": 18890,
+  "database": {
+    "path": "./gateway.db"
+  },
+  "ai": {
+    "default_provider": "anthropic",
+    "providers": [
+      {
+        "name": "anthropic",
+        "type": "anthropic",
+        "api_key": "${ANTHROPIC_API_KEY}",
+        "model": "claude-3-5-sonnet-20250114",
+        "auth": {
+          "type": "oauth",
+          "oauth_token": "${ANTHROPIC_OAUTH_TOKEN}"
+        }
+      }
+    ]
+  },
+  "tools": {
+    "enabled_tools": [
+      "read_file",
+      "write_file",
+      "exec"
+    ],
+    "sandbox": {
+      "workspace_dir": "./workspace",
+      "allowed_paths": [
+        "./workspace",
+        "/tmp"
+      ]
+    }
+  },
+  "channels": []
+}

@@ -1,0 +1,688 @@
+package integration
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"conduit/internal/config"
+	"conduit/internal/gateway"
+	"conduit/internal/monitoring"
+)
+
+// TestHeartbeatIntegration tests the complete heartbeat system with a real gateway
+func TestHeartbeatIntegration(t *testing.T) {
+	// Set up test configuration with heartbeat enabled
+	cfg := createTestConfig(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 2 // Short interval for testing
+	cfg.Heartbeat.EnableMetrics = true
+	cfg.Heartbeat.EnableEvents = true
+	cfg.Heartbeat.LogLevel = "debug"
+
+	// Create and start the gateway
+	gw, cleanup := createTestGateway(t, cfg)
+	defer cleanup()
+
+	// Wait for initial heartbeat cycles
+	time.Sleep(5 * time.Second)
+
+	// Test health endpoint responds correctly
+	t.Run("health_endpoint", func(t *testing.T) {
+		testHealthEndpoint(t, gw)
+	})
+
+	// Test metrics endpoint
+	t.Run("metrics_endpoint", func(t *testing.T) {
+		testMetricsEndpoint(t, gw)
+	})
+
+	// Test diagnostics endpoint
+	t.Run("diagnostics_endpoint", func(t *testing.T) {
+		testDiagnosticsEndpoint(t, gw)
+	})
+
+	// Test prometheus metrics
+	t.Run("prometheus_endpoint", func(t *testing.T) {
+		testPrometheusEndpoint(t, gw)
+	})
+}
+
+// TestHeartbeatWithRealSessions tests heartbeat behavior with actual sessions
+func TestHeartbeatWithRealSessions(t *testing.T) {
+	cfg := createTestConfig(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 1
+	cfg.Heartbeat.EnableMetrics = true
+	cfg.Heartbeat.EnableEvents = true
+
+	gw, cleanup := createTestGateway(t, cfg)
+	defer cleanup()
+
+	// Create multiple concurrent sessions to test session state tracking
+	t.Run("concurrent_sessions", func(t *testing.T) {
+		testConcurrentSessions(t, gw)
+	})
+
+	// Test stuck session detection
+	t.Run("stuck_session_detection", func(t *testing.T) {
+		testStuckSessionDetection(t, gw)
+	})
+
+	// Test idle session handling
+	t.Run("idle_session_handling", func(t *testing.T) {
+		testIdleSessionHandling(t, gw)
+	})
+}
+
+// TestHeartbeatEndpointsUnderLoad tests monitoring endpoints under various load conditions
+func TestHeartbeatEndpointsUnderLoad(t *testing.T) {
+	cfg := createTestConfig(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 1
+	cfg.Heartbeat.EnableMetrics = true
+
+	gw, cleanup := createTestGateway(t, cfg)
+	defer cleanup()
+
+	// Wait for heartbeat to start
+	time.Sleep(2 * time.Second)
+
+	t.Run("concurrent_health_requests", func(t *testing.T) {
+		testConcurrentHealthRequests(t, gw, 50)
+	})
+
+	t.Run("metrics_under_load", func(t *testing.T) {
+		testMetricsUnderLoad(t, gw, 30)
+	})
+
+	t.Run("mixed_endpoint_load", func(t *testing.T) {
+		testMixedEndpointLoad(t, gw)
+	})
+}
+
+// TestHeartbeatGracefulShutdown tests heartbeat behavior during gateway shutdown
+func TestHeartbeatGracefulShutdown(t *testing.T) {
+	cfg := createTestConfig(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 1
+
+	gw, cleanup := createTestGateway(t, cfg)
+
+	// Wait for heartbeat to be active
+	time.Sleep(3 * time.Second)
+
+	// Verify heartbeat is running
+	healthResp := makeHealthRequest(t, gw)
+	if !healthResp["heartbeat_running"].(bool) {
+		t.Fatal("Expected heartbeat to be running before shutdown")
+	}
+
+	// Initiate graceful shutdown
+	t.Run("graceful_shutdown", func(t *testing.T) {
+		start := time.Now()
+		cleanup() // This should stop the gateway gracefully
+		duration := time.Since(start)
+
+		// Shutdown should complete within reasonable time
+		if duration > 10*time.Second {
+			t.Errorf("Gateway shutdown took too long: %v", duration)
+		}
+
+		t.Logf("Gateway shutdown completed in %v", duration)
+	})
+}
+
+// TestHeartbeatEventGeneration tests event generation and filtering
+func TestHeartbeatEventGeneration(t *testing.T) {
+	cfg := createTestConfig(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 1
+	cfg.Heartbeat.EnableEvents = true
+
+	gw, cleanup := createTestGateway(t, cfg)
+	defer cleanup()
+
+	// Wait for several heartbeat cycles
+	time.Sleep(4 * time.Second)
+
+	t.Run("heartbeat_events_generated", func(t *testing.T) {
+		// Access heartbeat service through gateway (we need to add a getter method)
+		diagnosticsResp := makeDiagnosticsRequest(t, gw)
+		
+		// Verify events are being generated
+		if events, ok := diagnosticsResp["recent_events"].([]interface{}); ok {
+			if len(events) == 0 {
+				t.Error("Expected heartbeat events to be generated")
+			}
+
+			// Verify event structure
+			for _, eventInterface := range events {
+				if event, ok := eventInterface.(map[string]interface{}); ok {
+					if event["source"] == "heartbeat_service" {
+						// Found a heartbeat event
+						if event["type"] != "heartbeat" {
+							t.Errorf("Expected heartbeat event type, got %v", event["type"])
+						}
+						if event["metrics"] == nil {
+							t.Error("Expected heartbeat event to include metrics")
+						}
+					}
+				}
+			}
+		}
+	})
+}
+
+// TestHeartbeatMemoryUsage tests for memory leaks in long-running heartbeat
+func TestHeartbeatMemoryUsage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping memory usage test in short mode")
+	}
+
+	cfg := createTestConfig(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 1
+	cfg.Heartbeat.EnableMetrics = true
+	cfg.Heartbeat.EnableEvents = true
+
+	gw, cleanup := createTestGateway(t, cfg)
+	defer cleanup()
+
+	// Collect initial memory metrics
+	initialMetrics := makeMetricsRequest(t, gw)
+	initialMemory := initialMetrics["memory_usage_mb"].(float64)
+
+	// Run heartbeat for extended period
+	t.Logf("Initial memory usage: %.2f MB", initialMemory)
+	
+	// Let heartbeat run for 30 seconds with activity
+	duration := 30 * time.Second
+	start := time.Now()
+	
+	// Generate some activity to ensure heartbeat stays active
+	for time.Since(start) < duration {
+		time.Sleep(2 * time.Second)
+		makeHealthRequest(t, gw) // Generate some activity
+	}
+
+	// Check final memory usage
+	finalMetrics := makeMetricsRequest(t, gw)
+	finalMemory := finalMetrics["memory_usage_mb"].(float64)
+	memoryIncrease := finalMemory - initialMemory
+
+	t.Logf("Final memory usage: %.2f MB (increase: %.2f MB)", finalMemory, memoryIncrease)
+
+	// Memory usage should not increase significantly (allow for some variance)
+	// This is a basic leak detection - memory shouldn't grow by more than 10MB
+	if memoryIncrease > 10.0 {
+		t.Errorf("Possible memory leak detected: memory increased by %.2f MB", memoryIncrease)
+	}
+}
+
+// Helper functions
+
+func createTestConfig(t *testing.T) *config.Config {
+	// Create temporary directory for test database
+	tempDir := t.TempDir()
+	
+	cfg := config.Default()
+	cfg.Database.Path = filepath.Join(tempDir, "test.db")
+	cfg.Server.Port = "0" // Use random available port
+	cfg.Workspace.ContextDir = tempDir
+	cfg.AI.Provider = "mock" // Use mock AI provider for testing
+	
+	// Configure channels but don't enable them for these tests
+	cfg.Channels.Telegram.Enabled = false
+	
+	return cfg
+}
+
+func createTestGateway(t *testing.T, cfg *config.Config) (*gateway.Gateway, func()) {
+	gw, err := gateway.New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create gateway: %v", err)
+	}
+
+	// Start gateway in background
+	ctx, cancel := context.WithCancel(context.Background())
+	
+	started := make(chan bool, 1)
+	errorChan := make(chan error, 1)
+
+	go func() {
+		if err := gw.Start(ctx); err != nil {
+			if ctx.Err() == nil { // Only report error if not due to cancellation
+				errorChan <- err
+			}
+			return
+		}
+		started <- true
+	}()
+
+	// Wait for startup or error
+	select {
+	case <-started:
+		// Gateway started successfully
+	case err := <-errorChan:
+		t.Fatalf("Failed to start gateway: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Gateway startup timeout")
+	}
+
+	// Wait a bit for everything to initialize
+	time.Sleep(1 * time.Second)
+
+	cleanup := func() {
+		cancel()
+		// Give time for graceful shutdown
+		time.Sleep(2 * time.Second)
+	}
+
+	return gw, cleanup
+}
+
+func testHealthEndpoint(t *testing.T, gw *gateway.Gateway) {
+	response := makeHealthRequest(t, gw)
+
+	// Verify required fields
+	requiredFields := []string{"status", "uptime_seconds", "heartbeat_running", "active_sessions"}
+	for _, field := range requiredFields {
+		if _, exists := response[field]; !exists {
+			t.Errorf("Missing required field in health response: %s", field)
+		}
+	}
+
+	// Verify heartbeat is running
+	if !response["heartbeat_running"].(bool) {
+		t.Error("Expected heartbeat to be running")
+	}
+
+	// Verify status is healthy
+	if response["status"].(string) != "healthy" {
+		t.Errorf("Expected healthy status, got: %s", response["status"])
+	}
+}
+
+func testMetricsEndpoint(t *testing.T, gw *gateway.Gateway) {
+	response := makeMetricsRequest(t, gw)
+
+	// Verify required metrics fields
+	requiredFields := []string{
+		"active_sessions", "processing_sessions", "waiting_sessions",
+		"memory_usage_mb", "goroutine_count", "uptime_seconds",
+		"completed_requests", "failed_requests",
+	}
+
+	for _, field := range requiredFields {
+		if _, exists := response[field]; !exists {
+			t.Errorf("Missing required field in metrics response: %s", field)
+		}
+	}
+
+	// Verify numeric fields are reasonable
+	if response["goroutine_count"].(float64) <= 0 {
+		t.Error("Expected positive goroutine count")
+	}
+
+	if response["memory_usage_mb"].(float64) <= 0 {
+		t.Error("Expected positive memory usage")
+	}
+}
+
+func testDiagnosticsEndpoint(t *testing.T, gw *gateway.Gateway) {
+	response := makeDiagnosticsRequest(t, gw)
+
+	// Verify diagnostics includes heartbeat information
+	if heartbeatInfo, exists := response["heartbeat"]; exists {
+		heartbeat := heartbeatInfo.(map[string]interface{})
+		
+		// Check heartbeat stats
+		if !heartbeat["running"].(bool) {
+			t.Error("Expected heartbeat to be running in diagnostics")
+		}
+
+		if heartbeatCount, ok := heartbeat["heartbeat_count"].(float64); ok {
+			if heartbeatCount <= 0 {
+				t.Error("Expected positive heartbeat count")
+			}
+		}
+	} else {
+		t.Error("Expected heartbeat information in diagnostics")
+	}
+}
+
+func testPrometheusEndpoint(t *testing.T, gw *gateway.Gateway) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	
+	// Get server port from gateway (you may need to add a getter method)
+	url := fmt.Sprintf("http://localhost:%s/prometheus", getGatewayPort(gw))
+	
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("Failed to request prometheus endpoint: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read prometheus response: %v", err)
+	}
+
+	content := string(body)
+	
+	// Verify prometheus format includes heartbeat metrics
+	expectedMetrics := []string{
+		"conduit_heartbeat_count",
+		"conduit_active_sessions",
+		"conduit_memory_usage_bytes",
+		"conduit_goroutine_count",
+	}
+
+	for _, metric := range expectedMetrics {
+		if !strings.Contains(content, metric) {
+			t.Errorf("Expected prometheus metric %s not found in output", metric)
+		}
+	}
+}
+
+func testConcurrentSessions(t *testing.T, gw *gateway.Gateway) {
+	// This would require implementing session creation/management
+	// For now, we'll test that heartbeat handles session metrics correctly
+	
+	// Create some session activity by making multiple requests
+	var wg sync.WaitGroup
+	sessionCount := 10
+	
+	for i := 0; i < sessionCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			makeHealthRequest(t, gw)
+		}()
+	}
+	
+	wg.Wait()
+	
+	// Wait for heartbeat to process the activity
+	time.Sleep(2 * time.Second)
+	
+	metrics := makeMetricsRequest(t, gw)
+	
+	// Verify metrics are being tracked
+	if metrics["goroutine_count"].(float64) <= 0 {
+		t.Error("Expected goroutines to be tracked during concurrent activity")
+	}
+}
+
+func testStuckSessionDetection(t *testing.T, gw *gateway.Gateway) {
+	// This test would require creating actual stuck sessions
+	// For integration testing, we verify the detection mechanism is working
+	
+	// Wait for heartbeat cycles
+	time.Sleep(3 * time.Second)
+	
+	// Check diagnostics for stuck session alerts
+	diagnostics := makeDiagnosticsRequest(t, gw)
+	
+	// Verify stuck session detection is active (no stuck sessions expected in clean test)
+	if recentEvents, exists := diagnostics["recent_events"]; exists {
+		events := recentEvents.([]interface{})
+		
+		// Look for any stuck session warnings (should be none in clean test)
+		stuckCount := 0
+		for _, eventInterface := range events {
+			if event, ok := eventInterface.(map[string]interface{}); ok {
+				if severity, exists := event["severity"]; exists && severity == "warning" {
+					if message, exists := event["message"]; exists {
+						if strings.Contains(message.(string), "stuck") {
+							stuckCount++
+						}
+					}
+				}
+			}
+		}
+		
+		// In clean test environment, should be no stuck sessions
+		if stuckCount > 0 {
+			t.Logf("Found %d stuck session warnings (may be expected in some test scenarios)", stuckCount)
+		}
+	}
+}
+
+func testIdleSessionHandling(t *testing.T, gw *gateway.Gateway) {
+	// Test that heartbeat handles idle periods correctly
+	
+	// Get initial metrics
+	initialMetrics := makeMetricsRequest(t, gw)
+	initialHeartbeatCount := getHeartbeatCount(t, gw)
+	
+	// Wait without activity (heartbeat should skip during idle)
+	time.Sleep(5 * time.Second)
+	
+	// Check that heartbeat count hasn't increased much during idle
+	finalHeartbeatCount := getHeartbeatCount(t, gw)
+	heartbeatIncrease := finalHeartbeatCount - initialHeartbeatCount
+	
+	// Should have minimal heartbeats during idle period
+	if heartbeatIncrease > 2 { // Allow for some variance
+		t.Logf("Heartbeat count increased by %d during idle period (may indicate active system)", heartbeatIncrease)
+	}
+}
+
+func testConcurrentHealthRequests(t *testing.T, gw *gateway.Gateway, requestCount int) {
+	var wg sync.WaitGroup
+	errors := make(chan error, requestCount)
+	
+	start := time.Now()
+	
+	for i := 0; i < requestCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			
+			client := &http.Client{Timeout: 5 * time.Second}
+			url := fmt.Sprintf("http://localhost:%s/health", getGatewayPort(gw))
+			
+			resp, err := client.Get(url)
+			if err != nil {
+				errors <- err
+				return
+			}
+			defer resp.Body.Close()
+			
+			if resp.StatusCode != http.StatusOK {
+				errors <- fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+				return
+			}
+		}()
+	}
+	
+	wg.Wait()
+	close(errors)
+	
+	duration := time.Since(start)
+	
+	// Check for errors
+	errorCount := 0
+	for err := range errors {
+		t.Logf("Request error: %v", err)
+		errorCount++
+	}
+	
+	// Should handle concurrent requests without errors
+	if errorCount > 0 {
+		t.Errorf("Failed %d out of %d concurrent health requests", errorCount, requestCount)
+	}
+	
+	t.Logf("Completed %d concurrent health requests in %v", requestCount, duration)
+	
+	// Performance check - should complete within reasonable time
+	if duration > 30*time.Second {
+		t.Errorf("Concurrent requests took too long: %v", duration)
+	}
+}
+
+func testMetricsUnderLoad(t *testing.T, gw *gateway.Gateway, requestCount int) {
+	var wg sync.WaitGroup
+	
+	// Make concurrent metrics requests
+	for i := 0; i < requestCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			makeMetricsRequest(t, gw)
+		}()
+	}
+	
+	wg.Wait()
+	
+	// Verify metrics are still accurate after load
+	finalMetrics := makeMetricsRequest(t, gw)
+	
+	// Should still have valid metrics
+	if finalMetrics["goroutine_count"].(float64) <= 0 {
+		t.Error("Invalid goroutine count after load test")
+	}
+	
+	if finalMetrics["memory_usage_mb"].(float64) <= 0 {
+		t.Error("Invalid memory usage after load test")
+	}
+}
+
+func testMixedEndpointLoad(t *testing.T, gw *gateway.Gateway) {
+	var wg sync.WaitGroup
+	requestCount := 20
+	
+	endpoints := []string{"/health", "/metrics", "/diagnostics"}
+	
+	for i := 0; i < requestCount; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			
+			endpoint := endpoints[i%len(endpoints)]
+			client := &http.Client{Timeout: 5 * time.Second}
+			url := fmt.Sprintf("http://localhost:%s%s", getGatewayPort(gw), endpoint)
+			
+			resp, err := client.Get(url)
+			if err != nil {
+				t.Logf("Error requesting %s: %v", endpoint, err)
+				return
+			}
+			defer resp.Body.Close()
+			
+			if resp.StatusCode != http.StatusOK {
+				t.Logf("Unexpected status for %s: %d", endpoint, resp.StatusCode)
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	
+	// Verify system is still healthy after mixed load
+	health := makeHealthRequest(t, gw)
+	if health["status"].(string) != "healthy" {
+		t.Error("System should remain healthy after mixed endpoint load")
+	}
+}
+
+// Utility functions
+
+func makeHealthRequest(t *testing.T, gw *gateway.Gateway) map[string]interface{} {
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := fmt.Sprintf("http://localhost:%s/health", getGatewayPort(gw))
+	
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("Failed to request health endpoint: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode health response: %v", err)
+	}
+
+	return response
+}
+
+func makeMetricsRequest(t *testing.T, gw *gateway.Gateway) map[string]interface{} {
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := fmt.Sprintf("http://localhost:%s/metrics", getGatewayPort(gw))
+	
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("Failed to request metrics endpoint: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode metrics response: %v", err)
+	}
+
+	return response
+}
+
+func makeDiagnosticsRequest(t *testing.T, gw *gateway.Gateway) map[string]interface{} {
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := fmt.Sprintf("http://localhost:%s/diagnostics", getGatewayPort(gw))
+	
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("Failed to request diagnostics endpoint: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode diagnostics response: %v", err)
+	}
+
+	return response
+}
+
+func getHeartbeatCount(t *testing.T, gw *gateway.Gateway) int64 {
+	diagnostics := makeDiagnosticsRequest(t, gw)
+	
+	if heartbeatInfo, exists := diagnostics["heartbeat"]; exists {
+		heartbeat := heartbeatInfo.(map[string]interface{})
+		if count, ok := heartbeat["heartbeat_count"].(float64); ok {
+			return int64(count)
+		}
+	}
+	
+	return 0
+}
+
+func getGatewayPort(gw *gateway.Gateway) string {
+	// This is a placeholder - you may need to add a method to get the actual port
+	// from the gateway instance. For now, assume a default test port.
+	return "8080"
+}

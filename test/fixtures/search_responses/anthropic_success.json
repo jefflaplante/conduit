@@ -1,0 +1,27 @@
+{
+  "id": "msg_01ABC123DEF456",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-3-5-sonnet-20241022",
+  "content": [
+    {
+      "type": "text",
+      "text": "I'll search for information about OpenAI GPT for you."
+    },
+    {
+      "type": "tool_use",
+      "id": "tool_123456",
+      "name": "web_search",
+      "input": {
+        "query": "OpenAI GPT",
+        "count": 3
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 150,
+    "output_tokens": 75
+  }
+}

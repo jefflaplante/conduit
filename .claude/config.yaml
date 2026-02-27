@@ -1,0 +1,6 @@
+coding:
+  default_model: sonnet          # For implement/review
+  explore_model: haiku           # Cheaper for exploration  
+  ticket_prefix: OCGO            # Conduit Go tickets
+  auto_commit: false             # Manual commits for now
+  run_tests: true                # Always run tests

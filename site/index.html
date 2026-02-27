@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conduit Go - High-Performance AI Gateway</title>
+    <meta name="description" content="A clean, high-performance AI gateway rewrite in Go with native channel adapters, terminal UI, SSH access, and Telegram integration.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <nav class="nav">
+            <a href="#" class="logo">
+                <span class="logo-icon">&#x276F;</span>
+                <span class="logo-text">Conduit</span>
+            </a>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#architecture">Architecture</a>
+                <a href="#quickstart">Quick Start</a>
+                <a href="https://github.com/jefflaplante/conduit" class="nav-github" target="_blank" rel="noopener">
+                    <svg height="20" width="20" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                    </svg>
+                    <span>Star on GitHub</span>
+                </a>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Hero -->
+    <section class="hero">
+        <div class="hero-content">
+            <h1 class="hero-title">
+                <span class="hero-prompt">$</span> Conduit<span class="cursor">_</span>
+            </h1>
+            <p class="hero-tagline">High-performance AI gateway rewritten in Go</p>
+            <p class="hero-description">
+                Native channel adapters, terminal UI, SSH access, and Telegram integration.
+                10x the connections. 90% less memory. Pure Go simplicity.
+            </p>
+            <div class="hero-cta">
+                <a href="#quickstart" class="btn btn-primary">Get Started</a>
+                <a href="https://github.com/jefflaplante/conduit" class="btn btn-secondary" target="_blank" rel="noopener">View on GitHub</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Performance Table -->
+    <section class="performance" id="performance">
+        <div class="container">
+            <h2 class="section-title">Performance</h2>
+            <p class="section-subtitle">TypeScript vs Go comparison</p>
+            <div class="terminal-window">
+                <div class="terminal-header">
+                    <span class="terminal-dot red"></span>
+                    <span class="terminal-dot yellow"></span>
+                    <span class="terminal-dot green"></span>
+                    <span class="terminal-title">benchmark.go</span>
+                </div>
+                <div class="terminal-body">
+                    <table class="perf-table">
+                        <thead>
+                            <tr>
+                                <th>Metric</th>
+                                <th>TypeScript</th>
+                                <th>Go</th>
+                                <th>Improvement</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Memory (idle)</td>
+                                <td class="muted">150MB</td>
+                                <td>15MB</td>
+                                <td class="improvement">90% less</td>
+                            </tr>
+                            <tr>
+                                <td>Memory (1000 sessions)</td>
+                                <td class="muted">300MB</td>
+                                <td>60MB</td>
+                                <td class="improvement">80% less</td>
+                            </tr>
+                            <tr>
+                                <td>Startup time</td>
+                                <td class="muted">8s</td>
+                                <td>2s</td>
+                                <td class="improvement">75% faster</td>
+                            </tr>
+                            <tr>
+                                <td>Message latency</td>
+                                <td class="muted">150ms</td>
+                                <td>50ms</td>
+                                <td class="improvement">67% faster</td>
+                            </tr>
+                            <tr>
+                                <td>Concurrent connections</td>
+                                <td class="muted">1,000</td>
+                                <td>10,000+</td>
+                                <td class="improvement">10x more</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Feature Carousel -->
+    <section class="features" id="features">
+        <div class="container">
+            <h2 class="section-title">Features</h2>
+            <p class="section-subtitle">Everything you need to build AI-powered applications</p>
+
+            <div class="carousel">
+                <div class="carousel-tabs">
+                    <button class="carousel-tab active" data-tab="tui">TUI</button>
+                    <button class="carousel-tab" data-tab="ssh">SSH</button>
+                    <button class="carousel-tab" data-tab="telegram">Telegram</button>
+                    <button class="carousel-tab" data-tab="tools">Tools</button>
+                    <button class="carousel-tab" data-tab="search">Search</button>
+                    <button class="carousel-tab" data-tab="automation">Automation</button>
+                </div>
+
+                <div class="carousel-content">
+                    <div class="carousel-panel active" data-panel="tui">
+                        <div class="feature-card">
+                            <div class="feature-icon">&#x2630;</div>
+                            <h3>Terminal UI</h3>
+                            <p>Full-featured chat client built with BubbleTea. Streaming responses, tool activity display, and beautiful Lipgloss styling. Your AI, your terminal.</p>
+                            <code>./bin/conduit tui --token "conduit_v1_..."</code>
+                        </div>
+                    </div>
+
+                    <div class="carousel-panel" data-panel="ssh">
+                        <div class="feature-card">
+                            <div class="feature-icon">&#x1F5DD;</div>
+                            <h3>SSH Access</h3>
+                            <p>Remote TUI access via Wish library. Connect from anywhere with SSH key authentication. Secure, encrypted, and instant.</p>
+                            <code>ssh -p 2222 user@your-server.com</code>
+                        </div>
+                    </div>
+
+                    <div class="carousel-panel" data-panel="telegram">
+                        <div class="feature-card">
+                            <div class="feature-icon">&#x2709;</div>
+                            <h3>Telegram Bot</h3>
+                            <p>Native Go adapter with full Bot API support. Photo handling, inline keyboards, and seamless user pairing. Chat with your AI from anywhere.</p>
+                            <code>./bin/conduit pairing create --telegram-id 123456789</code>
+                        </div>
+                    </div>
+
+                    <div class="carousel-panel" data-panel="tools">
+                        <div class="feature-card">
+                            <div class="feature-icon">&#x2699;</div>
+                            <h3>Tool Registry</h3>
+                            <p>18 built-in tools with sandbox execution. File editing, web search, vision, scheduling, and more. Extensible architecture for custom tools.</p>
+                            <code>./bin/conduit tools list</code>
+                        </div>
+                    </div>
+
+                    <div class="carousel-panel" data-panel="search">
+                        <div class="feature-card">
+                            <div class="feature-icon">&#x1F50D;</div>
+                            <h3>Search & Memory</h3>
+                            <p>FTS5 full-text search over documents and messages. Semantic memory search across MEMORY.md and session history. Hybrid Anthropic + Brave web search.</p>
+                            <code>SELECT * FROM fts_documents WHERE content MATCH 'query';</code>
+                        </div>
+                    </div>
+
+                    <div class="carousel-panel" data-panel="automation">
+                        <div class="feature-card">
+                            <div class="feature-icon">&#x23F0;</div>
+                            <h3>Automation</h3>
+                            <p>Chain workflows with dependencies and variables. Cron scheduling for recurring tasks. Heartbeat loop for automated HEARTBEAT.md processing.</p>
+                            <code>./bin/conduit maintenance run-task vacuum</code>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Architecture Diagram -->
+    <section class="architecture" id="architecture">
+        <div class="container">
+            <h2 class="section-title">Architecture</h2>
+            <p class="section-subtitle">Clean, modular design for maximum flexibility</p>
+
+            <div class="architecture-svg-container">
+                <svg viewBox="0 0 800 520" class="architecture-svg" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Background -->
+                    <defs>
+                        <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" style="stop-color:#4a9eff;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#7c3aed;stop-opacity:1" />
+                        </linearGradient>
+                        <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+                            <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.3"/>
+                        </filter>
+                    </defs>
+
+                    <!-- Client boxes at top -->
+                    <g class="clients">
+                        <rect x="180" y="10" width="120" height="50" rx="8" fill="#1e293b" stroke="#475569" stroke-width="2" filter="url(#shadow)"/>
+                        <text x="240" y="32" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="600">Telegram</text>
+                        <text x="240" y="48" text-anchor="middle" fill="#94a3b8" font-size="11">Client</text>
+
+                        <rect x="340" y="10" width="120" height="50" rx="8" fill="#1e293b" stroke="#475569" stroke-width="2" filter="url(#shadow)"/>
+                        <text x="400" y="32" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="600">TUI Chat</text>
+                        <text x="400" y="48" text-anchor="middle" fill="#94a3b8" font-size="11">Client</text>
+
+                        <rect x="500" y="10" width="120" height="50" rx="8" fill="#1e293b" stroke="#475569" stroke-width="2" filter="url(#shadow)"/>
+                        <text x="560" y="32" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="600">SSH (Wish)</text>
+                        <text x="560" y="48" text-anchor="middle" fill="#94a3b8" font-size="11">Client</text>
+                    </g>
+
+                    <!-- Connection lines from clients -->
+                    <g class="connections" stroke="#475569" stroke-width="2">
+                        <line x1="240" y1="60" x2="240" y2="100"/>
+                        <line x1="400" y1="60" x2="400" y2="100"/>
+                        <line x1="560" y1="60" x2="560" y2="100"/>
+                    </g>
+
+                    <!-- Main Gateway container -->
+                    <rect x="40" y="90" width="720" height="420" rx="12" fill="#0f172a" stroke="url(#headerGrad)" stroke-width="3" filter="url(#shadow)"/>
+
+                    <!-- Gateway title -->
+                    <text x="400" y="125" text-anchor="middle" fill="url(#headerGrad)" font-size="20" font-weight="700">Conduit Gateway</text>
+
+                    <!-- Channel Manager box -->
+                    <rect x="80" y="145" width="640" height="60" rx="8" fill="#1e293b" stroke="#4a9eff" stroke-width="2"/>
+                    <text x="400" y="172" text-anchor="middle" fill="#4a9eff" font-size="14" font-weight="600">Channel Manager / WebSocket API</text>
+                    <text x="400" y="192" text-anchor="middle" fill="#94a3b8" font-size="12">Unified adapter lifecycle management</text>
+
+                    <!-- Arrow down from channel manager -->
+                    <path d="M400 205 L400 225 L380 225 M400 225 L420 225" stroke="#475569" stroke-width="2" fill="none"/>
+                    <polygon points="380,220 380,230 365,225" fill="#475569"/>
+                    <polygon points="420,220 420,230 435,225" fill="#475569"/>
+
+                    <!-- Adapter boxes -->
+                    <g class="adapters">
+                        <!-- Native Go Adapters -->
+                        <rect x="80" y="235" width="280" height="120" rx="8" fill="#1e293b" stroke="#10b981" stroke-width="2"/>
+                        <text x="220" y="260" text-anchor="middle" fill="#10b981" font-size="14" font-weight="600">Native Go Adapters</text>
+                        <text x="100" y="285" fill="#f8fafc" font-size="12">• Telegram (go-telegram/bot)</text>
+                        <text x="100" y="305" fill="#f8fafc" font-size="12">• Discord (planned)</text>
+                        <text x="100" y="325" fill="#f8fafc" font-size="12">• Slack (planned)</text>
+                        <text x="100" y="345" fill="#94a3b8" font-size="11">Pure Go, high performance</text>
+
+                        <!-- TypeScript Adapters -->
+                        <rect x="440" y="235" width="280" height="120" rx="8" fill="#1e293b" stroke="#f59e0b" stroke-width="2"/>
+                        <text x="580" y="260" text-anchor="middle" fill="#f59e0b" font-size="14" font-weight="600">TypeScript Adapters</text>
+                        <text x="460" y="285" fill="#f8fafc" font-size="12">• WhatsApp (Baileys)</text>
+                        <text x="460" y="305" fill="#f8fafc" font-size="12">• Signal</text>
+                        <text x="460" y="325" fill="#f8fafc" font-size="12">• Other legacy</text>
+                        <text x="460" y="345" fill="#94a3b8" font-size="11">Process bridge for compatibility</text>
+                    </g>
+
+                    <!-- Core Services box -->
+                    <rect x="80" y="375" width="640" height="120" rx="8" fill="#1e293b" stroke="#7c3aed" stroke-width="2"/>
+                    <text x="400" y="400" text-anchor="middle" fill="#7c3aed" font-size="14" font-weight="700">Core Services</text>
+
+                    <!-- Services grid -->
+                    <g fill="#f8fafc" font-size="11">
+                        <text x="120" y="425">• Session Store (SQLite)</text>
+                        <text x="120" y="445">• Tool Registry</text>
+                        <text x="120" y="465">• Config Management</text>
+                        <text x="120" y="485">• Authentication</text>
+
+                        <text x="320" y="425">• AI Router (Anthropic/OpenAI)</text>
+                        <text x="320" y="445">• WebSocket API</text>
+                        <text x="320" y="465">• HTTP Endpoints</text>
+                        <text x="320" y="485">• Web Search</text>
+
+                        <text x="540" y="425">• Heartbeat Monitoring</text>
+                        <text x="540" y="445">• Alert Processing</text>
+                        <text x="540" y="465">• SSH Server (Wish)</text>
+                        <text x="540" y="485">• TUI (BubbleTea)</text>
+                    </g>
+                </svg>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Start -->
+    <section class="quickstart" id="quickstart">
+        <div class="container">
+            <h2 class="section-title">Quick Start</h2>
+            <p class="section-subtitle">Up and running in 60 seconds</p>
+
+            <div class="terminal-window">
+                <div class="terminal-header">
+                    <span class="terminal-dot red"></span>
+                    <span class="terminal-dot yellow"></span>
+                    <span class="terminal-dot green"></span>
+                    <span class="terminal-title">terminal</span>
+                    <button class="copy-btn" data-copy="quickstart-code">Copy</button>
+                </div>
+                <div class="terminal-body">
+<pre id="quickstart-code"><span class="comment"># Build</span>
+<span class="prompt">$</span> make build
+
+<span class="comment"># Create auth token</span>
+<span class="prompt">$</span> ./bin/conduit token create --client-name "my-client"
+
+<span class="comment"># Start server</span>
+<span class="prompt">$</span> ./bin/conduit server
+
+<span class="comment"># Launch terminal UI</span>
+<span class="prompt">$</span> ./bin/conduit tui --token "conduit_v1_..."</pre>
+                </div>
+            </div>
+
+            <p class="quickstart-note">
+                See the <a href="https://github.com/jefflaplante/conduit/blob/main/docs/getting-started.md" target="_blank" rel="noopener">Getting Started Guide</a> for detailed setup instructions.
+            </p>
+        </div>
+    </section>
+
+    <!-- Access Methods Grid -->
+    <section class="access-methods" id="access">
+        <div class="container">
+            <h2 class="section-title">Access Methods</h2>
+            <p class="section-subtitle">Connect however you prefer</p>
+
+            <div class="access-grid">
+                <div class="access-card">
+                    <div class="access-icon">&#x2630;</div>
+                    <h3>Terminal UI</h3>
+                    <p>Full-featured BubbleTea chat client with streaming responses and tool activity display.</p>
+                </div>
+
+                <div class="access-card">
+                    <div class="access-icon">&#x1F5DD;</div>
+                    <h3>SSH Access</h3>
+                    <p>Remote TUI access via Wish library with SSH key authentication.</p>
+                </div>
+
+                <div class="access-card">
+                    <div class="access-icon">&#x2709;</div>
+                    <h3>Telegram Bot</h3>
+                    <p>Native Go adapter with full Bot API support and user pairing system.</p>
+                </div>
+
+                <div class="access-card">
+                    <div class="access-icon">&#x21C4;</div>
+                    <h3>WebSocket API</h3>
+                    <p>Real-time bidirectional communication for browser and app clients.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <span class="logo-icon">&#x276F;</span>
+                    <span class="logo-text">Conduit</span>
+                </div>
+                <div class="footer-links">
+                    <a href="https://github.com/jefflaplante/conduit" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://github.com/jefflaplante/conduit/blob/main/docs/getting-started.md" target="_blank" rel="noopener">Docs</a>
+                    <a href="https://github.com/jefflaplante/conduit/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+                </div>
+            </div>
+            <p class="footer-copyright">Built with Go. Powered by curiosity.</p>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

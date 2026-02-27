@@ -1,0 +1,48 @@
+{
+  "port": 18790,
+  "database": {
+    "path": "./gateway.db"
+  },
+  "ai": {
+    "default_provider": "anthropic",
+    "providers": [
+      {
+        "name": "anthropic",
+        "type": "anthropic",
+        "api_key": "${ANTHROPIC_API_KEY}",
+        "model": "claude-sonnet-4-20250514",
+        "auth": {
+          "type": "oauth",
+          "oauth_token": "${ANTHROPIC_OAUTH_TOKEN}"
+        }
+      }
+    ]
+  },
+  "tools": {
+    "enabled_tools": [
+      "read_file",
+      "write_file",
+      "exec",
+      "list_files"
+    ],
+    "sandbox": {
+      "workspace_dir": "./workspace",
+      "allowed_paths": [
+        "./workspace",
+        "/tmp"
+      ]
+    }
+  },
+  "channels": [
+    {
+      "name": "telegram",
+      "type": "telegram",
+      "enabled": true,
+      "config": {
+        "bot_token": "${TELEGRAM_BOT_TOKEN}",
+        "webhook_mode": false,
+        "debug": true
+      }
+    }
+  ]
+}

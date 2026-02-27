@@ -1,0 +1,103 @@
+# Binaries and build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/conduit
+
+# Test and coverage files
+*.test
+*.out
+coverage.html
+coverage.out
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Configuration files with secrets
+config.json
+.env
+*.env
+
+# Logs
+*.log
+logs/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node.js dependencies for channel adapters
+channels/adapters/node_modules/
+channels/adapters/npm-debug.log*
+channels/adapters/yarn-debug.log*
+channels/adapters/yarn-error.log*
+channels/adapters/.npm
+channels/adapters/.yarn-integrity
+
+# Workspace directory (may contain user files)
+workspace/
+!internal/workspace/
+
+# Session data (root level only, not internal/sessions/)
+/sessions/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Air (Go live reload) files
+.air.toml
+tmp-air/
+
+# Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Deployment scripts (keep deploy/ tracked)
+scripts/deploy.*
+
+# Live config with secrets
+config.live.json
+
+# SQLite WAL files
+*.db-shm
+*.db-wal
+
+# Test files and databases
+test/databases/*.db*
+test/configs/config.*.json
+test_*.go
+FINDINGS.md
+
+# Git worktrees
+.worktrees/
+
+# Private files (personal data, secrets, binaries)
+PRIVATE/
+
+# Backup files
+*.jsonl.bak
+issues-bak.jsonl

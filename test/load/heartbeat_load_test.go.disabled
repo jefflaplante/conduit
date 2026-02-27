@@ -1,0 +1,669 @@
+package load
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"path/filepath"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"conduit/internal/config"
+	"conduit/internal/gateway"
+)
+
+// LoadTestConfig defines parameters for load testing
+type LoadTestConfig struct {
+	Duration        time.Duration
+	ConcurrentUsers int
+	RequestRate     int // requests per second per user
+	EndpointMix     map[string]float64 // endpoint -> probability
+}
+
+// LoadTestResults contains the results of a load test
+type LoadTestResults struct {
+	TotalRequests     int64
+	SuccessfulRequests int64
+	FailedRequests    int64
+	AverageLatency    time.Duration
+	MinLatency        time.Duration
+	MaxLatency        time.Duration
+	RequestsPerSecond float64
+	ErrorRate         float64
+}
+
+// TestHeartbeatPerformanceBaseline establishes performance baseline without heartbeat
+func TestHeartbeatPerformanceBaseline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping load test in short mode")
+	}
+
+	// Test without heartbeat
+	cfg := createLoadTestConfig(t)
+	cfg.Heartbeat.Enabled = false
+
+	baselineResults := runLoadTest(t, cfg, LoadTestConfig{
+		Duration:        30 * time.Second,
+		ConcurrentUsers: 10,
+		RequestRate:     5, // 5 req/sec per user = 50 req/sec total
+		EndpointMix: map[string]float64{
+			"/health":      0.4,
+			"/metrics":     0.3,
+			"/diagnostics": 0.2,
+			"/prometheus":  0.1,
+		},
+	})
+
+	t.Logf("Baseline (no heartbeat): %.2f req/s, %.2f%% error rate, avg latency: %v",
+		baselineResults.RequestsPerSecond,
+		baselineResults.ErrorRate*100,
+		baselineResults.AverageLatency)
+
+	// Baseline performance benchmarks
+	if baselineResults.RequestsPerSecond < 30.0 {
+		t.Errorf("Baseline performance too low: %.2f req/s", baselineResults.RequestsPerSecond)
+	}
+
+	if baselineResults.ErrorRate > 0.01 { // 1% error rate threshold
+		t.Errorf("Baseline error rate too high: %.2f%%", baselineResults.ErrorRate*100)
+	}
+}
+
+// TestHeartbeatPerformanceImpact tests performance impact of heartbeat
+func TestHeartbeatPerformanceImpact(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping load test in short mode")
+	}
+
+	// Test with heartbeat enabled
+	cfg := createLoadTestConfig(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 5 // 5-second intervals
+	cfg.Heartbeat.EnableMetrics = true
+	cfg.Heartbeat.EnableEvents = true
+	cfg.Heartbeat.LogLevel = "info"
+
+	heartbeatResults := runLoadTest(t, cfg, LoadTestConfig{
+		Duration:        30 * time.Second,
+		ConcurrentUsers: 10,
+		RequestRate:     5,
+		EndpointMix: map[string]float64{
+			"/health":      0.4,
+			"/metrics":     0.3,
+			"/diagnostics": 0.2,
+			"/prometheus":  0.1,
+		},
+	})
+
+	t.Logf("With heartbeat: %.2f req/s, %.2f%% error rate, avg latency: %v",
+		heartbeatResults.RequestsPerSecond,
+		heartbeatResults.ErrorRate*100,
+		heartbeatResults.AverageLatency)
+
+	// Performance should not degrade significantly with heartbeat
+	if heartbeatResults.RequestsPerSecond < 25.0 { // Allow some degradation
+		t.Errorf("Heartbeat significantly impacted performance: %.2f req/s", heartbeatResults.RequestsPerSecond)
+	}
+
+	if heartbeatResults.ErrorRate > 0.02 { // 2% error rate with heartbeat
+		t.Errorf("Heartbeat caused high error rate: %.2f%%", heartbeatResults.ErrorRate*100)
+	}
+
+	// Latency should remain reasonable
+	if heartbeatResults.AverageLatency > 100*time.Millisecond {
+		t.Errorf("Average latency too high with heartbeat: %v", heartbeatResults.AverageLatency)
+	}
+}
+
+// TestHeartbeatHighLoadStability tests heartbeat under high load
+func TestHeartbeatHighLoadStability(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping high load test in short mode")
+	}
+
+	cfg := createLoadTestConfig(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 2 // More frequent heartbeats
+	cfg.Heartbeat.EnableMetrics = true
+	cfg.Heartbeat.EnableEvents = true
+
+	highLoadResults := runLoadTest(t, cfg, LoadTestConfig{
+		Duration:        45 * time.Second,
+		ConcurrentUsers: 25, // Higher concurrency
+		RequestRate:     8,  // 8 req/sec per user = 200 req/sec total
+		EndpointMix: map[string]float64{
+			"/health":      0.5,
+			"/metrics":     0.25,
+			"/diagnostics": 0.15,
+			"/prometheus":  0.1,
+		},
+	})
+
+	t.Logf("High load: %.2f req/s, %.2f%% error rate, avg latency: %v",
+		highLoadResults.RequestsPerSecond,
+		highLoadResults.ErrorRate*100,
+		highLoadResults.AverageLatency)
+
+	// System should remain stable under high load
+	if highLoadResults.ErrorRate > 0.05 { // 5% error rate threshold under high load
+		t.Errorf("High error rate under load: %.2f%%", highLoadResults.ErrorRate*100)
+	}
+
+	// Should still process reasonable number of requests
+	if highLoadResults.RequestsPerSecond < 100.0 {
+		t.Errorf("Low throughput under high load: %.2f req/s", highLoadResults.RequestsPerSecond)
+	}
+}
+
+// TestHeartbeatLongRunningStability tests heartbeat over extended periods
+func TestHeartbeatLongRunningStability(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping long-running test in short mode")
+	}
+
+	cfg := createLoadTestConfig(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 3
+	cfg.Heartbeat.EnableMetrics = true
+	cfg.Heartbeat.EnableEvents = true
+
+	// Run for longer period with moderate load
+	longRunResults := runLoadTest(t, cfg, LoadTestConfig{
+		Duration:        120 * time.Second, // 2 minutes
+		ConcurrentUsers: 15,
+		RequestRate:     4,
+		EndpointMix: map[string]float64{
+			"/health":      0.6,
+			"/metrics":     0.25,
+			"/diagnostics": 0.1,
+			"/prometheus":  0.05,
+		},
+	})
+
+	t.Logf("Long-running: %.2f req/s, %.2f%% error rate, avg latency: %v",
+		longRunResults.RequestsPerSecond,
+		longRunResults.ErrorRate*100,
+		longRunResults.AverageLatency)
+
+	// Long-running should be stable
+	if longRunResults.ErrorRate > 0.02 {
+		t.Errorf("Instability in long-running test: %.2f%% error rate", longRunResults.ErrorRate*100)
+	}
+}
+
+// TestHeartbeatMemoryUsageUnderLoad tests memory usage during load
+func TestHeartbeatMemoryUsageUnderLoad(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping memory load test in short mode")
+	}
+
+	cfg := createLoadTestConfig(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 1 // Frequent heartbeats for memory testing
+	cfg.Heartbeat.EnableMetrics = true
+	cfg.Heartbeat.EnableEvents = true
+
+	gw, cleanup := createLoadTestGateway(t, cfg)
+	defer cleanup()
+
+	// Get initial memory state
+	runtime.GC()
+	time.Sleep(time.Second)
+	
+	initialMetrics := makeLoadTestMetricsRequest(t, gw)
+	initialMemory := initialMetrics["memory_usage_mb"].(float64)
+	
+	t.Logf("Initial memory usage: %.2f MB", initialMemory)
+
+	// Run load test with memory monitoring
+	var memoryPeaks []float64
+	memoryMutex := sync.Mutex{}
+
+	// Memory monitoring goroutine
+	memCtx, memCancel := context.WithCancel(context.Background())
+	defer memCancel()
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-memCtx.Done():
+				return
+			case <-ticker.C:
+				metrics := makeLoadTestMetricsRequest(t, gw)
+				memory := metrics["memory_usage_mb"].(float64)
+
+				memoryMutex.Lock()
+				memoryPeaks = append(memoryPeaks, memory)
+				memoryMutex.Unlock()
+
+				t.Logf("Current memory usage: %.2f MB", memory)
+			}
+		}
+	}()
+
+	// Run load test
+	runLoadTestWithGateway(t, gw, LoadTestConfig{
+		Duration:        60 * time.Second,
+		ConcurrentUsers: 20,
+		RequestRate:     6,
+		EndpointMix: map[string]float64{
+			"/health":  0.7,
+			"/metrics": 0.3,
+		},
+	})
+
+	memCancel()
+	time.Sleep(time.Second)
+
+	// Final memory check
+	runtime.GC()
+	time.Sleep(2 * time.Second)
+
+	finalMetrics := makeLoadTestMetricsRequest(t, gw)
+	finalMemory := finalMetrics["memory_usage_mb"].(float64)
+
+	t.Logf("Final memory usage: %.2f MB", finalMemory)
+
+	// Analyze memory usage patterns
+	memoryMutex.Lock()
+	defer memoryMutex.Unlock()
+
+	var maxMemory, sumMemory float64
+	for _, memory := range memoryPeaks {
+		if memory > maxMemory {
+			maxMemory = memory
+		}
+		sumMemory += memory
+	}
+
+	avgMemoryDuringLoad := sumMemory / float64(len(memoryPeaks))
+	memoryIncrease := finalMemory - initialMemory
+
+	t.Logf("Memory stats - Initial: %.2f MB, Peak: %.2f MB, Avg during load: %.2f MB, Final: %.2f MB",
+		initialMemory, maxMemory, avgMemoryDuringLoad, finalMemory)
+
+	// Memory usage should not grow excessively
+	if memoryIncrease > 50.0 { // 50MB increase threshold
+		t.Errorf("Excessive memory growth during load test: %.2f MB", memoryIncrease)
+	}
+
+	// Peak memory should not be excessive
+	memoryPeakIncrease := maxMemory - initialMemory
+	if memoryPeakIncrease > 75.0 { // 75MB peak increase threshold
+		t.Errorf("Excessive peak memory usage: %.2f MB above baseline", memoryPeakIncrease)
+	}
+}
+
+// TestHeartbeatConcurrentEndpointAccess tests concurrent access to monitoring endpoints
+func TestHeartbeatConcurrentEndpointAccess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping concurrent access test in short mode")
+	}
+
+	cfg := createLoadTestConfig(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 1
+	cfg.Heartbeat.EnableMetrics = true
+	cfg.Heartbeat.EnableEvents = true
+
+	gw, cleanup := createLoadTestGateway(t, cfg)
+	defer cleanup()
+
+	// Test massive concurrent access to endpoints
+	endpoints := []string{"/health", "/metrics", "/diagnostics", "/prometheus"}
+	concurrentUsers := 50
+	requestsPerUser := 20
+
+	var wg sync.WaitGroup
+	var totalRequests int64
+	var successfulRequests int64
+	var failedRequests int64
+
+	start := time.Now()
+
+	for i := 0; i < concurrentUsers; i++ {
+		wg.Add(1)
+		go func(userID int) {
+			defer wg.Done()
+
+			for j := 0; j < requestsPerUser; j++ {
+				endpoint := endpoints[j%len(endpoints)]
+				atomic.AddInt64(&totalRequests, 1)
+
+				if makeLoadTestRequest(t, gw, endpoint) {
+					atomic.AddInt64(&successfulRequests, 1)
+				} else {
+					atomic.AddInt64(&failedRequests, 1)
+				}
+
+				// Small delay between requests
+				time.Sleep(10 * time.Millisecond)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	duration := time.Since(start)
+
+	successRate := float64(successfulRequests) / float64(totalRequests)
+	requestsPerSecond := float64(totalRequests) / duration.Seconds()
+
+	t.Logf("Concurrent endpoint test: %d total requests, %.2f%% success rate, %.2f req/s, duration: %v",
+		totalRequests, successRate*100, requestsPerSecond, duration)
+
+	// Should handle concurrent access well
+	if successRate < 0.95 { // 95% success rate
+		t.Errorf("Low success rate under concurrent load: %.2f%%", successRate*100)
+	}
+
+	// Should maintain reasonable throughput
+	expectedMinThroughput := float64(concurrentUsers * requestsPerUser) / 30.0 // Complete within 30 seconds
+	if requestsPerSecond < expectedMinThroughput {
+		t.Errorf("Low throughput: %.2f req/s (expected at least %.2f)", requestsPerSecond, expectedMinThroughput)
+	}
+}
+
+// TestHeartbeatStuckSessionSimulation simulates stuck sessions under load
+func TestHeartbeatStuckSessionSimulation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping stuck session simulation in short mode")
+	}
+
+	cfg := createLoadTestConfig(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 2
+	cfg.Heartbeat.EnableMetrics = true
+	cfg.Heartbeat.EnableEvents = true
+
+	gw, cleanup := createLoadTestGateway(t, cfg)
+	defer cleanup()
+
+	// Simulate normal load with some slow requests (simulating stuck sessions)
+	var wg sync.WaitGroup
+	duration := 30 * time.Second
+	concurrentUsers := 15
+
+	start := time.Now()
+
+	for i := 0; i < concurrentUsers; i++ {
+		wg.Add(1)
+		go func(userID int) {
+			defer wg.Done()
+
+			for time.Since(start) < duration {
+				// 10% of requests are slow (simulate stuck behavior)
+				if userID%10 == 0 {
+					// Simulate slow request
+					client := &http.Client{Timeout: 8 * time.Second}
+					url := fmt.Sprintf("http://localhost:%s/health", getLoadTestGatewayPort(gw))
+					
+					resp, err := client.Get(url)
+					if err == nil {
+						resp.Body.Close()
+					}
+					
+					time.Sleep(2 * time.Second) // Slow user
+				} else {
+					// Normal request
+					makeLoadTestRequest(t, gw, "/health")
+					time.Sleep(500 * time.Millisecond) // Normal delay
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Wait for heartbeat to detect and report any issues
+	time.Sleep(5 * time.Second)
+
+	// Check that system remained stable despite mixed load
+	diagnostics := makeLoadTestDiagnosticsRequest(t, gw)
+	
+	// Verify heartbeat is still running
+	if heartbeatInfo, exists := diagnostics["heartbeat"]; exists {
+		heartbeat := heartbeatInfo.(map[string]interface{})
+		if !heartbeat["running"].(bool) {
+			t.Error("Heartbeat stopped running under load with simulated stuck sessions")
+		}
+
+		// Check heartbeat count is reasonable
+		if count, ok := heartbeat["heartbeat_count"].(float64); ok {
+			expectedMinHeartbeats := int64(duration.Seconds()) / 2 // 2-second intervals
+			if int64(count) < expectedMinHeartbeats/2 { // Allow for some variance
+				t.Errorf("Too few heartbeats during load test: %d (expected at least %d)", int64(count), expectedMinHeartbeats/2)
+			}
+		}
+	}
+}
+
+// Helper functions for load testing
+
+func createLoadTestConfig(t *testing.T) *config.Config {
+	tempDir := t.TempDir()
+
+	cfg := config.Default()
+	cfg.Database.Path = filepath.Join(tempDir, "load_test.db")
+	cfg.Server.Port = "0" // Use random available port
+	cfg.Workspace.ContextDir = tempDir
+	cfg.AI.Provider = "mock"
+
+	// Disable channels for load testing
+	cfg.Channels.Telegram.Enabled = false
+
+	// Optimize for load testing
+	cfg.RateLimit.RequestsPerSecond = 1000 // High rate limit
+	cfg.RateLimit.BurstSize = 100
+
+	return cfg
+}
+
+func createLoadTestGateway(t *testing.T, cfg *config.Config) (*gateway.Gateway, func()) {
+	gw, err := gateway.New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create load test gateway: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	started := make(chan bool, 1)
+	errorChan := make(chan error, 1)
+
+	go func() {
+		if err := gw.Start(ctx); err != nil {
+			if ctx.Err() == nil {
+				errorChan <- err
+			}
+			return
+		}
+		started <- true
+	}()
+
+	select {
+	case <-started:
+		// Gateway started
+	case err := <-errorChan:
+		t.Fatalf("Failed to start load test gateway: %v", err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("Load test gateway startup timeout")
+	}
+
+	// Wait for initialization
+	time.Sleep(2 * time.Second)
+
+	cleanup := func() {
+		cancel()
+		time.Sleep(3 * time.Second)
+	}
+
+	return gw, cleanup
+}
+
+func runLoadTest(t *testing.T, cfg *config.Config, loadConfig LoadTestConfig) LoadTestResults {
+	gw, cleanup := createLoadTestGateway(t, cfg)
+	defer cleanup()
+
+	return runLoadTestWithGateway(t, gw, loadConfig)
+}
+
+func runLoadTestWithGateway(t *testing.T, gw *gateway.Gateway, loadConfig LoadTestConfig) LoadTestResults {
+	var wg sync.WaitGroup
+	var totalRequests int64
+	var successfulRequests int64
+	var failedRequests int64
+
+	latencies := make([]time.Duration, 0, loadConfig.ConcurrentUsers*loadConfig.RequestRate*int(loadConfig.Duration.Seconds()))
+	latencyMutex := sync.Mutex{}
+
+	start := time.Now()
+
+	// Create endpoints slice with weights
+	endpoints := make([]string, 0)
+	for endpoint, weight := range loadConfig.EndpointMix {
+		count := int(weight * 100) // Convert to integer weights
+		for i := 0; i < count; i++ {
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+
+	for i := 0; i < loadConfig.ConcurrentUsers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			ticker := time.NewTicker(time.Second / time.Duration(loadConfig.RequestRate))
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ticker.C:
+					if time.Since(start) >= loadConfig.Duration {
+						return
+					}
+
+					// Select endpoint based on mix
+					endpoint := endpoints[int(atomic.AddInt64(&totalRequests, 1))%len(endpoints)]
+
+					requestStart := time.Now()
+					success := makeLoadTestRequest(t, gw, endpoint)
+					latency := time.Since(requestStart)
+
+					latencyMutex.Lock()
+					latencies = append(latencies, latency)
+					latencyMutex.Unlock()
+
+					if success {
+						atomic.AddInt64(&successfulRequests, 1)
+					} else {
+						atomic.AddInt64(&failedRequests, 1)
+					}
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	actualDuration := time.Since(start)
+
+	// Calculate statistics
+	latencyMutex.Lock()
+	var totalLatency time.Duration
+	minLatency := time.Hour
+	maxLatency := time.Duration(0)
+
+	for _, lat := range latencies {
+		totalLatency += lat
+		if lat < minLatency {
+			minLatency = lat
+		}
+		if lat > maxLatency {
+			maxLatency = lat
+		}
+	}
+	latencyMutex.Unlock()
+
+	var averageLatency time.Duration
+	if len(latencies) > 0 {
+		averageLatency = totalLatency / time.Duration(len(latencies))
+	}
+
+	requestsPerSecond := float64(totalRequests) / actualDuration.Seconds()
+	errorRate := float64(failedRequests) / float64(totalRequests)
+
+	return LoadTestResults{
+		TotalRequests:      totalRequests,
+		SuccessfulRequests: successfulRequests,
+		FailedRequests:     failedRequests,
+		AverageLatency:     averageLatency,
+		MinLatency:         minLatency,
+		MaxLatency:         maxLatency,
+		RequestsPerSecond:  requestsPerSecond,
+		ErrorRate:          errorRate,
+	}
+}
+
+func makeLoadTestRequest(t *testing.T, gw *gateway.Gateway, endpoint string) bool {
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := fmt.Sprintf("http://localhost:%s%s", getLoadTestGatewayPort(gw), endpoint)
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	// Read and discard body
+	io.ReadAll(resp.Body)
+
+	return resp.StatusCode == http.StatusOK
+}
+
+func makeLoadTestMetricsRequest(t *testing.T, gw *gateway.Gateway) map[string]interface{} {
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := fmt.Sprintf("http://localhost:%s/metrics", getLoadTestGatewayPort(gw))
+
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("Failed to request metrics: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode metrics: %v", err)
+	}
+
+	return response
+}
+
+func makeLoadTestDiagnosticsRequest(t *testing.T, gw *gateway.Gateway) map[string]interface{} {
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := fmt.Sprintf("http://localhost:%s/diagnostics", getLoadTestGatewayPort(gw))
+
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("Failed to request diagnostics: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode diagnostics: %v", err)
+	}
+
+	return response
+}
+
+func getLoadTestGatewayPort(gw *gateway.Gateway) string {
+	// Placeholder - you'll need to implement a method to get the actual port
+	// from the gateway instance
+	return "8080"
+}

@@ -1,0 +1,71 @@
+{
+  "port": 18789,
+  "database": {
+    "path": "gateway.db"
+  },
+  "ai": {
+    "default_provider": "anthropic",
+    "providers": [
+      {
+        "name": "anthropic",
+        "type": "anthropic",
+        "model": "claude-3-5-sonnet-20241022",
+        "auth": {
+          "type": "oauth",
+          "oauth_token": "${ANTHROPIC_OAUTH_TOKEN}"
+        }
+      }
+    ]
+  },
+  "tools": {
+    "enabled_tools": [
+      "read_file",
+      "write_file", 
+      "exec",
+      "list_files",
+      "memory_search",
+      "memory_get",
+      "sessions_list",
+      "sessions_send",
+      "sessions_spawn",
+      "session_status",
+      "web_search",
+      "web_fetch",
+      "message",
+      "tts",
+      "cron",
+      "gateway",
+      "image"
+    ],
+    "sandbox": {
+      "workspace_dir": "./workspace",
+      "allowed_paths": [
+        "./workspace",
+        "/tmp"
+      ]
+    },
+    "services": {
+      "brave": {
+        "api_key": "${BRAVE_API_KEY}"
+      },
+      "tts": {
+        "provider": "edge",
+        "voice": "en-US-AriaNeural"
+      }
+    }
+  },
+  "channels": [
+    {
+      "name": "telegram",
+      "type": "telegram", 
+      "enabled": true,
+      "config": {
+        "bot_token": "${TELEGRAM_BOT_TOKEN}"
+      }
+    }
+  ],
+  "debug": {
+    "log_message_content": false,
+    "verbose_logging": true
+  }
+}
