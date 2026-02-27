@@ -7,7 +7,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=conduit
-Group=developers
+Group=conduit
 WorkingDirectory=/home/conduit/conduit
 
 # Binary and config
@@ -32,7 +32,7 @@ StartLimitBurst=3
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/conduit/conduit/ /home/conduit/
+ReadWritePaths=/home/conduit/conduit/
 PrivateTmp=true
 
 # Logging
