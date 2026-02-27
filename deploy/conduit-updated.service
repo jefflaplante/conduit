@@ -6,16 +6,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=clawd
-Group=developers
-WorkingDirectory=/home/clawd/projects/conduit
+User=conduit
+Group=conduit
+WorkingDirectory=/home/conduit/conduit
 
 # Binary and config
-ExecStart=/home/clawd/projects/conduit/bin/conduit server --config /home/clawd/projects/conduit/config.json
+ExecStart=/home/conduit/conduit/bin/conduit server --config /home/conduit/conduit/config.json
 
 # Environment
 Environment=PATH=/usr/local/go/bin:/usr/bin:/bin:/usr/local/bin
-EnvironmentFile=-/home/clawd/.clawd-secrets.env
+EnvironmentFile=-/home/conduit/.conduit-secrets.env
 
 # Graceful shutdown (gateway handles SIGTERM)
 KillMode=mixed
@@ -32,7 +32,7 @@ StartLimitBurst=3
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/clawd/projects/conduit/ /home/clawd/clawd/
+ReadWritePaths=/home/conduit/conduit/
 PrivateTmp=true
 
 # Logging
