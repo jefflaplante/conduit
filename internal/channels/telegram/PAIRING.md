@@ -1,6 +1,6 @@
 # Telegram Pairing System
 
-This document describes the implementation of the Telegram pairing system for Conduit Go.
+This document describes the implementation of the Telegram pairing system for Conduit.
 
 ## Overview
 

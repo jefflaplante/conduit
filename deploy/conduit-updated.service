@@ -1,6 +1,6 @@
 [Unit]
 Description=Conduit Gateway
-Documentation=https://github.com/conduit/conduit
+Documentation=https://github.com/jefflaplante/conduit
 After=network-online.target
 Wants=network-online.target
 

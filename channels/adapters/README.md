@@ -4,7 +4,7 @@ This directory is reserved for **TypeScript/Node.js process adapters** that cann
 
 ## Architecture
 
-Conduit Go supports a **hybrid channel adapter system**:
+Conduit supports a **hybrid channel adapter system**:
 
 1. **Native Go Adapters** (preferred): Direct integration in `internal/channels/<provider>/`
    - Better performance and reliability

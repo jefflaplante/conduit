@@ -5,7 +5,7 @@ const WebSocket = require('ws');
 const ws = new WebSocket('ws://localhost:18791/ws');
 
 ws.on('open', () => {
-    console.log('🔌 Connected to Conduit Go gateway');
+    console.log('🔌 Connected to Conduit gateway');
     
     // Test message to Jules
     const testMessage = {
