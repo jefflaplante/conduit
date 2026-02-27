@@ -94,7 +94,7 @@ echo "Go Version: $go_version"
 
 # Build project to ensure it compiles
 echo "Building project..."
-if go build -o /tmp/conduit ./cmd/conduit > "$RESULTS_DIR/build.log" 2>&1; then
+if go build -o /tmp/conduit ./cmd/gateway > "$RESULTS_DIR/build.log" 2>&1; then
     echo -e "${GREEN}✅ Build successful${NC}"
 else
     echo -e "${RED}❌ Build failed${NC}"
@@ -227,7 +227,7 @@ cat > "$REPORT_FILE" << EOF
 # OCGO-022 Validation Report
 
 **Generated:** $(date)  
-**Project:** Conduit Go Gateway  
+**Project:** Conduit Gateway  
 **Test Suite:** Heartbeat Loop Testing and Validation  
 
 ## Summary

@@ -71,7 +71,7 @@ func New(workspaceDir string, executor JobExecutor) *Scheduler {
 		executor:      executor,
 		ctx:           ctx,
 		cancel:        cancel,
-		crontagMarker: "# CONDUIT-GO-MANAGED",
+		crontagMarker: "# CONDUIT-MANAGED",
 	}
 }
 
@@ -344,7 +344,7 @@ func (s *Scheduler) addSystemCrontab(job *Job) error {
 	entries = s.filterCrontabEntries(entries, job.ID)
 
 	// Add new entry
-	entry := fmt.Sprintf("%s %s %s # CONDUIT-GO-JOB-ID:%s",
+	entry := fmt.Sprintf("%s %s %s # CONDUIT-JOB-ID:%s",
 		job.Schedule, job.Command, s.crontagMarker, job.ID)
 	entries = append(entries, entry)
 
@@ -399,7 +399,7 @@ func (s *Scheduler) writeSystemCrontab(entries []string) error {
 
 // filterCrontabEntries removes entries for a specific job ID
 func (s *Scheduler) filterCrontabEntries(entries []string, jobID string) []string {
-	marker := fmt.Sprintf("CONDUIT-GO-JOB-ID:%s", jobID)
+	marker := fmt.Sprintf("CONDUIT-JOB-ID:%s", jobID)
 	var filtered []string
 	for _, entry := range entries {
 		if !strings.Contains(entry, marker) {

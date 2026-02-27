@@ -1,6 +1,6 @@
 # HEARTBEAT.md Task Execution Framework
 
-This package implements **OCGO-020**, a comprehensive framework for executing HEARTBEAT.md tasks through the existing Conduit Go Gateway cron system.
+This package implements **OCGO-020**, a comprehensive framework for executing HEARTBEAT.md tasks through the existing Conduit Gateway cron system.
 
 ## Overview
 
@@ -353,4 +353,4 @@ session, err := sessionsStore.GetOrCreateSession("heartbeat", sessionKey)
 err := channelSender.SendMessage(ctx, channelID, userID, content)
 ```
 
-This framework provides a robust, testable, and maintainable solution for executing HEARTBEAT.md tasks while leveraging all existing Conduit Go Gateway infrastructure.
+This framework provides a robust, testable, and maintainable solution for executing HEARTBEAT.md tasks while leveraging all existing Conduit Gateway infrastructure.

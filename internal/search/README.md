@@ -1,6 +1,6 @@
 # Search Package
 
-This package provides search strategy implementations for Conduit Go Gateway, implementing OCGO-010: Brave Search API Fallback Implementation.
+This package provides search strategy implementations for Conduit Gateway, implementing OCGO-010: Brave Search API Fallback Implementation.
 
 ## Overview
 
