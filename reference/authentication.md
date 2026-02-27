@@ -94,7 +94,7 @@ Output shows:
 Revoke a token by its ID:
 
 ```bash
-conduit token revoke claw_v1_abc123...
+conduit token revoke conduit_v1_abc123...
 ```
 
 Or by ID:

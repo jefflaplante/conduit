@@ -42,10 +42,10 @@ conduit token create --client-name "temp" --expires-in "7d"
 conduit token list
 
 # Revoke a token
-conduit token revoke claw_v1_abc123
+conduit token revoke conduit_v1_abc123
 
 # Export token for environment variable
-conduit token export claw_v1_abc123 --format env
+conduit token export conduit_v1_abc123 --format env
 ```
 
 ### tui
@@ -61,7 +61,7 @@ Flags:
 
 # Examples
 conduit tui                              # Connect with saved token
-conduit tui --token "claw_v1_..."        # Connect with specific token
+conduit tui --token "conduit_v1_..."        # Connect with specific token
 conduit tui --url "ws://remote:18789/ws" # Connect to remote gateway
 ```
 
@@ -80,7 +80,7 @@ Flags:
   --gateway-token string     Gateway authentication token
 
 # Example
-conduit ssh-server --listen ":2222" --gateway-token "claw_v1_..."
+conduit ssh-server --listen ":2222" --gateway-token "conduit_v1_..."
 ```
 
 ### ssh-keys
