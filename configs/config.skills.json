@@ -1,0 +1,81 @@
+{
+  "ai": {
+    "providers": {
+      "anthropic": {
+        "api_key": "${ANTHROPIC_API_KEY}",
+        "base_url": "https://api.anthropic.com",
+        "models": {
+          "claude-3-5-sonnet-20241022": {
+            "name": "claude-3-5-sonnet-20241022",
+            "max_tokens": 8192
+          }
+        }
+      }
+    },
+    "default_provider": "anthropic",
+    "default_model": "claude-3-5-sonnet-20241022"
+  },
+  "tools": {
+    "enabled_tools": [
+      "read", "write", "exec", "list_files",
+      "web_search", "web_fetch", "message", "tts",
+      "skill_email", "skill_ha", "skill_solar", "skill_unifi"
+    ],
+    "sandbox": {
+      "enabled": true,
+      "allowed_paths": [
+        "/tmp/conduit-sandbox"
+      ],
+      "blocked_commands": [
+        "rm -rf /",
+        "sudo",
+        "su"
+      ]
+    }
+  },
+  "skills": {
+    "enabled": true,
+    "search_paths": [
+      "./skills",
+      "/usr/local/lib/conduit/skills"
+    ],
+    "execution": {
+      "timeout_seconds": 60,
+      "environment": {
+        "NODE_ENV": "production",
+        "SKILL_MODE": "production"
+      },
+      "allowed_actions": {
+        "email": ["search", "read", "cleanup", "list"],
+        "ha": ["status", "control", "list", "get_state"],
+        "solar": ["status", "daily_report", "current"],
+        "unifi": ["status", "devices", "clients"]
+      }
+    },
+    "cache": {
+      "enabled": true,
+      "ttl_seconds": 3600
+    }
+  },
+  "agents": {
+    "main": {
+      "name": "Conduit",
+      "personality": "conduit",
+      "identity": {
+        "oauth_identity": "You are Claude Code, Anthropic's official CLI for Claude.",
+        "api_key_identity": "You are Conduit, an AI assistant powered by Claude."
+      },
+      "capabilities": {
+        "memory_recall": true,
+        "tool_chaining": true,
+        "skills_integration": true,
+        "heartbeats": true,
+        "silent_replies": true
+      }
+    }
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080
+  }
+}

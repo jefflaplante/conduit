@@ -1,0 +1,967 @@
+package integration
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"conduit/internal/config"
+	"conduit/internal/gateway"
+	"conduit/internal/heartbeat"
+	"conduit/internal/tools/scheduling"
+)
+
+// TestHeartbeatLoopComprehensive tests the complete heartbeat loop system
+func TestHeartbeatLoopComprehensive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping comprehensive heartbeat loop test in short mode")
+	}
+
+	// Create test workspace with HEARTBEAT.md file
+	tempDir := t.TempDir()
+	heartbeatFile := filepath.Join(tempDir, "HEARTBEAT.md")
+
+	// Copy test fixture to workspace
+	fixtureContent := loadTestFixture(t, "test_basic.md")
+	if err := os.WriteFile(heartbeatFile, []byte(fixtureContent), 0644); err != nil {
+		t.Fatalf("Failed to write test HEARTBEAT.md: %v", err)
+	}
+
+	// Set up alert queue with test data
+	alertQueuePath := filepath.Join(tempDir, "alerts_queue.json")
+	alertFixtureContent := loadTestFixture(t, "test_alerts.json")
+	if err := os.WriteFile(alertQueuePath, []byte(alertFixtureContent), 0644); err != nil {
+		t.Fatalf("Failed to write test alert queue: %v", err)
+	}
+
+	// Configure gateway with heartbeat enabled
+	cfg := createHeartbeatTestConfig(t, tempDir)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 2 // Frequent for testing
+	cfg.Heartbeat.EnableMetrics = true
+	cfg.Heartbeat.EnableEvents = true
+	cfg.Heartbeat.AlertQueuePath = alertQueuePath
+	cfg.Heartbeat.LogLevel = "debug"
+
+	gw, cleanup := createTestGateway(t, cfg)
+	defer cleanup()
+
+	// Test sequence
+	t.Run("heartbeat_initialization", func(t *testing.T) {
+		testHeartbeatInitialization(t, gw)
+	})
+
+	t.Run("heartbeat_md_parsing", func(t *testing.T) {
+		testHeartbeatMdParsing(t, gw, tempDir)
+	})
+
+	t.Run("alert_queue_processing", func(t *testing.T) {
+		testAlertQueueProcessing(t, gw, alertQueuePath)
+	})
+
+	t.Run("heartbeat_execution_cycle", func(t *testing.T) {
+		testHeartbeatExecutionCycle(t, gw, tempDir)
+	})
+
+	t.Run("cron_integration", func(t *testing.T) {
+		testCronIntegration(t, gw, cfg)
+	})
+
+	t.Run("performance_overhead", func(t *testing.T) {
+		testHeartbeatPerformanceOverhead(t, gw)
+	})
+}
+
+// TestHeartbeatTimezoneAwareness tests timezone-aware quiet hours behavior
+func TestHeartbeatTimezoneAwareness(t *testing.T) {
+	tests := []struct {
+		name         string
+		timezone     string
+		testTime     string
+		isQuietHours bool
+		description  string
+	}{
+		{
+			name:         "pacific_morning",
+			timezone:     "America/Los_Angeles",
+			testTime:     "2024-01-01T09:00:00", // 9 AM PT
+			isQuietHours: false,
+			description:  "Morning hours in Pacific should be awake time",
+		},
+		{
+			name:         "pacific_night", 
+			timezone:     "America/Los_Angeles",
+			testTime:     "2024-01-01T02:00:00", // 2 AM PT
+			isQuietHours: true,
+			description:  "Night hours in Pacific should be quiet time",
+		},
+		{
+			name:         "eastern_conversion",
+			timezone:     "America/New_York",
+			testTime:     "2024-01-01T05:00:00", // 5 AM ET = 2 AM PT
+			isQuietHours: true,
+			description:  "Eastern time should convert correctly to Pacific quiet hours",
+		},
+		{
+			name:         "utc_conversion",
+			timezone:     "UTC",
+			testTime:     "2024-01-01T10:00:00", // 10 AM UTC = 2 AM PT
+			isQuietHours: true,
+			description:  "UTC should convert correctly to Pacific quiet hours",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testTimezoneQuietHours(t, tt.timezone, tt.testTime, tt.isQuietHours, tt.description)
+		})
+	}
+}
+
+// TestHeartbeatErrorScenarios tests various error conditions
+func TestHeartbeatErrorScenarios(t *testing.T) {
+	t.Run("corrupted_heartbeat_file", func(t *testing.T) {
+		testCorruptedHeartbeatFile(t)
+	})
+
+	t.Run("corrupted_alert_queue", func(t *testing.T) {
+		testCorruptedAlertQueue(t)
+	})
+
+	t.Run("inaccessible_files", func(t *testing.T) {
+		testInaccessibleFiles(t)
+	})
+
+	t.Run("delivery_failures", func(t *testing.T) {
+		testDeliveryFailures(t)
+	})
+
+	t.Run("timeout_scenarios", func(t *testing.T) {
+		testTimeoutScenarios(t)
+	})
+
+	t.Run("resource_exhaustion", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("Skipping resource exhaustion test in short mode")
+		}
+		testResourceExhaustion(t)
+	})
+}
+
+// TestHeartbeatCronIntegration tests cron job lifecycle management
+func TestHeartbeatCronIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping cron integration test in short mode")
+	}
+
+	tempDir := t.TempDir()
+	cfg := createHeartbeatTestConfig(t, tempDir)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 5
+	cfg.Tools.Cron.Enabled = true
+	cfg.Tools.Cron.MaxJobs = 10
+	cfg.Tools.Cron.DefaultTimeoutMinutes = 2
+
+	gw, cleanup := createTestGateway(t, cfg)
+	defer cleanup()
+
+	t.Run("cron_job_creation", func(t *testing.T) {
+		testCronJobCreation(t, gw)
+	})
+
+	t.Run("cron_job_execution", func(t *testing.T) {
+		testCronJobExecution(t, gw)
+	})
+
+	t.Run("cron_job_monitoring", func(t *testing.T) {
+		testCronJobMonitoring(t, gw)
+	})
+
+	t.Run("cron_job_cleanup", func(t *testing.T) {
+		testCronJobCleanup(t, gw)
+	})
+}
+
+// TestHeartbeatPerformanceBenchmark tests performance impact
+func TestHeartbeatPerformanceBenchmark(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping performance benchmark in short mode")
+	}
+
+	// Test baseline without heartbeat
+	baselineMetrics := runPerformanceBaseline(t)
+	t.Logf("Baseline metrics - Memory: %.2f MB, Goroutines: %d, CPU: %.2f%%",
+		baselineMetrics.MemoryMB, baselineMetrics.Goroutines, baselineMetrics.CPUPercent)
+
+	// Test with heartbeat enabled
+	heartbeatMetrics := runPerformanceWithHeartbeat(t)
+	t.Logf("Heartbeat metrics - Memory: %.2f MB, Goroutines: %d, CPU: %.2f%%",
+		heartbeatMetrics.MemoryMB, heartbeatMetrics.Goroutines, heartbeatMetrics.CPUPercent)
+
+	// Calculate overhead
+	memoryOverhead := ((heartbeatMetrics.MemoryMB - baselineMetrics.MemoryMB) / baselineMetrics.MemoryMB) * 100
+	goroutineOverhead := float64(heartbeatMetrics.Goroutines-baselineMetrics.Goroutines) / float64(baselineMetrics.Goroutines) * 100
+	cpuOverhead := heartbeatMetrics.CPUPercent - baselineMetrics.CPUPercent
+
+	t.Logf("Performance overhead - Memory: %.2f%%, Goroutines: %.2f%%, CPU: %.2f%%",
+		memoryOverhead, goroutineOverhead, cpuOverhead)
+
+	// Verify overhead is within acceptable limits (5% requirement)
+	if memoryOverhead > 5.0 {
+		t.Errorf("Memory overhead too high: %.2f%% (limit: 5.0%%)", memoryOverhead)
+	}
+
+	if cpuOverhead > 5.0 {
+		t.Errorf("CPU overhead too high: %.2f%% (limit: 5.0%%)", cpuOverhead)
+	}
+
+	// Allow more goroutines as they're lightweight
+	if goroutineOverhead > 20.0 {
+		t.Errorf("Goroutine overhead too high: %.2f%% (limit: 20.0%%)", goroutineOverhead)
+	}
+}
+
+// Test implementation functions
+
+func testHeartbeatInitialization(t *testing.T, gw *gateway.Gateway) {
+	// Wait for heartbeat to initialize
+	time.Sleep(3 * time.Second)
+
+	// Check that heartbeat is running
+	health := makeHealthRequest(t, gw)
+	if !health["heartbeat_running"].(bool) {
+		t.Error("Heartbeat should be running after initialization")
+	}
+
+	// Check that metrics are available
+	metrics := makeMetricsRequest(t, gw)
+	if metrics["uptime_seconds"].(float64) <= 0 {
+		t.Error("Uptime should be positive after initialization")
+	}
+}
+
+func testHeartbeatMdParsing(t *testing.T, gw *gateway.Gateway, workspaceDir string) {
+	// Create a task interpreter to test parsing
+	interpreter := heartbeat.NewTaskInterpreter(workspaceDir)
+	
+	tasks, err := interpreter.ReadHeartbeatTasks()
+	if err != nil {
+		t.Fatalf("Failed to read heartbeat tasks: %v", err)
+	}
+
+	if len(tasks) == 0 {
+		t.Error("Should have parsed at least one task from test fixture")
+	}
+
+	// Verify task parsing
+	foundAlertTask := false
+	foundHealthTask := false
+	foundMaintenanceTask := false
+
+	for _, task := range tasks {
+		switch {
+		case strings.Contains(strings.ToLower(task.Title), "alert"):
+			foundAlertTask = true
+			if len(task.Instructions) == 0 {
+				t.Error("Alert task should have instructions")
+			}
+		case strings.Contains(strings.ToLower(task.Title), "health"):
+			foundHealthTask = true
+		case strings.Contains(strings.ToLower(task.Title), "maintenance"):
+			foundMaintenanceTask = true
+		}
+	}
+
+	if !foundAlertTask {
+		t.Error("Should have found alert-related task")
+	}
+	if !foundHealthTask {
+		t.Error("Should have found health-related task") 
+	}
+	if !foundMaintenanceTask {
+		t.Error("Should have found maintenance-related task")
+	}
+
+	// Test prompt generation
+	prompt, err := interpreter.GeneratePrompt(tasks)
+	if err != nil {
+		t.Fatalf("Failed to generate prompt: %v", err)
+	}
+
+	if !strings.Contains(prompt, "HEARTBEAT.md") {
+		t.Error("Generated prompt should reference HEARTBEAT.md")
+	}
+
+	if !strings.Contains(prompt, "HEARTBEAT_OK") {
+		t.Error("Generated prompt should mention HEARTBEAT_OK")
+	}
+}
+
+func testAlertQueueProcessing(t *testing.T, gw *gateway.Gateway, queuePath string) {
+	// Create shared alert queue
+	queue := heartbeat.NewSharedAlertQueue(queuePath)
+
+	// Verify test alerts are loaded
+	alerts, err := queue.GetPendingAlerts()
+	if err != nil {
+		t.Fatalf("Failed to get pending alerts: %v", err)
+	}
+
+	if len(alerts) == 0 {
+		t.Error("Should have test alerts in queue")
+	}
+
+	// Verify alert severities
+	severityCounts := make(map[heartbeat.AlertSeverity]int)
+	for _, alert := range alerts {
+		severityCounts[alert.Severity]++
+	}
+
+	if severityCounts[heartbeat.AlertSeverityCritical] == 0 {
+		t.Error("Should have critical test alerts")
+	}
+	if severityCounts[heartbeat.AlertSeverityWarning] == 0 {
+		t.Error("Should have warning test alerts")
+	}
+	if severityCounts[heartbeat.AlertSeverityInfo] == 0 {
+		t.Error("Should have info test alerts")
+	}
+
+	// Test queue statistics
+	stats, err := queue.GetQueueStats()
+	if err != nil {
+		t.Fatalf("Failed to get queue stats: %v", err)
+	}
+
+	if stats.TotalAlerts != len(alerts) {
+		t.Errorf("Total alerts mismatch: got %d, expected %d", stats.TotalAlerts, len(alerts))
+	}
+
+	if stats.PendingAlerts != len(alerts) {
+		t.Errorf("Pending alerts mismatch: got %d, expected %d", stats.PendingAlerts, len(alerts))
+	}
+}
+
+func testHeartbeatExecutionCycle(t *testing.T, gw *gateway.Gateway, workspaceDir string) {
+	initialDiagnostics := makeDiagnosticsRequest(t, gw)
+	initialHeartbeatCount := getHeartbeatCountFromDiagnostics(initialDiagnostics)
+
+	// Wait for several heartbeat cycles
+	time.Sleep(8 * time.Second)
+
+	finalDiagnostics := makeDiagnosticsRequest(t, gw)
+	finalHeartbeatCount := getHeartbeatCountFromDiagnostics(finalDiagnostics)
+
+	// Should have executed multiple heartbeat cycles
+	executedCycles := finalHeartbeatCount - initialHeartbeatCount
+	if executedCycles < 2 {
+		t.Errorf("Expected at least 2 heartbeat cycles, got %d", executedCycles)
+	}
+
+	// Check for heartbeat events
+	if events, ok := finalDiagnostics["recent_events"].([]interface{}); ok {
+		heartbeatEventFound := false
+		for _, eventInterface := range events {
+			if event, ok := eventInterface.(map[string]interface{}); ok {
+				if event["source"] == "heartbeat_service" {
+					heartbeatEventFound = true
+					break
+				}
+			}
+		}
+		if !heartbeatEventFound {
+			t.Error("Should have generated heartbeat events")
+		}
+	}
+}
+
+func testCronIntegration(t *testing.T, gw *gateway.Gateway, cfg *config.Config) {
+	// This would test cron job creation and management
+	// For now, verify that cron system is available
+	diagnostics := makeDiagnosticsRequest(t, gw)
+	
+	// Check if cron system is initialized (implementation-dependent)
+	// This is a placeholder test that verifies the integration point exists
+	if cfg.Tools.Cron.Enabled {
+		t.Log("Cron integration enabled in configuration")
+		// Additional cron-specific tests would go here
+		// Testing job creation, execution, monitoring, cleanup
+	}
+}
+
+func testHeartbeatPerformanceOverhead(t *testing.T, gw *gateway.Gateway) {
+	// Get initial resource usage
+	initialMetrics := makeMetricsRequest(t, gw)
+	initialMemory := initialMetrics["memory_usage_mb"].(float64)
+	initialGoroutines := initialMetrics["goroutine_count"].(float64)
+
+	// Run for a period with heartbeat active
+	duration := 30 * time.Second
+	start := time.Now()
+
+	// Generate some concurrent load while heartbeat runs
+	var wg sync.WaitGroup
+	var requestCount int64
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for time.Since(start) < duration {
+				makeHealthRequest(t, gw)
+				atomic.AddInt64(&requestCount, 1)
+				time.Sleep(100 * time.Millisecond)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Get final resource usage
+	runtime.GC() // Force garbage collection
+	time.Sleep(time.Second)
+	
+	finalMetrics := makeMetricsRequest(t, gw)
+	finalMemory := finalMetrics["memory_usage_mb"].(float64)
+	finalGoroutines := finalMetrics["goroutine_count"].(float64)
+
+	// Calculate resource changes
+	memoryIncrease := finalMemory - initialMemory
+	goroutineIncrease := finalGoroutines - initialGoroutines
+
+	t.Logf("Performance test results:")
+	t.Logf("  Duration: %v", duration)
+	t.Logf("  Requests processed: %d", requestCount)
+	t.Logf("  Memory increase: %.2f MB", memoryIncrease)
+	t.Logf("  Goroutine increase: %.0f", goroutineIncrease)
+
+	// Memory usage should not increase excessively
+	if memoryIncrease > 20.0 { // 20MB threshold for test duration
+		t.Errorf("Excessive memory increase: %.2f MB", memoryIncrease)
+	}
+
+	// Should not leak goroutines significantly
+	if goroutineIncrease > 5 {
+		t.Errorf("Excessive goroutine increase: %.0f", goroutineIncrease)
+	}
+}
+
+func testTimezoneQuietHours(t *testing.T, timezone, testTime string, expectedQuiet bool, description string) {
+	// Parse test time in specified timezone
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		t.Fatalf("Failed to load timezone %s: %v", timezone, err)
+	}
+
+	testDateTime, err := time.ParseInLocation("2006-01-02T15:04:05", testTime, loc)
+	if err != nil {
+		t.Fatalf("Failed to parse test time %s: %v", testTime, err)
+	}
+
+	// Create timezone-aware routing configuration
+	router := heartbeat.NewAlertRouter(&heartbeat.RoutingConfig{
+		QuietHoursStart: "23:00",
+		QuietHoursEnd:   "07:00", 
+		Timezone:        "America/Los_Angeles", // Always use Pacific for quiet hours
+	})
+
+	// Test if this time is considered quiet hours
+	isQuiet := router.IsQuietHours(testDateTime)
+
+	t.Logf("%s: Testing %s in %s -> isQuiet=%t (expected=%t)",
+		description, testDateTime.Format("2006-01-02 15:04:05 MST"), timezone, isQuiet, expectedQuiet)
+
+	if isQuiet != expectedQuiet {
+		t.Errorf("%s: Expected quiet hours=%t, got %t for %s in %s",
+			description, expectedQuiet, isQuiet, testTime, timezone)
+	}
+}
+
+func testCorruptedHeartbeatFile(t *testing.T) {
+	tempDir := t.TempDir()
+	heartbeatFile := filepath.Join(tempDir, "HEARTBEAT.md")
+
+	// Write corrupted HEARTBEAT.md
+	corruptedContent := loadTestFixture(t, "test_corrupted.md")
+	if err := os.WriteFile(heartbeatFile, []byte(corruptedContent), 0644); err != nil {
+		t.Fatalf("Failed to write corrupted HEARTBEAT.md: %v", err)
+	}
+
+	// Test parsing corrupted file
+	interpreter := heartbeat.NewTaskInterpreter(tempDir)
+	tasks, err := interpreter.ReadHeartbeatTasks()
+	
+	// Should handle corruption gracefully
+	if err != nil {
+		t.Logf("Parser correctly detected corruption: %v", err)
+	} else {
+		// Should still parse valid parts
+		if len(tasks) == 0 {
+			t.Error("Should have recovered at least some tasks from corrupted file")
+		} else {
+			t.Logf("Parser recovered %d tasks from corrupted file", len(tasks))
+		}
+	}
+}
+
+func testCorruptedAlertQueue(t *testing.T) {
+	tempDir := t.TempDir()
+	queuePath := filepath.Join(tempDir, "corrupted_queue.json")
+
+	// Write invalid JSON
+	corruptedJSON := `{
+		"alerts": [
+			{"id": "valid", "severity": "warning", "status": "pending"},
+			{"id": "invalid", "severity": "invalid_severity", "malformed"
+		],
+		"version": 1
+	`
+
+	if err := os.WriteFile(queuePath, []byte(corruptedJSON), 0644); err != nil {
+		t.Fatalf("Failed to write corrupted queue: %v", err)
+	}
+
+	// Test loading corrupted queue
+	queue := heartbeat.NewSharedAlertQueue(queuePath)
+	loadedQueue, err := queue.LoadQueue()
+
+	// Should handle corruption gracefully
+	if err != nil {
+		t.Logf("Queue correctly detected corruption: %v", err)
+	} else {
+		// Should recover valid parts or return empty queue
+		t.Logf("Queue recovered with %d alerts", len(loadedQueue.Alerts))
+	}
+}
+
+func testInaccessibleFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping file permission test on Windows")
+	}
+
+	tempDir := t.TempDir()
+	restrictedDir := filepath.Join(tempDir, "restricted")
+	
+	// Create directory with no permissions
+	if err := os.Mkdir(restrictedDir, 0000); err != nil {
+		t.Fatalf("Failed to create restricted directory: %v", err)
+	}
+	defer os.Chmod(restrictedDir, 0755) // Clean up
+
+	restrictedFile := filepath.Join(restrictedDir, "HEARTBEAT.md")
+	interpreter := heartbeat.NewTaskInterpreter(restrictedDir)
+	
+	// Should handle permission errors gracefully
+	_, err := interpreter.ReadHeartbeatTasks()
+	if err == nil {
+		t.Error("Should have failed to read from restricted directory")
+	}
+
+	// Test inaccessible queue file
+	restrictedQueuePath := filepath.Join(restrictedDir, "queue.json")
+	queue := heartbeat.NewSharedAlertQueue(restrictedQueuePath)
+	
+	err = queue.IsHealthy()
+	if err == nil {
+		t.Error("Should have detected unhealthy queue with inaccessible file")
+	}
+}
+
+func testDeliveryFailures(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := createHeartbeatTestConfig(t, tempDir)
+	cfg.Heartbeat.Enabled = true
+	
+	// Configure with non-existent delivery endpoint to simulate failures
+	cfg.Channels.Telegram.Enabled = false // Disable to simulate delivery issues
+
+	gw, cleanup := createTestGateway(t, cfg)
+	defer cleanup()
+
+	// Create alerts that would trigger deliveries
+	queuePath := filepath.Join(tempDir, "delivery_test_queue.json")
+	queue := heartbeat.NewSharedAlertQueue(queuePath)
+	
+	testAlert := heartbeat.Alert{
+		ID:       "delivery-test-001",
+		Source:   "test",
+		Title:    "Delivery Test Alert",
+		Message:  "This alert will fail delivery",
+		Severity: heartbeat.AlertSeverityCritical,
+		Status:   heartbeat.AlertStatusPending,
+		CreatedAt: time.Now(),
+		MaxRetries: 3,
+	}
+
+	if err := queue.AddAlert(testAlert); err != nil {
+		t.Fatalf("Failed to add test alert: %v", err)
+	}
+
+	// Wait for heartbeat to process and handle delivery failure
+	time.Sleep(5 * time.Second)
+
+	// Check that alert status was updated appropriately
+	loadedQueue, err := queue.LoadQueue()
+	if err != nil {
+		t.Fatalf("Failed to reload queue: %v", err)
+	}
+
+	// Alert should either be failed or still pending for retry
+	if len(loadedQueue.Alerts) > 0 {
+		alert := loadedQueue.Alerts[0]
+		if alert.Status == heartbeat.AlertStatusSent {
+			t.Error("Alert should not be marked as sent when delivery fails")
+		}
+		t.Logf("Alert status after delivery attempt: %s (retry count: %d)", alert.Status, alert.RetryCount)
+	}
+}
+
+func testTimeoutScenarios(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := createHeartbeatTestConfig(t, tempDir)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 1
+	
+	// Create HEARTBEAT.md with timeout-prone tasks
+	heartbeatFile := filepath.Join(tempDir, "HEARTBEAT.md")
+	timeoutContent := `# HEARTBEAT.md - Timeout Test
+
+## Slow Task
+- Execute a task that might timeout
+- Handle timeout gracefully
+
+` + "```bash\nsleep 10\n```" // Sleep longer than typical timeout
+
+	if err := os.WriteFile(heartbeatFile, []byte(timeoutContent), 0644); err != nil {
+		t.Fatalf("Failed to write timeout test HEARTBEAT.md: %v", err)
+	}
+
+	gw, cleanup := createTestGateway(t, cfg)
+	defer cleanup()
+
+	// Let heartbeat run and handle timeout
+	time.Sleep(8 * time.Second)
+
+	// Check that system remained stable despite timeouts
+	health := makeHealthRequest(t, gw)
+	if health["status"].(string) != "healthy" {
+		t.Error("System should remain healthy even with task timeouts")
+	}
+
+	diagnostics := makeDiagnosticsRequest(t, gw)
+	if heartbeatInfo, exists := diagnostics["heartbeat"]; exists {
+		heartbeat := heartbeatInfo.(map[string]interface{})
+		if !heartbeat["running"].(bool) {
+			t.Error("Heartbeat should continue running despite task timeouts")
+		}
+	}
+}
+
+func testResourceExhaustion(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := createHeartbeatTestConfig(t, tempDir)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 1 // Very frequent
+
+	gw, cleanup := createTestGateway(t, cfg)
+	defer cleanup()
+
+	// Create high load scenario
+	duration := 60 * time.Second
+	var wg sync.WaitGroup
+	
+	// Multiple concurrent operations
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			for time.Since(start) < duration {
+				makeHealthRequest(t, gw)
+				time.Sleep(50 * time.Millisecond)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// System should remain stable under load
+	finalHealth := makeHealthRequest(t, gw)
+	if finalHealth["status"].(string) != "healthy" {
+		t.Error("System should remain healthy under resource pressure")
+	}
+
+	// Check resource usage is reasonable
+	finalMetrics := makeMetricsRequest(t, gw)
+	if finalMetrics["memory_usage_mb"].(float64) > 200 { // 200MB threshold
+		t.Errorf("Excessive memory usage under load: %.2f MB", finalMetrics["memory_usage_mb"].(float64))
+	}
+}
+
+// Test helper functions specific to heartbeat loop testing
+
+func testCronJobCreation(t *testing.T, gw *gateway.Gateway) {
+	// Test that heartbeat can create cron jobs for scheduling
+	// This would interact with the cron tool system
+	t.Log("Testing cron job creation (placeholder)")
+	
+	// Verify cron functionality is available
+	diagnostics := makeDiagnosticsRequest(t, gw)
+	
+	// Check for cron-related information
+	if tools, ok := diagnostics["tools"].(map[string]interface{}); ok {
+		if cronInfo, ok := tools["cron"]; ok {
+			t.Logf("Cron tool info: %+v", cronInfo)
+		}
+	}
+}
+
+func testCronJobExecution(t *testing.T, gw *gateway.Gateway) {
+	t.Log("Testing cron job execution (placeholder)")
+	// Would test actual job execution and monitoring
+}
+
+func testCronJobMonitoring(t *testing.T, gw *gateway.Gateway) {
+	t.Log("Testing cron job monitoring (placeholder)")
+	// Would test job status tracking and health monitoring
+}
+
+func testCronJobCleanup(t *testing.T, gw *gateway.Gateway) {
+	t.Log("Testing cron job cleanup (placeholder)")
+	// Would test job lifecycle management and cleanup
+}
+
+// Performance measurement helpers
+
+type PerformanceMetrics struct {
+	MemoryMB    float64
+	Goroutines  int
+	CPUPercent  float64
+	Duration    time.Duration
+}
+
+func runPerformanceBaseline(t *testing.T) PerformanceMetrics {
+	tempDir := t.TempDir()
+	cfg := createHeartbeatTestConfig(t, tempDir)
+	cfg.Heartbeat.Enabled = false // Baseline without heartbeat
+
+	gw, cleanup := createTestGateway(t, cfg)
+	defer cleanup()
+
+	return measurePerformance(t, gw, 30*time.Second)
+}
+
+func runPerformanceWithHeartbeat(t *testing.T) PerformanceMetrics {
+	tempDir := t.TempDir()
+	cfg := createHeartbeatTestConfig(t, tempDir)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.IntervalSeconds = 3
+	cfg.Heartbeat.EnableMetrics = true
+	cfg.Heartbeat.EnableEvents = true
+
+	gw, cleanup := createTestGateway(t, cfg)
+	defer cleanup()
+
+	return measurePerformance(t, gw, 30*time.Second)
+}
+
+func measurePerformance(t *testing.T, gw *gateway.Gateway, duration time.Duration) PerformanceMetrics {
+	// Stabilization period
+	time.Sleep(5 * time.Second)
+	runtime.GC()
+	time.Sleep(time.Second)
+
+	start := time.Now()
+	initialMetrics := makeMetricsRequest(t, gw)
+
+	// Generate standard load during measurement
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			startTime := time.Now()
+			for time.Since(startTime) < duration {
+				makeHealthRequest(t, gw)
+				time.Sleep(200 * time.Millisecond)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Final measurement
+	runtime.GC()
+	time.Sleep(time.Second)
+	finalMetrics := makeMetricsRequest(t, gw)
+	actualDuration := time.Since(start)
+
+	return PerformanceMetrics{
+		MemoryMB:   finalMetrics["memory_usage_mb"].(float64),
+		Goroutines: int(finalMetrics["goroutine_count"].(float64)),
+		CPUPercent: 0.0, // Would need CPU monitoring implementation
+		Duration:   actualDuration,
+	}
+}
+
+// Utility functions for heartbeat loop testing
+
+func createHeartbeatTestConfig(t *testing.T, workspaceDir string) *config.Config {
+	cfg := config.Default()
+	cfg.Database.Path = filepath.Join(workspaceDir, "test.db")
+	cfg.Server.Port = "0" // Random port
+	cfg.Workspace.ContextDir = workspaceDir
+	cfg.AI.Provider = "mock"
+
+	// Disable channels for testing
+	cfg.Channels.Telegram.Enabled = false
+
+	// Optimize for testing
+	cfg.RateLimit.RequestsPerSecond = 1000
+	cfg.RateLimit.BurstSize = 100
+
+	return cfg
+}
+
+func loadTestFixture(t *testing.T, filename string) string {
+	fixturePath := filepath.Join("fixtures", "heartbeat", filename)
+	content, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("Failed to load test fixture %s: %v", filename, err)
+	}
+	return string(content)
+}
+
+func getHeartbeatCountFromDiagnostics(diagnostics map[string]interface{}) int64 {
+	if heartbeatInfo, exists := diagnostics["heartbeat"]; exists {
+		if heartbeat, ok := heartbeatInfo.(map[string]interface{}); ok {
+			if count, ok := heartbeat["heartbeat_count"].(float64); ok {
+				return int64(count)
+			}
+		}
+	}
+	return 0
+}
+
+// HTTP request helpers (reuse from existing integration tests)
+
+func createTestGateway(t *testing.T, cfg *config.Config) (*gateway.Gateway, func()) {
+	gw, err := gateway.New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create gateway: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	started := make(chan bool, 1)
+	errorChan := make(chan error, 1)
+
+	go func() {
+		if err := gw.Start(ctx); err != nil {
+			if ctx.Err() == nil {
+				errorChan <- err
+			}
+			return
+		}
+		started <- true
+	}()
+
+	select {
+	case <-started:
+		// Gateway started
+	case err := <-errorChan:
+		t.Fatalf("Failed to start gateway: %v", err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("Gateway startup timeout")
+	}
+
+	time.Sleep(2 * time.Second) // Stabilization
+
+	cleanup := func() {
+		cancel()
+		time.Sleep(3 * time.Second)
+	}
+
+	return gw, cleanup
+}
+
+func makeHealthRequest(t *testing.T, gw *gateway.Gateway) map[string]interface{} {
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := fmt.Sprintf("http://localhost:%s/health", getGatewayPort(gw))
+
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("Failed to request health endpoint: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode health response: %v", err)
+	}
+
+	return response
+}
+
+func makeMetricsRequest(t *testing.T, gw *gateway.Gateway) map[string]interface{} {
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := fmt.Sprintf("http://localhost:%s/metrics", getGatewayPort(gw))
+
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("Failed to request metrics endpoint: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode metrics response: %v", err)
+	}
+
+	return response
+}
+
+func makeDiagnosticsRequest(t *testing.T, gw *gateway.Gateway) map[string]interface{} {
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := fmt.Sprintf("http://localhost:%s/diagnostics", getGatewayPort(gw))
+
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("Failed to request diagnostics endpoint: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode diagnostics response: %v", err)
+	}
+
+	return response
+}
+
+func getGatewayPort(gw *gateway.Gateway) string {
+	// Placeholder - would need actual port getter from gateway
+	return "8080"
+}

@@ -1,0 +1,21 @@
+{
+  "port": 18889,
+  "database": {
+    "path": "./gateway.db"
+  },
+  "tools": {
+    "enabled_tools": [
+      "read_file",
+      "write_file",
+      "list_files"
+    ],
+    "sandbox": {
+      "workspace_dir": "./workspace",
+      "allowed_paths": [
+        "./workspace",
+        "/tmp"
+      ]
+    }
+  },
+  "channels": []
+}

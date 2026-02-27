@@ -1,0 +1,162 @@
+{
+  "type": "search",
+  "discussions": {
+    "type": "search",
+    "results": []
+  },
+  "faq": {
+    "type": "faq",
+    "results": []
+  },
+  "infobox": {
+    "type": "infobox",
+    "results": []
+  },
+  "locations": {
+    "type": "location",
+    "results": []
+  },
+  "mixed": {
+    "type": "mixed",
+    "main": [
+      {
+        "type": "web",
+        "index": 0,
+        "all": false
+      },
+      {
+        "type": "web",
+        "index": 1,
+        "all": false
+      },
+      {
+        "type": "web",
+        "index": 2,
+        "all": false
+      }
+    ]
+  },
+  "news": {
+    "type": "news",
+    "results": []
+  },
+  "query": {
+    "original": "OpenAI GPT",
+    "show_strict_warning": false,
+    "altered": "OpenAI GPT",
+    "safesearch": true,
+    "is_navigational": false,
+    "local_decision": "",
+    "local_locations_idx": null,
+    "is_news_breaking": false,
+    "spellcheck_off": false,
+    "country": "US",
+    "bad_results": false,
+    "should_fallback": false,
+    "lat": "",
+    "long": "",
+    "postal_code": "",
+    "city": "",
+    "state": "",
+    "header_country": "",
+    "more_results_available": true,
+    "custom_location_label": "",
+    "reddit_cluster": ""
+  },
+  "videos": {
+    "type": "videos",
+    "results": []
+  },
+  "web": {
+    "type": "search",
+    "results": [
+      {
+        "type": "search_result",
+        "title": "ChatGPT - OpenAI",
+        "url": "https://openai.com/chatgpt/",
+        "description": "ChatGPT is a free-to-use AI system. Use it for engaging conversations, gain insights, automate tasks, and witness the future of AI, all in one place.",
+        "date": "2024-12-15T10:30:00.000Z",
+        "extra_snippets": [
+          "OpenAI's mission is to ensure that artificial general intelligence benefits all of humanity.",
+          "ChatGPT is powered by GPT-4, one of the most advanced AI language models."
+        ],
+        "favicon": "https://openai.com/favicon.ico",
+        "is_source_local": false,
+        "is_source_both": false,
+        "language": "en",
+        "family_friendly": true,
+        "subtype": "generic",
+        "thumbnail": {
+          "src": "https://example.com/thumbnail1.jpg",
+          "original": "https://example.com/thumbnail1_orig.jpg",
+          "logo": false
+        },
+        "age": "2024-12-15T10:30:00.000Z",
+        "profile": {
+          "name": "OpenAI",
+          "url": "https://openai.com",
+          "long_name": "OpenAI - Artificial Intelligence Research",
+          "img": "https://openai.com/logo.png"
+        }
+      },
+      {
+        "type": "search_result", 
+        "title": "GPT-4 Technical Report - OpenAI",
+        "url": "https://openai.com/research/gpt-4",
+        "description": "We report the development of GPT-4, a large-scale, multimodal model which can accept image and text inputs and produce text outputs.",
+        "date": "2024-11-20T15:45:00.000Z",
+        "extra_snippets": [
+          "GPT-4 demonstrates human-level performance on various professional and academic benchmarks.",
+          "The model exhibits more reliable, creative, and nuanced behavior than previous models."
+        ],
+        "favicon": "https://openai.com/favicon.ico",
+        "is_source_local": false,
+        "is_source_both": false,
+        "language": "en", 
+        "family_friendly": true,
+        "subtype": "generic",
+        "thumbnail": {
+          "src": "https://example.com/thumbnail2.jpg",
+          "original": "https://example.com/thumbnail2_orig.jpg",
+          "logo": false
+        },
+        "age": "2024-11-20T15:45:00.000Z",
+        "profile": {
+          "name": "OpenAI Research",
+          "url": "https://openai.com/research",
+          "long_name": "OpenAI Research Publications",
+          "img": "https://openai.com/research/logo.png"
+        }
+      },
+      {
+        "type": "search_result",
+        "title": "What is GPT? - Generative Pre-trained Transformer Guide",
+        "url": "https://example.edu/gpt-guide",
+        "description": "A comprehensive guide to understanding GPT (Generative Pre-trained Transformer) models, their architecture, training process, and applications in AI.",
+        "date": "2024-10-01T09:15:00.000Z",
+        "extra_snippets": [
+          "GPT models use the transformer architecture introduced in 'Attention is All You Need'.",
+          "These models are pre-trained on large amounts of text data and fine-tuned for specific tasks."
+        ],
+        "favicon": "https://example.edu/favicon.ico",
+        "is_source_local": false,
+        "is_source_both": false,
+        "language": "en",
+        "family_friendly": true,
+        "subtype": "generic",
+        "thumbnail": {
+          "src": "https://example.com/thumbnail3.jpg",
+          "original": "https://example.com/thumbnail3_orig.jpg", 
+          "logo": false
+        },
+        "age": "2024-10-01T09:15:00.000Z",
+        "profile": {
+          "name": "University AI Lab",
+          "url": "https://example.edu",
+          "long_name": "Example University Artificial Intelligence Laboratory",
+          "img": "https://example.edu/logo.png"
+        }
+      }
+    ]
+  }
+}

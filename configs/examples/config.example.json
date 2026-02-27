@@ -1,0 +1,65 @@
+{
+  "port": 18789,
+  "database": {
+    "path": "./gateway.db"
+  },
+  "ai": {
+    "default_provider": "anthropic",
+    "providers": [
+      {
+        "name": "anthropic",
+        "type": "anthropic",
+        "api_key": "${ANTHROPIC_API_KEY}",
+        "model": "claude-3-5-sonnet-20241022"
+      },
+      {
+        "name": "opus46",
+        "type": "anthropic",
+        "api_key": "${ANTHROPIC_API_KEY}",
+        "model": "claude-opus-4-6"
+      },
+      {
+        "name": "openai",
+        "type": "openai",
+        "api_key": "${OPENAI_API_KEY}",
+        "model": "gpt-4"
+      }
+    ]
+  },
+  "tools": {
+    "enabled_tools": [
+      "read_file",
+      "write_file",
+      "exec",
+      "list_files"
+    ],
+    "sandbox": {
+      "workspace_dir": "./workspace",
+      "allowed_paths": [
+        "./workspace",
+        "/tmp"
+      ]
+    }
+  },
+  "channels": [
+    {
+      "name": "telegram",
+      "type": "telegram",
+      "enabled": false,
+      "config": {
+        "bot_token": "${TELEGRAM_BOT_TOKEN}",
+        "webhook_mode": false,
+        "debug": true
+      }
+    },
+    {
+      "name": "whatsapp_ts",
+      "type": "whatsapp",
+      "enabled": false,
+      "config": {
+        "session_dir": "./sessions/whatsapp",
+        "adapter_path": "./channels/adapters/whatsapp.js"
+      }
+    }
+  ]
+}

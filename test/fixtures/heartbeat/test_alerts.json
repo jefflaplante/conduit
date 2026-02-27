@@ -1,0 +1,51 @@
+{
+  "alerts": [
+    {
+      "id": "test-critical-001",
+      "source": "test-source",
+      "title": "Critical System Alert",
+      "message": "Test critical alert for validation",
+      "severity": "critical",
+      "status": "pending",
+      "created_at": "2024-01-01T10:00:00Z",
+      "max_retries": 3,
+      "retry_count": 0,
+      "metadata": {
+        "test": true,
+        "fixture": "critical_alert"
+      }
+    },
+    {
+      "id": "test-warning-001",
+      "source": "test-source",
+      "title": "Warning Alert",
+      "message": "Test warning alert for quiet hours testing",
+      "severity": "warning",
+      "status": "pending",
+      "created_at": "2024-01-01T23:30:00Z",
+      "max_retries": 3,
+      "retry_count": 0,
+      "metadata": {
+        "test": true,
+        "fixture": "warning_alert"
+      }
+    },
+    {
+      "id": "test-info-001",
+      "source": "test-source",
+      "title": "Info Alert",
+      "message": "Test info alert for batching",
+      "severity": "info",
+      "status": "pending",
+      "created_at": "2024-01-01T14:00:00Z",
+      "max_retries": 3,
+      "retry_count": 0,
+      "metadata": {
+        "test": true,
+        "fixture": "info_alert"
+      }
+    }
+  ],
+  "last_sync": "2024-01-01T10:00:00Z",
+  "version": 1
+}
