@@ -159,6 +159,11 @@ func (pb *PromptBuilder) buildFullPrompt(ctx context.Context, session *sessions.
 	// 14. Messaging
 	sections = append(sections, buildMessagingSection(pb.sectionParams))
 
+	// 14b. Cron/Scheduled Job Delivery instructions
+	if session != nil && strings.HasPrefix(session.Key, "cron_") {
+		sections = append(sections, buildCronDeliverySection(pb.sectionParams))
+	}
+
 	// 15. Voice/TTS
 	sections = append(sections, buildVoiceSection(pb.sectionParams))
 
