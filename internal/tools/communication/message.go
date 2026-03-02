@@ -24,7 +24,11 @@ func (t *MessageTool) Name() string {
 }
 
 func (t *MessageTool) Description() string {
-	return "Send messages via configured channels (Telegram, Discord, etc.)"
+	return `Send messages via configured channels (Telegram, Discord, etc.).
+
+IMPORTANT: This is the ONLY correct way to deliver output to users from scheduled/cron jobs, heartbeats, or background tasks. Do NOT use shell commands (echo, curl, etc.) to send messages — they will not work. Call this tool directly with action="send", target=<chat_id>, message=<content>.
+
+Use action="status" to discover available channels and their IDs if you don't know the target.`
 }
 
 func (t *MessageTool) Parameters() map[string]interface{} {

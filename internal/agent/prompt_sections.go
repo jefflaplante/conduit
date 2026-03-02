@@ -118,7 +118,7 @@ func buildMessagingSection(params *SectionParams) string {
 - Never use exec/curl for provider messaging; Conduit handles all routing internally.
 `)
 
-	if params.AvailableTools["message"] {
+	if params.AvailableTools["message"] || params.AvailableTools["Message"] {
 		channelOptions := "telegram|whatsapp|discord|googlechat|slack|signal|imessage"
 		if len(params.MessageChannels) > 0 {
 			channelOptions = strings.Join(params.MessageChannels, "|")
@@ -357,4 +357,28 @@ func buildRuntimeSection(params *SectionParams, runtimeInfo map[string]string) s
 Runtime: %s
 Current time: %s
 `, strings.Join(parts, " | "), now.Format("Mon 2006-01-02 15:04 MST"))
+}
+
+// buildCronDeliverySection returns instructions for cron/scheduled job output delivery.
+// This is injected only for sessions with a "cron_" prefix to ensure scheduled jobs
+// use the Message tool and do not attempt shell-based delivery.
+func buildCronDeliverySection(params *SectionParams) string {
+	hasMessage := params.AvailableTools["Message"] || params.AvailableTools["message"]
+	if !hasMessage {
+		return ""
+	}
+
+	return `## Scheduled Job Output Delivery
+
+You are running as a scheduled/cron job. You have NO interactive session — there is no user waiting for a reply here.
+
+**To deliver output to the user, you MUST call the Message tool directly.** This is the only way to reach them.
+
+Rules:
+- ALWAYS use: ` + "`Message(action=\"send\", target=\"<chat_id>\", message=\"<content>\")`" + `
+- NEVER use shell commands (echo, curl, bash) to send messages — they do nothing
+- If you don't know the target chat ID, call ` + "`Message(action=\"status\")`" + ` first to discover it
+- After sending, your text reply is discarded — only tool-delivered messages reach the user
+- If there is nothing to report, do NOT send a message
+`
 }
