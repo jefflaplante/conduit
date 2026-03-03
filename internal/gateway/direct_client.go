@@ -233,8 +233,9 @@ func (c *DirectClient) streamChatWithID(session *sessions.Session, text, request
 		})
 	})
 
-	// Get model override
+	// Get model and provider overrides
 	modelOverride := session.Context["model"]
+	providerOverride := session.Context["provider"]
 
 	// Stream deltas
 	onDelta := func(delta string, done bool) {
@@ -247,7 +248,7 @@ func (c *DirectClient) streamChatWithID(session *sessions.Session, text, request
 		}
 	}
 
-	convResponse, err := c.ai.GenerateResponseStreaming(reqCtx, session, text, modelOverride, onDelta)
+	convResponse, err := c.ai.GenerateResponseStreaming(reqCtx, session, text, providerOverride, modelOverride, onDelta)
 	if err != nil {
 		if reqCtx.Err() == context.Canceled {
 			log.Printf("[DirectClient] Request cancelled for session: %s", session.Key)
@@ -391,6 +392,7 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 			"/status - Show session info\n" +
 			"/help - Show this message\n" +
 			"/model [alias] - View/switch model\n" +
+			"/provider [name] - View/switch provider\n" +
 			"/context - Show context window usage\n" +
 			"/stop - Stop current operation\n" +
 			"/quit - Exit TUI\n\n" +
@@ -408,6 +410,52 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 			return
 		}
 		sendResponse(formatContextUsage(session))
+
+	case text == "/provider" || strings.HasPrefix(text, "/provider "):
+		parts := strings.Fields(text)
+		if sessionKey == "" {
+			sendResponse("No active session.")
+			return
+		}
+
+		session, err := c.sessions.GetSession(sessionKey)
+		if err != nil {
+			sendResponse("Could not retrieve session.")
+			return
+		}
+
+		currentProvider := session.Context["provider"]
+		if currentProvider == "" {
+			currentProvider = c.ai.DefaultProviderName() + " (default)"
+		}
+
+		if len(parts) == 1 {
+			providers := c.ai.ListProviders()
+			var lines []string
+			for _, p := range providers {
+				lines = append(lines, fmt.Sprintf("  %s — %s (model: %s)", p.Name, p.Type, p.DefaultModel))
+			}
+			sendResponse(fmt.Sprintf("Current Provider: %s\n\nAvailable providers:\n%s\n\nUse /provider <name> to switch.", currentProvider, strings.Join(lines, "\n")))
+			return
+		}
+
+		requested := parts[1]
+		meta, exists := c.ai.GetProviderMeta(requested)
+		if !exists {
+			providers := c.ai.ListProviders()
+			var names []string
+			for _, p := range providers {
+				names = append(names, p.Name)
+			}
+			sendResponse(fmt.Sprintf("Unknown provider: %s\n\nAvailable: %s", requested, strings.Join(names, ", ")))
+			return
+		}
+
+		if err := c.sessions.SetSessionContext(sessionKey, "provider", requested); err != nil {
+			sendResponse(fmt.Sprintf("Failed to switch provider: %v", err))
+			return
+		}
+		sendResponse(fmt.Sprintf("Switched to provider %s (%s, model: %s)", meta.Name, meta.Type, meta.DefaultModel))
 
 	case text == "/model" || strings.HasPrefix(text, "/model "):
 		parts := strings.Fields(text)
@@ -428,8 +476,12 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 		}
 
 		if len(parts) == 1 {
-			aliasDisplay := formatAliasDisplay(c.modelAliases, "  ", " -> ")
-			response := fmt.Sprintf("Current Model: %s\n\nAvailable aliases:\n%s\n\nUse /model <alias> to switch.", currentModel, aliasDisplay)
+			currentProvider := session.Context["provider"]
+			if currentProvider == "" {
+				currentProvider = c.ai.DefaultProviderName()
+			}
+			aliasDisplay := c.formatAliasDisplayWithProvider(c.modelAliases, "  ", " -> ")
+			response := fmt.Sprintf("Current Model: %s\nProvider: %s\n\nAvailable aliases:\n%s\n\nUse /model <alias> to switch.", currentModel, currentProvider, aliasDisplay)
 			sendResponse(response)
 			return
 		}
@@ -443,22 +495,45 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 				Model:      model,
 			})
 		}
+
+		// Helper to set model and auto-resolve provider
+		dcSetModelAndResolve := func(model string) (string, error) {
+			if err := c.sessions.SetSessionContext(sessionKey, "model", model); err != nil {
+				return "", err
+			}
+			resolvedProvider := c.ai.ResolveProviderForModel(model)
+			if resolvedProvider != "" {
+				_ = c.sessions.SetSessionContext(sessionKey, "provider", resolvedProvider)
+			}
+			return resolvedProvider, nil
+		}
+
 		if fullModel, exists := c.modelAliases[requested]; exists {
-			if err := c.sessions.SetSessionContext(sessionKey, "model", fullModel); err != nil {
+			resolvedProvider, err := dcSetModelAndResolve(fullModel)
+			if err != nil {
 				sendResponse(fmt.Sprintf("Failed to switch model: %v", err))
 				return
 			}
 			if fullModel == "" {
 				sendModelResponse("Switched to default model (sonnet)", "")
 			} else {
-				sendModelResponse(fmt.Sprintf("Switched to %s (%s)", requested, fullModel), fullModel)
+				suffix := ""
+				if resolvedProvider != "" {
+					suffix = " on " + resolvedProvider
+				}
+				sendModelResponse(fmt.Sprintf("Switched to %s (%s)%s", requested, fullModel, suffix), fullModel)
 			}
-		} else if strings.Contains(requested, "/") || strings.HasPrefix(requested, "claude-") {
-			if err := c.sessions.SetSessionContext(sessionKey, "model", requested); err != nil {
+		} else if strings.Contains(requested, "/") || len(requested) > 3 {
+			resolvedProvider, err := dcSetModelAndResolve(requested)
+			if err != nil {
 				sendResponse(fmt.Sprintf("Failed to switch model: %v", err))
 				return
 			}
-			sendModelResponse(fmt.Sprintf("Switched to %s", requested), requested)
+			suffix := ""
+			if resolvedProvider != "" {
+				suffix = " on " + resolvedProvider
+			}
+			sendModelResponse(fmt.Sprintf("Switched to %s%s", requested, suffix), requested)
 		} else {
 			sendResponse(fmt.Sprintf("Unknown model alias: %s\n\nAvailable: %s", requested, formatAliasKeys(c.modelAliases)))
 		}
@@ -479,6 +554,23 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 		command := strings.Fields(text)[0]
 		sendResponse(fmt.Sprintf("Unknown command: %s\nType /help for available commands.", command))
 	}
+}
+
+// formatAliasDisplayWithProvider returns a multi-line display of aliases with resolved providers.
+func (c *DirectClient) formatAliasDisplayWithProvider(aliases map[string]string, prefix, arrow string) string {
+	var lines []string
+	for alias, model := range aliases {
+		display := model
+		if display == "" {
+			display = "reset to default"
+		}
+		providerName := c.ai.ResolveProviderForModel(model)
+		if providerName == "" {
+			providerName = c.ai.DefaultProviderName()
+		}
+		lines = append(lines, fmt.Sprintf("%s%s %s %s (%s)", prefix, alias, arrow, display, providerName))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // formatToolArgs formats a tool args map as "key=value, key=value".

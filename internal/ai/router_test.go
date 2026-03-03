@@ -562,6 +562,238 @@ func TestMockProviderReset(t *testing.T) {
 	}
 }
 
+func TestResolveProviderForModel(t *testing.T) {
+	cfg := config.AIConfig{
+		DefaultProvider: "anthropic",
+		Providers: []config.ProviderConfig{
+			{Name: "anthropic", Type: "anthropic", APIKey: "test-key", Model: "claude-sonnet-4-20250514"},
+			{Name: "openai-prod", Type: "openai", APIKey: "test-key", Model: "gpt-4"},
+			{Name: "ollama-local", Type: "ollama", Model: "llama3.2"},
+		},
+	}
+
+	router, err := NewRouter(cfg, nil)
+	if err != nil {
+		t.Fatalf("Failed to create router: %v", err)
+	}
+
+	tests := []struct {
+		model    string
+		expected string
+	}{
+		// Prefix heuristic: claude-* → anthropic type
+		{"claude-opus-4-6", "anthropic"},
+		{"claude-haiku-4-5-20251001", "anthropic"},
+		// Prefix heuristic: gpt-* → openai type
+		{"gpt-4o", "openai-prod"},
+		{"gpt-3.5-turbo", "openai-prod"},
+		// Prefix heuristic: o1-*/o3-* → openai type
+		{"o1-preview", "openai-prod"},
+		{"o3-mini", "openai-prod"},
+		// Prefix heuristic: llama/mistral/deepseek/qwen/phi/gemma → ollama type
+		{"llama3.2", "ollama-local"},
+		{"mistral-7b", "ollama-local"},
+		{"deepseek-coder", "ollama-local"},
+		{"qwen2.5-coder", "ollama-local"},
+		{"phi-3", "ollama-local"},
+		{"gemma2-9b", "ollama-local"},
+		// Default model match
+		{"gpt-4", "openai-prod"},
+		// Empty → empty
+		{"", ""},
+		// Unknown → empty
+		{"some-unknown-model", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			result := router.ResolveProviderForModel(tt.model)
+			if result != tt.expected {
+				t.Errorf("ResolveProviderForModel(%q) = %q, want %q", tt.model, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestListProviders(t *testing.T) {
+	cfg := config.AIConfig{
+		DefaultProvider: "anthropic",
+		Providers: []config.ProviderConfig{
+			{Name: "anthropic", Type: "anthropic", APIKey: "test-key", Model: "claude-sonnet-4-20250514"},
+			{Name: "openai-prod", Type: "openai", APIKey: "test-key", Model: "gpt-4"},
+		},
+	}
+
+	router, err := NewRouter(cfg, nil)
+	if err != nil {
+		t.Fatalf("Failed to create router: %v", err)
+	}
+
+	providers := router.ListProviders()
+	if len(providers) != 2 {
+		t.Fatalf("Expected 2 providers, got %d", len(providers))
+	}
+
+	// Build a map for easier assertions
+	byName := make(map[string]ProviderMeta)
+	for _, p := range providers {
+		byName[p.Name] = p
+	}
+
+	if meta, ok := byName["anthropic"]; !ok {
+		t.Error("Missing anthropic provider")
+	} else {
+		if meta.Type != "anthropic" {
+			t.Errorf("Expected anthropic type, got %s", meta.Type)
+		}
+		if meta.DefaultModel != "claude-sonnet-4-20250514" {
+			t.Errorf("Expected default model claude-sonnet-4-20250514, got %s", meta.DefaultModel)
+		}
+	}
+
+	if meta, ok := byName["openai-prod"]; !ok {
+		t.Error("Missing openai-prod provider")
+	} else {
+		if meta.Type != "openai" {
+			t.Errorf("Expected openai type, got %s", meta.Type)
+		}
+	}
+}
+
+func TestGetProviderMeta(t *testing.T) {
+	cfg := config.AIConfig{
+		DefaultProvider: "anthropic",
+		Providers: []config.ProviderConfig{
+			{Name: "anthropic", Type: "anthropic", APIKey: "test-key", Model: "claude-sonnet-4-20250514"},
+		},
+	}
+
+	router, err := NewRouter(cfg, nil)
+	if err != nil {
+		t.Fatalf("Failed to create router: %v", err)
+	}
+
+	// Found case
+	meta, ok := router.GetProviderMeta("anthropic")
+	if !ok {
+		t.Fatal("Expected to find anthropic provider")
+	}
+	if meta.Name != "anthropic" || meta.Type != "anthropic" {
+		t.Errorf("Unexpected meta: %+v", meta)
+	}
+
+	// Not found case
+	_, ok = router.GetProviderMeta("nonexistent")
+	if ok {
+		t.Error("Expected not to find nonexistent provider")
+	}
+}
+
+func TestDefaultProviderName(t *testing.T) {
+	cfg := config.AIConfig{
+		DefaultProvider: "my-default",
+		Providers:       []config.ProviderConfig{},
+	}
+
+	router, err := NewRouter(cfg, nil)
+	if err != nil {
+		t.Fatalf("Failed to create router: %v", err)
+	}
+
+	if router.DefaultProviderName() != "my-default" {
+		t.Errorf("Expected 'my-default', got %s", router.DefaultProviderName())
+	}
+}
+
+func TestStreamingWithProviderSelection(t *testing.T) {
+	cfg := config.AIConfig{
+		DefaultProvider: "anthropic",
+		Providers:       []config.ProviderConfig{},
+	}
+
+	router, err := NewRouter(cfg, nil)
+	if err != nil {
+		t.Fatalf("Failed to create router: %v", err)
+	}
+
+	// Register two mock providers
+	mockAnthropic := NewMockProvider("anthropic")
+	mockAnthropic.AddResponse("Response from Anthropic", nil)
+	router.RegisterProvider("anthropic", mockAnthropic)
+	router.providerMeta["anthropic"] = ProviderMeta{Name: "anthropic", Type: "anthropic", DefaultModel: "claude-sonnet-4-20250514"}
+
+	mockOllama := NewMockProvider("ollama-local")
+	mockOllama.AddResponse("Response from Ollama", nil)
+	router.RegisterProvider("ollama-local", mockOllama)
+	router.providerMeta["ollama-local"] = ProviderMeta{Name: "ollama-local", Type: "ollama", DefaultModel: "llama3.2"}
+
+	session := &sessions.Session{
+		Key:       "test-session",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	// Call with explicit provider name — should use that provider
+	// Since mock providers don't implement StreamingProvider, it falls back to non-streaming
+	resp, err := router.GenerateResponseStreaming(nil, session, "hello", "ollama-local", "", nil)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if resp.GetContent() != "Response from Ollama" {
+		t.Errorf("Expected response from Ollama, got %q", resp.GetContent())
+	}
+
+	if mockOllama.GetCallCount() != 1 {
+		t.Errorf("Expected ollama mock to be called once, got %d", mockOllama.GetCallCount())
+	}
+	if mockAnthropic.GetCallCount() != 0 {
+		t.Errorf("Expected anthropic mock to not be called, got %d", mockAnthropic.GetCallCount())
+	}
+}
+
+func TestStreamingAutoResolution(t *testing.T) {
+	cfg := config.AIConfig{
+		DefaultProvider: "anthropic",
+		Providers:       []config.ProviderConfig{},
+	}
+
+	router, err := NewRouter(cfg, nil)
+	if err != nil {
+		t.Fatalf("Failed to create router: %v", err)
+	}
+
+	mockAnthropic := NewMockProvider("anthropic")
+	mockAnthropic.AddResponse("Anthropic response", nil)
+	router.RegisterProvider("anthropic", mockAnthropic)
+	router.providerMeta["anthropic"] = ProviderMeta{Name: "anthropic", Type: "anthropic", DefaultModel: "claude-sonnet-4-20250514"}
+
+	mockOllama := NewMockProvider("ollama-local")
+	mockOllama.AddResponse("Ollama response", nil)
+	router.RegisterProvider("ollama-local", mockOllama)
+	router.providerMeta["ollama-local"] = ProviderMeta{Name: "ollama-local", Type: "ollama", DefaultModel: "llama3.2"}
+
+	session := &sessions.Session{
+		Key:       "test-session",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	// Pass empty provider but model that resolves to ollama
+	resp, err := router.GenerateResponseStreaming(nil, session, "hello", "", "llama3.2", nil)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if resp.GetContent() != "Ollama response" {
+		t.Errorf("Expected Ollama response via auto-resolution, got %q", resp.GetContent())
+	}
+
+	if mockOllama.GetCallCount() != 1 {
+		t.Errorf("Expected ollama to be called, got %d", mockOllama.GetCallCount())
+	}
+}
+
 // MockError is a simple error type for testing
 type MockError struct {
 	Message string

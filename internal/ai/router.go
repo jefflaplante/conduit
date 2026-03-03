@@ -24,9 +24,17 @@ type ConversationResponse interface {
 	HasToolResults() bool
 }
 
+// ProviderMeta holds metadata about a configured provider.
+type ProviderMeta struct {
+	Name         string
+	Type         string // "anthropic", "openai", "ollama"
+	DefaultModel string
+}
+
 // Router handles AI model interactions
 type Router struct {
 	providers       map[string]Provider
+	providerMeta    map[string]ProviderMeta
 	default_        string
 	agentSystem     AgentSystem     // Add agent system to router
 	executionEngine ExecutionEngine // Tool execution engine (interface, not pointer)
@@ -185,6 +193,7 @@ func ContextWindowForModel(model string) int {
 func NewRouter(cfg config.AIConfig, agentSystem AgentSystem) (*Router, error) {
 	router := &Router{
 		providers:    make(map[string]Provider),
+		providerMeta: make(map[string]ProviderMeta),
 		default_:     cfg.DefaultProvider,
 		agentSystem:  agentSystem,
 		usageTracker: NewUsageTracker(),
@@ -197,6 +206,7 @@ func NewRouter(cfg config.AIConfig, agentSystem AgentSystem) (*Router, error) {
 func NewRouterWithExecution(cfg config.AIConfig, agentSystem AgentSystem, executionEngine ExecutionEngine) (*Router, error) {
 	router := &Router{
 		providers:       make(map[string]Provider),
+		providerMeta:    make(map[string]ProviderMeta),
 		default_:        cfg.DefaultProvider,
 		agentSystem:     agentSystem,
 		executionEngine: executionEngine,
@@ -277,6 +287,11 @@ func (r *Router) initializeProviders(cfg config.AIConfig) error {
 		}
 
 		r.providers[providerCfg.Name] = provider
+		r.providerMeta[providerCfg.Name] = ProviderMeta{
+			Name:         providerCfg.Name,
+			Type:         providerCfg.Type,
+			DefaultModel: providerCfg.Model,
+		}
 	}
 
 	return nil
@@ -290,6 +305,66 @@ func (r *Router) RegisterProvider(name string, provider Provider) {
 // HasProviders returns true if the router has at least one provider configured
 func (r *Router) HasProviders() bool {
 	return len(r.providers) > 0
+}
+
+// ListProviders returns metadata for all configured providers.
+func (r *Router) ListProviders() []ProviderMeta {
+	result := make([]ProviderMeta, 0, len(r.providerMeta))
+	for _, meta := range r.providerMeta {
+		result = append(result, meta)
+	}
+	return result
+}
+
+// GetProviderMeta returns metadata for a provider by name.
+func (r *Router) GetProviderMeta(name string) (ProviderMeta, bool) {
+	meta, ok := r.providerMeta[name]
+	return meta, ok
+}
+
+// DefaultProviderName returns the name of the default provider.
+func (r *Router) DefaultProviderName() string {
+	return r.default_
+}
+
+// ResolveProviderForModel attempts to find the best provider for a given model name.
+// Returns the provider name, or "" if no match is found (caller should use default).
+func (r *Router) ResolveProviderForModel(model string) string {
+	if model == "" {
+		return ""
+	}
+	lower := strings.ToLower(model)
+
+	// Tier 1: prefix heuristics → provider type
+	var targetType string
+	switch {
+	case strings.HasPrefix(lower, "claude-"):
+		targetType = "anthropic"
+	case strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o1-") || strings.HasPrefix(lower, "o3-"):
+		targetType = "openai"
+	case strings.HasPrefix(lower, "llama") || strings.HasPrefix(lower, "mistral") ||
+		strings.HasPrefix(lower, "mixtral") || strings.HasPrefix(lower, "codellama") ||
+		strings.HasPrefix(lower, "deepseek") || strings.HasPrefix(lower, "qwen") ||
+		strings.HasPrefix(lower, "phi-") || strings.HasPrefix(lower, "gemma"):
+		targetType = "ollama"
+	}
+
+	if targetType != "" {
+		for name, meta := range r.providerMeta {
+			if meta.Type == targetType {
+				return name
+			}
+		}
+	}
+
+	// Tier 2: check if model matches any provider's default model
+	for name, meta := range r.providerMeta {
+		if meta.DefaultModel == model {
+			return name
+		}
+	}
+
+	return ""
 }
 
 // GenerateResponse generates an AI response for a session
@@ -378,7 +453,10 @@ func (r *Router) GenerateResponseWithTools(ctx context.Context, session *session
 
 // GenerateResponseWithToolsAndProgress is like GenerateResponseWithTools but with progress callbacks
 func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onProgress ProgressCallback) (ConversationResponse, error) {
-	// Use default provider if none specified
+	// Resolve provider: explicit → auto-resolve from model → default
+	if providerName == "" && modelOverride != "" {
+		providerName = r.ResolveProviderForModel(modelOverride)
+	}
 	if providerName == "" {
 		providerName = r.default_
 	}
@@ -511,17 +589,25 @@ func (r *Router) getConversationalProgress(toolCalls []ToolCall) string {
 // GenerateResponseStreaming generates a streaming AI response.
 // The onDelta callback is called with each text delta, and done=true when complete.
 // Any provider implementing StreamingProvider will stream; others fall back to non-streaming.
-func (r *Router) GenerateResponseStreaming(ctx context.Context, session *sessions.Session, userMessage string, modelOverride string, onDelta StreamCallback) (ConversationResponse, error) {
-	provider, exists := r.providers[r.default_]
+func (r *Router) GenerateResponseStreaming(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onDelta StreamCallback) (ConversationResponse, error) {
+	// Resolve provider: explicit → auto-resolve from model → default
+	if providerName == "" && modelOverride != "" {
+		providerName = r.ResolveProviderForModel(modelOverride)
+	}
+	if providerName == "" {
+		providerName = r.default_
+	}
+
+	provider, exists := r.providers[providerName]
 	if !exists {
-		return nil, fmt.Errorf("default provider not found")
+		return nil, fmt.Errorf("provider not found: %s", providerName)
 	}
 
 	// Check if the provider supports streaming
 	streamingProvider, canStream := provider.(StreamingProvider)
 	if !canStream {
 		// Fall back to non-streaming
-		return r.GenerateResponseWithTools(ctx, session, userMessage, "", modelOverride)
+		return r.GenerateResponseWithTools(ctx, session, userMessage, providerName, modelOverride)
 	}
 
 	// Build system prompt

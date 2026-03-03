@@ -56,6 +56,12 @@ func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessa
 		return true
 	}
 
+	// Check for /provider command
+	if text == "/provider" || strings.HasPrefix(text, "/provider ") {
+		g.handleProviderCommand(msg, text, session)
+		return true
+	}
+
 	// Check for /context command
 	if text == "/context" || strings.HasPrefix(text, "/context ") {
 		g.sendCommandResponse(msg, formatContextUsage(session))
@@ -92,17 +98,24 @@ func (g *Gateway) handleStatusCommand(msg *protocol.IncomingMessage, session *se
 		currentModel = "sonnet (default)"
 	}
 
+	currentProvider := session.Context["provider"]
+	if currentProvider == "" {
+		currentProvider = "default"
+	}
+
 	// Build status message
 	status := fmt.Sprintf("*Session Status*\n\n"+
 		"*Session:* %s\n"+
 		"*Messages:* %d\n"+
 		"*Channel:* %s\n"+
-		"*Model:* %s\n\n"+
+		"*Model:* %s\n"+
+		"*Provider:* %s\n\n"+
 		"_Go Gateway %s_",
 		session.Key,
 		msgCount,
 		msg.ChannelID,
 		currentModel,
+		currentProvider,
 		version.Info(),
 	)
 
@@ -117,6 +130,7 @@ func (g *Gateway) handleHelpCommand(msg *protocol.IncomingMessage) {
 /status - Show session info
 /help - Show this message
 /model - View/switch model
+/provider - View/switch provider
 /context - Show context window usage
 /stop - Stop current operation
 
@@ -156,6 +170,69 @@ func formatAliasDisplay(aliases map[string]string, prefix, arrow string) string 
 	return strings.Join(lines, "\n")
 }
 
+// formatAliasDisplayWithProvider returns a multi-line display string of aliases,
+// their targets, and the resolved provider for each.
+func (g *Gateway) formatAliasDisplayWithProvider(aliases map[string]string, prefix, arrow string) string {
+	var lines []string
+	for alias, model := range aliases {
+		display := model
+		if display == "" {
+			display = "reset to default"
+		}
+		providerName := g.ai.ResolveProviderForModel(model)
+		if providerName == "" {
+			providerName = g.ai.DefaultProviderName()
+		}
+		lines = append(lines, fmt.Sprintf("%s%s %s %s (%s)", prefix, alias, arrow, display, providerName))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// handleProviderCommand handles provider switching
+func (g *Gateway) handleProviderCommand(msg *protocol.IncomingMessage, text string, session *sessions.Session) {
+	parts := strings.Fields(text)
+
+	currentProvider := session.Context["provider"]
+	if currentProvider == "" {
+		currentProvider = g.ai.DefaultProviderName() + " (default)"
+	}
+
+	if len(parts) == 1 {
+		// List providers
+		providers := g.ai.ListProviders()
+		var lines []string
+		for _, p := range providers {
+			lines = append(lines, fmt.Sprintf("• *%s* — %s (model: %s)", p.Name, p.Type, p.DefaultModel))
+		}
+		response := fmt.Sprintf("🔌 *Current Provider*\n\n*Active:* %s\n\n*Available providers:*\n%s\n\nUse /provider <name> to switch.", currentProvider, strings.Join(lines, "\n"))
+		g.sendCommandResponse(msg, response)
+		return
+	}
+
+	requested := parts[1]
+	meta, exists := g.ai.GetProviderMeta(requested)
+	if !exists {
+		providers := g.ai.ListProviders()
+		var names []string
+		for _, p := range providers {
+			names = append(names, p.Name)
+		}
+		g.sendCommandResponse(msg, fmt.Sprintf("❌ Unknown provider: %s\n\nAvailable: %s", requested, strings.Join(names, ", ")))
+		return
+	}
+
+	if err := g.sessions.SetSessionContext(session.Key, "provider", requested); err != nil {
+		g.sendCommandResponse(msg, fmt.Sprintf("❌ Failed to switch provider: %v", err))
+		return
+	}
+	if session.Context == nil {
+		session.Context = make(map[string]string)
+	}
+	session.Context["provider"] = requested
+
+	g.sendCommandResponse(msg, fmt.Sprintf("✅ Switched to provider *%s* (%s, model: %s)", meta.Name, meta.Type, meta.DefaultModel))
+}
+
 // handleModelCommand handles model switching
 func (g *Gateway) handleModelCommand(msg *protocol.IncomingMessage, text string, session *sessions.Session) {
 	parts := strings.Fields(text)
@@ -169,9 +246,13 @@ func (g *Gateway) handleModelCommand(msg *protocol.IncomingMessage, text string,
 	aliases := g.getModelAliases()
 
 	if len(parts) == 1 {
-		// Just /model - show current and list available
-		aliasDisplay := formatAliasDisplay(aliases, "• ", " → ")
-		response := fmt.Sprintf("🤖 *Current Model*\n\n*Active:* %s\n*Provider:* Anthropic (OAuth)\n\n*Available aliases:*\n%s\n\nUse /model <alias> to switch.", currentModel, aliasDisplay)
+		// Just /model - show current and list available with provider info
+		currentProvider := session.Context["provider"]
+		if currentProvider == "" {
+			currentProvider = g.ai.DefaultProviderName()
+		}
+		aliasDisplay := g.formatAliasDisplayWithProvider(aliases, "• ", " → ")
+		response := fmt.Sprintf("🤖 *Current Model*\n\n*Active:* %s\n*Provider:* %s\n\n*Available aliases:*\n%s\n\nUse /model <alias> to switch.", currentModel, currentProvider, aliasDisplay)
 		g.sendCommandResponse(msg, response)
 		return
 	}
@@ -179,42 +260,58 @@ func (g *Gateway) handleModelCommand(msg *protocol.IncomingMessage, text string,
 	// Model switch requested
 	requested := strings.ToLower(parts[1])
 
-	// Check if it's a known alias
-	if fullModel, exists := aliases[requested]; exists {
-		// Save to session context
-		if err := g.sessions.SetSessionContext(session.Key, "model", fullModel); err != nil {
-			g.sendCommandResponse(msg, fmt.Sprintf("❌ Failed to switch model: %v", err))
-			return
+	// setModelAndResolveProvider stores the model in session context,
+	// auto-resolves the provider, and returns the resolved provider name.
+	setModelAndResolveProvider := func(model string) (string, error) {
+		if err := g.sessions.SetSessionContext(session.Key, "model", model); err != nil {
+			return "", err
 		}
-
-		// Update the in-memory session too
 		if session.Context == nil {
 			session.Context = make(map[string]string)
 		}
-		session.Context["model"] = fullModel
+		session.Context["model"] = model
+
+		resolvedProvider := g.ai.ResolveProviderForModel(model)
+		if resolvedProvider != "" {
+			_ = g.sessions.SetSessionContext(session.Key, "provider", resolvedProvider)
+			session.Context["provider"] = resolvedProvider
+		}
+		return resolvedProvider, nil
+	}
+
+	// Check if it's a known alias
+	if fullModel, exists := aliases[requested]; exists {
+		resolvedProvider, err := setModelAndResolveProvider(fullModel)
+		if err != nil {
+			g.sendCommandResponse(msg, fmt.Sprintf("❌ Failed to switch model: %v", err))
+			return
+		}
 
 		if fullModel == "" {
 			g.sendCommandResponse(msg, "✅ Switched to *default* model (sonnet)")
 		} else {
-			g.sendCommandResponse(msg, fmt.Sprintf("✅ Switched to *%s* (%s)", requested, fullModel))
+			providerSuffix := ""
+			if resolvedProvider != "" {
+				providerSuffix = " on " + resolvedProvider
+			}
+			g.sendCommandResponse(msg, fmt.Sprintf("✅ Switched to *%s* (%s)%s", requested, fullModel, providerSuffix))
 		}
 		return
 	}
 
-	// Check if it looks like a full model name (contains /)
-	if strings.Contains(requested, "/") || strings.HasPrefix(requested, "claude-") {
-		// Use as-is
-		if err := g.sessions.SetSessionContext(session.Key, "model", requested); err != nil {
+	// Accept any raw model name (full model name, contains /, or any string)
+	if strings.Contains(requested, "/") || len(requested) > 3 {
+		resolvedProvider, err := setModelAndResolveProvider(requested)
+		if err != nil {
 			g.sendCommandResponse(msg, fmt.Sprintf("❌ Failed to switch model: %v", err))
 			return
 		}
 
-		if session.Context == nil {
-			session.Context = make(map[string]string)
+		providerSuffix := ""
+		if resolvedProvider != "" {
+			providerSuffix = " on " + resolvedProvider
 		}
-		session.Context["model"] = requested
-
-		g.sendCommandResponse(msg, fmt.Sprintf("✅ Switched to *%s*", requested))
+		g.sendCommandResponse(msg, fmt.Sprintf("✅ Switched to *%s*%s", requested, providerSuffix))
 		return
 	}
 

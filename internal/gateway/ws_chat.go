@@ -163,8 +163,9 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		})
 	})
 
-	// Get model override from session context
+	// Get model and provider overrides from session context
 	modelOverride := session.Context["model"]
+	providerOverride := session.Context["provider"]
 
 	// Try streaming first
 	var responseContent string
@@ -183,7 +184,7 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		}
 	}
 
-	convResponse, err := g.ai.GenerateResponseStreaming(reqCtx, session, msg.Text, modelOverride, onDelta)
+	convResponse, err := g.ai.GenerateResponseStreaming(reqCtx, session, msg.Text, providerOverride, modelOverride, onDelta)
 	if err != nil {
 		// Check for cancellation from /stop
 		if reqCtx.Err() == context.Canceled {
@@ -361,6 +362,7 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			"/status - Show session info\n" +
 			"/help - Show this message\n" +
 			"/model [alias] - View/switch model\n" +
+			"/provider [name] - View/switch provider\n" +
 			"/context - Show context window usage\n" +
 			"/stop - Stop current operation\n" +
 			"/quit - Exit TUI"
@@ -377,6 +379,52 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			return
 		}
 		sendResponse(formatContextUsage(session))
+
+	case text == "/provider" || strings.HasPrefix(text, "/provider "):
+		parts := strings.Fields(text)
+		if sessionKey == "" {
+			sendResponse("No active session.")
+			return
+		}
+
+		session, err := g.sessions.GetSession(sessionKey)
+		if err != nil {
+			sendResponse("Could not retrieve session.")
+			return
+		}
+
+		currentProvider := session.Context["provider"]
+		if currentProvider == "" {
+			currentProvider = g.ai.DefaultProviderName() + " (default)"
+		}
+
+		if len(parts) == 1 {
+			providers := g.ai.ListProviders()
+			var lines []string
+			for _, p := range providers {
+				lines = append(lines, fmt.Sprintf("  %s — %s (model: %s)", p.Name, p.Type, p.DefaultModel))
+			}
+			sendResponse(fmt.Sprintf("Current Provider: %s\n\nAvailable providers:\n%s\n\nUse /provider <name> to switch.", currentProvider, strings.Join(lines, "\n")))
+			return
+		}
+
+		requested := parts[1]
+		meta, exists := g.ai.GetProviderMeta(requested)
+		if !exists {
+			providers := g.ai.ListProviders()
+			var names []string
+			for _, p := range providers {
+				names = append(names, p.Name)
+			}
+			sendResponse(fmt.Sprintf("Unknown provider: %s\n\nAvailable: %s", requested, strings.Join(names, ", ")))
+			return
+		}
+
+		if err := g.sessions.SetSessionContext(sessionKey, "provider", requested); err != nil {
+			sendResponse(fmt.Sprintf("Failed to switch provider: %v", err))
+			return
+		}
+		sendResponse(fmt.Sprintf("Switched to provider %s (%s, model: %s)", meta.Name, meta.Type, meta.DefaultModel))
 
 	case text == "/model" || strings.HasPrefix(text, "/model "):
 		parts := strings.Fields(text)
@@ -399,8 +447,12 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 		aliases := g.getModelAliases()
 
 		if len(parts) == 1 {
-			aliasDisplay := formatAliasDisplay(aliases, "  ", " -> ")
-			response := fmt.Sprintf("Current Model: %s\n\nAvailable aliases:\n%s\n\nUse /model <alias> to switch.", currentModel, aliasDisplay)
+			currentProvider := session.Context["provider"]
+			if currentProvider == "" {
+				currentProvider = g.ai.DefaultProviderName()
+			}
+			aliasDisplay := g.formatAliasDisplayWithProvider(aliases, "  ", " -> ")
+			response := fmt.Sprintf("Current Model: %s\nProvider: %s\n\nAvailable aliases:\n%s\n\nUse /model <alias> to switch.", currentModel, currentProvider, aliasDisplay)
 			sendResponse(response)
 			return
 		}
@@ -419,22 +471,45 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 				Model:      model,
 			})
 		}
+
+		// Helper to set model and auto-resolve provider
+		wsSetModelAndResolve := func(model string) (string, error) {
+			if err := g.sessions.SetSessionContext(sessionKey, "model", model); err != nil {
+				return "", err
+			}
+			resolvedProvider := g.ai.ResolveProviderForModel(model)
+			if resolvedProvider != "" {
+				_ = g.sessions.SetSessionContext(sessionKey, "provider", resolvedProvider)
+			}
+			return resolvedProvider, nil
+		}
+
 		if fullModel, exists := aliases[requested]; exists {
-			if err := g.sessions.SetSessionContext(sessionKey, "model", fullModel); err != nil {
+			resolvedProvider, err := wsSetModelAndResolve(fullModel)
+			if err != nil {
 				sendResponse(fmt.Sprintf("Failed to switch model: %v", err))
 				return
 			}
 			if fullModel == "" {
 				sendModelResponse("Switched to default model (sonnet)", "")
 			} else {
-				sendModelResponse(fmt.Sprintf("Switched to %s (%s)", requested, fullModel), fullModel)
+				suffix := ""
+				if resolvedProvider != "" {
+					suffix = " on " + resolvedProvider
+				}
+				sendModelResponse(fmt.Sprintf("Switched to %s (%s)%s", requested, fullModel, suffix), fullModel)
 			}
-		} else if strings.Contains(requested, "/") || strings.HasPrefix(requested, "claude-") {
-			if err := g.sessions.SetSessionContext(sessionKey, "model", requested); err != nil {
+		} else if strings.Contains(requested, "/") || len(requested) > 3 {
+			resolvedProvider, err := wsSetModelAndResolve(requested)
+			if err != nil {
 				sendResponse(fmt.Sprintf("Failed to switch model: %v", err))
 				return
 			}
-			sendModelResponse(fmt.Sprintf("Switched to %s", requested), requested)
+			suffix := ""
+			if resolvedProvider != "" {
+				suffix = " on " + resolvedProvider
+			}
+			sendModelResponse(fmt.Sprintf("Switched to %s%s", requested, suffix), requested)
 		} else {
 			sendResponse(fmt.Sprintf("Unknown model alias: %s\n\nAvailable: %s", requested, formatAliasKeys(aliases)))
 		}
