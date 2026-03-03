@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"conduit/internal/ai"
+	"conduit/internal/channels"
 	"conduit/internal/scheduler"
 	"conduit/internal/sessions"
 )
@@ -300,11 +301,13 @@ func (g *GatewayIntegration) resolveTarget(actionTarget, jobTarget string) strin
 // sendToTarget sends a message to the specified target
 func (g *GatewayIntegration) sendToTarget(ctx context.Context, target, message string) error {
 	// Suppress silent response tokens from being delivered to channels
-	upper := strings.ToUpper(strings.TrimSpace(message))
-	if strings.Contains(upper, "NO_REPLY") || strings.Contains(upper, "HEARTBEAT_OK") {
+	if channels.IsSilentResponse(message) {
 		log.Printf("[HeartbeatIntegration] Silent token suppressed, not delivering to %s", target)
 		return nil
 	}
+
+	// Sanitize internal markers before sending
+	message = channels.SanitizeOutgoingText(message)
 
 	if g.channelSender == nil {
 		log.Printf("[HeartbeatIntegration] No channel sender configured, would send: %s", message)

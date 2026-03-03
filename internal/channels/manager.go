@@ -333,6 +333,9 @@ func (m *Manager) routeMessages() {
 			// Strip reply tags from text; set metadata for adapters that support replies
 			processReplyTags(msg)
 
+			// Sanitize remaining internal markers (MEDIA: lines, excessive newlines)
+			msg.Text = SanitizeOutgoingText(msg.Text)
+
 			m.mutex.RLock()
 			adapter, exists := m.adapters[msg.ChannelID]
 			m.mutex.RUnlock()

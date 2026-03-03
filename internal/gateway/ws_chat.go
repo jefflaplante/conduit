@@ -212,8 +212,8 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		responseContent = convResponse.GetContent()
 	}
 
-	// Strip reply tags — TUI doesn't support reply threading
-	responseContent = channels.StripReplyTags(responseContent)
+	// Sanitize internal markers — TUI doesn't support reply threading
+	responseContent = channels.SanitizeOutgoingText(responseContent)
 
 	// Extract usage and persist to session context
 	var promptTokens, completionTokens, totalTokens int
@@ -238,7 +238,7 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	}
 
 	// Check for silent response tokens (NO_REPLY, HEARTBEAT_OK)
-	if isSilentResponse(responseContent) {
+	if channels.IsSilentResponse(responseContent) {
 		log.Printf("Silent response detected in WS chat (%d chars), suppressing", len(responseContent))
 		// Send StreamEnd with empty content so TUI stops its streaming state
 		g.sendToClient(client, &protocol.StreamEnd{
