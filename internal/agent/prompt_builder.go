@@ -14,6 +14,9 @@ import (
 	"conduit/internal/workspace"
 )
 
+// CronSessionKeyPrefix is the prefix used for session keys created by cron/scheduled jobs.
+const CronSessionKeyPrefix = "cron_"
+
 // PromptBuilder handles building system prompts with full Conduit integration
 type PromptBuilder struct {
 	agentName        string
@@ -160,7 +163,7 @@ func (pb *PromptBuilder) buildFullPrompt(ctx context.Context, session *sessions.
 	sections = append(sections, buildMessagingSection(pb.sectionParams))
 
 	// 14b. Cron/Scheduled Job Delivery instructions
-	if session != nil && strings.HasPrefix(session.Key, "cron_") {
+	if session != nil && strings.HasPrefix(session.Key, CronSessionKeyPrefix) {
 		sections = append(sections, buildCronDeliverySection(pb.sectionParams))
 	}
 
