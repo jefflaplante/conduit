@@ -142,11 +142,12 @@ func DefaultModelAliases() map[string]string {
 
 // ProviderConfig contains settings for a specific AI provider
 type ProviderConfig struct {
-	Name   string      `json:"name"`
-	Type   string      `json:"type"`              // "anthropic", "openai", etc.
-	APIKey string      `json:"api_key,omitempty"` // Legacy API key
-	Model  string      `json:"model"`
-	Auth   *AuthConfig `json:"auth,omitempty"` // OAuth configuration
+	Name    string      `json:"name"`
+	Type    string      `json:"type"`               // "anthropic", "openai", "ollama", etc.
+	APIKey  string      `json:"api_key,omitempty"`   // Legacy API key
+	BaseURL string      `json:"base_url,omitempty"`  // Custom API base URL (for local/compatible servers)
+	Model   string      `json:"model"`
+	Auth    *AuthConfig `json:"auth,omitempty"` // OAuth configuration
 }
 
 // AuthConfig contains OAuth authentication settings
@@ -413,6 +414,7 @@ func (c *Config) expandEnvVars() error {
 	// Expand AI provider settings
 	for i := range c.AI.Providers {
 		c.AI.Providers[i].APIKey = os.ExpandEnv(c.AI.Providers[i].APIKey)
+		c.AI.Providers[i].BaseURL = os.ExpandEnv(c.AI.Providers[i].BaseURL)
 
 		// Expand OAuth configuration if present
 		if c.AI.Providers[i].Auth != nil {
