@@ -1139,8 +1139,9 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 			}
 		}()
 
-		// Get model override from session context (if set via /model)
+		// Get model and provider overrides from session context
 		modelOverride := session.Context["model"]
+		providerOverride := session.Context["provider"]
 
 		// Check if adapter supports streaming
 		adapter, _ := g.channelManager.GetAdapter(msg.ChannelID)
@@ -1189,7 +1190,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 					}
 				}
 
-				convResponse, err = g.ai.GenerateResponseStreaming(reqCtx, session, msg.Text, modelOverride, onDelta)
+				convResponse, err = g.ai.GenerateResponseStreaming(reqCtx, session, msg.Text, providerOverride, modelOverride, onDelta)
 
 				// Final edit with complete text
 				if err == nil && convResponse != nil {
@@ -1256,7 +1257,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 				g.channelManager.SendMessage(progressMsg)
 			}
 
-			convResponse, err = g.ai.GenerateResponseWithToolsAndProgress(reqCtx, session, msg.Text, "", modelOverride, onProgress)
+			convResponse, err = g.ai.GenerateResponseWithToolsAndProgress(reqCtx, session, msg.Text, providerOverride, modelOverride, onProgress)
 		}
 		if err != nil {
 			if !typingClosed {
@@ -1414,7 +1415,8 @@ func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// Use GenerateResponseWithTools to enable tool execution
 	modelOverride := session.Context["model"]
-	convResponse, err := g.ai.GenerateResponseWithTools(ctx, session, req.Message, "", modelOverride)
+	providerOverride := session.Context["provider"]
+	convResponse, err := g.ai.GenerateResponseWithTools(ctx, session, req.Message, providerOverride, modelOverride)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error generating AI response: %v", err), http.StatusInternalServerError)
 		return

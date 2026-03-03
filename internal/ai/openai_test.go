@@ -378,7 +378,7 @@ func TestRouterStreamingFallback(t *testing.T) {
 
 	session := &sessions.Session{Key: "test-session"}
 
-	resp, err := router.GenerateResponseStreaming(context.Background(), session, "hello", "", nil)
+	resp, err := router.GenerateResponseStreaming(context.Background(), session, "hello", "", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

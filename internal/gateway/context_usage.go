@@ -79,6 +79,11 @@ func formatStatusResponse(session *sessions.Session, messageCount int, usageTrac
 		currentModel = "sonnet (default)"
 	}
 	sb.WriteString(fmt.Sprintf("Model:    %s\n", currentModel))
+	currentProvider := session.Context["provider"]
+	if currentProvider == "" {
+		currentProvider = "default"
+	}
+	sb.WriteString(fmt.Sprintf("Provider: %s\n", currentProvider))
 	sb.WriteString(fmt.Sprintf("User:     %s\n", session.UserID))
 
 	// Session cost
