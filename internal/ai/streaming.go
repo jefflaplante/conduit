@@ -255,6 +255,21 @@ func (a *AnthropicProvider) parseSSEStream(body io.Reader, onDelta StreamCallbac
 	}, nil
 }
 
+// GenerateResponseStreaming implements StreamingProvider for the Anthropic provider.
+// This is a thin adapter that delegates to the existing generateWithStreamOAuth method.
+func (a *AnthropicProvider) GenerateResponseStreaming(ctx context.Context, req *GenerateRequest, onDelta StreamCallback) (*GenerateResponse, error) {
+	// Extract system prompt: Anthropic expects it separate from messages.
+	// The router prepends the system prompt as the first message with role="system".
+	var systemPrompt string
+	messages := req.Messages
+	if len(messages) > 0 && messages[0].Role == "system" {
+		systemPrompt = messages[0].Content
+		messages = messages[1:]
+	}
+
+	return a.generateWithStreamOAuth(ctx, messages, req.Tools, systemPrompt, req.Model, onDelta)
+}
+
 func getFloat64(m map[string]interface{}, key string) float64 {
 	if v, ok := m[key].(float64); ok {
 		return v

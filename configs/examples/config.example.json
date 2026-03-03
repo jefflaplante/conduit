@@ -23,6 +23,17 @@
         "type": "openai",
         "api_key": "${OPENAI_API_KEY}",
         "model": "gpt-4"
+      },
+      {
+        "name": "ollama-local",
+        "type": "ollama",
+        "model": "llama3.2"
+      },
+      {
+        "name": "vllm",
+        "type": "openai",
+        "base_url": "http://localhost:8000/v1",
+        "model": "meta-llama/Llama-3.2-8B-Instruct"
       }
     ]
   },

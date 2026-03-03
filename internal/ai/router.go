@@ -76,6 +76,13 @@ type Provider interface {
 	GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error)
 }
 
+// StreamingProvider is an optional extension of Provider for streaming support.
+// Providers that implement this interface can deliver token-by-token responses.
+type StreamingProvider interface {
+	Provider
+	GenerateResponseStreaming(ctx context.Context, req *GenerateRequest, onDelta StreamCallback) (*GenerateResponse, error)
+}
+
 // GenerateRequest represents a request to generate an AI response
 type GenerateRequest struct {
 	Messages  []ChatMessage `json:"messages"`
@@ -125,6 +132,7 @@ const DefaultContextWindow = 200000
 
 // ContextWindowSizes maps model ID prefixes to their context window sizes.
 var ContextWindowSizes = map[string]int{
+	// Anthropic
 	"claude-opus-4-6":   200000,
 	"claude-opus-4-5":   200000, // legacy
 	"claude-sonnet-4":   200000,
@@ -134,10 +142,24 @@ var ContextWindowSizes = map[string]int{
 	"claude-3-opus":     200000,
 	"claude-3-sonnet":   200000,
 	"claude-3-haiku":    200000,
-	"gpt-4o":            128000,
-	"gpt-4-turbo":       128000,
-	"gpt-4":             8192,
-	"gpt-3.5-turbo":     16385,
+	// OpenAI
+	"gpt-4o":        128000,
+	"gpt-4-turbo":   128000,
+	"gpt-4":         8192,
+	"gpt-3.5-turbo": 16385,
+	// Local / Ollama models
+	"llama3":          8192,
+	"llama3.1":        128000,
+	"llama3.2":        128000,
+	"llama3.3":        128000,
+	"mistral":         32768,
+	"mixtral":         32768,
+	"codellama":       16384,
+	"deepseek-coder":  16384,
+	"deepseek-coder2": 16384,
+	"qwen2.5":         32768,
+	"phi-3":           128000,
+	"gemma2":          8192,
 }
 
 // ContextWindowForModel returns the context window size for a given model.
@@ -239,6 +261,12 @@ func (r *Router) initializeProviders(cfg config.AIConfig) error {
 		case "anthropic":
 			provider, err = NewAnthropicProvider(providerCfg)
 		case "openai":
+			provider, err = NewOpenAIProvider(providerCfg)
+		case "ollama":
+			// Ollama is OpenAI-compatible with sensible defaults
+			if providerCfg.BaseURL == "" {
+				providerCfg.BaseURL = "http://localhost:11434/v1"
+			}
 			provider, err = NewOpenAIProvider(providerCfg)
 		default:
 			return fmt.Errorf("unsupported provider type: %s", providerCfg.Type)
@@ -480,17 +508,18 @@ func (r *Router) getConversationalProgress(toolCalls []ToolCall) string {
 	return ""
 }
 
-// GenerateResponseStreaming generates a streaming AI response
-// The onDelta callback is called with each text delta, and done=true when complete
+// GenerateResponseStreaming generates a streaming AI response.
+// The onDelta callback is called with each text delta, and done=true when complete.
+// Any provider implementing StreamingProvider will stream; others fall back to non-streaming.
 func (r *Router) GenerateResponseStreaming(ctx context.Context, session *sessions.Session, userMessage string, modelOverride string, onDelta StreamCallback) (ConversationResponse, error) {
 	provider, exists := r.providers[r.default_]
 	if !exists {
 		return nil, fmt.Errorf("default provider not found")
 	}
 
-	// Only Anthropic provider supports streaming currently
-	anthropicProvider, ok := provider.(*AnthropicProvider)
-	if !ok {
+	// Check if the provider supports streaming
+	streamingProvider, canStream := provider.(StreamingProvider)
+	if !canStream {
 		// Fall back to non-streaming
 		return r.GenerateResponseWithTools(ctx, session, userMessage, "", modelOverride)
 	}
@@ -517,34 +546,21 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		tools = r.agentSystem.GetToolDefinitions()
 	}
 
-	// Build system prompt string
-	var systemPrompt string
-	for _, block := range systemBlocks {
-		if systemPrompt != "" {
-			systemPrompt += "\n\n"
-		}
-		systemPrompt += block.Text
+	req := &GenerateRequest{
+		Messages:  messages,
+		Model:     modelOverride,
+		Tools:     tools,
+		MaxTokens: 4000,
 	}
 
-	// Call streaming API
-	response, err := anthropicProvider.generateWithStreamOAuth(ctx, messages, tools, systemPrompt, modelOverride, onDelta)
+	// Call streaming API via the provider-agnostic interface
+	response, err := streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
 	if err != nil {
 		return nil, err
 	}
 
 	// Check if tool calls were detected during streaming
 	if len(response.ToolCalls) > 0 && r.executionEngine != nil {
-		// Tool calls found! Transition to tool execution mode
-
-		// Build the request that would produce this response
-		req := &GenerateRequest{
-			Messages:  messages,
-			Model:     modelOverride,
-			Tools:     tools,
-			MaxTokens: 4000,
-		}
-
-		// Use the execution engine to handle tool calls
 		convResponse, err := r.executionEngine.HandleToolCallFlow(ctx, provider, req, response)
 		if err != nil {
 			return nil, err
