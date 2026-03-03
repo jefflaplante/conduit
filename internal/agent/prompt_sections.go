@@ -60,7 +60,7 @@ func buildMemorySection(params *SectionParams) string {
 		return ""
 	}
 
-	hasMemorySearch := params.AvailableTools["MemorySearch"] || params.AvailableTools["memory_search"]
+	hasMemorySearch := params.AvailableTools["MemorySearch"]
 	if !hasMemorySearch {
 		return ""
 	}
@@ -78,8 +78,8 @@ func buildMemoryPersistenceSection(params *SectionParams) string {
 		return ""
 	}
 
-	hasWriteTool := params.AvailableTools["Write"] || params.AvailableTools["write"]
-	hasBashTool := params.AvailableTools["Bash"] || params.AvailableTools["bash"]
+	hasWriteTool := params.AvailableTools["Write"]
+	hasBashTool := params.AvailableTools["Bash"]
 	if !hasWriteTool && !hasBashTool {
 		return ""
 	}
@@ -118,7 +118,7 @@ func buildMessagingSection(params *SectionParams) string {
 - Never use exec/curl for provider messaging; Conduit handles all routing internally.
 `)
 
-	if params.AvailableTools["message"] || params.AvailableTools["Message"] {
+	if params.AvailableTools["Message"] {
 		channelOptions := "telegram|whatsapp|discord|googlechat|slack|signal|imessage"
 		if len(params.MessageChannels) > 0 {
 			channelOptions = strings.Join(params.MessageChannels, "|")
@@ -283,7 +283,7 @@ func buildSelfUpdateSection(params *SectionParams) string {
 		return ""
 	}
 
-	hasGatewayTool := params.AvailableTools["gateway"]
+	hasGatewayTool := params.AvailableTools["Gateway"]
 	if !hasGatewayTool {
 		return ""
 	}
@@ -363,7 +363,7 @@ Current time: %s
 // This is injected only for sessions with a "cron_" prefix to ensure scheduled jobs
 // use the Message tool and do not attempt shell-based delivery.
 func buildCronDeliverySection(params *SectionParams) string {
-	hasMessage := params.AvailableTools["Message"] || params.AvailableTools["message"]
+	hasMessage := params.AvailableTools["Message"]
 	if !hasMessage {
 		return ""
 	}

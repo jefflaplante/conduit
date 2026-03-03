@@ -21,6 +21,9 @@ type JobType string
 const (
 	JobTypeGo     JobType = "go"     // In-process, can spawn sub-agents
 	JobTypeSystem JobType = "system" // System crontab, runs scripts
+
+	CrontabMarker      = "# CONDUIT-MANAGED"
+	CrontabJobIDFormat = "CONDUIT-JOB-ID:%s"
 )
 
 // JobExecutor is called when a Go job fires
@@ -71,7 +74,7 @@ func New(workspaceDir string, executor JobExecutor) *Scheduler {
 		executor:      executor,
 		ctx:           ctx,
 		cancel:        cancel,
-		crontagMarker: "# CONDUIT-MANAGED",
+		crontagMarker: CrontabMarker,
 	}
 }
 
@@ -344,7 +347,7 @@ func (s *Scheduler) addSystemCrontab(job *Job) error {
 	entries = s.filterCrontabEntries(entries, job.ID)
 
 	// Add new entry
-	entry := fmt.Sprintf("%s %s %s # CONDUIT-JOB-ID:%s",
+	entry := fmt.Sprintf("%s %s %s "+CrontabJobIDFormat,
 		job.Schedule, job.Command, s.crontagMarker, job.ID)
 	entries = append(entries, entry)
 
@@ -399,7 +402,7 @@ func (s *Scheduler) writeSystemCrontab(entries []string) error {
 
 // filterCrontabEntries removes entries for a specific job ID
 func (s *Scheduler) filterCrontabEntries(entries []string, jobID string) []string {
-	marker := fmt.Sprintf("CONDUIT-JOB-ID:%s", jobID)
+	marker := fmt.Sprintf(CrontabJobIDFormat, jobID)
 	var filtered []string
 	for _, entry := range entries {
 		if !strings.Contains(entry, marker) {
