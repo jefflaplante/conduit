@@ -539,7 +539,7 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 
 	// Handle regular cron jobs (existing logic)
 	// Create a session for this job
-	sessionKey := fmt.Sprintf("cron_%s_%d", job.ID, time.Now().UnixNano())
+	sessionKey := fmt.Sprintf(agent.CronSessionKeyPrefix+"%s_%d", job.ID, time.Now().UnixNano())
 	session, err := g.sessions.GetOrCreateSession("cron", sessionKey)
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
@@ -564,7 +564,7 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 		responseContent := response.GetContent()
 
 		// Check for silent response patterns - don't send these to the target
-		if responseContent == "" || isSilentResponse(responseContent) {
+		if responseContent == "" || channels.IsSilentResponse(responseContent) {
 			log.Printf("[Scheduler] Job %s completed with silent response, not sending to target", job.ID)
 			return nil
 		}
@@ -583,7 +583,7 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 		outgoingMsg := &protocol.OutgoingMessage{
 			BaseMessage: protocol.BaseMessage{
 				Type:      protocol.TypeOutgoingMessage,
-				ID:        fmt.Sprintf("cron_%s_%d", job.ID, time.Now().UnixNano()),
+				ID:        fmt.Sprintf(agent.CronSessionKeyPrefix+"%s_%d", job.ID, time.Now().UnixNano()),
 				Timestamp: time.Now(),
 			},
 			ChannelID: channelID,
@@ -1197,7 +1197,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 					streamedLength := textBuilder.Len()
 
 					// Check for silent response patterns in final content
-					if isSilentResponse(finalContent) {
+					if channels.IsSilentResponse(finalContent) {
 						log.Printf("[Streaming] Silent response pattern detected, deleting placeholder")
 						// Delete the placeholder message since we don't want to show this
 						if deleteErr := streamingAdapter.DeleteMessage(chatID, placeholderMsgID); deleteErr != nil {
@@ -1205,25 +1205,32 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 						}
 						streamingUsed = true
 					} else if finalContent != "" {
+						// Sanitize internal markers before editing the placeholder
+						finalContent = channels.SanitizeOutgoingText(finalContent)
 						// If tool execution happened, the final content might be different from streamed text
 						if streamedLength > 0 && finalContent != textBuilder.String() {
 							log.Printf("[Streaming] Tool execution detected: streamed=%d chars, final=%d chars",
 								streamedLength, len(finalContent))
 						}
-						streamingAdapter.EditMessageText(chatID, placeholderMsgID, finalContent)
+						if finalContent != "" {
+							streamingAdapter.EditMessageText(chatID, placeholderMsgID, finalContent)
+						}
 						streamingUsed = true
 					} else if streamedLength > 0 {
 						// Fallback to streamed text if no final content
 						streamedText := textBuilder.String()
 						// Also check streamed text for silent patterns
-						if isSilentResponse(streamedText) {
+						if channels.IsSilentResponse(streamedText) {
 							log.Printf("[Streaming] Silent response in streamed text, deleting placeholder")
 							if deleteErr := streamingAdapter.DeleteMessage(chatID, placeholderMsgID); deleteErr != nil {
 								log.Printf("[Streaming] Failed to delete placeholder: %v", deleteErr)
 							}
 						} else {
+							streamedText = channels.SanitizeOutgoingText(streamedText)
 							log.Printf("[Streaming] Using streamed text only: %d chars", streamedLength)
-							streamingAdapter.EditMessageText(chatID, placeholderMsgID, streamedText)
+							if streamedText != "" {
+								streamingAdapter.EditMessageText(chatID, placeholderMsgID, streamedText)
+							}
 						}
 						streamingUsed = true
 					}
@@ -1295,7 +1302,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		}
 
 		// Check for silent response tokens (NO_REPLY, HEARTBEAT_OK)
-		if responseContent == "" || isSilentResponse(responseContent) {
+		if responseContent == "" || channels.IsSilentResponse(responseContent) {
 			if responseContent == "" {
 				log.Printf("Warning: Empty response content, not sending to channel")
 			} else {

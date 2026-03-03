@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"conduit/internal/ai"
+	"conduit/internal/channels"
 	"conduit/internal/monitoring"
 	"conduit/internal/sessions"
 	"conduit/internal/tools"
@@ -286,7 +287,7 @@ func (c *DirectClient) streamChatWithID(session *sessions.Session, text, request
 	}
 
 	// Check for silent response tokens (NO_REPLY, HEARTBEAT_OK)
-	if isSilentResponse(responseContent) {
+	if channels.IsSilentResponse(responseContent) {
 		log.Printf("[DirectClient] Silent response detected (%d chars), suppressing", len(responseContent))
 		// Send StreamEnd with empty content so TUI stops its streaming state
 		c.send(tui.StreamEndMsg{
@@ -302,6 +303,9 @@ func (c *DirectClient) streamChatWithID(session *sessions.Session, text, request
 		})
 		return
 	}
+
+	// Sanitize internal markers before sending to TUI
+	responseContent = channels.SanitizeOutgoingText(responseContent)
 
 	// Send StreamEnd with usage
 	c.send(tui.StreamEndMsg{

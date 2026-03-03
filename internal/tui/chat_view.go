@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
+
+	"conduit/internal/channels"
 )
 
 // ChatBubble represents a single chat message
@@ -103,7 +105,7 @@ func (c *ChatViewModel) EndStreaming(finalContent string) {
 	}
 	c.Streaming = false
 	// Suppress silent response tokens that may have arrived via streamed deltas
-	if isSilentContent(content) {
+	if channels.IsSilentResponse(content) {
 		content = ""
 	}
 	if content != "" {
@@ -116,13 +118,6 @@ func (c *ChatViewModel) EndStreaming(finalContent string) {
 	c.StreamBuf.Reset()
 	c.refreshContent()
 	c.Viewport.GotoBottom()
-}
-
-// isSilentContent returns true if the content contains silent response tokens
-// (NO_REPLY or HEARTBEAT_OK) that should not be shown to the user.
-func isSilentContent(content string) bool {
-	upper := strings.ToUpper(strings.TrimSpace(content))
-	return strings.Contains(upper, "NO_REPLY") || strings.Contains(upper, "HEARTBEAT_OK")
 }
 
 // ThinkingTick advances the KITT scanner animation by one frame and refreshes.

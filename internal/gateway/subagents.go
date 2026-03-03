@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"conduit/internal/channels"
 	"conduit/pkg/protocol"
 )
 
@@ -64,7 +65,7 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 			result := response.GetContent()
 
 			// Check for silent response patterns - don't announce these
-			if result == "" || isSilentResponse(result) {
+			if result == "" || channels.IsSilentResponse(result) {
 				log.Printf("[SubAgent] Silent response, not announcing")
 				return
 			}
