@@ -230,6 +230,13 @@ func (g *Gateway) handleProviderCommand(msg *protocol.IncomingMessage, text stri
 	}
 	session.Context["provider"] = requested
 
+	// Also switch the model to the new provider's default so we don't send
+	// an incompatible model name (e.g. a Claude model to Ollama).
+	if meta.DefaultModel != "" {
+		_ = g.sessions.SetSessionContext(session.Key, "model", meta.DefaultModel)
+		session.Context["model"] = meta.DefaultModel
+	}
+
 	g.sendCommandResponse(msg, fmt.Sprintf("✅ Switched to provider *%s* (%s, model: %s)", meta.Name, meta.Type, meta.DefaultModel))
 }
 
