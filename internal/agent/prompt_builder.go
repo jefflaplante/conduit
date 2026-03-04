@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 
 	"conduit/internal/ai"
@@ -16,6 +17,20 @@ import (
 
 // CronSessionKeyPrefix is the prefix used for session keys created by cron/scheduled jobs.
 const CronSessionKeyPrefix = "cron_"
+
+// Prompt scaling constants for small-context models.
+const (
+	largeContextThreshold = 128000 // tokens; skip budget logic above this
+	promptBudgetPercent   = 15     // % of context window allocated to system prompt
+	charsPerToken         = 4      // rough chars-per-token estimate for budget math
+)
+
+// promptSection pairs a builder function with its priority for budget-based inclusion.
+type promptSection struct {
+	name     string       // human-readable name for compact-mode notice
+	priority int          // 1=critical, 4=nice-to-have
+	build    func() string
+}
 
 // PromptBuilder handles building system prompts with full Conduit integration
 type PromptBuilder struct {
@@ -107,96 +122,145 @@ func (pb *PromptBuilder) Build(ctx context.Context, session *sessions.Session, i
 	}, nil
 }
 
-// buildFullPrompt creates the complete system prompt text
+// buildFullPrompt creates the complete system prompt text.
+// For models with large context windows (>= 128K tokens), all sections are included.
+// For smaller models, sections are included by priority order within a token budget.
 func (pb *PromptBuilder) buildFullPrompt(ctx context.Context, session *sessions.Session, isOAuth bool) string {
-	var sections []string
+	isCron := session != nil && strings.HasPrefix(session.Key, CronSessionKeyPrefix)
 
-	// 1. Core Identity
-	sections = append(sections, pb.buildIdentitySection(isOAuth))
+	// Build the priority-tagged section list. Order within each priority is preserved.
+	allSections := pb.buildSectionList(ctx, session, isOAuth, isCron)
 
-	// 2. Tooling section
-	sections = append(sections, pb.buildToolingSection())
+	// Determine context window from session model.
+	model := ""
+	if session != nil && session.Context != nil {
+		model = session.Context["model"]
+	}
+	contextWindow := ai.ContextWindowForModel(model)
 
-	// 3. Tool Call Style
-	sections = append(sections, pb.buildToolCallStyleSection())
+	// Short circuit: large-context models get everything.
+	if contextWindow >= largeContextThreshold {
+		return joinSections(allSections, nil)
+	}
 
-	// 4. Safety
-	sections = append(sections, buildSafetySection(pb.sectionParams.IsMinimal))
+	// Budget-constrained assembly for small-context models.
+	budgetChars := contextWindow * promptBudgetPercent / 100 * charsPerToken
+	usedChars := 0
+	included := make([]bool, len(allSections))
+	var dropped []string
 
-	// 5. Conduit CLI Quick Reference
-	sections = append(sections, buildConduitCLISection(pb.sectionParams.IsMinimal))
-
-	// 6. Skills section (if available)
-	if pb.capabilities.SkillsIntegration && pb.skillsManager != nil {
-		if skillsSection := pb.buildSkillsSection(ctx); skillsSection != "" {
-			sections = append(sections, skillsSection)
+	// Sections are already ordered by priority (stable within same priority).
+	for i, sec := range allSections {
+		text := strings.TrimSpace(sec.build())
+		if text == "" {
+			included[i] = true // empty sections are free
+			continue
+		}
+		cost := len(text)
+		if usedChars+cost <= budgetChars {
+			usedChars += cost
+			included[i] = true
+		} else {
+			dropped = append(dropped, sec.name)
 		}
 	}
 
-	// 7. Memory Recall (if memory tools available)
-	sections = append(sections, buildMemorySection(pb.sectionParams))
+	return joinSections(allSections, included, dropped...)
+}
 
-	// 7b. Memory Persistence (writing to memory files)
-	sections = append(sections, buildMemoryPersistenceSection(pb.sectionParams))
+// buildSectionList returns all prompt sections tagged with priorities.
+// Sections are ordered by priority (1 first), preserving relative order within each priority.
+func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions.Session, isOAuth, isCron bool) []promptSection {
+	params := pb.sectionParams
 
-	// 8. Self-Update (if gateway tool available)
-	sections = append(sections, buildSelfUpdateSection(pb.sectionParams))
+	// Define all sections with priorities.
+	// P1=critical, P2=needed for delivery, P3=enhances behavior, P4=largest/optional.
+	raw := []promptSection{
+		// P1 — Critical
+		{"Identity", 1, func() string { return pb.buildIdentitySection(isOAuth) }},
+		{"Tooling", 1, func() string { return pb.buildToolingSection() }},
+		{"Tool Call Style", 1, func() string { return pb.buildToolCallStyleSection() }},
+		{"Silent Replies", 1, func() string { return buildSilentRepliesSection(params.IsMinimal) }},
+		{"Runtime", 1, func() string {
+			return buildRuntimeSection(params, pb.buildRuntimeInfo(session))
+		}},
 
-	// 9. Model Aliases
-	sections = append(sections, buildModelAliasesSection(pb.sectionParams))
+		// P2 — Needed for proper channel delivery and tool usage
+		{"Reply Tags", 2, func() string { return buildReplyTagsSection(params.IsMinimal) }},
+		{"Messaging", 2, func() string { return buildMessagingSection(params) }},
+		{"Cron Delivery", 2, func() string {
+			if isCron {
+				return buildCronDeliverySection(params)
+			}
+			return ""
+		}},
+		{"Workspace", 2, func() string { return pb.buildWorkspaceSection() }},
+		{"Docs", 2, func() string { return buildDocsSection(params) }},
+		{"Model Aliases", 2, func() string { return buildModelAliasesSection(params) }},
+		{"Timezone", 2, func() string {
+			if params.UserTimezone != "" {
+				return "If you need the current date, time, or day of week, run session_status."
+			}
+			return ""
+		}},
 
-	// 10. Timezone (uses session_status hint)
-	if pb.sectionParams.UserTimezone != "" {
-		sections = append(sections, "If you need the current date, time, or day of week, run session_status (📊 session_status).")
+		// P3 — Enhance behavior but model works without
+		{"Safety", 3, func() string { return buildSafetySection(params.IsMinimal) }},
+		{"Memory Recall", 3, func() string { return buildMemorySection(params) }},
+		{"Memory Persistence", 3, func() string { return buildMemoryPersistenceSection(params) }},
+		{"Voice/TTS", 3, func() string { return buildVoiceSection(params) }},
+		{"Reactions", 3, func() string { return buildReactionsSection(params) }},
+		{"Heartbeats", 3, func() string { return buildHeartbeatsSection(params) }},
+
+		// P4 — Largest sections; nice-to-have
+		{"Conduit CLI", 4, func() string { return buildConduitCLISection(params.IsMinimal) }},
+		{"Skills", 4, func() string {
+			if pb.capabilities.SkillsIntegration && pb.skillsManager != nil {
+				return pb.buildSkillsSection(ctx)
+			}
+			return ""
+		}},
+		{"Self-Update", 4, func() string { return buildSelfUpdateSection(params) }},
+		{"Project Context", 4, func() string { return pb.buildWorkspaceContextSection(ctx, session) }},
 	}
 
-	// 11. Workspace
-	sections = append(sections, pb.buildWorkspaceSection())
+	// Stable sort by priority (preserves order within same priority).
+	sort.SliceStable(raw, func(i, j int) bool {
+		return raw[i].priority < raw[j].priority
+	})
 
-	// 12. Documentation
-	sections = append(sections, buildDocsSection(pb.sectionParams))
+	return raw
+}
 
-	// 13. Reply Tags
-	sections = append(sections, buildReplyTagsSection(pb.sectionParams.IsMinimal))
-
-	// 14. Messaging
-	sections = append(sections, buildMessagingSection(pb.sectionParams))
-
-	// 14b. Cron/Scheduled Job Delivery instructions
-	if session != nil && strings.HasPrefix(session.Key, CronSessionKeyPrefix) {
-		sections = append(sections, buildCronDeliverySection(pb.sectionParams))
-	}
-
-	// 15. Voice/TTS
-	sections = append(sections, buildVoiceSection(pb.sectionParams))
-
-	// 16. Reactions
-	sections = append(sections, buildReactionsSection(pb.sectionParams))
-
-	// 17. Project Context (workspace files)
-	if workspaceSection := pb.buildWorkspaceContextSection(ctx, session); workspaceSection != "" {
-		sections = append(sections, workspaceSection)
-	}
-
-	// 18. Silent Replies
-	sections = append(sections, buildSilentRepliesSection(pb.sectionParams.IsMinimal))
-
-	// 19. Heartbeats
-	sections = append(sections, buildHeartbeatsSection(pb.sectionParams))
-
-	// 20. Runtime
-	runtimeInfo := pb.buildRuntimeInfo(session)
-	sections = append(sections, buildRuntimeSection(pb.sectionParams, runtimeInfo))
-
-	// Filter empty sections and join
+// joinSections assembles prompt text from sections.
+// If included is nil, all sections are built. Otherwise only included[i]==true sections are used.
+// If dropped names are provided, a compact-mode notice is appended.
+func joinSections(sections []promptSection, included []bool, dropped ...string) string {
 	var nonEmpty []string
-	for _, s := range sections {
-		if strings.TrimSpace(s) != "" {
-			nonEmpty = append(nonEmpty, strings.TrimSpace(s))
+	for i, sec := range sections {
+		if included != nil && !included[i] {
+			continue
+		}
+		var text string
+		if included != nil {
+			// Already built during budget check — rebuild (sections are small enough).
+			text = strings.TrimSpace(sec.build())
+		} else {
+			text = strings.TrimSpace(sec.build())
+		}
+		if text != "" {
+			nonEmpty = append(nonEmpty, text)
 		}
 	}
 
-	return strings.Join(nonEmpty, "\n\n")
+	result := strings.Join(nonEmpty, "\n\n")
+
+	if len(dropped) > 0 {
+		result += fmt.Sprintf("\n\n---\n[Compact mode: omitted %s to fit context window. Core capabilities remain active.]",
+			strings.Join(dropped, ", "))
+	}
+
+	return result
 }
 
 // buildIdentitySection creates the identity/personality section
