@@ -94,6 +94,86 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **Heartbeat Loop** — Automated HEARTBEAT.md task processing
 - **Skills System** — Extensible AI capabilities via SKILL.md files
 
+## Providers
+
+Conduit supports multiple AI providers. Configure them in the `ai.providers` array in your config JSON.
+
+### Anthropic (default)
+
+```json
+{
+  "name": "anthropic",
+  "type": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "auth": {
+    "type": "oauth",
+    "oauth_token": "${ANTHROPIC_OAUTH_TOKEN}"
+  }
+}
+```
+
+Or with an API key:
+
+```json
+{
+  "name": "anthropic",
+  "type": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "auth": {
+    "type": "api_key",
+    "oauth_token": "${ANTHROPIC_API_KEY}"
+  }
+}
+```
+
+### Ollama
+
+```json
+{
+  "name": "ollama",
+  "type": "ollama",
+  "base_url": "http://localhost:11434/v1",
+  "model": "llama3.1"
+}
+```
+
+> **Important:** The `base_url` must include `/v1`. Ollama's OpenAI-compatible endpoint is at `/v1/chat/completions`, and Conduit appends `/chat/completions` to the base URL automatically.
+
+No authentication is needed for local Ollama instances.
+
+### OpenAI-compatible
+
+Any OpenAI-compatible API can be used with `type: "openai"`:
+
+```json
+{
+  "name": "my-provider",
+  "type": "openai",
+  "base_url": "https://api.example.com/v1",
+  "api_key": "${MY_API_KEY}",
+  "model": "my-model"
+}
+```
+
+### Switching providers at runtime
+
+Use `/provider` to list available providers and `/provider <name>` to switch. The model automatically updates to the new provider's default when switching.
+
+### Model aliases
+
+Map short names to full model IDs across providers:
+
+```json
+"model_aliases": {
+  "haiku": "claude-haiku-4-5-20251001",
+  "sonnet": "claude-sonnet-4-6",
+  "opus": "claude-opus-4-6",
+  "default": "claude-haiku-4-5-20251001"
+}
+```
+
+Use `/model <alias>` to switch models. The provider auto-resolves based on the model name.
+
 ## Documentation
 
 | Document | Description |
