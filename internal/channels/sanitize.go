@@ -32,11 +32,21 @@ func SanitizeOutgoingText(text string) string {
 	return strings.TrimSpace(cleaned)
 }
 
-// IsSilentResponse returns true if the content contains a silent token
-// (NO_REPLY or HEARTBEAT_OK) anywhere in the body, meaning the response
-// should not be delivered to the user. The check is case-insensitive because
-// the LLM sometimes wraps or varies casing.
+// IsSilentResponse returns true if the content is a silent token
+// (NO_REPLY or HEARTBEAT_OK), meaning the response should not be
+// delivered to the user. Exact match after trimming, or contains-match
+// only for short responses (≤40 chars) to tolerate minor LLM wrapping
+// like "OK. NO_REPLY". Long responses that merely reference the token
+// are not suppressed.
 func IsSilentResponse(content string) bool {
-	upper := strings.ToUpper(content)
-	return strings.Contains(upper, "NO_REPLY") || strings.Contains(upper, "HEARTBEAT_OK")
+	upper := strings.ToUpper(strings.TrimSpace(content))
+	if upper == "NO_REPLY" || upper == "HEARTBEAT_OK" {
+		return true
+	}
+	// Allow short wrapped responses like "OK. NO_REPLY" but not long
+	// responses that merely reference the token.
+	if len(upper) <= 40 {
+		return strings.Contains(upper, "NO_REPLY") || strings.Contains(upper, "HEARTBEAT_OK")
+	}
+	return false
 }
