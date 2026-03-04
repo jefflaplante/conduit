@@ -824,6 +824,7 @@ func (a *Adapter) registerCommands(ctx context.Context) {
 		{Command: "status", Description: "Show session status and model info"},
 		{Command: "help", Description: "Show available commands"},
 		{Command: "model", Description: "Switch or view current model"},
+		{Command: "provider", Description: "Switch or view current AI provider"},
 		{Command: "context", Description: "Show context window usage"},
 		{Command: "stop", Description: "Stop the current operation"},
 	}
