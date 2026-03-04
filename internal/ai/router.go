@@ -687,14 +687,18 @@ func (s *SimpleConversationResponse) HasToolResults() bool {
 }
 
 // processSilentPatterns checks for HEARTBEAT_OK/NO_REPLY patterns in the response
-// and returns an empty-content response if detected. This applies the same logic
-// as AgentSystem.ProcessResponse but for responses that come from tool execution.
+// and returns an empty-content response if detected. Exact match after trimming,
+// or contains-match only for short responses (≤40 chars) to tolerate minor LLM
+// wrapping. Long responses that merely reference the token are not suppressed.
 func (r *Router) processSilentPatterns(response ConversationResponse) ConversationResponse {
 	upper := strings.ToUpper(strings.TrimSpace(response.GetContent()))
 
-	// Check for silent response patterns using contains check,
-	// because the LLM sometimes wraps tokens in surrounding text.
-	if strings.Contains(upper, "HEARTBEAT_OK") || strings.Contains(upper, "NO_REPLY") {
+	silent := upper == "NO_REPLY" || upper == "HEARTBEAT_OK"
+	if !silent && len(upper) <= 40 {
+		silent = strings.Contains(upper, "NO_REPLY") || strings.Contains(upper, "HEARTBEAT_OK")
+	}
+
+	if silent {
 		log.Printf("[Router] Silent response pattern detected (suppressing)")
 		return &SimpleConversationResponse{
 			Content: "",

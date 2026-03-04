@@ -94,14 +94,24 @@ func TestIsSilentResponse(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "wrapped NO_REPLY",
-			input:    "Sure, I'll stay quiet. NO_REPLY",
+			name:     "short wrapped NO_REPLY",
+			input:    "OK. NO_REPLY",
 			expected: true,
 		},
 		{
-			name:     "wrapped HEARTBEAT_OK",
-			input:    "Everything looks good. HEARTBEAT_OK. Done.",
+			name:     "short wrapped HEARTBEAT_OK",
+			input:    "All good. HEARTBEAT_OK",
 			expected: true,
+		},
+		{
+			name:     "long response containing NO_REPLY not suppressed",
+			input:    "Sure, I'll stay quiet. NO_REPLY is what I would normally say but here is more text instead.",
+			expected: false,
+		},
+		{
+			name:     "long response containing HEARTBEAT_OK not suppressed",
+			input:    "Everything looks good. HEARTBEAT_OK. But let me tell you more about the status of things.",
+			expected: false,
 		},
 		{
 			name:     "case insensitive no_reply",

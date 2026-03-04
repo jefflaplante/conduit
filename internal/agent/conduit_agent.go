@@ -128,11 +128,16 @@ func (a *ConduitAgentWithIntegration) ProcessResponse(ctx context.Context, respo
 		Modified:  false,
 	}
 
-	// Check for special Conduit response patterns using contains check,
-	// because the LLM sometimes wraps tokens in surrounding text.
+	// Check for silent response tokens. Exact match after trimming, or
+	// contains-match only for short responses (≤40 chars) to tolerate minor
+	// LLM wrapping. Long responses that merely reference the token are not suppressed.
 	upper := strings.ToUpper(strings.TrimSpace(response.Content))
 
-	if strings.Contains(upper, "HEARTBEAT_OK") || strings.Contains(upper, "NO_REPLY") {
+	silent := upper == "NO_REPLY" || upper == "HEARTBEAT_OK"
+	if !silent && len(upper) <= 40 {
+		silent = strings.Contains(upper, "NO_REPLY") || strings.Contains(upper, "HEARTBEAT_OK")
+	}
+	if silent {
 		processed.Silent = true
 		processed.Content = ""
 		processed.Modified = true
