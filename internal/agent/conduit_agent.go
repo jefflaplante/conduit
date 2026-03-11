@@ -30,6 +30,7 @@ type ConduitAgentWithIntegration struct {
 	identity         IdentityConfig
 	capabilities     AgentCapabilities
 	promptScaling    *config.PromptScalingConfig
+	timezone         string
 	tools            []ai.Tool
 	workspaceContext *workspace.WorkspaceContext
 	skillsManager    *skills.Manager
@@ -57,6 +58,7 @@ func NewConduitAgentWithIntegration(
 		identity:         cfg.Identity,
 		capabilities:     cfg.Capabilities,
 		promptScaling:    &cfg.PromptScaling,
+		timezone:         cfg.Timezone,
 		tools:            tools,
 		workspaceContext: workspaceContext,
 		skillsManager:    skillsManager,
@@ -74,6 +76,7 @@ func NewConduitAgentWithIntegration(
 		agent.skillsManager,
 		agent.modelAliases,
 		agent.promptScaling,
+		agent.timezone,
 	)
 
 	return agent
@@ -93,6 +96,7 @@ func (a *ConduitAgentWithIntegration) SetTools(tools []ai.Tool) {
 		a.skillsManager,
 		a.modelAliases,
 		a.promptScaling,
+		a.timezone,
 	)
 	// Invalidate prompt cache since tools affect prompt content
 	a.InvalidatePromptCache()
@@ -312,6 +316,7 @@ func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error
 	a.identity = cfg.Identity
 	a.capabilities = cfg.Capabilities
 	a.promptScaling = &cfg.PromptScaling
+	a.timezone = cfg.Timezone
 
 	// Rebuild prompt builder with new configuration
 	a.promptBuilder = NewPromptBuilder(
@@ -324,6 +329,7 @@ func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error
 		a.skillsManager,
 		a.modelAliases,
 		a.promptScaling,
+		a.timezone,
 	)
 
 	// Invalidate prompt cache since configuration affects prompt content
@@ -347,6 +353,7 @@ func (a *ConduitAgentWithIntegration) UpdateTools(tools []ai.Tool) error {
 		a.skillsManager,
 		a.modelAliases,
 		a.promptScaling,
+		a.timezone,
 	)
 
 	// Invalidate prompt cache since tools affect prompt content

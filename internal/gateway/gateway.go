@@ -186,6 +186,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 			SilentReplies:     cfg.Agent.Capabilities.SilentReplies,
 		},
 		PromptScaling: cfg.Agent.PromptScaling,
+		Timezone:      cfg.Timezone,
 	}
 
 	// Use the integrated agent system (tools will be set after gateway is created)
