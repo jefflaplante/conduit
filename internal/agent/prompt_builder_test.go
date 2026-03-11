@@ -28,6 +28,7 @@ func newTestPromptBuilder() *PromptBuilder {
 		nil, // no skills manager
 		nil, // default model aliases
 		nil, // default prompt scaling
+		"",  // default timezone
 	)
 }
 

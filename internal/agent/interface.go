@@ -65,6 +65,7 @@ type AgentConfig struct {
 	Identity      IdentityConfig              `json:"identity"`
 	Capabilities  AgentCapabilities           `json:"capabilities"`
 	PromptScaling config.PromptScalingConfig  `json:"prompt_scaling,omitempty"`
+	Timezone      string                      `json:"timezone,omitempty"`
 }
 
 // SessionStateManager provides utilities for managing session state during agent operations
