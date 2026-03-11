@@ -4,8 +4,13 @@ import (
 	"fmt"
 	"strings"
 
+	"conduit/internal/config"
 	"conduit/internal/sessions"
 )
+
+// HistoryConfig holds configuration for token-aware history retrieval.
+// This is copied from config to avoid circular imports in some contexts.
+type HistoryConfig = config.HistoryConfig
 
 // buildChatMessages constructs the message history for AI context (legacy method)
 func (r *Router) buildChatMessages(session *sessions.Session, userMessage string) ([]ChatMessage, error) {
@@ -16,8 +21,8 @@ func (r *Router) buildChatMessages(session *sessions.Session, userMessage string
 		},
 	}
 
-	// Add recent message history (limit to last 20 messages for context)
-	recentMessages, err := r.getRecentMessages(session, 20)
+	// Add recent message history with token-aware retrieval
+	recentMessages, err := r.getRecentMessagesTokenAware(session)
 	if err != nil {
 		return nil, err
 	}
@@ -62,8 +67,8 @@ func (r *Router) buildChatMessagesWithSystemPrompt(session *sessions.Session, us
 		})
 	}
 
-	// Add recent message history (limit to last 20 messages for context)
-	recentMessages, err := r.getRecentMessages(session, 20)
+	// Add recent message history with token-aware retrieval
+	recentMessages, err := r.getRecentMessagesTokenAware(session)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +93,7 @@ func (r *Router) buildChatMessagesWithSystemPrompt(session *sessions.Session, us
 	return messages, nil
 }
 
-// getRecentMessages retrieves recent messages from a session
+// getRecentMessages retrieves recent messages from a session (legacy, fixed count)
 func (r *Router) getRecentMessages(session *sessions.Session, limit int) ([]sessions.Message, error) {
 	if r.sessionStore == nil {
 		// No store available, return empty history
@@ -105,4 +110,78 @@ func (r *Router) getRecentMessages(session *sessions.Session, limit int) ([]sess
 	fmt.Printf("[Router] Retrieved %d messages from session %s\n", len(messages), session.Key)
 
 	return messages, nil
+}
+
+// getRecentMessagesTokenAware retrieves messages using token budget instead of fixed count.
+// This ensures long conversations retain meaningful context rather than arbitrary message counts.
+func (r *Router) getRecentMessagesTokenAware(session *sessions.Session) ([]sessions.Message, error) {
+	if r.sessionStore == nil {
+		fmt.Printf("[Router] WARNING: No session store available for history\n")
+		return []sessions.Message{}, nil
+	}
+
+	// Get config or use defaults
+	cfg := r.getHistoryConfig()
+
+	// Fetch more messages than we'll likely use, then trim by token budget
+	messages, err := r.sessionStore.GetMessages(session.Key, cfg.MaxMessages)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get messages: %w", err)
+	}
+
+	if len(messages) == 0 {
+		return messages, nil
+	}
+
+	// Calculate token budget and select messages newest-first
+	tokenBudget := cfg.MaxTokens
+	charsPerToken := cfg.CharsPerToken
+	if charsPerToken <= 0 {
+		charsPerToken = 4
+	}
+
+	charBudget := tokenBudget * charsPerToken
+	usedChars := 0
+
+	// Messages are returned chronologically (oldest first), so iterate from end
+	var selected []sessions.Message
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		msgChars := len(msg.Content) + len(msg.Role) + 10 // overhead for role/structure
+
+		// Always include minimum messages
+		if len(selected) < cfg.MinMessages {
+			selected = append(selected, msg)
+			usedChars += msgChars
+			continue
+		}
+
+		// Check if we have budget for more
+		if usedChars+msgChars <= charBudget {
+			selected = append(selected, msg)
+			usedChars += msgChars
+		} else {
+			// Budget exhausted
+			break
+		}
+	}
+
+	// Reverse to restore chronological order
+	for i, j := 0, len(selected)-1; i < j; i, j = i+1, j-1 {
+		selected[i], selected[j] = selected[j], selected[i]
+	}
+
+	estimatedTokens := usedChars / charsPerToken
+	fmt.Printf("[Router] Token-aware retrieval: %d messages (~%d tokens) from session %s\n",
+		len(selected), estimatedTokens, session.Key)
+
+	return selected, nil
+}
+
+// getHistoryConfig returns the history configuration, with defaults if not set
+func (r *Router) getHistoryConfig() HistoryConfig {
+	if r.historyConfig != nil {
+		return *r.historyConfig
+	}
+	return config.DefaultHistoryConfig()
 }

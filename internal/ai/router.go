@@ -40,6 +40,7 @@ type Router struct {
 	executionEngine ExecutionEngine // Tool execution engine (interface, not pointer)
 	sessionStore    *sessions.Store // Session store for retrieving message history
 	usageTracker    *UsageTracker
+	historyConfig   *config.HistoryConfig // Token-aware history retrieval config
 
 	// Smart routing components
 	modelSelector      ModelSelector
@@ -219,6 +220,11 @@ func NewRouterWithExecution(cfg config.AIConfig, agentSystem AgentSystem, execut
 // SetSessionStore sets the session store for retrieving message history
 func (r *Router) SetSessionStore(store *sessions.Store) {
 	r.sessionStore = store
+}
+
+// SetHistoryConfig sets the token-aware history retrieval configuration
+func (r *Router) SetHistoryConfig(cfg *config.HistoryConfig) {
+	r.historyConfig = cfg
 }
 
 // GetUsageTracker returns the router's usage tracker.

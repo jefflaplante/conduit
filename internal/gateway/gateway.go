@@ -185,6 +185,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 			Heartbeats:        cfg.Agent.Capabilities.Heartbeats,
 			SilentReplies:     cfg.Agent.Capabilities.SilentReplies,
 		},
+		PromptScaling: cfg.Agent.PromptScaling,
 	}
 
 	// Use the integrated agent system (tools will be set after gateway is created)
@@ -222,6 +223,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 	// Wire up session store for conversation history
 	aiRouter.SetSessionStore(sessionStore)
+
+	// Wire up token-aware history config
+	aiRouter.SetHistoryConfig(&cfg.Agent.History)
 
 	log.Println("Tool execution engine wired up")
 
@@ -688,6 +692,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 			log.Printf("WARNING: Failed to start heartbeat service: %v", err)
 		}
 	}
+
+	// Start session state cleanup loop (prevents memory leak from abandoned sessions)
+	stopCleanup := g.sessions.StartStateCleanup(30*time.Minute, 5*time.Minute)
+	go func() {
+		<-ctx.Done()
+		stopCleanup()
+	}()
 
 	// Start periodic FTS5 workspace re-indexing (every 5 minutes)
 	if g.ftsIndexer != nil {
