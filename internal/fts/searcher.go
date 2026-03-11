@@ -221,8 +221,14 @@ func sortByRank(results []SearchResult) {
 	}
 }
 
+// fts5Operators are FTS5 query operators that should not be treated as search terms.
+var fts5Operators = map[string]bool{
+	"and": true, "or": true, "not": true, "near": true,
+}
+
 // buildFTSQuery converts a user query string into an FTS5 MATCH expression.
 // Terms are joined with OR for broad matching. Special FTS5 characters are escaped.
+// Prevents injection by stripping operators and quoting terms that need it.
 func buildFTSQuery(query string) string {
 	words := strings.Fields(strings.ToLower(query))
 	if len(words) == 0 {
@@ -231,11 +237,23 @@ func buildFTSQuery(query string) string {
 
 	var terms []string
 	for _, w := range words {
+		// Skip FTS5 operators to prevent query manipulation
+		if fts5Operators[w] {
+			continue
+		}
+
 		// Strip FTS5 special characters to prevent syntax errors
 		cleaned := cleanFTSTerm(w)
-		if cleaned != "" {
-			terms = append(terms, cleaned)
+		if cleaned == "" {
+			continue
 		}
+
+		// If term still contains any risky characters after cleaning, quote it
+		if needsQuoting(cleaned) {
+			cleaned = `"` + cleaned + `"`
+		}
+
+		terms = append(terms, cleaned)
 	}
 
 	if len(terms) == 0 {
@@ -246,15 +264,27 @@ func buildFTSQuery(query string) string {
 }
 
 // cleanFTSTerm removes characters that have special meaning in FTS5 queries.
+// This is the primary defense against FTS5 injection.
 func cleanFTSTerm(term string) string {
 	var b strings.Builder
 	for _, ch := range term {
 		switch ch {
-		case '"', '*', '(', ')', ':', '^', '{', '}', '+', '-':
-			// skip special FTS5 characters
+		case '"', '*', '(', ')', ':', '^', '{', '}', '+', '-', '~', '<', '>', '[', ']':
+			// skip special FTS5 characters and potential injection vectors
 		default:
 			b.WriteRune(ch)
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// needsQuoting returns true if the term contains characters that might cause
+// issues even after cleaning (e.g., embedded spaces from multi-byte chars).
+func needsQuoting(term string) bool {
+	for _, ch := range term {
+		if ch < 32 || ch == '\'' {
+			return true
+		}
+	}
+	return false
 }

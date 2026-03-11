@@ -96,6 +96,68 @@ func NewSessionStateTracker() *SessionStateTracker {
 	}
 }
 
+// StartCleanupLoop starts a background goroutine that periodically removes
+// idle sessions that haven't been active for the given duration.
+// Call the returned function to stop the cleanup loop.
+func (t *SessionStateTracker) StartCleanupLoop(idleTimeout time.Duration, interval time.Duration) func() {
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	if idleTimeout <= 0 {
+		idleTimeout = 30 * time.Minute
+	}
+
+	stop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				t.cleanupIdleSessions(idleTimeout)
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	return func() { close(stop) }
+}
+
+// cleanupIdleSessions removes sessions that have been idle for longer than the timeout.
+// Only idle sessions are cleaned up; processing/waiting/error sessions are preserved.
+func (t *SessionStateTracker) cleanupIdleSessions(idleTimeout time.Duration) {
+	t.statesMutex.Lock()
+	defer t.statesMutex.Unlock()
+
+	now := time.Now()
+	var toRemove []string
+
+	for sessionKey, info := range t.sessionStates {
+		info.mutex.RLock()
+		isIdle := info.State == SessionStateIdle
+		lastActivity := info.LastActivity
+		info.mutex.RUnlock()
+
+		// Only clean up idle sessions that haven't been active recently
+		if isIdle && now.Sub(lastActivity) > idleTimeout {
+			toRemove = append(toRemove, sessionKey)
+		}
+	}
+
+	for _, sessionKey := range toRemove {
+		// Update counter before removing
+		atomic.AddInt64(&t.idleCount, -1)
+		delete(t.sessionStates, sessionKey)
+	}
+
+	if len(toRemove) > 0 {
+		// Log cleanup (would use proper logger in production)
+		// log.Printf("[SessionStateTracker] Cleaned up %d idle sessions", len(toRemove))
+	}
+}
+
 // UpdateState updates the state of a session and triggers hooks
 func (t *SessionStateTracker) UpdateState(sessionKey string, newState SessionState, metadata map[string]interface{}) error {
 	if !newState.IsValid() {

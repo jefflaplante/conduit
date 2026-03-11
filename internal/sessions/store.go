@@ -523,6 +523,12 @@ func (s *Store) GetStateTracker() *SessionStateTracker {
 	return s.stateTracker
 }
 
+// StartStateCleanup starts the background cleanup loop for idle session states.
+// Returns a function to stop the cleanup loop. Should be called on shutdown.
+func (s *Store) StartStateCleanup(idleTimeout, interval time.Duration) func() {
+	return s.stateTracker.StartCleanupLoop(idleTimeout, interval)
+}
+
 // UpdateSessionState updates the state of a session with optional metadata
 func (s *Store) UpdateSessionState(sessionKey string, state SessionState, metadata map[string]interface{}) error {
 	if err := s.stateTracker.UpdateState(sessionKey, state, metadata); err != nil {

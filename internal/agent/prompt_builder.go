@@ -18,11 +18,11 @@ import (
 // CronSessionKeyPrefix is the prefix used for session keys created by cron/scheduled jobs.
 const CronSessionKeyPrefix = "cron_"
 
-// Prompt scaling constants for small-context models.
+// Default prompt scaling constants (used when config not provided).
 const (
-	largeContextThreshold = 128000 // tokens; skip budget logic above this
-	promptBudgetPercent   = 15     // % of context window allocated to system prompt
-	charsPerToken         = 4      // rough chars-per-token estimate for budget math
+	defaultLargeContextThreshold = 128000 // tokens; skip budget logic above this
+	defaultPromptBudgetPercent   = 15     // % of context window allocated to system prompt
+	defaultCharsPerToken         = 4      // rough chars-per-token estimate for budget math
 )
 
 // promptSection pairs a builder function with its priority for budget-based inclusion.
@@ -30,6 +30,8 @@ type promptSection struct {
 	name     string       // human-readable name for compact-mode notice
 	priority int          // 1=critical, 4=nice-to-have
 	build    func() string
+	cached   string       // cached result of build() to avoid double-building
+	built    bool         // whether cached has been populated
 }
 
 // PromptBuilder handles building system prompts with full Conduit integration
@@ -42,11 +44,13 @@ type PromptBuilder struct {
 	workspaceContext *workspace.WorkspaceContext
 	skillsManager    *skills.Manager
 	sectionParams    *SectionParams
+	promptScaling    config.PromptScalingConfig
 }
 
 // NewPromptBuilder creates a new prompt builder with full integration.
 // modelAliases maps short names (e.g. "haiku") to full model identifiers.
 // If nil, a built-in default set is used.
+// promptScaling controls budget allocation for small-context models.
 func NewPromptBuilder(
 	agentName, personality string,
 	identity IdentityConfig,
@@ -55,6 +59,7 @@ func NewPromptBuilder(
 	workspaceContext *workspace.WorkspaceContext,
 	skillsManager *skills.Manager,
 	modelAliases map[string]string,
+	promptScaling *config.PromptScalingConfig,
 ) *PromptBuilder {
 	params := NewSectionParams(tools)
 
@@ -91,6 +96,20 @@ func NewPromptBuilder(
 		params.WorkspaceDir = workspaceContext.GetWorkspaceDir()
 	}
 
+	// Use provided scaling config or defaults
+	scaling := config.DefaultPromptScalingConfig()
+	if promptScaling != nil {
+		if promptScaling.LargeContextThreshold > 0 {
+			scaling.LargeContextThreshold = promptScaling.LargeContextThreshold
+		}
+		if promptScaling.PromptBudgetPercent > 0 {
+			scaling.PromptBudgetPercent = promptScaling.PromptBudgetPercent
+		}
+		if promptScaling.CharsPerToken > 0 {
+			scaling.CharsPerToken = promptScaling.CharsPerToken
+		}
+	}
+
 	return &PromptBuilder{
 		agentName:        agentName,
 		personality:      personality,
@@ -100,6 +119,7 @@ func NewPromptBuilder(
 		workspaceContext: workspaceContext,
 		skillsManager:    skillsManager,
 		sectionParams:    params,
+		promptScaling:    scaling,
 	}
 }
 
@@ -123,7 +143,7 @@ func (pb *PromptBuilder) Build(ctx context.Context, session *sessions.Session, i
 }
 
 // buildFullPrompt creates the complete system prompt text.
-// For models with large context windows (>= 128K tokens), all sections are included.
+// For models with large context windows (>= threshold), all sections are included.
 // For smaller models, sections are included by priority order within a token budget.
 func (pb *PromptBuilder) buildFullPrompt(ctx context.Context, session *sessions.Session, isOAuth bool) string {
 	isCron := session != nil && strings.HasPrefix(session.Key, CronSessionKeyPrefix)
@@ -138,20 +158,41 @@ func (pb *PromptBuilder) buildFullPrompt(ctx context.Context, session *sessions.
 	}
 	contextWindow := ai.ContextWindowForModel(model)
 
+	// Use config values for scaling thresholds
+	largeCtxThreshold := pb.promptScaling.LargeContextThreshold
+	if largeCtxThreshold <= 0 {
+		largeCtxThreshold = defaultLargeContextThreshold
+	}
+
 	// Short circuit: large-context models get everything.
-	if contextWindow >= largeContextThreshold {
-		return joinSections(allSections, nil)
+	if contextWindow >= largeCtxThreshold {
+		return joinSectionsWithCache(allSections, nil)
+	}
+
+	// Get budget parameters from config
+	budgetPercent := pb.promptScaling.PromptBudgetPercent
+	if budgetPercent <= 0 {
+		budgetPercent = defaultPromptBudgetPercent
+	}
+	cpt := pb.promptScaling.CharsPerToken
+	if cpt <= 0 {
+		cpt = defaultCharsPerToken
 	}
 
 	// Budget-constrained assembly for small-context models.
-	budgetChars := contextWindow * promptBudgetPercent / 100 * charsPerToken
+	budgetChars := contextWindow * budgetPercent / 100 * cpt
 	usedChars := 0
 	included := make([]bool, len(allSections))
 	var dropped []string
 
 	// Sections are already ordered by priority (stable within same priority).
-	for i, sec := range allSections {
-		text := strings.TrimSpace(sec.build())
+	// Build and cache each section's text to avoid double-building.
+	for i := range allSections {
+		if !allSections[i].built {
+			allSections[i].cached = strings.TrimSpace(allSections[i].build())
+			allSections[i].built = true
+		}
+		text := allSections[i].cached
 		if text == "" {
 			included[i] = true // empty sections are free
 			continue
@@ -161,11 +202,11 @@ func (pb *PromptBuilder) buildFullPrompt(ctx context.Context, session *sessions.
 			usedChars += cost
 			included[i] = true
 		} else {
-			dropped = append(dropped, sec.name)
+			dropped = append(dropped, allSections[i].name)
 		}
 	}
 
-	return joinSections(allSections, included, dropped...)
+	return joinSectionsWithCache(allSections, included, dropped...)
 }
 
 // buildSectionList returns all prompt sections tagged with priorities.
@@ -177,27 +218,27 @@ func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions
 	// P1=critical, P2=needed for delivery, P3=enhances behavior, P4=largest/optional.
 	raw := []promptSection{
 		// P1 — Critical
-		{"Identity", 1, func() string { return pb.buildIdentitySection(isOAuth) }},
-		{"Tooling", 1, func() string { return pb.buildToolingSection() }},
-		{"Tool Call Style", 1, func() string { return pb.buildToolCallStyleSection() }},
-		{"Silent Replies", 1, func() string { return buildSilentRepliesSection(params.IsMinimal) }},
-		{"Runtime", 1, func() string {
+		{name: "Identity", priority: 1, build: func() string { return pb.buildIdentitySection(isOAuth) }},
+		{name: "Tooling", priority: 1, build: func() string { return pb.buildToolingSection() }},
+		{name: "Tool Call Style", priority: 1, build: func() string { return pb.buildToolCallStyleSection() }},
+		{name: "Silent Replies", priority: 1, build: func() string { return buildSilentRepliesSection(params.IsMinimal) }},
+		{name: "Runtime", priority: 1, build: func() string {
 			return buildRuntimeSection(params, pb.buildRuntimeInfo(session))
 		}},
 
 		// P2 — Needed for proper channel delivery and tool usage
-		{"Reply Tags", 2, func() string { return buildReplyTagsSection(params.IsMinimal) }},
-		{"Messaging", 2, func() string { return buildMessagingSection(params) }},
-		{"Cron Delivery", 2, func() string {
+		{name: "Reply Tags", priority: 2, build: func() string { return buildReplyTagsSection(params.IsMinimal) }},
+		{name: "Messaging", priority: 2, build: func() string { return buildMessagingSection(params) }},
+		{name: "Cron Delivery", priority: 2, build: func() string {
 			if isCron {
 				return buildCronDeliverySection(params)
 			}
 			return ""
 		}},
-		{"Workspace", 2, func() string { return pb.buildWorkspaceSection() }},
-		{"Docs", 2, func() string { return buildDocsSection(params) }},
-		{"Model Aliases", 2, func() string { return buildModelAliasesSection(params) }},
-		{"Timezone", 2, func() string {
+		{name: "Workspace", priority: 2, build: func() string { return pb.buildWorkspaceSection() }},
+		{name: "Docs", priority: 2, build: func() string { return buildDocsSection(params) }},
+		{name: "Model Aliases", priority: 2, build: func() string { return buildModelAliasesSection(params) }},
+		{name: "Timezone", priority: 2, build: func() string {
 			if params.UserTimezone != "" {
 				return "If you need the current date, time, or day of week, run session_status."
 			}
@@ -205,23 +246,23 @@ func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions
 		}},
 
 		// P3 — Enhance behavior but model works without
-		{"Safety", 3, func() string { return buildSafetySection(params.IsMinimal) }},
-		{"Memory Recall", 3, func() string { return buildMemorySection(params) }},
-		{"Memory Persistence", 3, func() string { return buildMemoryPersistenceSection(params) }},
-		{"Voice/TTS", 3, func() string { return buildVoiceSection(params) }},
-		{"Reactions", 3, func() string { return buildReactionsSection(params) }},
-		{"Heartbeats", 3, func() string { return buildHeartbeatsSection(params) }},
+		{name: "Safety", priority: 3, build: func() string { return buildSafetySection(params.IsMinimal) }},
+		{name: "Memory Recall", priority: 3, build: func() string { return buildMemorySection(params) }},
+		{name: "Memory Persistence", priority: 3, build: func() string { return buildMemoryPersistenceSection(params) }},
+		{name: "Voice/TTS", priority: 3, build: func() string { return buildVoiceSection(params) }},
+		{name: "Reactions", priority: 3, build: func() string { return buildReactionsSection(params) }},
+		{name: "Heartbeats", priority: 3, build: func() string { return buildHeartbeatsSection(params) }},
 
 		// P4 — Largest sections; nice-to-have
-		{"Conduit CLI", 4, func() string { return buildConduitCLISection(params.IsMinimal) }},
-		{"Skills", 4, func() string {
+		{name: "Conduit CLI", priority: 4, build: func() string { return buildConduitCLISection(params.IsMinimal) }},
+		{name: "Skills", priority: 4, build: func() string {
 			if pb.capabilities.SkillsIntegration && pb.skillsManager != nil {
 				return pb.buildSkillsSection(ctx)
 			}
 			return ""
 		}},
-		{"Self-Update", 4, func() string { return buildSelfUpdateSection(params) }},
-		{"Project Context", 4, func() string { return pb.buildWorkspaceContextSection(ctx, session) }},
+		{name: "Self-Update", priority: 4, build: func() string { return buildSelfUpdateSection(params) }},
+		{name: "Project Context", priority: 4, build: func() string { return pb.buildWorkspaceContextSection(ctx, session) }},
 	}
 
 	// Stable sort by priority (preserves order within same priority).
@@ -232,7 +273,7 @@ func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions
 	return raw
 }
 
-// joinSections assembles prompt text from sections.
+// joinSections assembles prompt text from sections (legacy, rebuilds each section).
 // If included is nil, all sections are built. Otherwise only included[i]==true sections are used.
 // If dropped names are provided, a compact-mode notice is appended.
 func joinSections(sections []promptSection, included []bool, dropped ...string) string {
@@ -241,13 +282,42 @@ func joinSections(sections []promptSection, included []bool, dropped ...string) 
 		if included != nil && !included[i] {
 			continue
 		}
-		var text string
-		if included != nil {
-			// Already built during budget check — rebuild (sections are small enough).
-			text = strings.TrimSpace(sec.build())
-		} else {
-			text = strings.TrimSpace(sec.build())
+		text := strings.TrimSpace(sec.build())
+		if text != "" {
+			nonEmpty = append(nonEmpty, text)
 		}
+	}
+
+	result := strings.Join(nonEmpty, "\n\n")
+
+	if len(dropped) > 0 {
+		result += fmt.Sprintf("\n\n---\n[Compact mode: omitted %s to fit context window. Core capabilities remain active.]",
+			strings.Join(dropped, ", "))
+	}
+
+	return result
+}
+
+// joinSectionsWithCache assembles prompt text using cached section values when available.
+// This avoids double-building sections during budget calculation and final assembly.
+func joinSectionsWithCache(sections []promptSection, included []bool, dropped ...string) string {
+	var nonEmpty []string
+	for i := range sections {
+		if included != nil && !included[i] {
+			continue
+		}
+
+		var text string
+		if sections[i].built {
+			// Use cached value
+			text = sections[i].cached
+		} else {
+			// Build and cache
+			text = strings.TrimSpace(sections[i].build())
+			sections[i].cached = text
+			sections[i].built = true
+		}
+
 		if text != "" {
 			nonEmpty = append(nonEmpty, text)
 		}

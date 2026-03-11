@@ -26,6 +26,7 @@ func newTestPromptBuilder() *PromptBuilder {
 		nil, // no workspace context
 		nil, // no skills manager
 		nil, // default model aliases
+		nil, // default prompt scaling
 	)
 }
 
@@ -72,7 +73,7 @@ func TestBuildFullPrompt_SmallContext(t *testing.T) {
 
 	// Budget is applied (not short-circuited) — verify prompt is reasonably sized.
 	// Mistral budget: 32768 * 15 / 100 * 4 = 19660 chars.
-	budgetChars := 32768 * promptBudgetPercent / 100 * charsPerToken
+	budgetChars := 32768 * defaultPromptBudgetPercent / 100 * defaultCharsPerToken
 	if len(prompt) > budgetChars+200 { // small tolerance for compact-mode notice
 		t.Errorf("prompt (%d chars) exceeds budget (%d chars) for mistral", len(prompt), budgetChars)
 	}
@@ -87,7 +88,7 @@ func TestBuildFullPrompt_SmallContext_DropsLargeSections(t *testing.T) {
 
 	prompt := pb.buildFullPrompt(context.Background(), session, false)
 
-	budgetChars := 8192 * promptBudgetPercent / 100 * charsPerToken
+	budgetChars := 8192 * defaultPromptBudgetPercent / 100 * defaultCharsPerToken
 	// Prompt should be near or under budget (compact notice adds a bit).
 	if len(prompt) > budgetChars+300 {
 		t.Errorf("prompt (%d chars) far exceeds budget (%d chars) for gemma2", len(prompt), budgetChars)

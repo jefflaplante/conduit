@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"conduit/internal/ai"
+	"conduit/internal/config"
 	"conduit/internal/sessions"
 	"conduit/internal/skills"
 	"conduit/internal/workspace"
@@ -17,6 +18,7 @@ type ConduitAgentWithIntegration struct {
 	personality      string
 	identity         IdentityConfig
 	capabilities     AgentCapabilities
+	promptScaling    *config.PromptScalingConfig
 	tools            []ai.Tool
 	workspaceContext *workspace.WorkspaceContext
 	skillsManager    *skills.Manager
@@ -39,6 +41,7 @@ func NewConduitAgentWithIntegration(
 		personality:      cfg.Personality,
 		identity:         cfg.Identity,
 		capabilities:     cfg.Capabilities,
+		promptScaling:    &cfg.PromptScaling,
 		tools:            tools,
 		workspaceContext: workspaceContext,
 		skillsManager:    skillsManager,
@@ -54,6 +57,7 @@ func NewConduitAgentWithIntegration(
 		agent.workspaceContext,
 		agent.skillsManager,
 		agent.modelAliases,
+		agent.promptScaling,
 	)
 
 	return agent
@@ -72,6 +76,7 @@ func (a *ConduitAgentWithIntegration) SetTools(tools []ai.Tool) {
 		a.workspaceContext,
 		a.skillsManager,
 		a.modelAliases,
+		a.promptScaling,
 	)
 }
 
@@ -198,6 +203,7 @@ func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error
 	a.personality = cfg.Personality
 	a.identity = cfg.Identity
 	a.capabilities = cfg.Capabilities
+	a.promptScaling = &cfg.PromptScaling
 
 	// Rebuild prompt builder with new configuration
 	a.promptBuilder = NewPromptBuilder(
@@ -209,6 +215,7 @@ func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error
 		a.workspaceContext,
 		a.skillsManager,
 		a.modelAliases,
+		a.promptScaling,
 	)
 
 	return nil
@@ -228,6 +235,7 @@ func (a *ConduitAgentWithIntegration) UpdateTools(tools []ai.Tool) error {
 		a.workspaceContext,
 		a.skillsManager,
 		a.modelAliases,
+		a.promptScaling,
 	)
 
 	return nil

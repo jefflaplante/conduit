@@ -161,65 +161,34 @@ func (s *MessageSyncer) FullSync(ctx context.Context) error {
 // IncrementalSync finds and syncs any messages that are in gateway.db but not in search.db.
 // This is a safety net for any messages that might have been missed by callbacks.
 func (s *MessageSyncer) IncrementalSync(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Find messages in gateway.db that are not in search.db
-	// We do this by checking for message IDs that don't exist in FTS
-	rows, err := s.gatewayDB.QueryContext(ctx, `
-		SELECT id, session_key, role, content
-		FROM messages
-		WHERE id NOT IN (SELECT message_id FROM messages_fts)
-		LIMIT 1000
-	`)
-
-	// Note: The above query won't work across databases directly.
-	// We need to get all message IDs from search.db first, then check gateway.db
-	// This is a simplified approach - for a more robust solution, we'd use
-	// a watermark or timestamp-based approach.
-
-	// For now, let's use a simpler approach: compare counts and do full sync if mismatch
-	if err != nil {
-		// Cross-database query not supported - fall back to count comparison
-		var ftsCount, gatewayCount int
-		s.searchDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages_fts").Scan(&ftsCount)
-		s.gatewayDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages").Scan(&gatewayCount)
-
-		if ftsCount < gatewayCount {
-			log.Printf("MessageSyncer: incremental sync detected %d missing messages, triggering full sync",
-				gatewayCount-ftsCount)
-			s.mu.Unlock() // Unlock before calling FullSync which will re-lock
-			return s.FullSync(ctx)
-		}
-		return nil
-	}
-	defer rows.Close()
-
-	syncedCount := 0
-	for rows.Next() {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		var id, sessionKey, role, content string
-		if err := rows.Scan(&id, &sessionKey, &role, &content); err != nil {
-			continue
-		}
-
-		if _, err := s.searchDB.ExecContext(ctx,
-			`INSERT INTO messages_fts(message_id, session_key, role, content) VALUES (?, ?, ?, ?)`,
-			id, sessionKey, role, content); err != nil {
-			log.Printf("Warning: incremental sync failed for message %s: %v", id, err)
-			continue
-		}
-		syncedCount++
+	// First, check if we need a full sync (without holding the lock during the check)
+	needsFullSync, missingCount := s.checkSyncNeeded(ctx)
+	if needsFullSync {
+		log.Printf("MessageSyncer: incremental sync detected %d missing messages, triggering full sync",
+			missingCount)
+		return s.FullSync(ctx)
 	}
 
-	if syncedCount > 0 {
-		log.Printf("MessageSyncer: incremental sync added %d messages", syncedCount)
-	}
-
+	// No sync needed
 	return nil
+}
+
+// checkSyncNeeded compares counts between gateway and FTS to determine if sync is needed.
+// Returns (needsSync, missingCount).
+func (s *MessageSyncer) checkSyncNeeded(ctx context.Context) (bool, int) {
+	var ftsCount, gatewayCount int
+
+	if err := s.searchDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages_fts").Scan(&ftsCount); err != nil {
+		return false, 0
+	}
+	if err := s.gatewayDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages").Scan(&gatewayCount); err != nil {
+		return false, 0
+	}
+
+	if ftsCount < gatewayCount {
+		return true, gatewayCount - ftsCount
+	}
+	return false, 0
 }
 
 // ValidateSync compares message counts between gateway.db and search.db.
