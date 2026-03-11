@@ -11,6 +11,7 @@ Complete reference for every `config.json` option, how each option behaves, how 
 - [Path Resolution Rules](#path-resolution-rules)
 - [Top-Level Options](#top-level-options)
 - [database](#database)
+- [search](#search)
 - [ai](#ai)
 - [agent](#agent)
 - [workspace](#workspace)
@@ -20,6 +21,7 @@ Complete reference for every `config.json` option, how each option behaves, how 
 - [agent_heartbeat](#agent_heartbeat)
 - [rateLimiting](#ratelimiting)
 - [ssh](#ssh)
+- [vector](#vector)
 - [debug](#debug)
 - [Use-Case Recipes](#use-case-recipes)
 
@@ -104,6 +106,40 @@ If your config is at `/opt/conduit/configs/config.json` and contains `"path": ".
 
 The HTTP/WebSocket server listen port. The health endpoint is at `GET /health` and the WebSocket endpoint is at `/ws`.
 
+### `timezone`
+
+| | |
+|---|---|
+| Type | `string` |
+| Default | `""` (uses system local time) |
+
+IANA timezone identifier (e.g., `"America/Los_Angeles"`, `"UTC"`). Used for scheduling, logging timestamps, and quiet hours. Falls back to `agent_heartbeat.timezone` if empty, then to system local time.
+
+### `data_dir`
+
+| | |
+|---|---|
+| Type | `string` |
+| Default | `""` |
+
+Base directory for data files. Supports `~/` expansion. Optional — most paths can be specified individually.
+
+### `secrets_file`
+
+| | |
+|---|---|
+| Type | `string` |
+| Default | `""` |
+
+Path to a KEY=VALUE secrets file (like `.env`). Loaded before environment variable expansion. Supports `~/` expansion. Lines starting with `#` are comments. Existing environment variables take precedence over file values.
+
+```
+# Example secrets file
+ANTHROPIC_API_KEY=sk-ant-...
+TELEGRAM_BOT_TOKEN=123456:ABC...
+BRAVE_API_KEY=BSA...
+```
+
 ---
 
 ## `database`
@@ -131,6 +167,28 @@ SQLite is configured with: WAL journal mode, 5s busy timeout, NORMAL synchronous
 
 ---
 
+## `search`
+
+Dedicated search database for FTS5 indices and beads issue indexing. Separated from the main gateway database for independent index management.
+
+```json
+{
+  "search": {
+    "enabled": true,
+    "path": "./gateway.search.db",
+    "beads_dir": ".beads"
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable search database. When disabled, falls back to grep-based search |
+| `path` | string | derived | Path to search database. Defaults to `<gateway-db>.search.db` |
+| `beads_dir` | string | `".beads"` | Directory containing beads issues.jsonl for indexing |
+
+---
+
 ## `ai`
 
 ```json
@@ -153,6 +211,48 @@ SQLite is configured with: WAL journal mode, 5s busy timeout, NORMAL synchronous
 |-------|------|---------|-------------|
 | `default_provider` | string | `"anthropic"` | Which provider name to use for requests |
 | `providers` | array | see below | List of configured providers |
+| `model_aliases` | object | see below | Map of alias names to full model identifiers |
+| `smart_routing` | object | see below | Intelligent model routing configuration |
+
+### Model aliases
+
+```json
+{
+  "model_aliases": {
+    "haiku": "claude-haiku-4-5-20251001",
+    "sonnet": "claude-sonnet-4-6",
+    "opus": "claude-opus-4-6",
+    "default": "claude-haiku-4-5-20251001"
+  }
+}
+```
+
+Aliases let you reference models by short names. The defaults above are built-in; config values override them.
+
+### Smart routing
+
+```json
+{
+  "smart_routing": {
+    "enabled": true,
+    "track_usage": true,
+    "cost_budget_daily": 10.00,
+    "pricing_overrides": {
+      "claude-sonnet-4-6": {
+        "input_per_m_token": 3.00,
+        "output_per_m_token": 15.00
+      }
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable smart routing |
+| `track_usage` | bool | `false` | Track token usage and costs |
+| `cost_budget_daily` | float | `0` | Daily cost budget in USD (0 = unlimited) |
+| `pricing_overrides` | object | `{}` | Override default model pricing |
 
 ### Provider fields
 
@@ -161,6 +261,7 @@ SQLite is configured with: WAL journal mode, 5s busy timeout, NORMAL synchronous
 | `name` | string | yes | Identifier used by `default_provider` to select this provider |
 | `type` | string | yes | Provider type: `"anthropic"` or `"openai"` |
 | `api_key` | string | conditional | API key. Required unless using OAuth |
+| `base_url` | string | no | Custom API base URL for local/compatible servers (e.g., Ollama) |
 | `model` | string | yes | Model identifier (e.g., `"claude-sonnet-4-20250514"`, `"claude-opus-4-6"`) |
 | `auth` | object | no | OAuth configuration (alternative to api_key) |
 
@@ -226,6 +327,52 @@ Controls the AI agent's personality, identity, and capabilities. Optional — if
 | `capabilities.skills_integration` | bool | `true` | Enable skills system integration |
 | `capabilities.heartbeats` | bool | `true` | Enable heartbeat task processing |
 | `capabilities.silent_replies` | bool | `true` | Allow agent to reply with empty content (for background tasks) |
+
+### History settings
+
+Controls how conversation history is retrieved and budgeted.
+
+```json
+{
+  "agent": {
+    "history": {
+      "max_tokens": 16000,
+      "min_messages": 4,
+      "max_messages": 100,
+      "chars_per_token": 4
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `history.max_tokens` | int | `16000` | Target token budget for conversation history |
+| `history.min_messages` | int | `4` | Minimum recent messages to include (even if over budget) |
+| `history.max_messages` | int | `100` | Absolute cap on messages regardless of token budget |
+| `history.chars_per_token` | int | `4` | Estimated characters per token for budgeting |
+
+### Prompt scaling settings
+
+Controls dynamic system prompt scaling for small-context models.
+
+```json
+{
+  "agent": {
+    "prompt_scaling": {
+      "large_context_threshold": 128000,
+      "prompt_budget_percent": 15,
+      "chars_per_token": 4
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `prompt_scaling.large_context_threshold` | int | `128000` | Context window size (tokens) above which all prompt sections are included |
+| `prompt_scaling.prompt_budget_percent` | int | `15` | Percentage of context window allocated to system prompt for small-context models |
+| `prompt_scaling.chars_per_token` | int | `4` | Estimated characters per token for budget math |
 
 **Interaction with `workspace`:** When `memory_recall` is true, the agent loads MEMORY.md and `memory/*.md` files from `workspace.context_dir`. When `heartbeats` is true, the agent reads HEARTBEAT.md from the same directory.
 
@@ -544,6 +691,8 @@ Agent heartbeat — periodic task processing loop. Every N minutes, the agent re
 | `timezone` | string | `"America/Los_Angeles"` | IANA timezone for quiet hours and scheduling |
 | `heartbeat_task_path` | string | `"HEARTBEAT.md"` | Path to task instructions file (relative to `workspace.context_dir`) |
 | `enabled_task_types` | string array | `["alerts", "checks", "reports"]` | Which task types to process. Options: `"alerts"`, `"checks"`, `"reports"`, `"maintenance"` |
+| `log_level` | string | `"info"` | Log level: `"debug"`, `"info"`, `"warn"`, `"error"` |
+| `verbose_logging` | bool | `false` | Enable verbose debug logging for agent heartbeat |
 
 ### Quiet hours
 
@@ -665,6 +814,43 @@ Integrated SSH server that serves the BubbleTea TUI over SSH via Wish. Clients c
 3. Set `ssh.enabled: true` in config and restart, or run `./bin/gateway ssh-server` standalone
 
 The SSH server uses a direct in-process client (`gateway/direct_client.go`) instead of WebSocket loopback, so it doesn't consume an API token. However, the standalone `ssh-server` command does require a `--gateway-token` flag for WebSocket connection to the gateway.
+
+---
+
+## `vector`
+
+Optional vector/semantic search service for embedding-based document retrieval.
+
+```json
+{
+  "vector": {
+    "enabled": false,
+    "path": "./gateway.vector.db",
+    "chunk_size": 500,
+    "embed_dims": 4096,
+    "embed_provider": "tfidf",
+    "openai": {
+      "api_key": "${OPENAI_API_KEY}",
+      "model": "text-embedding-3-small"
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable vector search |
+| `path` | string | derived | Path to vector database. Defaults to `<gateway-db>.vector.db` |
+| `chunk_size` | int | `500` | Maximum tokens per document chunk |
+| `embed_dims` | int | `4096` | Embedding dimensions (4096 for TF-IDF, 1536 for OpenAI) |
+| `embed_provider` | string | `"tfidf"` | Embedding provider: `"tfidf"` (local) or `"openai"` |
+
+### OpenAI embeddings
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `openai.api_key` | string | OpenAI API key (supports `${ENV_VAR}` expansion) |
+| `openai.model` | string | Embedding model (default: `"text-embedding-3-small"`) |
 
 ---
 
@@ -909,3 +1095,71 @@ Enable custom skills from SKILL.md files:
 Each skill directory must contain a `SKILL.md` file. The skills system discovers executable scripts (.sh, .py, .js) and reference files in each skill directory. Skills are exposed to the AI as additional tools.
 
 Note: Skills integration is currently disabled in the tool registry pending a refactor (`registerAllTools` has the skill adapter registration commented out). The config infrastructure is in place for when it's re-enabled.
+
+### Vector/semantic search
+
+Enable vector-based document search with TF-IDF (local, no API):
+
+```json
+{
+  "vector": {
+    "enabled": true,
+    "embed_provider": "tfidf",
+    "chunk_size": 500
+  }
+}
+```
+
+Or with OpenAI embeddings for higher quality:
+
+```json
+{
+  "vector": {
+    "enabled": true,
+    "embed_provider": "openai",
+    "embed_dims": 1536,
+    "openai": {
+      "api_key": "${OPENAI_API_KEY}",
+      "model": "text-embedding-3-small"
+    }
+  }
+}
+```
+
+### Using a secrets file
+
+Keep API keys out of your config by using a secrets file:
+
+```json
+{
+  "secrets_file": "~/.conduit/secrets",
+  "ai": {
+    "providers": [{
+      "api_key": "${ANTHROPIC_API_KEY}"
+    }]
+  }
+}
+```
+
+Then in `~/.conduit/secrets`:
+```
+ANTHROPIC_API_KEY=sk-ant-...
+TELEGRAM_BOT_TOKEN=123456:ABC...
+```
+
+### Local/compatible API servers
+
+Use a local model server (like Ollama) with the OpenAI-compatible endpoint:
+
+```json
+{
+  "ai": {
+    "providers": [{
+      "name": "local",
+      "type": "openai",
+      "base_url": "http://localhost:11434/v1",
+      "model": "llama3.2"
+    }]
+  }
+}
+```
