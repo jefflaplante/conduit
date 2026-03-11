@@ -297,3 +297,142 @@ func TestGetSessionByLabel(t *testing.T) {
 		t.Error("Expected error for empty label")
 	}
 }
+
+func TestSearchMessages(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Create sessions and add messages
+	session1, err := store.GetOrCreateSession("user1", "channel1")
+	if err != nil {
+		t.Fatalf("Failed to create session1: %v", err)
+	}
+
+	session2, err := store.GetOrCreateSession("user2", "channel2")
+	if err != nil {
+		t.Fatalf("Failed to create session2: %v", err)
+	}
+
+	// Add messages with searchable content
+	_, err = store.AddMessage(session1.Key, "user", "The weather today is sunny and warm", nil)
+	if err != nil {
+		t.Fatalf("Failed to add message: %v", err)
+	}
+
+	_, err = store.AddMessage(session1.Key, "assistant", "I hope you enjoy the sunshine!", nil)
+	if err != nil {
+		t.Fatalf("Failed to add message: %v", err)
+	}
+
+	_, err = store.AddMessage(session2.Key, "user", "Can you help me with database queries?", nil)
+	if err != nil {
+		t.Fatalf("Failed to add message: %v", err)
+	}
+
+	// Test FTS search for "weather"
+	results, err := store.SearchMessages("weather", 10)
+	if err != nil {
+		t.Fatalf("SearchMessages failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for 'weather', got %d", len(results))
+	}
+
+	if len(results) > 0 && results[0].SessionKey != session1.Key {
+		t.Errorf("Expected result from session1, got %s", results[0].SessionKey)
+	}
+
+	// Test search for "database"
+	results, err = store.SearchMessages("database", 10)
+	if err != nil {
+		t.Fatalf("SearchMessages failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for 'database', got %d", len(results))
+	}
+
+	if len(results) > 0 && results[0].SessionKey != session2.Key {
+		t.Errorf("Expected result from session2, got %s", results[0].SessionKey)
+	}
+
+	// Test search for "sunshine" (in assistant message)
+	results, err = store.SearchMessages("sunshine", 10)
+	if err != nil {
+		t.Fatalf("SearchMessages failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for 'sunshine', got %d", len(results))
+	}
+
+	// Test search for non-existent term
+	results, err = store.SearchMessages("xyznonexistent", 10)
+	if err != nil {
+		t.Fatalf("SearchMessages failed: %v", err)
+	}
+
+	if len(results) != 0 {
+		t.Errorf("Expected 0 results for non-existent term, got %d", len(results))
+	}
+
+	// Test empty query
+	results, err = store.SearchMessages("", 10)
+	if err != nil {
+		t.Fatalf("SearchMessages with empty query failed: %v", err)
+	}
+
+	if results != nil && len(results) != 0 {
+		t.Errorf("Expected nil or empty results for empty query, got %d", len(results))
+	}
+
+	// Test limit
+	results, err = store.SearchMessages("the", 1)
+	if err != nil {
+		t.Fatalf("SearchMessages with limit failed: %v", err)
+	}
+
+	if len(results) > 1 {
+		t.Errorf("Expected at most 1 result with limit=1, got %d", len(results))
+	}
+}
+
+func TestSearchMessagesFTSTriggers(t *testing.T) {
+	// This test verifies that FTS triggers keep the index in sync
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	session, err := store.GetOrCreateSession("user1", "channel1")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	// Add a message - should be indexed via trigger
+	_, err = store.AddMessage(session.Key, "user", "unique_test_keyword_alpha", nil)
+	if err != nil {
+		t.Fatalf("Failed to add message: %v", err)
+	}
+
+	// Search should find it immediately (trigger should have indexed it)
+	results, err := store.SearchMessages("unique_test_keyword_alpha", 10)
+	if err != nil {
+		t.Fatalf("SearchMessages failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result after INSERT trigger, got %d", len(results))
+	}
+}

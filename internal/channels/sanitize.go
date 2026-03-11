@@ -3,6 +3,8 @@ package channels
 import (
 	"regexp"
 	"strings"
+
+	"conduit/internal/constants"
 )
 
 // MediaLineRe matches lines starting with "MEDIA:" followed by a file path.
@@ -40,13 +42,13 @@ func SanitizeOutgoingText(text string) string {
 // are not suppressed.
 func IsSilentResponse(content string) bool {
 	upper := strings.ToUpper(strings.TrimSpace(content))
-	if upper == "NO_REPLY" || upper == "HEARTBEAT_OK" {
+	if upper == constants.SilentReplyToken || upper == constants.HeartbeatOKToken {
 		return true
 	}
 	// Allow short wrapped responses like "OK. NO_REPLY" but not long
 	// responses that merely reference the token.
 	if len(upper) <= 40 {
-		return strings.Contains(upper, "NO_REPLY") || strings.Contains(upper, "HEARTBEAT_OK")
+		return strings.Contains(upper, constants.SilentReplyToken) || strings.Contains(upper, constants.HeartbeatOKToken)
 	}
 	return false
 }

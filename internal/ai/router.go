@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	"conduit/internal/constants"
 	"conduit/internal/sessions"
 )
 
@@ -699,9 +700,9 @@ func (s *SimpleConversationResponse) HasToolResults() bool {
 func (r *Router) processSilentPatterns(response ConversationResponse) ConversationResponse {
 	upper := strings.ToUpper(strings.TrimSpace(response.GetContent()))
 
-	silent := upper == "NO_REPLY" || upper == "HEARTBEAT_OK"
+	silent := upper == constants.SilentReplyToken || upper == constants.HeartbeatOKToken
 	if !silent && len(upper) <= 40 {
-		silent = strings.Contains(upper, "NO_REPLY") || strings.Contains(upper, "HEARTBEAT_OK")
+		silent = strings.Contains(upper, constants.SilentReplyToken) || strings.Contains(upper, constants.HeartbeatOKToken)
 	}
 
 	if silent {

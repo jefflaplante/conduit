@@ -156,6 +156,33 @@ func GetMigrations() []Migration {
 				SELECT id, session_key, role, content FROM messages;
 			`,
 		},
+		{
+			Version: 5,
+			Name:    "add_messages_fts_sync_triggers",
+			SQL: `
+				-- Triggers to keep messages_fts in sync with messages table.
+				-- Migration 4 created messages_fts but only did initial backfill.
+				-- These triggers ensure FTS stays in sync for new/updated/deleted messages.
+
+				-- Trigger for INSERT: add new message to FTS index
+				CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+					INSERT INTO messages_fts(message_id, session_key, role, content)
+					VALUES (new.id, new.session_key, new.role, new.content);
+				END;
+
+				-- Trigger for DELETE: remove message from FTS index
+				CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+					DELETE FROM messages_fts WHERE message_id = old.id;
+				END;
+
+				-- Trigger for UPDATE: update message in FTS index
+				CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE ON messages BEGIN
+					DELETE FROM messages_fts WHERE message_id = old.id;
+					INSERT INTO messages_fts(message_id, session_key, role, content)
+					VALUES (new.id, new.session_key, new.role, new.content);
+				END;
+			`,
+		},
 	}
 }
 
