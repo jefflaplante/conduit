@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"conduit/internal/ai"
 	"conduit/internal/config"
@@ -11,6 +13,15 @@ import (
 	"conduit/internal/skills"
 	"conduit/internal/workspace"
 )
+
+// DefaultPromptCacheTTL is the default time-to-live for cached system prompts.
+const DefaultPromptCacheTTL = 5 * time.Minute
+
+// promptCacheEntry holds a cached system prompt with its expiration time.
+type promptCacheEntry struct {
+	blocks    []ai.SystemBlock
+	expiresAt time.Time
+}
 
 // ConduitAgentWithIntegration implements the Conduit agent system with full integration
 type ConduitAgentWithIntegration struct {
@@ -24,6 +35,10 @@ type ConduitAgentWithIntegration struct {
 	skillsManager    *skills.Manager
 	modelAliases     map[string]string
 	promptBuilder    *PromptBuilder
+
+	// System prompt cache: keyed by "sessionKey:model:isOAuth"
+	promptCache    sync.Map
+	promptCacheTTL time.Duration
 }
 
 // NewConduitAgentWithIntegration creates a new Conduit agent instance with full integration.
@@ -46,6 +61,7 @@ func NewConduitAgentWithIntegration(
 		workspaceContext: workspaceContext,
 		skillsManager:    skillsManager,
 		modelAliases:     modelAliases,
+		promptCacheTTL:   DefaultPromptCacheTTL,
 	}
 
 	agent.promptBuilder = NewPromptBuilder(
@@ -78,6 +94,8 @@ func (a *ConduitAgentWithIntegration) SetTools(tools []ai.Tool) {
 		a.modelAliases,
 		a.promptScaling,
 	)
+	// Invalidate prompt cache since tools affect prompt content
+	a.InvalidatePromptCache()
 }
 
 // Name returns the agent name
@@ -85,7 +103,8 @@ func (a *ConduitAgentWithIntegration) Name() string {
 	return a.name
 }
 
-// BuildSystemPrompt builds the system prompt for a session with full integration
+// BuildSystemPrompt builds the system prompt for a session with full integration.
+// Results are cached per session+model+authType combination with a configurable TTL.
 func (a *ConduitAgentWithIntegration) BuildSystemPrompt(ctx context.Context, session *sessions.Session) ([]ai.SystemBlock, error) {
 	// Initialize skills manager if needed
 	if a.skillsManager != nil && a.capabilities.SkillsIntegration && !a.skillsManager.IsInitialized() {
@@ -97,7 +116,96 @@ func (a *ConduitAgentWithIntegration) BuildSystemPrompt(ctx context.Context, ses
 	// Determine if this is OAuth based on session context or other indicators
 	isOAuth := a.detectOAuthFromSession(session)
 
-	return a.promptBuilder.Build(ctx, session, isOAuth)
+	// Build cache key from factors that affect prompt content
+	cacheKey := a.buildPromptCacheKey(session, isOAuth)
+
+	// Check cache for valid entry
+	if cached, ok := a.promptCache.Load(cacheKey); ok {
+		entry := cached.(promptCacheEntry)
+		if time.Now().Before(entry.expiresAt) {
+			// Return a copy to prevent callers from modifying cached data
+			return copySystemBlocks(entry.blocks), nil
+		}
+		// Entry expired, delete it
+		a.promptCache.Delete(cacheKey)
+	}
+
+	// Build new prompt
+	blocks, err := a.promptBuilder.Build(ctx, session, isOAuth)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the result
+	ttl := a.promptCacheTTL
+	if ttl == 0 {
+		ttl = DefaultPromptCacheTTL
+	}
+	a.promptCache.Store(cacheKey, promptCacheEntry{
+		blocks:    copySystemBlocks(blocks),
+		expiresAt: time.Now().Add(ttl),
+	})
+
+	return blocks, nil
+}
+
+// buildPromptCacheKey creates a cache key from session and auth state.
+// The key includes session key, model, and OAuth status since these affect prompt content.
+func (a *ConduitAgentWithIntegration) buildPromptCacheKey(session *sessions.Session, isOAuth bool) string {
+	sessionKey := ""
+	model := ""
+	if session != nil {
+		sessionKey = session.Key
+		if session.Context != nil {
+			model = session.Context["model"]
+		}
+	}
+	oauthStr := "api"
+	if isOAuth {
+		oauthStr = "oauth"
+	}
+	return fmt.Sprintf("%s:%s:%s", sessionKey, model, oauthStr)
+}
+
+// copySystemBlocks creates a deep copy of system blocks to prevent cache mutation.
+func copySystemBlocks(blocks []ai.SystemBlock) []ai.SystemBlock {
+	if blocks == nil {
+		return nil
+	}
+	copied := make([]ai.SystemBlock, len(blocks))
+	for i, block := range blocks {
+		copied[i] = ai.SystemBlock{
+			Type: block.Type,
+			Text: block.Text,
+			Meta: block.Meta, // Note: Meta is interface{}, shallow copy only
+		}
+	}
+	return copied
+}
+
+// InvalidatePromptCache clears all cached system prompts.
+// Call this when tools, configuration, or other prompt-affecting state changes.
+func (a *ConduitAgentWithIntegration) InvalidatePromptCache() {
+	a.promptCache.Range(func(key, _ interface{}) bool {
+		a.promptCache.Delete(key)
+		return true
+	})
+}
+
+// InvalidatePromptCacheForSession clears cached system prompt for a specific session.
+// Call this when session-specific state changes (e.g., model switch).
+func (a *ConduitAgentWithIntegration) InvalidatePromptCacheForSession(sessionKey string) {
+	a.promptCache.Range(func(key, _ interface{}) bool {
+		if keyStr, ok := key.(string); ok && strings.HasPrefix(keyStr, sessionKey+":") {
+			a.promptCache.Delete(key)
+		}
+		return true
+	})
+}
+
+// SetPromptCacheTTL sets the time-to-live for cached system prompts.
+func (a *ConduitAgentWithIntegration) SetPromptCacheTTL(ttl time.Duration) {
+	a.promptCacheTTL = ttl
 }
 
 // GetToolDefinitions returns available tool definitions including skills-generated tools
@@ -138,9 +246,9 @@ func (a *ConduitAgentWithIntegration) ProcessResponse(ctx context.Context, respo
 	// LLM wrapping. Long responses that merely reference the token are not suppressed.
 	upper := strings.ToUpper(strings.TrimSpace(response.Content))
 
-	silent := upper == "NO_REPLY" || upper == "HEARTBEAT_OK"
+	silent := upper == SilentReplyToken || upper == HeartbeatOKToken
 	if !silent && len(upper) <= 40 {
-		silent = strings.Contains(upper, "NO_REPLY") || strings.Contains(upper, "HEARTBEAT_OK")
+		silent = strings.Contains(upper, SilentReplyToken) || strings.Contains(upper, HeartbeatOKToken)
 	}
 	if silent {
 		processed.Silent = true
@@ -218,6 +326,9 @@ func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error
 		a.promptScaling,
 	)
 
+	// Invalidate prompt cache since configuration affects prompt content
+	a.InvalidatePromptCache()
+
 	return nil
 }
 
@@ -237,6 +348,9 @@ func (a *ConduitAgentWithIntegration) UpdateTools(tools []ai.Tool) error {
 		a.modelAliases,
 		a.promptScaling,
 	)
+
+	// Invalidate prompt cache since tools affect prompt content
+	a.InvalidatePromptCache()
 
 	return nil
 }

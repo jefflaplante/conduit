@@ -73,7 +73,7 @@ func NewPromptBuilder(
 	params.ReactionsMode = "MINIMAL"
 	params.RuntimeChannel = "telegram"
 	params.InlineButtons = true
-	params.MessageChannels = []string{"telegram", "whatsapp", "discord", "signal", "slack"}
+	params.MessageChannels = SupportedChannels
 
 	// Build prompt-format aliases from config (add "anthropic/" prefix where needed).
 	// Fall back to config.DefaultModelAliases() when none are provided.

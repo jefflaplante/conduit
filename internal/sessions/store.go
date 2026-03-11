@@ -591,14 +591,114 @@ type SearchMessagesResult struct {
 	MatchScore float64 `json:"match_score"`
 }
 
-// SearchMessages searches for messages across all sessions containing the query keywords
+// SearchMessages searches for messages across all sessions containing the query keywords.
+// Uses FTS5 full-text search for efficient querying with BM25 ranking.
 func (s *Store) SearchMessages(query string, limit int) ([]SearchMessagesResult, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 
-	// Use FTS if available, otherwise fall back to LIKE search
-	// For simplicity, using LIKE search which works without FTS setup
+	// Build FTS5 query: escape special characters and join with OR for flexible matching
+	ftsQuery := s.buildFTSQuery(query)
+	if ftsQuery == "" {
+		return nil, nil
+	}
+
+	// Try FTS5 search first (uses messages_fts virtual table with BM25 ranking)
+	rows, err := s.db.Query(`
+		SELECT m.id, m.session_key, m.role, m.content, m.timestamp, m.metadata, s.key, fts.rank
+		FROM messages_fts fts
+		JOIN messages m ON fts.message_id = m.id
+		JOIN sessions s ON m.session_key = s.key
+		WHERE messages_fts MATCH ?
+		ORDER BY fts.rank
+		LIMIT ?
+	`, "content:"+ftsQuery, limit)
+
+	if err != nil {
+		// Fall back to LIKE search if FTS fails (e.g., table doesn't exist)
+		return s.searchMessagesLIKE(query, limit)
+	}
+	defer rows.Close()
+
+	var results []SearchMessagesResult
+
+	for rows.Next() {
+		var message Message
+		var metadataJSON string
+		var sessionKey string
+		var rank float64
+
+		err := rows.Scan(
+			&message.ID,
+			&message.SessionKey,
+			&message.Role,
+			&message.Content,
+			&message.Timestamp,
+			&metadataJSON,
+			&sessionKey,
+			&rank,
+		)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan message: %w", err)
+		}
+
+		// Parse metadata JSON
+		if err := json.Unmarshal([]byte(metadataJSON), &message.Metadata); err != nil {
+			message.Metadata = make(map[string]string)
+		}
+
+		// Convert BM25 rank to 0-1 score (rank is negative, more negative = better match)
+		score := -rank / 20.0
+		if score > 1.0 {
+			score = 1.0
+		}
+		if score < 0.0 {
+			score = 0.0
+		}
+
+		results = append(results, SearchMessagesResult{
+			Message:    message,
+			SessionKey: sessionKey,
+			MatchScore: score,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("row iteration error: %w", err)
+	}
+
+	return results, nil
+}
+
+// buildFTSQuery converts a user query into FTS5 query syntax.
+// Escapes special characters and handles multi-word queries.
+func (s *Store) buildFTSQuery(query string) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return ""
+	}
+
+	// Split into words and escape each for FTS5
+	words := strings.Fields(query)
+	var escaped []string
+	for _, word := range words {
+		// Escape FTS5 special characters by quoting
+		// FTS5 special chars: AND OR NOT ( ) " *
+		if strings.ContainsAny(word, `"*()`) || strings.EqualFold(word, "AND") ||
+			strings.EqualFold(word, "OR") || strings.EqualFold(word, "NOT") {
+			word = `"` + strings.ReplaceAll(word, `"`, `""`) + `"`
+		}
+		escaped = append(escaped, word)
+	}
+
+	// Join with OR for flexible matching (any term matches)
+	return strings.Join(escaped, " OR ")
+}
+
+// searchMessagesLIKE is a fallback search using LIKE when FTS5 is unavailable.
+func (s *Store) searchMessagesLIKE(query string, limit int) ([]SearchMessagesResult, error) {
 	rows, err := s.db.Query(`
 		SELECT m.id, m.session_key, m.role, m.content, m.timestamp, m.metadata, s.key
 		FROM messages m

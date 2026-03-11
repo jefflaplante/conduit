@@ -39,8 +39,11 @@ func NewSectionParams(tools []ai.Tool) *SectionParams {
 	}
 }
 
-const SILENT_REPLY_TOKEN = "NO_REPLY"
-const HEARTBEAT_TOKEN = "HEARTBEAT_OK"
+// SILENT_REPLY_TOKEN is deprecated; use SilentReplyToken from constants.go
+const SILENT_REPLY_TOKEN = SilentReplyToken
+
+// HEARTBEAT_TOKEN is deprecated; use HeartbeatOKToken from constants.go
+const HEARTBEAT_TOKEN = HeartbeatOKToken
 
 // buildSafetySection returns the safety guidelines
 func buildSafetySection(isMinimal bool) string {
@@ -119,7 +122,7 @@ func buildMessagingSection(params *SectionParams) string {
 `)
 
 	if params.AvailableTools["Message"] {
-		channelOptions := "telegram|whatsapp|discord|googlechat|slack|signal|imessage"
+		channelOptions := strings.Join(SupportedChannels, "|")
 		if len(params.MessageChannels) > 0 {
 			channelOptions = strings.Join(params.MessageChannels, "|")
 		}
