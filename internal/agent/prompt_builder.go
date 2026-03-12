@@ -43,6 +43,7 @@ type PromptBuilder struct {
 	capabilities     AgentCapabilities
 	tools            []ai.Tool
 	workspaceContext *workspace.WorkspaceContext
+	summaryManager   *workspace.SummaryManager
 	skillsManager    *skills.Manager
 	sectionParams    *SectionParams
 	promptScaling    config.PromptScalingConfig
@@ -52,6 +53,7 @@ type PromptBuilder struct {
 // modelAliases maps short names (e.g. "haiku") to full model identifiers.
 // If nil, a built-in default set is used.
 // promptScaling controls budget allocation for small-context models.
+// summaryManager is optional; if provided, enables AI-powered summarization for small-context models.
 func NewPromptBuilder(
 	agentName, personality string,
 	email config.AgentEmail,
@@ -59,6 +61,7 @@ func NewPromptBuilder(
 	capabilities AgentCapabilities,
 	tools []ai.Tool,
 	workspaceContext *workspace.WorkspaceContext,
+	summaryManager *workspace.SummaryManager,
 	skillsManager *skills.Manager,
 	modelAliases map[string]string,
 	promptScaling *config.PromptScalingConfig,
@@ -125,6 +128,7 @@ func NewPromptBuilder(
 		capabilities:     capabilities,
 		tools:            tools,
 		workspaceContext: workspaceContext,
+		summaryManager:   summaryManager,
 		skillsManager:    skillsManager,
 		sectionParams:    params,
 		promptScaling:    scaling,
@@ -476,6 +480,16 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 		return ""
 	}
 
+	// Check if we should use summarized content for small-context models
+	files := bundle.Files
+	if pb.shouldUseSummaries(session) && pb.summaryManager != nil {
+		summarized, err := pb.summaryManager.GetSummarizedContext(ctx, bundle.Files)
+		if err == nil {
+			files = summarized
+		}
+		// On error, fall through to use full content
+	}
+
 	var builder strings.Builder
 	builder.WriteString("# Project Context\n\n")
 	builder.WriteString("The following project context files have been loaded:\n")
@@ -484,13 +498,13 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 	// Core files in specific order
 	coreFiles := []string{"SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md", "IDENTITY.md", "HEARTBEAT.md", "BOOTSTRAP.md"}
 	for _, filename := range coreFiles {
-		if content, exists := bundle.Files[filename]; exists {
+		if content, exists := files[filename]; exists {
 			builder.WriteString(fmt.Sprintf("## %s\n%s\n", filename, content))
 		}
 	}
 
 	// Memory files
-	for filename, content := range bundle.Files {
+	for filename, content := range files {
 		if strings.HasPrefix(filename, "memory/") && strings.HasSuffix(filename, ".md") {
 			if len(content) > 4000 {
 				content = content[:4000] + "\n...(truncated)"
@@ -501,12 +515,34 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 
 	// MEMORY.md only in main sessions
 	if sessionType == "main" {
-		if content, exists := bundle.Files["MEMORY.md"]; exists {
+		if content, exists := files["MEMORY.md"]; exists {
 			builder.WriteString(fmt.Sprintf("## MEMORY.md\n%s\n", content))
 		}
 	}
 
 	return builder.String()
+}
+
+// shouldUseSummaries determines if summarized content should be used
+func (pb *PromptBuilder) shouldUseSummaries(session *sessions.Session) bool {
+	if pb.summaryManager == nil || !pb.summaryManager.IsEnabled() {
+		return false
+	}
+
+	// Determine context window from session model
+	model := ""
+	if session != nil && session.Context != nil {
+		model = session.Context["model"]
+	}
+	contextWindow := ai.ContextWindowForModel(model)
+
+	// Use config threshold
+	threshold := pb.promptScaling.LargeContextThreshold
+	if threshold <= 0 {
+		threshold = defaultLargeContextThreshold
+	}
+
+	return workspace.ShouldSummarize(contextWindow, threshold)
 }
 
 // buildRuntimeInfo creates runtime information map

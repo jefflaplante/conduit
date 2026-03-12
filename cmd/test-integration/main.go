@@ -136,6 +136,7 @@ func main() {
 		agentCfg,
 		[]ai.Tool{}, // No tools for this test
 		workspaceContext,
+		nil, // No summary manager for this test
 		skillsManager,
 		cfg.AI.ModelAliases,
 	)

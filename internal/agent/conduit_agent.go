@@ -34,6 +34,7 @@ type ConduitAgentWithIntegration struct {
 	timezone         string
 	tools            []ai.Tool
 	workspaceContext *workspace.WorkspaceContext
+	summaryManager   *workspace.SummaryManager
 	skillsManager    *skills.Manager
 	modelAliases     map[string]string
 	promptBuilder    *PromptBuilder
@@ -46,10 +47,12 @@ type ConduitAgentWithIntegration struct {
 // NewConduitAgentWithIntegration creates a new Conduit agent instance with full integration.
 // modelAliases maps short names to full model identifiers for the system prompt;
 // pass nil to use built-in defaults.
+// summaryManager enables AI-powered summarization for small-context models; pass nil to disable.
 func NewConduitAgentWithIntegration(
 	cfg AgentConfig,
 	tools []ai.Tool,
 	workspaceContext *workspace.WorkspaceContext,
+	summaryManager *workspace.SummaryManager,
 	skillsManager *skills.Manager,
 	modelAliases map[string]string,
 ) *ConduitAgentWithIntegration {
@@ -63,6 +66,7 @@ func NewConduitAgentWithIntegration(
 		timezone:         cfg.Timezone,
 		tools:            tools,
 		workspaceContext: workspaceContext,
+		summaryManager:   summaryManager,
 		skillsManager:    skillsManager,
 		modelAliases:     modelAliases,
 		promptCacheTTL:   DefaultPromptCacheTTL,
@@ -76,6 +80,7 @@ func NewConduitAgentWithIntegration(
 		agent.capabilities,
 		agent.tools,
 		agent.workspaceContext,
+		agent.summaryManager,
 		agent.skillsManager,
 		agent.modelAliases,
 		agent.promptScaling,
@@ -97,6 +102,7 @@ func (a *ConduitAgentWithIntegration) SetTools(tools []ai.Tool) {
 		a.capabilities,
 		a.tools,
 		a.workspaceContext,
+		a.summaryManager,
 		a.skillsManager,
 		a.modelAliases,
 		a.promptScaling,
@@ -332,6 +338,7 @@ func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error
 		a.capabilities,
 		a.tools,
 		a.workspaceContext,
+		a.summaryManager,
 		a.skillsManager,
 		a.modelAliases,
 		a.promptScaling,
@@ -357,6 +364,7 @@ func (a *ConduitAgentWithIntegration) UpdateTools(tools []ai.Tool) error {
 		a.capabilities,
 		a.tools,
 		a.workspaceContext,
+		a.summaryManager,
 		a.skillsManager,
 		a.modelAliases,
 		a.promptScaling,
@@ -401,6 +409,36 @@ func (a *ConduitAgentWithIntegration) SetOAuthMode(isOAuth bool, session *sessio
 // GetWorkspaceContext returns the workspace context manager (for external access if needed)
 func (a *ConduitAgentWithIntegration) GetWorkspaceContext() *workspace.WorkspaceContext {
 	return a.workspaceContext
+}
+
+// SetSummaryManager sets the summary manager for AI-powered workspace summarization.
+// This is called after the AI router is available to create the summary executor.
+func (a *ConduitAgentWithIntegration) SetSummaryManager(sm *workspace.SummaryManager) {
+	a.summaryManager = sm
+
+	// Rebuild prompt builder with summary manager
+	a.promptBuilder = NewPromptBuilder(
+		a.name,
+		a.personality,
+		a.email,
+		a.identity,
+		a.capabilities,
+		a.tools,
+		a.workspaceContext,
+		a.summaryManager,
+		a.skillsManager,
+		a.modelAliases,
+		a.promptScaling,
+		a.timezone,
+	)
+
+	// Invalidate prompt cache since summarization affects prompt content
+	a.InvalidatePromptCache()
+}
+
+// GetSummaryManager returns the summary manager (for external access if needed)
+func (a *ConduitAgentWithIntegration) GetSummaryManager() *workspace.SummaryManager {
+	return a.summaryManager
 }
 
 // GetSkillsManager returns the skills manager (for external access if needed)
