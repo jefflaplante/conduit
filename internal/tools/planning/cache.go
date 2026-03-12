@@ -99,16 +99,16 @@ func (rc *ResultCache) Get(ctx context.Context, key string) (*StepResult, bool) 
 
 	// Check expiration
 	if entry.ExpiresAt.Before(time.Now()) {
-		// Expired entry
-		go rc.storage.Delete(ctx, key) // Async cleanup
+		// Expired entry - delete synchronously to avoid race with Clear/Invalidate
+		rc.storage.Delete(ctx, key)
 		rc.recordMiss()
 		return nil, false
 	}
 
-	// Update access time and hit count
+	// Update access time and hit count - synchronous to avoid race with Clear/Invalidate
 	entry.AccessedAt = time.Now()
 	entry.HitCount++
-	go rc.storage.Set(ctx, key, entry) // Async update
+	rc.storage.Set(ctx, key, entry)
 
 	rc.recordHit()
 	log.Printf("Cache hit for key: %s (tool: %s, hits: %d)", key, entry.ToolName, entry.HitCount)
