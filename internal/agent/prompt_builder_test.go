@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"conduit/internal/ai"
+	"conduit/internal/config"
 	"conduit/internal/sessions"
 )
 
@@ -21,6 +22,7 @@ func newTestPromptBuilder() *PromptBuilder {
 	}
 	return NewPromptBuilder(
 		"conduit", "helpful assistant",
+		config.AgentEmail{}, // no email configured
 		IdentityConfig{APIKeyIdentity: "You are Conduit."},
 		AgentCapabilities{SkillsIntegration: false},
 		tools,
@@ -506,5 +508,103 @@ func TestSetPromptCacheTTL(t *testing.T) {
 
 	if agent.promptCacheTTL != customTTL {
 		t.Errorf("expected custom TTL %v, got %v", customTTL, agent.promptCacheTTL)
+	}
+}
+
+// --- Email Section Tests ---
+
+func TestBuildEmailSection_Configured(t *testing.T) {
+	pb := NewPromptBuilder(
+		"Conduit", "helpful assistant",
+		config.AgentEmail{
+			Address:     "agent@example.com",
+			Aliases:     []string{"assistant@example.com", "bot@example.com"},
+			DisplayName: "Conduit Agent",
+		},
+		IdentityConfig{APIKeyIdentity: "You are Conduit."},
+		AgentCapabilities{},
+		nil, nil, nil, nil, nil, "",
+	)
+
+	section := pb.buildEmailSection()
+
+	// Check address is present
+	if !strings.Contains(section, "agent@example.com") {
+		t.Error("email section should contain the email address")
+	}
+
+	// Check display name is present
+	if !strings.Contains(section, "Conduit Agent") {
+		t.Error("email section should contain the display name")
+	}
+
+	// Check aliases are present
+	if !strings.Contains(section, "assistant@example.com") {
+		t.Error("email section should contain aliases")
+	}
+	if !strings.Contains(section, "bot@example.com") {
+		t.Error("email section should contain all aliases")
+	}
+
+	// Check header
+	if !strings.Contains(section, "## Email") {
+		t.Error("email section should have ## Email header")
+	}
+}
+
+func TestBuildEmailSection_Empty(t *testing.T) {
+	pb := NewPromptBuilder(
+		"conduit", "helpful assistant",
+		config.AgentEmail{}, // empty email config
+		IdentityConfig{APIKeyIdentity: "You are Conduit."},
+		AgentCapabilities{},
+		nil, nil, nil, nil, nil, "",
+	)
+
+	section := pb.buildEmailSection()
+
+	if section != "" {
+		t.Errorf("email section should be empty when no address configured, got: %s", section)
+	}
+}
+
+func TestBuildEmailSection_DisplayNameDefault(t *testing.T) {
+	pb := NewPromptBuilder(
+		"Conduit", "helpful assistant",
+		config.AgentEmail{
+			Address: "agent@example.com",
+			// DisplayName is empty, should fall back to agent name
+		},
+		IdentityConfig{APIKeyIdentity: "You are Conduit."},
+		AgentCapabilities{},
+		nil, nil, nil, nil, nil, "",
+	)
+
+	section := pb.buildEmailSection()
+
+	// Should use agent name as display name
+	if !strings.Contains(section, "Display name: Conduit") {
+		t.Error("email section should use agent name as default display name")
+	}
+}
+
+func TestBuildEmailSection_NoAliases(t *testing.T) {
+	pb := NewPromptBuilder(
+		"Conduit", "helpful assistant",
+		config.AgentEmail{
+			Address:     "agent@example.com",
+			DisplayName: "Conduit",
+			// No aliases
+		},
+		IdentityConfig{APIKeyIdentity: "You are Conduit."},
+		AgentCapabilities{},
+		nil, nil, nil, nil, nil, "",
+	)
+
+	section := pb.buildEmailSection()
+
+	// Should not contain "Aliases:" line
+	if strings.Contains(section, "Aliases:") {
+		t.Error("email section should not contain Aliases line when no aliases configured")
 	}
 }

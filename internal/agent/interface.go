@@ -60,12 +60,13 @@ type AgentCapabilities struct {
 
 // AgentConfig holds the complete agent configuration
 type AgentConfig struct {
-	Name          string                      `json:"name"`
-	Personality   string                      `json:"personality"`
-	Identity      IdentityConfig              `json:"identity"`
-	Capabilities  AgentCapabilities           `json:"capabilities"`
-	PromptScaling config.PromptScalingConfig  `json:"prompt_scaling,omitempty"`
-	Timezone      string                      `json:"timezone,omitempty"`
+	Name          string                     `json:"name"`
+	Personality   string                     `json:"personality"`
+	Email         config.AgentEmail          `json:"email,omitempty"`
+	Identity      IdentityConfig             `json:"identity"`
+	Capabilities  AgentCapabilities          `json:"capabilities"`
+	PromptScaling config.PromptScalingConfig `json:"prompt_scaling,omitempty"`
+	Timezone      string                     `json:"timezone,omitempty"`
 }
 
 // SessionStateManager provides utilities for managing session state during agent operations

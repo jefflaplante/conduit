@@ -164,6 +164,7 @@ type AuthConfig struct {
 type AgentConfig struct {
 	Name          string              `json:"name"`
 	Personality   string              `json:"personality"`
+	Email         AgentEmail          `json:"email,omitempty"`
 	Identity      AgentIdentity       `json:"identity"`
 	Capabilities  AgentCapabilities   `json:"capabilities"`
 	History       HistoryConfig       `json:"history,omitempty"`
@@ -204,6 +205,13 @@ func DefaultHistoryConfig() HistoryConfig {
 type AgentIdentity struct {
 	OAuthIdentity  string `json:"oauth_identity"`
 	APIKeyIdentity string `json:"api_key_identity"`
+}
+
+// AgentEmail configures the agent's email identity for sending/receiving email
+type AgentEmail struct {
+	Address     string   `json:"address"`
+	Aliases     []string `json:"aliases,omitempty"`
+	DisplayName string   `json:"display_name,omitempty"`
 }
 
 // AgentCapabilities defines what the agent can do

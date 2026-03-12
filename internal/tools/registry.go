@@ -154,6 +154,11 @@ func (r *Registry) registerAllTools() {
 		&UniFiTool{registry: r},
 	}...)
 
+	// Google Workspace tools (optional - requires gws CLI)
+	allTools = append(allTools, []types.Tool{
+		&GoogleWorkspaceTool{registry: r},
+	}...)
+
 	// TODO: Fix skills integration after core tools are working
 	// Skills-based tools (if skills system is available and enabled)
 	// if r.services.SkillsManager != nil && r.services.SkillsManager.IsEnabled() {
@@ -176,6 +181,11 @@ func (r *Registry) registerAllTools() {
 			log.Printf("Registered tool: %s", tool.Name())
 		}
 	}
+}
+
+// GetServices returns the service dependencies for tools that need them
+func (r *Registry) GetServices() *types.ToolServices {
+	return r.services
 }
 
 // ExecuteTool executes a tool by name with the given arguments, including validation

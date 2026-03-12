@@ -27,6 +27,7 @@ type promptCacheEntry struct {
 type ConduitAgentWithIntegration struct {
 	name             string
 	personality      string
+	email            config.AgentEmail
 	identity         IdentityConfig
 	capabilities     AgentCapabilities
 	promptScaling    *config.PromptScalingConfig
@@ -55,6 +56,7 @@ func NewConduitAgentWithIntegration(
 	agent := &ConduitAgentWithIntegration{
 		name:             cfg.Name,
 		personality:      cfg.Personality,
+		email:            cfg.Email,
 		identity:         cfg.Identity,
 		capabilities:     cfg.Capabilities,
 		promptScaling:    &cfg.PromptScaling,
@@ -69,6 +71,7 @@ func NewConduitAgentWithIntegration(
 	agent.promptBuilder = NewPromptBuilder(
 		agent.name,
 		agent.personality,
+		agent.email,
 		agent.identity,
 		agent.capabilities,
 		agent.tools,
@@ -89,6 +92,7 @@ func (a *ConduitAgentWithIntegration) SetTools(tools []ai.Tool) {
 	a.promptBuilder = NewPromptBuilder(
 		a.name,
 		a.personality,
+		a.email,
 		a.identity,
 		a.capabilities,
 		a.tools,
@@ -313,6 +317,7 @@ func (a *ConduitAgentWithIntegration) isHeartbeatResponse(content string) bool {
 func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error {
 	a.name = cfg.Name
 	a.personality = cfg.Personality
+	a.email = cfg.Email
 	a.identity = cfg.Identity
 	a.capabilities = cfg.Capabilities
 	a.promptScaling = &cfg.PromptScaling
@@ -322,6 +327,7 @@ func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error
 	a.promptBuilder = NewPromptBuilder(
 		a.name,
 		a.personality,
+		a.email,
 		a.identity,
 		a.capabilities,
 		a.tools,
@@ -346,6 +352,7 @@ func (a *ConduitAgentWithIntegration) UpdateTools(tools []ai.Tool) error {
 	a.promptBuilder = NewPromptBuilder(
 		a.name,
 		a.personality,
+		a.email,
 		a.identity,
 		a.capabilities,
 		a.tools,
