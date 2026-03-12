@@ -1,5 +1,18 @@
 # Workspace Context Summarization
 
+## Quick Recommendation
+
+**Should you enable this?**
+
+| Your Setup | Recommendation | Why |
+|------------|----------------|-----|
+| Claude models only (Haiku/Sonnet/Opus) | **No** | All have 200K context - summarization never triggers |
+| Mixed models (Claude + GPT-4 + local) | **Yes** | Graceful degradation on smaller models |
+| Small models only (8K-32K context) | **Yes** | Preserves personality that would otherwise be dropped |
+| Cost-sensitive, large models | **No** | Avoid extra Haiku API calls |
+
+**TL;DR**: If you exclusively use Claude models, don't bother. The feature only activates for models with context windows under 128K tokens.
+
 ## Overview
 
 Conduit uses a priority-based system for assembling system prompts. When using models with smaller context windows (< 128K tokens), lower-priority sections may not fit within the token budget.
@@ -237,13 +250,62 @@ Check summarization stats via the session_status tool or gateway metrics:
 }
 ```
 
+## Token Budget Analysis
+
+Understanding when summarization actually helps:
+
+### Typical Prompt Sizes
+
+| Component | Size |
+|-----------|------|
+| Core system prompt (Priority 1-3) | ~5,000 chars (~1,250 tokens) |
+| Workspace files (Priority 4) | ~4,000 chars (~1,000 tokens) |
+| **Full prompt** | ~9,000 chars (~2,250 tokens) |
+| **Summarized workspace** | ~1,200 chars (~300 tokens) |
+
+### Budget by Model Size
+
+| Context Window | Budget (15%) | Core Prompt | + Full Workspace | + Summarized | Verdict |
+|----------------|--------------|-------------|------------------|--------------|---------|
+| 8K | ~1,228 tokens | 1,250 | 2,250 ❌ | 1,550 ⚠️ | Tight fit |
+| 16K | ~2,400 tokens | 1,250 | 2,250 ✅ | 1,550 ✅ | Summarization helps |
+| 32K | ~4,800 tokens | 1,250 | 2,250 ✅ | 1,550 ✅ | Either works |
+| 64K | ~9,600 tokens | 1,250 | 2,250 ✅ | 1,550 ✅ | Either works |
+| 128K+ | ~19,200+ | 2,250 | 2,250 ✅ | N/A | Full prompt, no summarization |
+
+### Key Insight
+
+- **8K models**: Core prompt already near budget. Summarization helps marginally (some personality vs none)
+- **16K-64K models**: Summarization provides meaningful benefit - full personality in smaller footprint
+- **128K+ models**: No summarization needed - everything fits comfortably
+
+## Does Summarization Help Large Context Models?
+
+**No.** For models with 128K+ context windows:
+
+| Factor | Full Context | Summarized |
+|--------|--------------|------------|
+| Information | Complete | Lossy (AI decides what's "important") |
+| Latency | Direct | +Haiku API call on cache miss |
+| Cost | Just the prompt tokens | +Haiku tokens for summarization |
+| Nuance | All details preserved | May lose subtle guidance |
+| Model attention | Handles long context fine | N/A |
+
+**Why "less is more" doesn't apply here:**
+
+1. Workspace files (~4KB) are tiny relative to 200K context (0.02%)
+2. Claude models are specifically trained for long context
+3. "Lost in the middle" phenomenon applies to very long documents, not well-structured system prompts
+4. AI summarization introduces its own biases about what matters
+
 ## Best Practices
 
-1. **Enable for production** if using multiple model sizes (Haiku, Sonnet, Opus)
-2. **Use Haiku** for summarization - fast, cheap, good at compression
-3. **Tune ratios** based on your file sizes and content density
-4. **Set preserve_keys** for concepts critical to your agent's behavior
-5. **Monitor hit rate** - should be >90% after initial warmup
+1. **Don't enable for Claude-only deployments** - all Claude models have 200K context
+2. **Enable for mixed-model deployments** - graceful degradation on smaller models
+3. **Use Haiku** for summarization - fast, cheap, good at compression
+4. **Tune ratios** based on your file sizes and content density
+5. **Set preserve_keys** for concepts critical to your agent's behavior
+6. **Monitor hit rate** - should be >90% after initial warmup
 
 ## Troubleshooting
 
