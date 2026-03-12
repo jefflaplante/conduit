@@ -265,6 +265,19 @@ Reactions are enabled for %s in %s mode.
 `, params.RuntimeChannel, mode, guidance)
 }
 
+// buildErrorRecoverySection returns error handling guidance
+func buildErrorRecoverySection(isMinimal bool) string {
+	if isMinimal {
+		return ""
+	}
+	return `## Error Handling
+- When a tool fails, report the error clearly. Do not silently retry or ignore.
+- When context is ambiguous, ask rather than guess.
+- When uncertain about system state, verify before acting.
+- Distinguish "I checked and it's fine" from "I didn't check but it's probably fine."
+`
+}
+
 // buildConduitCLISection returns CLI quick reference
 func buildConduitCLISection(isMinimal bool) string {
 	if isMinimal {
@@ -366,22 +379,13 @@ Current time: %s
 // This is injected only for sessions with a "cron_" prefix to ensure scheduled jobs
 // use the Message tool and do not attempt shell-based delivery.
 func buildCronDeliverySection(params *SectionParams) string {
-	hasMessage := params.AvailableTools["Message"]
-	if !hasMessage {
+	if !params.AvailableTools["Message"] {
 		return ""
 	}
 
-	return `## Scheduled Job Output Delivery
-
-You are running as a scheduled/cron job. You have NO interactive session — there is no user waiting for a reply here.
-
-**To deliver output to the user, you MUST call the Message tool directly.** This is the only way to reach them.
-
-Rules:
-- ALWAYS use: ` + "`Message(action=\"send\", target=\"<chat_id>\", message=\"<content>\")`" + `
-- NEVER use shell commands (echo, curl, bash) to send messages — they do nothing
-- If you don't know the target chat ID, call ` + "`Message(action=\"status\")`" + ` first to discover it
-- After sending, your text reply is discarded — only tool-delivered messages reach the user
-- If there is nothing to report, do NOT send a message
+	return `## Cron Delivery
+You are running as a scheduled job with no interactive session.
+Deliver output ONLY via Message(action="send", target="<chat_id>"). Shell commands cannot reach the user.
+If nothing to report, do not send a message.
 `
 }

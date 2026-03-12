@@ -32,6 +32,7 @@ func newTestPromptBuilder() *PromptBuilder {
 		nil, // default model aliases
 		nil, // default prompt scaling
 		"",  // default timezone
+		"",  // default runtime channel
 	)
 }
 
@@ -56,7 +57,7 @@ func TestBuildFullPrompt_LargeContext(t *testing.T) {
 		t.Error("large-context model should not trigger compact mode")
 	}
 	// Spot-check that P1 through P4 sections are present.
-	for _, want := range []string{"## Tooling", "## Tool Call Style", "## Silent Replies", "## Runtime", "## Messaging", "## Safety"} {
+	for _, want := range []string{"## Tooling", "## Tool Call Style", "## Silent Replies", "## Runtime", "## Messaging", "## Safety", "## Operating Principles", "## Error Handling"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("expected section %q in full prompt", want)
 		}
@@ -153,8 +154,8 @@ func TestPromptSectionPriorities(t *testing.T) {
 
 	sections := pb.buildSectionList(context.Background(), session, false, false)
 
-	if len(sections) < 20 {
-		t.Errorf("expected at least 20 sections, got %d", len(sections))
+	if len(sections) < 22 {
+		t.Errorf("expected at least 22 sections, got %d", len(sections))
 	}
 
 	// Count by priority.
@@ -163,11 +164,11 @@ func TestPromptSectionPriorities(t *testing.T) {
 		counts[sec.priority]++
 	}
 
-	if counts[1] != 5 {
-		t.Errorf("expected 5 P1 sections, got %d", counts[1])
+	if counts[1] != 6 {
+		t.Errorf("expected 6 P1 sections, got %d", counts[1])
 	}
-	if counts[2] < 5 {
-		t.Errorf("expected at least 5 P2 sections, got %d", counts[2])
+	if counts[2] < 8 {
+		t.Errorf("expected at least 8 P2 sections, got %d", counts[2])
 	}
 	if counts[3] < 4 {
 		t.Errorf("expected at least 4 P3 sections, got %d", counts[3])
@@ -524,7 +525,7 @@ func TestBuildEmailSection_Configured(t *testing.T) {
 		},
 		IdentityConfig{APIKeyIdentity: "You are Conduit."},
 		AgentCapabilities{},
-		nil, nil, nil, nil, nil, nil, "",
+		nil, nil, nil, nil, nil, nil, "", "",
 	)
 
 	section := pb.buildEmailSection()
@@ -559,7 +560,7 @@ func TestBuildEmailSection_Empty(t *testing.T) {
 		config.AgentEmail{}, // empty email config
 		IdentityConfig{APIKeyIdentity: "You are Conduit."},
 		AgentCapabilities{},
-		nil, nil, nil, nil, nil, nil, "",
+		nil, nil, nil, nil, nil, nil, "", "",
 	)
 
 	section := pb.buildEmailSection()
@@ -578,7 +579,7 @@ func TestBuildEmailSection_DisplayNameDefault(t *testing.T) {
 		},
 		IdentityConfig{APIKeyIdentity: "You are Conduit."},
 		AgentCapabilities{},
-		nil, nil, nil, nil, nil, nil, "",
+		nil, nil, nil, nil, nil, nil, "", "",
 	)
 
 	section := pb.buildEmailSection()
@@ -599,7 +600,7 @@ func TestBuildEmailSection_NoAliases(t *testing.T) {
 		},
 		IdentityConfig{APIKeyIdentity: "You are Conduit."},
 		AgentCapabilities{},
-		nil, nil, nil, nil, nil, nil, "",
+		nil, nil, nil, nil, nil, nil, "", "",
 	)
 
 	section := pb.buildEmailSection()

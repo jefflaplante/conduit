@@ -203,8 +203,9 @@ func DefaultHistoryConfig() HistoryConfig {
 
 // AgentIdentity configures agent identity based on auth type
 type AgentIdentity struct {
-	OAuthIdentity  string `json:"oauth_identity"`
-	APIKeyIdentity string `json:"api_key_identity"`
+	OAuthIdentity       string   `json:"oauth_identity"`
+	APIKeyIdentity      string   `json:"api_key_identity"`
+	OperatingPrinciples []string `json:"operating_principles,omitempty"` // Override default operating principles
 }
 
 // AgentEmail configures the agent's email identity for sending/receiving email
@@ -342,8 +343,9 @@ type WorkspaceMemoryConfig struct {
 
 // WorkspaceSecurityConfig defines security settings
 type WorkspaceSecurityConfig struct {
-	EnforceAccessRules bool `json:"enforce_access_rules"`
-	MemoryMainOnly     bool `json:"memory_main_only"`
+	EnforceAccessRules bool   `json:"enforce_access_rules"`
+	MemoryMainOnly     bool   `json:"memory_main_only"`
+	DefaultPolicy      string `json:"default_policy,omitempty"` // "allow" or "deny" for unmatched files (default: "deny")
 }
 
 // WorkspaceCacheConfig defines caching settings

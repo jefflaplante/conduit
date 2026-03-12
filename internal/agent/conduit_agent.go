@@ -32,6 +32,7 @@ type ConduitAgentWithIntegration struct {
 	capabilities     AgentCapabilities
 	promptScaling    *config.PromptScalingConfig
 	timezone         string
+	runtimeChannel   string
 	tools            []ai.Tool
 	workspaceContext *workspace.WorkspaceContext
 	summaryManager   *workspace.SummaryManager
@@ -64,6 +65,7 @@ func NewConduitAgentWithIntegration(
 		capabilities:     cfg.Capabilities,
 		promptScaling:    &cfg.PromptScaling,
 		timezone:         cfg.Timezone,
+		runtimeChannel:   cfg.RuntimeChannel,
 		tools:            tools,
 		workspaceContext: workspaceContext,
 		summaryManager:   summaryManager,
@@ -85,6 +87,7 @@ func NewConduitAgentWithIntegration(
 		agent.modelAliases,
 		agent.promptScaling,
 		agent.timezone,
+		agent.runtimeChannel,
 	)
 
 	return agent
@@ -107,6 +110,7 @@ func (a *ConduitAgentWithIntegration) SetTools(tools []ai.Tool) {
 		a.modelAliases,
 		a.promptScaling,
 		a.timezone,
+		a.runtimeChannel,
 	)
 	// Invalidate prompt cache since tools affect prompt content
 	a.InvalidatePromptCache()
@@ -293,19 +297,25 @@ func (a *ConduitAgentWithIntegration) detectOAuthFromSession(session *sessions.S
 	return true
 }
 
-// isHeartbeatResponse checks if a response looks like a heartbeat-style response
+// isHeartbeatResponse checks if a short response looks like a "nothing to report" heartbeat ack.
+// Only applies to responses under 100 characters to avoid suppressing legitimate content
+// that happens to contain completion phrases.
 func (a *ConduitAgentWithIntegration) isHeartbeatResponse(content string) bool {
 	content = strings.ToLower(strings.TrimSpace(content))
 
-	// Patterns that indicate this should be a silent response
+	// Only apply heuristic to short responses — long responses are real content
+	if len(content) >= 100 {
+		return false
+	}
+
+	// Narrow set of completion phrases indicating "nothing to report".
+	// Active-verb patterns (checking, monitoring, scanning, reviewing) are
+	// intentionally excluded — they describe ongoing work, not idle status.
 	silentPatterns := []string{
-		"checking",
-		"monitoring",
-		"scanning",
-		"reviewing",
 		"all clear",
 		"no updates",
 		"nothing urgent",
+		"nothing to report",
 		"status: ok",
 		"systems normal",
 	}
@@ -328,6 +338,7 @@ func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error
 	a.capabilities = cfg.Capabilities
 	a.promptScaling = &cfg.PromptScaling
 	a.timezone = cfg.Timezone
+	a.runtimeChannel = cfg.RuntimeChannel
 
 	// Rebuild prompt builder with new configuration
 	a.promptBuilder = NewPromptBuilder(
@@ -343,6 +354,7 @@ func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error
 		a.modelAliases,
 		a.promptScaling,
 		a.timezone,
+		a.runtimeChannel,
 	)
 
 	// Invalidate prompt cache since configuration affects prompt content
@@ -369,6 +381,7 @@ func (a *ConduitAgentWithIntegration) UpdateTools(tools []ai.Tool) error {
 		a.modelAliases,
 		a.promptScaling,
 		a.timezone,
+		a.runtimeChannel,
 	)
 
 	// Invalidate prompt cache since tools affect prompt content
@@ -430,6 +443,7 @@ func (a *ConduitAgentWithIntegration) SetSummaryManager(sm *workspace.SummaryMan
 		a.modelAliases,
 		a.promptScaling,
 		a.timezone,
+		a.runtimeChannel,
 	)
 
 	// Invalidate prompt cache since summarization affects prompt content

@@ -176,8 +176,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 		Personality: cfg.Agent.Personality,
 		Email:       cfg.Agent.Email,
 		Identity: agent.IdentityConfig{
-			OAuthIdentity:  cfg.Agent.Identity.OAuthIdentity,
-			APIKeyIdentity: cfg.Agent.Identity.APIKeyIdentity,
+			OAuthIdentity:       cfg.Agent.Identity.OAuthIdentity,
+			APIKeyIdentity:      cfg.Agent.Identity.APIKeyIdentity,
+			OperatingPrinciples: cfg.Agent.Identity.OperatingPrinciples,
 		},
 		Capabilities: agent.AgentCapabilities{
 			MemoryRecall:      cfg.Agent.Capabilities.MemoryRecall,
@@ -186,8 +187,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 			Heartbeats:        cfg.Agent.Capabilities.Heartbeats,
 			SilentReplies:     cfg.Agent.Capabilities.SilentReplies,
 		},
-		PromptScaling: cfg.Agent.PromptScaling,
-		Timezone:      cfg.Timezone,
+		PromptScaling:  cfg.Agent.PromptScaling,
+		Timezone:       cfg.Timezone,
+		RuntimeChannel: deriveRuntimeChannel(cfg.Channels),
 	}
 
 	// Use the integrated agent system (tools will be set after gateway is created)
@@ -651,6 +653,16 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 }
 
 // convertToolsToAIFormat converts tools registry tools to AI format
+// deriveRuntimeChannel returns the first enabled channel name, or "websocket" as fallback.
+func deriveRuntimeChannel(channels []config.ChannelConfig) string {
+	for _, ch := range channels {
+		if ch.Enabled {
+			return ch.Type
+		}
+	}
+	return "websocket"
+}
+
 func convertToolsToAIFormat(registry *tools.Registry) []ai.Tool {
 	var aiTools []ai.Tool
 

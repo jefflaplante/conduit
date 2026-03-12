@@ -45,8 +45,9 @@ type AgentAction struct {
 
 // IdentityConfig configures the agent identity based on auth type
 type IdentityConfig struct {
-	OAuthIdentity  string `json:"oauth_identity"`   // Identity when using OAuth (Claude Code)
-	APIKeyIdentity string `json:"api_key_identity"` // Identity when using API key
+	OAuthIdentity       string   `json:"oauth_identity"`        // Identity when using OAuth (Claude Code)
+	APIKeyIdentity      string   `json:"api_key_identity"`      // Identity when using API key
+	OperatingPrinciples []string `json:"operating_principles,omitempty"` // Override default operating principles
 }
 
 // AgentCapabilities defines what the agent can do
@@ -60,13 +61,14 @@ type AgentCapabilities struct {
 
 // AgentConfig holds the complete agent configuration
 type AgentConfig struct {
-	Name          string                     `json:"name"`
-	Personality   string                     `json:"personality"`
-	Email         config.AgentEmail          `json:"email,omitempty"`
-	Identity      IdentityConfig             `json:"identity"`
-	Capabilities  AgentCapabilities          `json:"capabilities"`
-	PromptScaling config.PromptScalingConfig `json:"prompt_scaling,omitempty"`
-	Timezone      string                     `json:"timezone,omitempty"`
+	Name           string                     `json:"name"`
+	Personality    string                     `json:"personality"`
+	Email          config.AgentEmail          `json:"email,omitempty"`
+	Identity       IdentityConfig             `json:"identity"`
+	Capabilities   AgentCapabilities          `json:"capabilities"`
+	PromptScaling  config.PromptScalingConfig `json:"prompt_scaling,omitempty"`
+	Timezone       string                     `json:"timezone,omitempty"`
+	RuntimeChannel string                     `json:"runtime_channel,omitempty"` // Active channel (derived from config)
 }
 
 // SessionStateManager provides utilities for managing session state during agent operations

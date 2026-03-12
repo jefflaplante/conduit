@@ -82,6 +82,23 @@ func (sm *SecurityManager) initializeDefaultRules() {
 			Enabled:     true,
 		},
 		{
+			Pattern: "IDENTITY.md",
+			Condition: func(sc SecurityContext) bool {
+				return true
+			},
+			Description: "IDENTITY.md accessible in all sessions",
+			Enabled:     true,
+		},
+		{
+			Pattern: "BOOTSTRAP.md",
+			Condition: func(sc SecurityContext) bool {
+				// BOOTSTRAP.md only accessible in main sessions
+				return sc.SessionType == "main"
+			},
+			Description: "BOOTSTRAP.md only accessible in main sessions",
+			Enabled:     true,
+		},
+		{
 			Pattern: "memory/*.md",
 			Condition: func(sc SecurityContext) bool {
 				// Daily memory files accessible in all session types for continuity
@@ -106,9 +123,9 @@ func (sm *SecurityManager) IsAccessible(filePath string, securityCtx SecurityCon
 		}
 	}
 
-	// Default: allow access for files not covered by specific rules
-	// This is a conservative approach - you might want to default to deny
-	return true
+	// Default: deny access for files not covered by specific rules.
+	// All discoverable files should have explicit rules above.
+	return false
 }
 
 // matchesPattern checks if a file path matches a pattern
