@@ -191,10 +191,12 @@ func New(cfg *config.Config) (*Gateway, error) {
 	}
 
 	// Use the integrated agent system (tools will be set after gateway is created)
+	// SummaryManager is set later after AI router is available
 	agentSystem := agent.NewConduitAgentWithIntegration(
 		agentCfg,
 		nil, // Tools set later after SetServices
 		workspaceContext,
+		nil, // SummaryManager set later after AI router is created
 		skillsManager,
 		cfg.AI.ModelAliases,
 	)
@@ -230,6 +232,48 @@ func New(cfg *config.Config) (*Gateway, error) {
 	aiRouter.SetHistoryConfig(&cfg.Agent.History)
 
 	log.Println("Tool execution engine wired up")
+
+	// Initialize summary manager for AI-powered workspace summarization (small-context models)
+	if cfg.Workspace.Summary.Enabled && workspaceContext != nil {
+		log.Println("Initializing workspace summary manager...")
+		summaryExecutor := workspace.NewSummaryExecutor(
+			newSummaryAIRouterAdapter(aiRouter),
+			cfg.Workspace.Summary.Model,
+		)
+		fallbackToTruncate := true
+		if cfg.Workspace.Summary.FallbackToTruncate != nil {
+			fallbackToTruncate = *cfg.Workspace.Summary.FallbackToTruncate
+		}
+		summaryConfig := workspace.SummaryConfig{
+			Enabled:            cfg.Workspace.Summary.Enabled,
+			Model:              cfg.Workspace.Summary.Model,
+			TargetRatio:        cfg.Workspace.Summary.TargetRatio,
+			CacheDir:           cfg.Workspace.Summary.CacheDir,
+			CacheTTLHours:      cfg.Workspace.Summary.CacheTTLHours,
+			FallbackToTruncate: fallbackToTruncate,
+			FileConfigs:        convertSummaryFileConfigs(cfg.Workspace.Summary.FileConfigs),
+		}
+		if summaryConfig.Model == "" {
+			summaryConfig.Model = "claude-haiku-4-5-20251001"
+		}
+		if summaryConfig.TargetRatio == 0 {
+			summaryConfig.TargetRatio = 0.25
+		}
+		if summaryConfig.CacheDir == "" {
+			summaryConfig.CacheDir = ".summaries"
+		}
+		if summaryConfig.CacheTTLHours == 0 {
+			summaryConfig.CacheTTLHours = 168
+		}
+		summaryManager := workspace.NewSummaryManager(
+			cfg.Workspace.ContextDir,
+			summaryExecutor,
+			summaryConfig,
+		)
+		agentSystem.SetSummaryManager(summaryManager)
+		log.Printf("Workspace summary manager initialized (model: %s, ratio: %.0f%%)",
+			summaryConfig.Model, summaryConfig.TargetRatio*100)
+	}
 
 	// Initialize authentication system using the same database
 	authStorage := auth.NewTokenStorage(sessionStore.DB())
@@ -1516,4 +1560,57 @@ func indexWorkspaceForVector(workspaceDir string, svc *vecgoservice.Service) {
 		}
 		log.Printf("Vector search: indexed %d workspace files", indexed)
 	}
+}
+
+// summaryAIRouterAdapter adapts ai.Router to workspace.SummaryAIRouter
+type summaryAIRouterAdapter struct {
+	router *ai.Router
+}
+
+// newSummaryAIRouterAdapter creates a new adapter
+func newSummaryAIRouterAdapter(router *ai.Router) *summaryAIRouterAdapter {
+	return &summaryAIRouterAdapter{router: router}
+}
+
+// GenerateSimpleResponse generates a simple AI response without tools
+func (a *summaryAIRouterAdapter) GenerateSimpleResponse(ctx context.Context, prompt, model string) (workspace.SummaryAIResponse, error) {
+	// Create a minimal session for the summarization request
+	tempSession := &sessions.Session{
+		Key:     "summary_temp",
+		Context: map[string]string{"model": model},
+	}
+
+	// Use GenerateResponse without tools for simple summarization
+	// The 4th param is provider name (empty = default), model is set via session context
+	response, err := a.router.GenerateResponse(ctx, tempSession, prompt, "")
+	if err != nil {
+		return nil, err
+	}
+
+	return &summaryAIResponseAdapter{content: response.Content}, nil
+}
+
+// summaryAIResponseAdapter adapts ai.GenerateResponse to workspace.SummaryAIResponse
+type summaryAIResponseAdapter struct {
+	content string
+}
+
+// GetContent returns the response content
+func (a *summaryAIResponseAdapter) GetContent() string {
+	return a.content
+}
+
+// convertSummaryFileConfigs converts config types to workspace types
+func convertSummaryFileConfigs(cfgConfigs map[string]config.SummaryFileConfig) map[string]workspace.SummaryFileConfig {
+	if len(cfgConfigs) == 0 {
+		return nil
+	}
+	result := make(map[string]workspace.SummaryFileConfig, len(cfgConfigs))
+	for filename, cfg := range cfgConfigs {
+		result[filename] = workspace.SummaryFileConfig{
+			Ratio:        cfg.Ratio,
+			PreserveKeys: cfg.PreserveKeys,
+		}
+	}
+	return result
 }

@@ -27,6 +27,7 @@ func newTestPromptBuilder() *PromptBuilder {
 		AgentCapabilities{SkillsIntegration: false},
 		tools,
 		nil, // no workspace context
+		nil, // no summary manager
 		nil, // no skills manager
 		nil, // default model aliases
 		nil, // default prompt scaling
@@ -200,7 +201,7 @@ func newTestAgent() *ConduitAgentWithIntegration {
 			SkillsIntegration: false,
 		},
 	}
-	return NewConduitAgentWithIntegration(cfg, tools, nil, nil, nil)
+	return NewConduitAgentWithIntegration(cfg, tools, nil, nil, nil, nil)
 }
 
 func TestBuildSystemPrompt_CachesResult(t *testing.T) {
@@ -523,7 +524,7 @@ func TestBuildEmailSection_Configured(t *testing.T) {
 		},
 		IdentityConfig{APIKeyIdentity: "You are Conduit."},
 		AgentCapabilities{},
-		nil, nil, nil, nil, nil, "",
+		nil, nil, nil, nil, nil, nil, "",
 	)
 
 	section := pb.buildEmailSection()
@@ -558,7 +559,7 @@ func TestBuildEmailSection_Empty(t *testing.T) {
 		config.AgentEmail{}, // empty email config
 		IdentityConfig{APIKeyIdentity: "You are Conduit."},
 		AgentCapabilities{},
-		nil, nil, nil, nil, nil, "",
+		nil, nil, nil, nil, nil, nil, "",
 	)
 
 	section := pb.buildEmailSection()
@@ -577,7 +578,7 @@ func TestBuildEmailSection_DisplayNameDefault(t *testing.T) {
 		},
 		IdentityConfig{APIKeyIdentity: "You are Conduit."},
 		AgentCapabilities{},
-		nil, nil, nil, nil, nil, "",
+		nil, nil, nil, nil, nil, nil, "",
 	)
 
 	section := pb.buildEmailSection()
@@ -598,7 +599,7 @@ func TestBuildEmailSection_NoAliases(t *testing.T) {
 		},
 		IdentityConfig{APIKeyIdentity: "You are Conduit."},
 		AgentCapabilities{},
-		nil, nil, nil, nil, nil, "",
+		nil, nil, nil, nil, nil, nil, "",
 	)
 
 	section := pb.buildEmailSection()
