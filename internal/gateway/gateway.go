@@ -174,6 +174,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	agentCfg := agent.AgentConfig{
 		Name:        cfg.Agent.Name,
 		Personality: cfg.Agent.Personality,
+		Email:       cfg.Agent.Email,
 		Identity: agent.IdentityConfig{
 			OAuthIdentity:  cfg.Agent.Identity.OAuthIdentity,
 			APIKeyIdentity: cfg.Agent.Identity.APIKeyIdentity,

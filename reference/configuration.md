@@ -37,6 +37,11 @@ Configuration is loaded from JSON files with support for:
   "agent": {
     "name": "Conduit",
     "personality": "helpful assistant",
+    "email": {
+      "address": "agent@example.com",
+      "aliases": ["assistant@example.com"],
+      "display_name": "Conduit Assistant"
+    },
     "capabilities": ["code", "research", "analysis"]
   },
 
@@ -177,6 +182,33 @@ Model aliases (for `/model` command):
 - `opus` - claude-3-opus-20240229
 - `opus46` - claude-opus-4-6
 
+### Agent Email
+
+Optional email identity configuration for the agent. When configured, the agent's email address is automatically included in the system prompt and available to tools. See the [Agent Email Guide](guides/agent-email.md) for detailed documentation.
+
+```json
+{
+  "agent": {
+    "email": {
+      "address": "agent@example.com",
+      "aliases": ["assistant@example.com", "bot@example.com"],
+      "display_name": "Conduit"
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `address` | string | `""` | Primary email address for the agent |
+| `aliases` | array | `[]` | Additional email addresses the agent recognizes as its own |
+| `display_name` | string | Agent name | Display name for outgoing emails |
+
+**Behavior:**
+- When `address` is empty, the email section is omitted from the system prompt
+- When `display_name` is empty, falls back to the agent's `name` field
+- Tools like `google_workspace` use this config for sending emails and validating aliases
+
 ### Workspace
 
 ```json
@@ -213,7 +245,32 @@ Model aliases (for `/model` command):
 }
 ```
 
-Available tools: Read, Write, Edit, Bash, Glob, MemorySearch, Find, Facts, WebSearch, WebFetch, Message, Tts, Cron, Chain, Gateway, Context, Image, SessionsList, SessionsSend, SessionsSpawn, SessionStatus
+Available tools: Read, Write, Edit, Bash, Glob, MemorySearch, Find, Facts, WebSearch, WebFetch, Message, Tts, Cron, Chain, Gateway, Context, Image, SessionsList, SessionsSend, SessionsSpawn, SessionStatus, google_workspace
+
+#### Google Workspace Tool
+
+Optional integration with Gmail and Calendar via the `gws` CLI. See [Google Workspace Setup Guide](guides/google-workspace-setup.md) for detailed instructions.
+
+```json
+{
+  "tools": {
+    "enabled_tools": ["google_workspace"],
+    "services": {
+      "google_workspace": {
+        "gws_path": "gws",
+        "user_id": "me"
+      }
+    }
+  }
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `gws_path` | `"gws"` | Path to gws CLI binary |
+| `user_id` | `"me"` | Gmail/Calendar user ID |
+
+The tool requires `gws` to be installed separately (`npm install -g @googleworkspace/cli`) and authenticated (`gws auth login`). Without gws, the tool returns a helpful error message and Conduit continues to function normally
 
 ### Channels
 
@@ -282,22 +339,34 @@ Gateway health monitoring:
 }
 ```
 
-Agent heartbeat for automated tasks:
+Agent heartbeat for automated tasks. See [agent-heartbeat.md](agent-heartbeat.md) for full documentation.
 
 ```json
 {
   "agent_heartbeat": {
     "enabled": true,
     "interval_minutes": 5,
+    "timezone": "America/Los_Angeles",
+    "quiet_enabled": true,
     "quiet_hours": {
-      "start": "23:00",
-      "end": "08:00",
-      "timezone": "America/Los_Angeles"
+      "start_time": "22:00",
+      "end_time": "07:00"
     },
-    "alert_targets": {
-      "critical": ["telegram"],
-      "warning": ["briefing"],
-      "info": ["briefing"]
+    "alert_queue_path": "memory/alerts/pending.json",
+    "heartbeat_task_path": "HEARTBEAT.md",
+    "enabled_task_types": ["alerts", "checks", "reports", "maintenance"],
+    "alert_targets": [
+      {
+        "name": "telegram_primary",
+        "type": "telegram",
+        "config": { "chat_id": "123456789" },
+        "severity": ["critical", "warning", "info"]
+      }
+    ],
+    "alert_retry_policy": {
+      "max_retries": 3,
+      "retry_interval": 300000000000,
+      "backoff_factor": 2.0
     }
   }
 }

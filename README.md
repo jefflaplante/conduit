@@ -91,7 +91,7 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 ### Automation
 - **Chain Workflows** — Multi-tool sequences with dependencies and variables
 - **Cron Scheduling** — Recurring task execution
-- **Heartbeat Loop** — Automated HEARTBEAT.md task processing
+- **[Agent Heartbeat](reference/agent-heartbeat.md)** — Automated HEARTBEAT.md task processing with shared alert queue
 - **Skills System** — Extensible AI capabilities via SKILL.md files
 
 ## Providers

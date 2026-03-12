@@ -38,6 +38,7 @@ type promptSection struct {
 type PromptBuilder struct {
 	agentName        string
 	personality      string
+	email            config.AgentEmail
 	identity         IdentityConfig
 	capabilities     AgentCapabilities
 	tools            []ai.Tool
@@ -53,6 +54,7 @@ type PromptBuilder struct {
 // promptScaling controls budget allocation for small-context models.
 func NewPromptBuilder(
 	agentName, personality string,
+	email config.AgentEmail,
 	identity IdentityConfig,
 	capabilities AgentCapabilities,
 	tools []ai.Tool,
@@ -118,6 +120,7 @@ func NewPromptBuilder(
 	return &PromptBuilder{
 		agentName:        agentName,
 		personality:      personality,
+		email:            email,
 		identity:         identity,
 		capabilities:     capabilities,
 		tools:            tools,
@@ -234,6 +237,7 @@ func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions
 		// P2 — Needed for proper channel delivery and tool usage
 		{name: "Reply Tags", priority: 2, build: func() string { return buildReplyTagsSection(params.IsMinimal) }},
 		{name: "Messaging", priority: 2, build: func() string { return buildMessagingSection(params) }},
+		{name: "Email", priority: 2, build: func() string { return pb.buildEmailSection() }},
 		{name: "Cron Delivery", priority: 2, build: func() string {
 			if isCron {
 				return buildCronDeliverySection(params)
@@ -391,6 +395,30 @@ func (pb *PromptBuilder) buildWorkspaceSection() string {
 	return fmt.Sprintf(`## Workspace
 Your working directory is: %s
 Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.`, pb.sectionParams.WorkspaceDir)
+}
+
+// buildEmailSection creates the email identity section
+func (pb *PromptBuilder) buildEmailSection() string {
+	if pb.email.Address == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	builder.WriteString("## Email\n")
+	builder.WriteString(fmt.Sprintf("Your email address: %s\n", pb.email.Address))
+
+	displayName := pb.email.DisplayName
+	if displayName == "" {
+		displayName = pb.agentName
+	}
+	builder.WriteString(fmt.Sprintf("Display name: %s\n", displayName))
+
+	if len(pb.email.Aliases) > 0 {
+		builder.WriteString(fmt.Sprintf("Aliases: %s\n", strings.Join(pb.email.Aliases, ", ")))
+	}
+
+	builder.WriteString("Use this address as your \"from\" identity when composing or referencing email. Recognize messages to any of these addresses as addressed to you.\n")
+	return builder.String()
 }
 
 // buildSkillsSection creates skills integration context
