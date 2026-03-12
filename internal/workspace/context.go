@@ -114,7 +114,7 @@ func (wc *WorkspaceContext) discoverFiles() ([]ContextFile, error) {
 	// Core workspace files
 	coreFiles := []string{
 		"SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md",
-		"IDENTITY.md", "MEMORY.md", "HEARTBEAT.md",
+		"IDENTITY.md", "MEMORY.md", "HEARTBEAT.md", "BOOTSTRAP.md",
 	}
 
 	for _, filename := range coreFiles {

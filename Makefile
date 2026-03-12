@@ -119,11 +119,20 @@ lint:
 	golint ./...
 	go vet ./...
 
-# Initialize workspace directory
+# Initialize workspace directory with starter templates
 init-workspace:
 	@echo "Creating workspace directory..."
 	@mkdir -p workspace
-	@echo "Workspace created at ./workspace"
+	@for f in configs/workspace-templates/*.md; do \
+		name=$$(basename $$f); \
+		if [ ! -f "workspace/$$name" ]; then \
+			cp "$$f" "workspace/$$name"; \
+			echo "  Created workspace/$$name"; \
+		else \
+			echo "  Skipped workspace/$$name (already exists)"; \
+		fi; \
+	done
+	@echo "Workspace ready at ./workspace"
 
 # Create example config if it doesn't exist
 init-config:

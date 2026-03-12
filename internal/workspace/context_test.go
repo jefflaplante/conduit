@@ -182,8 +182,8 @@ func TestSecurityManager_CustomRules(t *testing.T) {
 	// Test rule removal
 	sm.RemoveRule("SECRET.md")
 
-	// Should now default to allow (since no specific rule matches)
-	assert.True(t, sm.IsAccessible("SECRET.md", userCtx))
+	// Should now default to deny (no specific rule matches)
+	assert.False(t, sm.IsAccessible("SECRET.md", userCtx))
 }
 
 func TestSecurityManager_ValidationError(t *testing.T) {

@@ -66,6 +66,7 @@ func NewPromptBuilder(
 	modelAliases map[string]string,
 	promptScaling *config.PromptScalingConfig,
 	timezone string,
+	runtimeChannel string,
 ) *PromptBuilder {
 	params := NewSectionParams(tools)
 
@@ -81,7 +82,11 @@ func NewPromptBuilder(
 	params.TTSVoice = "en-US-AriaNeural"
 	params.ReactionsEnabled = true
 	params.ReactionsMode = "MINIMAL"
-	params.RuntimeChannel = "telegram"
+	if runtimeChannel != "" {
+		params.RuntimeChannel = runtimeChannel
+	} else {
+		params.RuntimeChannel = "websocket"
+	}
 	params.InlineButtons = true
 	params.MessageChannels = SupportedChannels
 
@@ -227,9 +232,9 @@ func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions
 	params := pb.sectionParams
 
 	// Define all sections with priorities.
-	// P1=critical, P2=needed for delivery, P3=enhances behavior, P4=largest/optional.
+	// P1=critical (never dropped), P2=important for SRE value, P3=enhances behavior, P4=cosmetic/optional.
 	raw := []promptSection{
-		// P1 — Critical
+		// P1 — Critical: identity, tooling, safety, core runtime
 		{name: "Identity", priority: 1, build: func() string { return pb.buildIdentitySection(isOAuth) }},
 		{name: "Tooling", priority: 1, build: func() string { return pb.buildToolingSection() }},
 		{name: "Tool Call Style", priority: 1, build: func() string { return pb.buildToolCallStyleSection() }},
@@ -237,9 +242,14 @@ func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions
 		{name: "Runtime", priority: 1, build: func() string {
 			return buildRuntimeSection(params, pb.buildRuntimeInfo(session))
 		}},
+		{name: "Safety", priority: 1, build: func() string { return buildSafetySection(params.IsMinimal) }},
 
-		// P2 — Needed for proper channel delivery and tool usage
-		{name: "Reply Tags", priority: 2, build: func() string { return buildReplyTagsSection(params.IsMinimal) }},
+		// P2 — Core value: workspace context, memory, messaging, error handling
+		{name: "Project Context", priority: 2, build: func() string { return pb.buildWorkspaceContextSection(ctx, session) }},
+		{name: "Memory Recall", priority: 2, build: func() string { return buildMemorySection(params) }},
+		{name: "Memory Persistence", priority: 2, build: func() string { return buildMemoryPersistenceSection(params) }},
+		{name: "Heartbeats", priority: 2, build: func() string { return buildHeartbeatsSection(params) }},
+		{name: "Error Recovery", priority: 2, build: func() string { return buildErrorRecoverySection(params.IsMinimal) }},
 		{name: "Messaging", priority: 2, build: func() string { return buildMessagingSection(params) }},
 		{name: "Email", priority: 2, build: func() string { return pb.buildEmailSection() }},
 		{name: "Cron Delivery", priority: 2, build: func() string {
@@ -249,8 +259,6 @@ func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions
 			return ""
 		}},
 		{name: "Workspace", priority: 2, build: func() string { return pb.buildWorkspaceSection() }},
-		{name: "Docs", priority: 2, build: func() string { return buildDocsSection(params) }},
-		{name: "Model Aliases", priority: 2, build: func() string { return buildModelAliasesSection(params) }},
 		{name: "Timezone", priority: 2, build: func() string {
 			if params.UserTimezone != "" {
 				return "If you need the current date, time, or day of week, run session_status."
@@ -258,24 +266,22 @@ func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions
 			return ""
 		}},
 
-		// P3 — Enhance behavior but model works without
-		{name: "Safety", priority: 3, build: func() string { return buildSafetySection(params.IsMinimal) }},
-		{name: "Memory Recall", priority: 3, build: func() string { return buildMemorySection(params) }},
-		{name: "Memory Persistence", priority: 3, build: func() string { return buildMemoryPersistenceSection(params) }},
-		{name: "Voice/TTS", priority: 3, build: func() string { return buildVoiceSection(params) }},
-		{name: "Reactions", priority: 3, build: func() string { return buildReactionsSection(params) }},
-		{name: "Heartbeats", priority: 3, build: func() string { return buildHeartbeatsSection(params) }},
-
-		// P4 — Largest sections; nice-to-have
-		{name: "Conduit CLI", priority: 4, build: func() string { return buildConduitCLISection(params.IsMinimal) }},
-		{name: "Skills", priority: 4, build: func() string {
+		// P3 — Enhances behavior: skills, docs, aliases, tags
+		{name: "Skills", priority: 3, build: func() string {
 			if pb.capabilities.SkillsIntegration && pb.skillsManager != nil {
 				return pb.buildSkillsSection(ctx)
 			}
 			return ""
 		}},
+		{name: "Reply Tags", priority: 3, build: func() string { return buildReplyTagsSection(params.IsMinimal) }},
+		{name: "Model Aliases", priority: 3, build: func() string { return buildModelAliasesSection(params) }},
+		{name: "Docs", priority: 3, build: func() string { return buildDocsSection(params) }},
+
+		// P4 — Nice-to-have: cosmetic features, CLI reference
+		{name: "Voice/TTS", priority: 4, build: func() string { return buildVoiceSection(params) }},
+		{name: "Reactions", priority: 4, build: func() string { return buildReactionsSection(params) }},
+		{name: "Conduit CLI", priority: 4, build: func() string { return buildConduitCLISection(params.IsMinimal) }},
 		{name: "Self-Update", priority: 4, build: func() string { return buildSelfUpdateSection(params) }},
-		{name: "Project Context", priority: 4, build: func() string { return pb.buildWorkspaceContextSection(ctx, session) }},
 	}
 
 	// Stable sort by priority (preserves order within same priority).
@@ -346,6 +352,16 @@ func joinSectionsWithCache(sections []promptSection, included []bool, dropped ..
 	return result
 }
 
+// defaultOperatingPrinciples are used when no custom principles are configured.
+var defaultOperatingPrinciples = []string{
+	"Think before acting. Understand what is being asked before executing.",
+	"Ask before destroying. Confirm deletions, restarts, or irreversible changes.",
+	"Verify before claiming success. Check that actions had their intended effect.",
+	"Understand blast radius. Know what systems, users, or data an action affects.",
+	"When uncertain, say so. Never guess at system state — check it.",
+	"Write down what you learn. Memory resets between sessions; files persist.",
+}
+
 // buildIdentitySection creates the identity/personality section
 func (pb *PromptBuilder) buildIdentitySection(isOAuth bool) string {
 	var identity string
@@ -362,6 +378,19 @@ func (pb *PromptBuilder) buildIdentitySection(isOAuth bool) string {
 		builder.WriteString(" You are running inside Conduit.\n")
 	} else {
 		builder.WriteString("You are a personal assistant running inside Conduit.\n")
+	}
+
+	// Add operating principles
+	principles := pb.identity.OperatingPrinciples
+	if len(principles) == 0 {
+		principles = defaultOperatingPrinciples
+	}
+
+	builder.WriteString("\n## Operating Principles\n")
+	for _, p := range principles {
+		builder.WriteString("- ")
+		builder.WriteString(p)
+		builder.WriteString("\n")
 	}
 
 	return builder.String()
@@ -398,7 +427,8 @@ Use plain human language for narration unless in a technical context.`
 func (pb *PromptBuilder) buildWorkspaceSection() string {
 	return fmt.Sprintf(`## Workspace
 Your working directory is: %s
-Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.`, pb.sectionParams.WorkspaceDir)
+Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.
+Key locations: MEMORY.md (long-term memory), memory/ (daily logs), HEARTBEAT.md (monitoring tasks), SOUL.md (personality).`, pb.sectionParams.WorkspaceDir)
 }
 
 // buildEmailSection creates the email identity section
