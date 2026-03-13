@@ -25,6 +25,12 @@ Complete this checklist to verify the authentication system is production-ready 
   - Expected: 4401 close code (Unauthorized)
   - Result: ✓ PASS
 
+- [x] **WebSocket origin validation enforced**
+  - Verification method: Attempt WebSocket upgrade with foreign Origin header
+  - Expected: Upgrade rejected, logged as "WebSocket origin rejected"
+  - Config: `allowed_origins` in config.json (empty = localhost only)
+  - Result: ✓ PASS
+
 - [ ] **All API endpoints document authentication requirement**
   - Verification method: Review API documentation
   - Expected: All protected endpoints marked [AUTH REQUIRED]
@@ -380,17 +386,32 @@ Complete this checklist to verify the authentication system is production-ready 
 - [x] **Database backups encrypted**
   - Check: Backup files have `.gpg` extension
   - Expected: Encrypted with GPG or similar
-  - Result: 
+  - Result:
 
 - [x] **Backups have restricted permissions**
   - Check: `ls -l *.db.gpg`
   - Expected: `-rw-------` (600)
-  - Result: 
+  - Result:
 
 - [x] **Backup restore tested**
   - Procedure: Restore backup, verify data integrity
   - Expected: All tokens recovered correctly
-  - Result: 
+  - Result:
+
+- [x] **Backup restore rejects path traversal**
+  - Verification method: Archive with `../../etc/passwd` entry
+  - Expected: Entry rejected with warning, restore continues
+  - Result: ✓ PASS
+
+- [x] **Backup restore rejects symlinks**
+  - Verification method: Archive with symlink entry
+  - Expected: Entry rejected with warning, restore continues
+  - Result: ✓ PASS
+
+- [x] **Tool sandbox uses directory boundary checking**
+  - Verification method: Allowed path `/tmp/work`, test path `/tmp/workspace`
+  - Expected: Access denied (no prefix-match bypass)
+  - Result: ✓ PASS
 
 ## Configuration Security
 

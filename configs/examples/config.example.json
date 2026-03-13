@@ -3,6 +3,7 @@
   "database": {
     "path": "./gateway.db"
   },
+  "allowed_origins": [],
   "ai": {
     "default_provider": "anthropic",
     "providers": [

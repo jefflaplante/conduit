@@ -18,6 +18,7 @@ type Config struct {
 	Timezone       string               `json:"timezone,omitempty"`
 	DataDir        string               `json:"data_dir,omitempty"`
 	SecretsFile    string               `json:"secrets_file,omitempty"`
+	AllowedOrigins []string             `json:"allowed_origins,omitempty"` // WebSocket allowed origins (empty = same-origin + localhost only)
 	Database       DatabaseConfig       `json:"database"`
 	Search         SearchDatabaseConfig `json:"search,omitempty"`
 	AI             AIConfig             `json:"ai"`

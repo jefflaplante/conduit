@@ -470,3 +470,70 @@ func TestPathResolution_Integration(t *testing.T) {
 		t.Errorf("File not found at expected path %s: %v", expectedPath, err)
 	}
 }
+
+func TestIsPathAllowed(t *testing.T) {
+	tests := []struct {
+		name         string
+		allowedPaths []string
+		path         string
+		expected     bool
+	}{
+		{
+			name:         "path inside allowed dir",
+			allowedPaths: []string{"/tmp/work"},
+			path:         "/tmp/work/file.txt",
+			expected:     true,
+		},
+		{
+			name:         "prefix overlap returns false",
+			allowedPaths: []string{"/tmp/work"},
+			path:         "/tmp/workspace/file.txt",
+			expected:     false,
+		},
+		{
+			name:         "path traversal returns false",
+			allowedPaths: []string{"/tmp/work"},
+			path:         "/tmp/work/../../etc/passwd",
+			expected:     false,
+		},
+		{
+			name:         "exact match returns true",
+			allowedPaths: []string{"/tmp/work"},
+			path:         "/tmp/work",
+			expected:     true,
+		},
+		{
+			name:         "subdirectory returns true",
+			allowedPaths: []string{"/tmp/work"},
+			path:         "/tmp/work/sub/deep/file",
+			expected:     true,
+		},
+		{
+			name:         "completely outside returns false",
+			allowedPaths: []string{"/tmp/work"},
+			path:         "/etc/passwd",
+			expected:     false,
+		},
+		{
+			name:         "multiple allowed paths",
+			allowedPaths: []string{"/tmp/work", "/var/data"},
+			path:         "/var/data/file.txt",
+			expected:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := &Registry{
+				sandboxCfg: config.SandboxConfig{
+					AllowedPaths: tt.allowedPaths,
+				},
+			}
+			result := registry.isPathAllowed(tt.path)
+			if result != tt.expected {
+				t.Errorf("isPathAllowed(%q) with allowed=%v: got %v, want %v",
+					tt.path, tt.allowedPaths, result, tt.expected)
+			}
+		})
+	}
+}
