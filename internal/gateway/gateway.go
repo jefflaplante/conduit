@@ -364,10 +364,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		clients:             make(map[string]*Client),
 		activeRequests:      make(map[string]context.CancelFunc),
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				// TODO: Implement proper origin checking
-				return true
-			},
+			CheckOrigin: checkOrigin(cfg.AllowedOrigins),
 			Subprotocols: []string{"conduit-auth"},
 		},
 	}
@@ -901,6 +898,50 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// checkOrigin returns a function that validates WebSocket Origin headers.
+// If allowedOrigins is non-empty, only those origins (case-insensitive) are accepted.
+// If allowedOrigins is empty, requests with no Origin header or localhost origins are accepted.
+func checkOrigin(allowedOrigins []string) func(r *http.Request) bool {
+	return func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+
+		// No Origin header means same-origin (non-browser or same-origin browser request)
+		if origin == "" {
+			return true
+		}
+
+		originLower := strings.ToLower(origin)
+
+		// If explicit allowlist is configured, check against it
+		if len(allowedOrigins) > 0 {
+			for _, allowed := range allowedOrigins {
+				if strings.EqualFold(origin, allowed) {
+					return true
+				}
+			}
+			log.Printf("WebSocket origin rejected: %s (not in allowed origins)", origin)
+			return false
+		}
+
+		// Default policy: allow localhost origins only
+		for _, prefix := range []string{
+			"http://localhost",
+			"https://localhost",
+			"http://127.0.0.1",
+			"https://127.0.0.1",
+			"http://[::1]",
+			"https://[::1]",
+		} {
+			if originLower == prefix || strings.HasPrefix(originLower, prefix+":") {
+				return true
+			}
+		}
+
+		log.Printf("WebSocket origin rejected: %s (no allowed origins configured, only localhost permitted)", origin)
+		return false
+	}
 }
 
 // handleWebSocket handles WebSocket connections with authentication

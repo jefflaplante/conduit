@@ -15,6 +15,7 @@ Configuration is loaded from JSON files with support for:
 {
   "port": 18789,
   "database": "./gateway.db",
+  "allowed_origins": [],
 
   "ai": {
     "default_provider": "anthropic",
@@ -151,6 +152,28 @@ Configuration is loaded from JSON files with support for:
 |-------|------|---------|-------------|
 | `port` | int | 18789 | HTTP/WebSocket server port |
 | `database` | string | "./gateway.db" | SQLite database path |
+| `allowed_origins` | string[] | `[]` | WebSocket allowed origins. Empty = localhost only. |
+
+### Allowed Origins (WebSocket Security)
+
+Controls which browser origins can establish WebSocket connections. Prevents cross-site WebSocket hijacking (CSWSH).
+
+```json
+{
+  "allowed_origins": [
+    "https://myapp.example.com",
+    "https://admin.corp.net:8443"
+  ]
+}
+```
+
+| Behavior | When |
+|----------|------|
+| Localhost only | `allowed_origins` is empty or omitted (default) |
+| Explicit allowlist | `allowed_origins` has entries — only those origins accepted |
+| Always allowed | Requests with no `Origin` header (curl, SDKs, non-browser clients) |
+
+Origins are compared case-insensitively. Include scheme and port (if non-standard), no trailing slash.
 
 ### AI Providers
 

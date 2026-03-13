@@ -81,6 +81,12 @@ func RestoreBackup(opts RestoreOptions) (*RestoreResult, error) {
 			continue
 		}
 
+		if err := validateTarEntry(hdr, "", dest); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("rejected %s: %v", hdr.Name, err))
+			result.FilesSkipped++
+			continue
+		}
+
 		if err := extractFile(tr, hdr, dest); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("failed to restore %s: %v", hdr.Name, err))
 			result.FilesSkipped++
@@ -158,6 +164,47 @@ func mapEntryToDestination(name string, m *BackupManifest, opts RestoreOptions) 
 	default:
 		return "", false
 	}
+}
+
+// validateTarEntry checks a tar header for path traversal and unsafe entry types.
+// targetDir is the root directory files are being extracted into.
+// dest is the resolved destination path for the entry.
+func validateTarEntry(hdr *tar.Header, targetDir, dest string) error {
+	// Reject symlinks and hard links
+	switch hdr.Typeflag {
+	case tar.TypeReg, tar.TypeRegA, tar.TypeDir, tar.TypeGNUSparse:
+		// These are safe entry types
+	case tar.TypeSymlink:
+		return fmt.Errorf("symlink entry not allowed: %s -> %s", hdr.Name, hdr.Linkname)
+	case tar.TypeLink:
+		return fmt.Errorf("hard link entry not allowed: %s -> %s", hdr.Name, hdr.Linkname)
+	default:
+		return fmt.Errorf("unsupported tar entry type %d: %s", hdr.Typeflag, hdr.Name)
+	}
+
+	// Clean the entry name and reject obviously malicious paths
+	cleaned := filepath.Clean(hdr.Name)
+	if filepath.IsAbs(cleaned) {
+		return fmt.Errorf("absolute path in tar entry: %s", hdr.Name)
+	}
+	if strings.HasPrefix(cleaned, "..") {
+		return fmt.Errorf("path traversal in tar entry: %s", hdr.Name)
+	}
+
+	// Validate the resolved destination is within the target directory
+	if targetDir != "" {
+		cleanDest := filepath.Clean(dest)
+		cleanTarget := filepath.Clean(targetDir)
+		rel, err := filepath.Rel(cleanTarget, cleanDest)
+		if err != nil {
+			return fmt.Errorf("cannot resolve path %s relative to %s: %w", dest, targetDir, err)
+		}
+		if strings.HasPrefix(rel, "..") {
+			return fmt.Errorf("path escapes target directory: %s resolves to %s", hdr.Name, cleanDest)
+		}
+	}
+
+	return nil
 }
 
 // extractFile writes a tar entry to disk, creating parent directories as needed.

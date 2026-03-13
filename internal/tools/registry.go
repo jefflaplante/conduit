@@ -395,9 +395,15 @@ func (r *Registry) isPathAllowed(path string) bool {
 	if err != nil {
 		return false
 	}
+	absPath = filepath.Clean(absPath)
 
 	for _, allowedPath := range r.sandboxCfg.AllowedPaths {
-		if strings.HasPrefix(absPath, allowedPath) {
+		cleanAllowed := filepath.Clean(allowedPath)
+		rel, err := filepath.Rel(cleanAllowed, absPath)
+		if err != nil {
+			continue
+		}
+		if !strings.HasPrefix(rel, "..") {
 			return true
 		}
 	}

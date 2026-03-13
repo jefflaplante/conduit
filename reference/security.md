@@ -14,6 +14,72 @@ This guide covers security considerations, best practices, and deployment checkl
 8. [Deployment Checklist](#deployment-checklist)
 9. [Incident Response](#incident-response)
 
+## Recent Security Hardening (2026-03)
+
+The following security fixes were applied based on a red team audit. Operators upgrading from earlier versions should review this section for any configuration changes.
+
+### WebSocket Origin Validation
+
+**What changed:** The WebSocket upgrader now validates the `Origin` header on all upgrade requests. Previously all origins were accepted.
+
+**Default behavior (no config change needed):** When `allowed_origins` is not set, only same-origin requests (no `Origin` header) and localhost origins (`http://localhost:*`, `http://127.0.0.1:*`, `http://[::1]:*`) are permitted. All other origins are rejected and logged.
+
+**If you access Conduit from a web application on a different domain**, add those origins to your config:
+
+```json
+{
+  "allowed_origins": [
+    "https://myapp.example.com",
+    "https://internal.corp.net:8443"
+  ]
+}
+```
+
+- Origins are compared case-insensitively.
+- Include the scheme and port (if non-standard). No trailing slash.
+- Requests with no `Origin` header (non-browser clients, curl, SDKs) are always allowed regardless of this setting.
+- Rejected origins are logged: `WebSocket origin rejected: <origin>`.
+
+**If you use the TUI or SSH adapter exclusively**, no change is needed — these use in-process connections, not WebSocket.
+
+### Backup Restore Hardening
+
+**What changed:** `conduit backup restore` now validates every tar entry before extraction:
+
+1. **Path traversal protection** — Entries with absolute paths (`/etc/passwd`) or directory escape (`../../secret`) are rejected.
+2. **Symlink/hardlink rejection** — Only regular files and directories are extracted. Symlink and hard link entries are skipped with a warning.
+
+**Impact on operators:** Backups created by Conduit are unaffected (they only contain regular files). If you have third-party tooling that modifies backup archives, ensure entries do not contain symlinks or path traversal sequences.
+
+Rejected entries appear in restore output as warnings:
+```
+WARNING: rejected database/../../etc/shadow: path traversal in tar entry: database/../../etc/shadow
+WARNING: rejected workspace/link.conf: symlink entry not allowed: workspace/link.conf -> /etc/shadow
+```
+
+### Tool Sandbox Path Validation
+
+**What changed:** The file sandbox (`tools.sandbox.allowed_paths`) now uses proper directory boundary checking instead of string prefix matching.
+
+**Previous behavior (vulnerable):** An allowed path of `/data/workspace` would also permit access to `/data/workspace-private` because `/data/workspace-private` starts with the string `/data/workspace`.
+
+**New behavior:** Only paths that are actually inside (or equal to) an allowed directory pass validation. `/data/workspace-private` no longer matches `/data/workspace`.
+
+**Impact on operators:** If you relied on the old prefix behavior to allow multiple directories sharing a prefix, you must now list each one explicitly:
+
+```json
+{
+  "tools": {
+    "sandbox": {
+      "allowed_paths": [
+        "/data/workspace",
+        "/data/workspace-private"
+      ]
+    }
+  }
+}
+```
+
 ## Security Architecture
 
 ### Authentication Flow
