@@ -655,6 +655,7 @@ func (t *CronTool) getHeartbeatStatus(ctx context.Context, args map[string]inter
 // isHeartbeatJob determines if a job is a heartbeat job
 func isHeartbeatJob(job *types.SchedulerJob) bool {
 	return strings.HasPrefix(job.ID, "heartbeat_") ||
+		strings.HasPrefix(job.ID, "agent_heartbeat") ||
 		strings.Contains(strings.ToLower(job.Command), "heartbeat") ||
 		strings.Contains(strings.ToLower(job.Name), "heartbeat")
 }

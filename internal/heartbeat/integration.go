@@ -349,7 +349,7 @@ func (g *GatewayIntegration) ScheduleHeartbeatJob(schedule, target, model string
 	}
 
 	job := &scheduler.Job{
-		ID:       fmt.Sprintf("heartbeat_%d", time.Now().UnixNano()),
+		ID:       "agent_heartbeat_main", // Stable ID so dedup check works across restarts
 		Name:     "Heartbeat Task Execution",
 		Schedule: schedule,
 		Type:     scheduler.JobTypeGo,
