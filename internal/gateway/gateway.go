@@ -545,10 +545,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Initialize heartbeat integration
 	gw.heartbeatIntegration = heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, metricsCollector)
 
-	// Auto-create agent heartbeat job if enabled
-	if err := gw.initializeAgentHeartbeat(cfg); err != nil {
-		log.Printf("WARNING: Failed to initialize agent heartbeat: %v", err)
-	}
+	// NOTE: initializeAgentHeartbeat is called AFTER scheduler.Start() in the Run() method
+	// so that existing jobs are loaded from cron_jobs.json before the heartbeat job is added.
 
 	log.Printf("Gateway initialized with:")
 	log.Printf("  - Agent: %s (%s personality)", agentCfg.Name, agentCfg.Personality)
@@ -734,11 +732,17 @@ func (g *Gateway) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start channels: %w", err)
 	}
 
-	// Start scheduler
+	// Start scheduler (loads jobs from cron_jobs.json)
 	if g.scheduler != nil {
 		if err := g.scheduler.Start(); err != nil {
 			log.Printf("WARNING: Failed to start scheduler: %v", err)
 		}
+	}
+
+	// Auto-create agent heartbeat job if enabled (MUST be after scheduler.Start() so
+	// existing jobs are loaded from disk before we check for duplicates and potentially save)
+	if err := g.initializeAgentHeartbeat(g.config); err != nil {
+		log.Printf("WARNING: Failed to initialize agent heartbeat: %v", err)
 	}
 
 	// Start heartbeat service
