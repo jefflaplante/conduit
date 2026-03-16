@@ -228,6 +228,12 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 			_ = g.sessions.SetSessionContext(session.Key, "last_completion_tokens", strconv.Itoa(completionTokens))
 			_ = g.sessions.SetSessionContext(session.Key, "last_total_tokens", strconv.Itoa(totalTokens))
 
+			// Proactive context window warning
+			if warning := contextWarningIfNeeded(session, promptTokens, modelOverride); warning.Text != "" {
+				responseContent += warning.Text
+				_ = g.sessions.SetSessionContext(session.Key, warning.Key, "true")
+			}
+
 			// Accumulate session cost
 			requestCost = ai.CalculateCost(modelOverride, promptTokens, completionTokens)
 			prevCost, _ := strconv.ParseFloat(session.Context["session_total_cost"], 64)

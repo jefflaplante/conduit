@@ -124,3 +124,118 @@ func TestFormatNumber(t *testing.T) {
 		}
 	}
 }
+
+func TestContextWarningIfNeeded_NoWarningUnderThreshold(t *testing.T) {
+	session := &sessions.Session{
+		Key:     "test-warn-1",
+		UserID:  "jeff",
+		Context: map[string]string{},
+	}
+
+	// 50% of 200k = 100k tokens — under 60% threshold
+	warning := contextWarningIfNeeded(session, 100000, "claude-sonnet-4-20250514")
+	if warning.Text != "" {
+		t.Errorf("Expected no warning at 50%%, got: %s", warning.Text)
+	}
+}
+
+func TestContextWarningIfNeeded_WarningAt60Pct(t *testing.T) {
+	session := &sessions.Session{
+		Key:     "test-warn-2",
+		UserID:  "jeff",
+		Context: map[string]string{},
+	}
+
+	// 65% of 200k = 130k tokens
+	warning := contextWarningIfNeeded(session, 130000, "claude-sonnet-4-20250514")
+	if warning.Text == "" {
+		t.Error("Expected warning at 65%")
+	}
+	if !strings.Contains(warning.Text, "🟡") {
+		t.Error("Expected yellow warning icon at 60% threshold")
+	}
+	if !strings.Contains(warning.Text, "60%") {
+		t.Error("Expected '60%' mention in warning")
+	}
+	if warning.Key != "context_warned_60" {
+		t.Errorf("Expected key 'context_warned_60', got %q", warning.Key)
+	}
+}
+
+func TestContextWarningIfNeeded_WarningAt80Pct(t *testing.T) {
+	session := &sessions.Session{
+		Key:     "test-warn-3",
+		UserID:  "jeff",
+		Context: map[string]string{},
+	}
+
+	// 85% of 200k = 170k tokens
+	warning := contextWarningIfNeeded(session, 170000, "claude-sonnet-4-20250514")
+	if warning.Text == "" {
+		t.Error("Expected warning at 85%")
+	}
+	if !strings.Contains(warning.Text, "🔴") {
+		t.Error("Expected red warning icon at 80% threshold")
+	}
+	if !strings.Contains(warning.Text, "80%") {
+		t.Error("Expected '80%' mention in warning")
+	}
+	if warning.Key != "context_warned_80" {
+		t.Errorf("Expected key 'context_warned_80', got %q", warning.Key)
+	}
+}
+
+func TestContextWarningIfNeeded_NoRepeatWarning(t *testing.T) {
+	session := &sessions.Session{
+		Key:    "test-warn-4",
+		UserID: "jeff",
+		Context: map[string]string{
+			"context_warned_60": "true",
+		},
+	}
+
+	// 65% again, but already warned
+	warning := contextWarningIfNeeded(session, 130000, "claude-sonnet-4-20250514")
+	if warning.Text != "" {
+		t.Errorf("Should not repeat 60%% warning, got: %s", warning.Text)
+	}
+}
+
+func TestContextWarningIfNeeded_EscalatesFrom60To80(t *testing.T) {
+	session := &sessions.Session{
+		Key:    "test-warn-5",
+		UserID: "jeff",
+		Context: map[string]string{
+			"context_warned_60": "true",
+		},
+	}
+
+	// 85% — already warned at 60, should still fire at 80
+	warning := contextWarningIfNeeded(session, 170000, "claude-sonnet-4-20250514")
+	if warning.Text == "" {
+		t.Error("Expected 80% warning even though 60% was already sent")
+	}
+	if !strings.Contains(warning.Text, "🔴") {
+		t.Error("Expected red warning icon for 80% escalation")
+	}
+}
+
+func TestContextWarningIfNeeded_NilSession(t *testing.T) {
+	warning := contextWarningIfNeeded(nil, 130000, "claude-sonnet-4-20250514")
+	if warning.Text != "" {
+		t.Error("Expected no warning for nil session")
+	}
+}
+
+func TestContextWarningIfNeeded_ZeroTokens(t *testing.T) {
+	session := &sessions.Session{
+		Key:     "test-warn-6",
+		UserID:  "jeff",
+		Context: map[string]string{},
+	}
+
+	warning := contextWarningIfNeeded(session, 0, "claude-sonnet-4-20250514")
+	if warning.Text != "" {
+		t.Error("Expected no warning for zero tokens")
+	}
+}

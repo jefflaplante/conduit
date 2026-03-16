@@ -1414,6 +1414,12 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 			_ = g.sessions.SetSessionContext(session.Key, "last_prompt_tokens", strconv.Itoa(usage.PromptTokens))
 			_ = g.sessions.SetSessionContext(session.Key, "last_completion_tokens", strconv.Itoa(usage.CompletionTokens))
 			_ = g.sessions.SetSessionContext(session.Key, "last_total_tokens", strconv.Itoa(usage.TotalTokens))
+
+			// Proactive context window warning
+			if warning := contextWarningIfNeeded(session, usage.PromptTokens, modelOverride); warning.Text != "" {
+				responseContent += warning.Text
+				_ = g.sessions.SetSessionContext(session.Key, warning.Key, "true")
+			}
 		}
 
 		// Check for silent response tokens (NO_REPLY, HEARTBEAT_OK)
