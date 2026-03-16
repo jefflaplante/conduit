@@ -25,7 +25,7 @@ const (
 					"url": "https://example.com/conduit",
 					"description": "Conduit is an advanced AI assistant platform that provides powerful automation and integration capabilities.",
 					"published": "2024-01-15",
-					"thumbnail": "https://example.com/thumb.jpg"
+					"thumbnail": {"src": "https://example.com/thumb.jpg", "original": "https://example.com/thumb_orig.jpg", "logo": false}
 				},
 				{
 					"title": "Getting Started with Conduit",

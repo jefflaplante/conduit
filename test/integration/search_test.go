@@ -476,6 +476,9 @@ func testBraveDirectSearchIntegration(t *testing.T, apiKey string) {
 	})
 
 	t.Run("RegionalSearch", func(t *testing.T) {
+		// Brief delay to avoid rate limiting when tests run back-to-back
+		time.Sleep(1 * time.Second)
+
 		config := search.BraveSearchConfig{
 			APIKey:   apiKey,
 			Endpoint: "https://api.search.brave.com/res/v1/web/search",
@@ -496,6 +499,9 @@ func testBraveDirectSearchIntegration(t *testing.T, apiKey string) {
 
 		response, err := braveSearch.Search(ctx, params)
 		if err != nil {
+			if strings.Contains(err.Error(), "rate limit") || strings.Contains(err.Error(), "429") {
+				t.Skip("Skipping regional search: Brave API rate limited")
+			}
 			t.Fatalf("Regional search failed: %v", err)
 		}
 
@@ -660,6 +666,9 @@ func testSearchResponseTimes(t *testing.T, hasBraveAPI bool) {
 	}
 
 	t.Run("SearchUnder3Seconds", func(t *testing.T) {
+		// Brief delay to avoid rate limiting when tests run back-to-back
+		time.Sleep(1 * time.Second)
+
 		config := search.BraveSearchConfig{
 			APIKey:   os.Getenv("BRAVE_API_KEY"),
 			Endpoint: "https://api.search.brave.com/res/v1/web/search",
@@ -681,6 +690,9 @@ func testSearchResponseTimes(t *testing.T, hasBraveAPI bool) {
 		duration := time.Since(startTime)
 
 		if err != nil {
+			if strings.Contains(err.Error(), "rate limit") || strings.Contains(err.Error(), "429") {
+				t.Skip("Skipping performance test: Brave API rate limited")
+			}
 			t.Fatalf("Search failed: %v", err)
 		}
 

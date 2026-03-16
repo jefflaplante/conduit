@@ -55,7 +55,11 @@ type BraveAPIResponse struct {
 			URL         string `json:"url"`
 			Description string `json:"description"`
 			Published   string `json:"published,omitempty"`
-			Thumbnail   string `json:"thumbnail,omitempty"`
+			Thumbnail   *struct {
+				Src      string `json:"src,omitempty"`
+				Original string `json:"original,omitempty"`
+				Logo     bool   `json:"logo,omitempty"`
+			} `json:"thumbnail,omitempty"`
 		} `json:"results"`
 	} `json:"web"`
 	Query struct {
@@ -300,12 +304,20 @@ func (b *BraveDirectSearch) parseResponse(resp *http.Response, params SearchPara
 	// Convert to standard format
 	results := make([]SearchResult, len(apiResp.Web.Results))
 	for i, result := range apiResp.Web.Results {
+		thumbnailURL := ""
+		if result.Thumbnail != nil {
+			if result.Thumbnail.Src != "" {
+				thumbnailURL = result.Thumbnail.Src
+			} else if result.Thumbnail.Original != "" {
+				thumbnailURL = result.Thumbnail.Original
+			}
+		}
 		results[i] = SearchResult{
 			Title:       result.Title,
 			URL:         result.URL,
 			Description: result.Description,
 			Published:   result.Published,
-			Thumbnail:   result.Thumbnail,
+			Thumbnail:   thumbnailURL,
 		}
 	}
 
