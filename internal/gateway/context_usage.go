@@ -126,6 +126,54 @@ func formatStatusResponse(session *sessions.Session, messageCount int, usageTrac
 	return sb.String()
 }
 
+// contextWarningThresholds defines the percentage levels at which proactive warnings fire.
+// Each threshold fires only once per session (tracked in session context).
+var contextWarningThresholds = []struct {
+	pct  float64
+	key  string // session context key to track if this warning was sent
+	icon string
+	msg  string
+}{
+	{80, "context_warned_80", "🔴", "Context window is 80%+ full — quality is degrading. Use /reset to start a fresh session."},
+	{60, "context_warned_60", "🟡", "Context window is over 60% full. Consider /reset soon to keep responses sharp."},
+}
+
+// ContextWarning holds a proactive warning to append to a response.
+type ContextWarning struct {
+	Text string // formatted warning to append (empty = no warning)
+	Key  string // session context key to set to "true" after sending
+}
+
+// contextWarningIfNeeded checks prompt token usage against the context window and returns
+// a warning to append to the response. Returns empty Text if no warning needed.
+// Each threshold fires only once per session to avoid nagging.
+// The caller is responsible for persisting Key via SetSessionContext after sending.
+func contextWarningIfNeeded(session *sessions.Session, promptTokens int, model string) ContextWarning {
+	if session == nil || promptTokens == 0 {
+		return ContextWarning{}
+	}
+
+	contextWindow := ai.ContextWindowForModel(model)
+	if contextWindow == 0 {
+		return ContextWarning{}
+	}
+
+	pct := float64(promptTokens) / float64(contextWindow) * 100
+
+	for _, t := range contextWarningThresholds {
+		if pct >= t.pct {
+			// Check if we already warned at this level
+			if session.Context != nil && session.Context[t.key] == "true" {
+				return ContextWarning{}
+			}
+			text := fmt.Sprintf("\n\n%s **Context Warning:** %s (%.0f%% of %sk tokens used)", t.icon, t.msg, pct, formatNumber(contextWindow/1000))
+			return ContextWarning{Text: text, Key: t.key}
+		}
+	}
+
+	return ContextWarning{}
+}
+
 // formatNumber formats an integer with comma separators (e.g. 84521 -> "84,521").
 func formatNumber(n int) string {
 	if n < 0 {
