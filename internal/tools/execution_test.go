@@ -454,6 +454,64 @@ func TestMetricsMiddleware(t *testing.T) {
 	}
 }
 
+// TestToolCallFlow_SliceIsolation verifies that HandleToolCallFlow does not
+// mutate the caller's Messages slice when it has spare capacity.
+func TestToolCallFlow_SliceIsolation(t *testing.T) {
+	registry := NewMockRegistry()
+	tool := &MockTool{
+		name:        "test_tool",
+		description: "A test tool",
+		parameters:  map[string]interface{}{"type": "object"},
+		executeFunc: func(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+			return &ToolResult{Success: true, Content: "ok"}, nil
+		},
+	}
+	registry.AddTool(tool)
+
+	engine := NewExecutionEngine(registry, 3, 30*time.Second, 10)
+
+	provider := ai.NewMockProvider("test")
+	provider.AddResponse("done", nil) // final response after tool exec
+
+	// Allocate a backing array with extra capacity so an unguarded append
+	// would overwrite elements beyond len.
+	backing := make([]ai.ChatMessage, 1, 10)
+	backing[0] = ai.ChatMessage{Role: "user", Content: "hello"}
+
+	// Place a sentinel in the spare capacity slot
+	sentinel := ai.ChatMessage{Role: "sentinel", Content: "DO_NOT_OVERWRITE"}
+	backing = append(backing, sentinel)
+	// Now trim back to len=1 but capacity=10; backing[1] == sentinel
+	callerSlice := backing[:1]
+
+	initialReq := &ai.GenerateRequest{
+		Messages:  callerSlice,
+		Model:     "test-model",
+		Tools:     []ai.Tool{{Name: "test_tool"}},
+		MaxTokens: 1024,
+	}
+
+	initialResp := &ai.GenerateResponse{
+		Content:   "",
+		ToolCalls: []ai.ToolCall{{ID: "c1", Name: "test_tool", Args: map[string]interface{}{}}},
+	}
+
+	_, err := engine.HandleToolCallFlow(context.Background(), provider, initialReq, initialResp)
+	if err != nil {
+		t.Fatalf("HandleToolCallFlow failed: %v", err)
+	}
+
+	// The sentinel in backing[1] must still be intact.
+	if backing[1].Role != "sentinel" || backing[1].Content != "DO_NOT_OVERWRITE" {
+		t.Errorf("Caller's backing array was mutated: backing[1] = %+v", backing[1])
+	}
+
+	// The original request's Messages slice must be unchanged.
+	if len(initialReq.Messages) != 1 {
+		t.Errorf("Original request messages were mutated: len=%d, want 1", len(initialReq.Messages))
+	}
+}
+
 // Test that HandleToolCallFlow propagates the Model field to follow-up requests
 func TestHandleToolCallFlow_ModelPropagation(t *testing.T) {
 	registry := NewMockRegistry()

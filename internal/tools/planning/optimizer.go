@@ -329,7 +329,7 @@ func (eo *ExecutionOptimizer) enhanceFallbacks(plan *ExecutionPlan) {
 }
 
 func (eo *ExecutionOptimizer) forceSequentialForCritical(plan *ExecutionPlan) {
-	criticalTools := []string{"write_file", "exec"} // Tools that should run sequentially
+	criticalTools := []string{"Write", "Bash"} // Tools that should run sequentially
 
 	priority := 0
 	for i := range plan.Steps {
@@ -483,7 +483,7 @@ func (eo *ExecutionOptimizer) calculateBalancedScore(step ExecutionStep) float64
 // Helper functions
 
 func (eo *ExecutionOptimizer) isNetworkTool(toolName string) bool {
-	networkTools := []string{"web_search", "web_fetch", "message"}
+	networkTools := []string{"WebSearch", "WebFetch", "Message"}
 	for _, tool := range networkTools {
 		if toolName == tool {
 			return true
@@ -493,7 +493,7 @@ func (eo *ExecutionOptimizer) isNetworkTool(toolName string) bool {
 }
 
 func (eo *ExecutionOptimizer) isFileOperation(toolName string) bool {
-	fileTools := []string{"read_file", "write_file", "list_files"}
+	fileTools := []string{"Read", "Write", "Glob"}
 	for _, tool := range fileTools {
 		if toolName == tool {
 			return true
@@ -546,17 +546,17 @@ func (eo *ExecutionOptimizer) createSmartFallback(step ExecutionStep) ExecutionS
 
 	// Tool-specific smart fallbacks
 	switch step.ToolName {
-	case "web_search":
+	case "WebSearch":
 		// Fallback to basic search
 		fallback.Args["count"] = 3
 		delete(fallback.Args, "freshness") // Remove time filters
 
-	case "web_fetch":
+	case "WebFetch":
 		// Fallback to text extraction only
 		fallback.Args["extractMode"] = "text"
 		fallback.Args["maxChars"] = 1000
 
-	case "memory_search":
+	case "MemorySearch":
 		// Fallback to simpler query
 		if query, ok := step.Args["query"].(string); ok {
 			// Use first 3 words only

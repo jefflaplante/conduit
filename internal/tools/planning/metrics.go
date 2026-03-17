@@ -242,8 +242,12 @@ func (mc *MetricsCollector) RecordPlanExecution(planResult *PlanResult, estimate
 		totalCost += stepResult.Duration.Seconds() * 0.001 // Rough cost calculation
 	}
 
-	successRate := float64(successCount) / float64(len(planResult.StepResults))
-	cacheHitRate := float64(cacheHits) / float64(len(planResult.StepResults))
+	successRate := 0.0
+	cacheHitRate := 0.0
+	if len(planResult.StepResults) > 0 {
+		successRate = float64(successCount) / float64(len(planResult.StepResults))
+		cacheHitRate = float64(cacheHits) / float64(len(planResult.StepResults))
+	}
 
 	// Calculate accuracy of estimates
 	accuracyRatio := 1.0
@@ -602,7 +606,7 @@ func findSubstring(s, substr string) int {
 }
 
 func (mc *MetricsCollector) isParallelizable(toolName string) bool {
-	parallelTools := []string{"web_search", "web_fetch", "memory_search", "read_file"}
+	parallelTools := []string{"WebSearch", "WebFetch", "MemorySearch", "Read"}
 	for _, tool := range parallelTools {
 		if toolName == tool {
 			return true
