@@ -1,10 +1,9 @@
 package database
 
 import (
+	"context"
 	"database/sql"
-	"fmt"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -254,30 +253,31 @@ func TestPragmasAppliedToAllPoolConnections(t *testing.T) {
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
 
-	// Force 4 concurrent connections and verify each has busy_timeout=5000
-	var wg sync.WaitGroup
-	errs := make(chan error, 4)
+	ctx := context.Background()
 
+	// Pin 4 connections to force the pool to create all of them
+	conns := make([]*sql.Conn, 4)
 	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var bt int
-			if err := db.QueryRow("PRAGMA busy_timeout").Scan(&bt); err != nil {
-				errs <- err
-				return
-			}
-			if bt != 5000 {
-				errs <- fmt.Errorf("busy_timeout=%d, want 5000", bt)
-			}
-		}()
+		conn, err := db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("Failed to get connection %d: %v", i, err)
+		}
+		conns[i] = conn
 	}
 
-	wg.Wait()
-	close(errs)
+	// Verify each pinned connection has busy_timeout=5000
+	for i, conn := range conns {
+		var bt int
+		if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&bt); err != nil {
+			t.Errorf("Connection %d: %v", i, err)
+		} else if bt != 5000 {
+			t.Errorf("Connection %d: busy_timeout=%d, want 5000", i, bt)
+		}
+	}
 
-	for err := range errs {
-		t.Error(err)
+	// Release all pinned connections
+	for _, conn := range conns {
+		conn.Close()
 	}
 }
 
