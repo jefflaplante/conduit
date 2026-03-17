@@ -481,6 +481,11 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 			sendResponse(fmt.Sprintf("Failed to switch provider: %v", err))
 			return
 		}
+		// Also switch the model to the new provider's default so we don't send
+		// an incompatible model name (e.g. a Claude model to Ollama).
+		if meta.DefaultModel != "" {
+			_ = c.sessions.SetSessionContext(sessionKey, "model", meta.DefaultModel)
+		}
 		sendResponse(fmt.Sprintf("Switched to provider %s (%s, model: %s)", meta.Name, meta.Type, meta.DefaultModel))
 
 	case text == "/model" || strings.HasPrefix(text, "/model "):
