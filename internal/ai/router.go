@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"conduit/internal/config"
@@ -34,6 +35,7 @@ type ProviderMeta struct {
 
 // Router handles AI model interactions
 type Router struct {
+	mu              sync.RWMutex
 	providers       map[string]Provider
 	providerMeta    map[string]ProviderMeta
 	default_        string
@@ -306,16 +308,22 @@ func (r *Router) initializeProviders(cfg config.AIConfig) error {
 
 // RegisterProvider adds a provider to the router (useful for testing with mocks)
 func (r *Router) RegisterProvider(name string, provider Provider) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.providers[name] = provider
 }
 
 // HasProviders returns true if the router has at least one provider configured
 func (r *Router) HasProviders() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return len(r.providers) > 0
 }
 
 // ListProviders returns metadata for all configured providers.
 func (r *Router) ListProviders() []ProviderMeta {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	result := make([]ProviderMeta, 0, len(r.providerMeta))
 	for _, meta := range r.providerMeta {
 		result = append(result, meta)
@@ -325,6 +333,8 @@ func (r *Router) ListProviders() []ProviderMeta {
 
 // GetProviderMeta returns metadata for a provider by name.
 func (r *Router) GetProviderMeta(name string) (ProviderMeta, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	meta, ok := r.providerMeta[name]
 	return meta, ok
 }
@@ -334,12 +344,24 @@ func (r *Router) DefaultProviderName() string {
 	return r.default_
 }
 
+// getProvider returns the named provider under a read lock.
+func (r *Router) getProvider(name string) (Provider, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.providers[name]
+	return p, ok
+}
+
 // ResolveProviderForModel attempts to find the best provider for a given model name.
 // Returns the provider name, or "" if no match is found (caller should use default).
 func (r *Router) ResolveProviderForModel(model string) string {
 	if model == "" {
 		return ""
 	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	lower := strings.ToLower(model)
 
 	// Tier 1: prefix heuristics → provider type
@@ -381,7 +403,7 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 		providerName = r.default_
 	}
 
-	provider, exists := r.providers[providerName]
+	provider, exists := r.getProvider(providerName)
 	if !exists {
 		return nil, fmt.Errorf("provider not found: %s", providerName)
 	}
@@ -468,7 +490,7 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 		providerName = r.default_
 	}
 
-	provider, exists := r.providers[providerName]
+	provider, exists := r.getProvider(providerName)
 	if !exists {
 		return nil, fmt.Errorf("provider not found: %s", providerName)
 	}
@@ -605,7 +627,7 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		providerName = r.default_
 	}
 
-	provider, exists := r.providers[providerName]
+	provider, exists := r.getProvider(providerName)
 	if !exists {
 		return nil, fmt.Errorf("provider not found: %s", providerName)
 	}

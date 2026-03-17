@@ -25,6 +25,7 @@ type promptCacheEntry struct {
 
 // ConduitAgentWithIntegration implements the Conduit agent system with full integration
 type ConduitAgentWithIntegration struct {
+	mu               sync.RWMutex
 	name             string
 	personality      string
 	email            config.AgentEmail
@@ -95,6 +96,7 @@ func NewConduitAgentWithIntegration(
 
 // SetTools updates the agent's tool definitions (used after deferred initialization)
 func (a *ConduitAgentWithIntegration) SetTools(tools []ai.Tool) {
+	a.mu.Lock()
 	a.tools = tools
 	// Rebuild prompt builder with new tools
 	a.promptBuilder = NewPromptBuilder(
@@ -112,6 +114,7 @@ func (a *ConduitAgentWithIntegration) SetTools(tools []ai.Tool) {
 		a.timezone,
 		a.runtimeChannel,
 	)
+	a.mu.Unlock()
 	// Invalidate prompt cache since tools affect prompt content
 	a.InvalidatePromptCache()
 }
@@ -125,8 +128,13 @@ func (a *ConduitAgentWithIntegration) Name() string {
 // Results are cached per session+model+authType combination with a configurable TTL.
 func (a *ConduitAgentWithIntegration) BuildSystemPrompt(ctx context.Context, session *sessions.Session) ([]ai.SystemBlock, error) {
 	// Initialize skills manager if needed
-	if a.skillsManager != nil && a.capabilities.SkillsIntegration && !a.skillsManager.IsInitialized() {
-		if err := a.skillsManager.Initialize(ctx); err != nil {
+	a.mu.RLock()
+	sm := a.skillsManager
+	caps := a.capabilities
+	a.mu.RUnlock()
+
+	if sm != nil && caps.SkillsIntegration && !sm.IsInitialized() {
+		if err := sm.Initialize(ctx); err != nil {
 			return nil, fmt.Errorf("failed to initialize skills manager: %w", err)
 		}
 	}
@@ -148,14 +156,20 @@ func (a *ConduitAgentWithIntegration) BuildSystemPrompt(ctx context.Context, ses
 		a.promptCache.Delete(cacheKey)
 	}
 
-	// Build new prompt
-	blocks, err := a.promptBuilder.Build(ctx, session, isOAuth)
+	// Build new prompt (read-lock promptBuilder)
+	a.mu.RLock()
+	pb := a.promptBuilder
+	a.mu.RUnlock()
+
+	blocks, err := pb.Build(ctx, session, isOAuth)
 	if err != nil {
 		return nil, err
 	}
 
 	// Cache the result
+	a.mu.RLock()
 	ttl := a.promptCacheTTL
+	a.mu.RUnlock()
 	if ttl == 0 {
 		ttl = DefaultPromptCacheTTL
 	}
@@ -228,13 +242,17 @@ func (a *ConduitAgentWithIntegration) SetPromptCacheTTL(ttl time.Duration) {
 
 // GetToolDefinitions returns available tool definitions including skills-generated tools
 func (a *ConduitAgentWithIntegration) GetToolDefinitions() []ai.Tool {
+	a.mu.RLock()
 	allTools := make([]ai.Tool, len(a.tools))
 	copy(allTools, a.tools)
+	sm := a.skillsManager
+	caps := a.capabilities
+	a.mu.RUnlock()
 
 	// Add skills-generated tools if skills integration is enabled
-	if a.skillsManager != nil && a.capabilities.SkillsIntegration && a.skillsManager.IsEnabled() {
+	if sm != nil && caps.SkillsIntegration && sm.IsEnabled() {
 		ctx := context.Background()
-		if skillTools, err := a.skillsManager.GenerateTools(ctx); err == nil {
+		if skillTools, err := sm.GenerateTools(ctx); err == nil {
 			// Convert skill tools to ai.Tool format
 			for _, skillTool := range skillTools {
 				aiTool := ai.Tool{
@@ -331,6 +349,7 @@ func (a *ConduitAgentWithIntegration) isHeartbeatResponse(content string) bool {
 
 // UpdateConfiguration updates the agent configuration
 func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error {
+	a.mu.Lock()
 	a.name = cfg.Name
 	a.personality = cfg.Personality
 	a.email = cfg.Email
@@ -356,6 +375,7 @@ func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error
 		a.timezone,
 		a.runtimeChannel,
 	)
+	a.mu.Unlock()
 
 	// Invalidate prompt cache since configuration affects prompt content
 	a.InvalidatePromptCache()
@@ -427,6 +447,7 @@ func (a *ConduitAgentWithIntegration) GetWorkspaceContext() *workspace.Workspace
 // SetSummaryManager sets the summary manager for AI-powered workspace summarization.
 // This is called after the AI router is available to create the summary executor.
 func (a *ConduitAgentWithIntegration) SetSummaryManager(sm *workspace.SummaryManager) {
+	a.mu.Lock()
 	a.summaryManager = sm
 
 	// Rebuild prompt builder with summary manager
@@ -445,6 +466,7 @@ func (a *ConduitAgentWithIntegration) SetSummaryManager(sm *workspace.SummaryMan
 		a.timezone,
 		a.runtimeChannel,
 	)
+	a.mu.Unlock()
 
 	// Invalidate prompt cache since summarization affects prompt content
 	a.InvalidatePromptCache()

@@ -97,12 +97,17 @@ func NewSearchRouter(config RouterConfig) (*SearchRouter, error) {
 
 // SetCurrentModel updates the current model for provider detection
 func (r *SearchRouter) SetCurrentModel(model string) {
+	r.statsMutex.Lock()
 	r.currentModel = model
+	r.statsMutex.Unlock()
 	log.Printf("[SearchRouter] Current model set to: %s", model)
 }
 
 // SetAPIKey sets the API key for a specific provider (useful for OAuth detection)
 func (r *SearchRouter) SetAPIKey(provider, apiKey string) error {
+	r.statsMutex.Lock()
+	defer r.statsMutex.Unlock()
+
 	switch provider {
 	case "anthropic":
 		// Try to update existing strategy first
@@ -124,7 +129,7 @@ func (r *SearchRouter) SetAPIKey(provider, apiKey string) error {
 		}
 
 		r.strategies[provider] = anthStrategy
-		r.initProviderStats(provider)
+		r.usageStats[provider] = &ProviderStats{}
 		log.Printf("[SearchRouter] Created new Anthropic strategy with API key")
 		return nil
 
@@ -138,7 +143,8 @@ func (r *SearchRouter) SetAPIKey(provider, apiKey string) error {
 	}
 }
 
-// detectProviderFromModel determines which search provider to use based on the model name
+// detectProviderFromModel determines which search provider to use based on the model name.
+// Caller must hold statsMutex (at least RLock).
 func (r *SearchRouter) detectProviderFromModel(model string) string {
 	if model == "" {
 		model = r.currentModel
@@ -188,25 +194,34 @@ func (r *SearchRouter) Search(ctx context.Context, params SearchParameters) (*Se
 		return nil, fmt.Errorf("invalid search parameters: %w", err)
 	}
 
+	// Read current model under lock
+	r.statsMutex.RLock()
+	currentModel := r.currentModel
+	r.statsMutex.RUnlock()
+
 	// Detect OAuth and update Anthropic strategy if needed
-	if r.currentModel != "" {
+	if currentModel != "" {
 		if err := r.handleOAuthDetection(); err != nil {
 			log.Printf("[SearchRouter] OAuth detection error: %v", err)
 		}
 	}
 
 	// Determine primary provider
-	primaryProvider := r.detectProviderFromModel(r.currentModel)
-	log.Printf("[SearchRouter] Selected primary provider: %s for model: %s", primaryProvider, r.currentModel)
-
+	r.statsMutex.RLock()
+	primaryProvider := r.detectProviderFromModel(currentModel)
 	// Get fallback chain
 	fallbackChain := r.getFallbackChain(primaryProvider)
+	r.statsMutex.RUnlock()
+
+	log.Printf("[SearchRouter] Selected primary provider: %s for model: %s", primaryProvider, currentModel)
 
 	var lastError error
 
 	// Try each provider in the fallback chain
 	for i, providerName := range fallbackChain {
+		r.statsMutex.RLock()
 		strategy, exists := r.strategies[providerName]
+		r.statsMutex.RUnlock()
 		if !exists {
 			lastError = fmt.Errorf("provider %s not available", providerName)
 			continue
@@ -311,6 +326,9 @@ func (r *SearchRouter) GetUsageStats() map[string]*ProviderStats {
 
 // GetAvailableProviders returns a list of currently available search providers
 func (r *SearchRouter) GetAvailableProviders() []string {
+	r.statsMutex.RLock()
+	defer r.statsMutex.RUnlock()
+
 	var providers []string
 	for name, strategy := range r.strategies {
 		if strategy.IsAvailable() {

@@ -142,14 +142,17 @@ func NewPromptBuilder(
 
 // Build constructs the complete system prompt
 func (pb *PromptBuilder) Build(ctx context.Context, session *sessions.Session, isOAuth bool) ([]ai.SystemBlock, error) {
-	pb.sectionParams.Session = session
+	// Work on a local copy of sectionParams to avoid mutating shared state.
+	// This makes Build safe to call concurrently with different sessions.
+	localParams := *pb.sectionParams
+	localParams.Session = session
 
 	// Determine if minimal mode
 	isMinimal := false // Could be set based on config
-	pb.sectionParams.IsMinimal = isMinimal
+	localParams.IsMinimal = isMinimal
 
-	// Build the complete prompt text
-	promptText := pb.buildFullPrompt(ctx, session, isOAuth)
+	// Build the complete prompt text using the local copy
+	promptText := pb.buildFullPromptWithParams(ctx, session, isOAuth, &localParams)
 
 	return []ai.SystemBlock{
 		{
@@ -163,10 +166,16 @@ func (pb *PromptBuilder) Build(ctx context.Context, session *sessions.Session, i
 // For models with large context windows (>= threshold), all sections are included.
 // For smaller models, sections are included by priority order within a token budget.
 func (pb *PromptBuilder) buildFullPrompt(ctx context.Context, session *sessions.Session, isOAuth bool) string {
+	return pb.buildFullPromptWithParams(ctx, session, isOAuth, pb.sectionParams)
+}
+
+// buildFullPromptWithParams creates the complete system prompt text using the given params.
+// This avoids mutating shared state and is safe for concurrent use with different sessions.
+func (pb *PromptBuilder) buildFullPromptWithParams(ctx context.Context, session *sessions.Session, isOAuth bool, params *SectionParams) string {
 	isCron := session != nil && strings.HasPrefix(session.Key, CronSessionKeyPrefix)
 
-	// Build the priority-tagged section list. Order within each priority is preserved.
-	allSections := pb.buildSectionList(ctx, session, isOAuth, isCron)
+	// Build the priority-tagged section list using the provided params.
+	allSections := pb.buildSectionListWithParams(ctx, session, isOAuth, isCron, params)
 
 	// Determine context window from session model.
 	model := ""
@@ -229,7 +238,11 @@ func (pb *PromptBuilder) buildFullPrompt(ctx context.Context, session *sessions.
 // buildSectionList returns all prompt sections tagged with priorities.
 // Sections are ordered by priority (1 first), preserving relative order within each priority.
 func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions.Session, isOAuth, isCron bool) []promptSection {
-	params := pb.sectionParams
+	return pb.buildSectionListWithParams(ctx, session, isOAuth, isCron, pb.sectionParams)
+}
+
+// buildSectionListWithParams returns all prompt sections using the provided params.
+func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session *sessions.Session, isOAuth, isCron bool, params *SectionParams) []promptSection {
 
 	// Define all sections with priorities.
 	// P1=critical (never dropped), P2=important for SRE value, P3=enhances behavior, P4=cosmetic/optional.

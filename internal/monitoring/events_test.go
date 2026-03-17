@@ -2,6 +2,7 @@ package monitoring
 
 import (
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 )
@@ -610,5 +611,49 @@ func TestGenerateEventID(t *testing.T) {
 	// Should start with expected prefix
 	if len(id1) < 4 || id1[:4] != "evt_" {
 		t.Errorf("generateEventID() should start with 'evt_', got %s", id1)
+	}
+}
+
+func TestMemoryEventStore_ConcurrentAccess(t *testing.T) {
+	store := NewMemoryEventStore(100)
+
+	var wg sync.WaitGroup
+	workers := 20
+	opsPerWorker := 50
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < opsPerWorker; j++ {
+				switch j % 4 {
+				case 0:
+					event := NewHeartbeatEvent(EventTypeHeartbeat, SeverityInfo, "concurrent test", "test")
+					store.Store(event)
+				case 1:
+					store.Query(EventFilter{Type: EventTypeHeartbeat})
+				case 2:
+					store.Count(EventFilter{})
+				case 3:
+					if j%20 == 3 {
+						store.Clear()
+					} else {
+						store.Query(EventFilter{Source: "test"})
+					}
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify store is in a consistent state after concurrent operations.
+	count, err := store.Count(EventFilter{})
+	if err != nil {
+		t.Errorf("Count after concurrent access failed: %v", err)
+	}
+	// Count should be non-negative
+	if count < 0 {
+		t.Errorf("negative count after concurrent access: %d", count)
 	}
 }

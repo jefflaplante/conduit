@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"context"
@@ -24,6 +25,7 @@ type AnthropicProvider struct {
 	authCfg *config.AuthConfig
 	client  *http.Client
 	isOAuth bool
+	oauthMu sync.Mutex // protects apiKey, authCfg fields during OAuth refresh
 }
 
 // isOAuthToken detects if the token is an OAuth token (Pro/Max subscription)
@@ -166,9 +168,14 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
+	// Read apiKey under lock to avoid racing with refreshOAuthToken
+	a.oauthMu.Lock()
+	currentKey := a.apiKey
+	a.oauthMu.Unlock()
+
 	// Use OAuth Bearer token or fall back to API key
 	if a.isOAuth {
-		httpReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+		httpReq.Header.Set("Authorization", "Bearer "+currentKey)
 		// Required headers for OAuth tokens - must match Claude Code exactly
 		httpReq.Header.Set("accept", "application/json")
 		httpReq.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14")
@@ -177,7 +184,7 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 		httpReq.Header.Set("x-app", "cli")
 	} else {
 		httpReq.Header.Set("Accept", "application/json")
-		httpReq.Header.Set("x-api-key", a.apiKey)
+		httpReq.Header.Set("x-api-key", currentKey)
 	}
 
 	resp, err := a.client.Do(httpReq)
@@ -390,6 +397,9 @@ func (a *AnthropicProvider) parseAnthropicUsage(resp map[string]interface{}) Usa
 
 // refreshOAuthToken refreshes the OAuth token if needed.
 func (a *AnthropicProvider) refreshOAuthToken() error {
+	a.oauthMu.Lock()
+	defer a.oauthMu.Unlock()
+
 	if a.authCfg == nil || a.authCfg.Type != "oauth" || a.authCfg.RefreshToken == "" {
 		return nil // No refresh needed for API key auth
 	}
