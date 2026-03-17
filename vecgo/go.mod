@@ -1,6 +1,8 @@
 module github.com/jefflaplante/vecgo
 
-go 1.24.13
+go 1.24
+
+toolchain go1.24.13
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
