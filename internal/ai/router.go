@@ -436,6 +436,7 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 		Tools:     tools,
 		MaxTokens: 4000,
 	}
+	trimRequestToFitContext(req)
 
 	start := time.Now()
 	response, err := provider.GenerateResponse(ctx, req)
@@ -524,6 +525,7 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 		Tools:     tools,
 		MaxTokens: 4000,
 	}
+	trimRequestToFitContext(req)
 
 	// Get initial AI response
 	start := time.Now()
@@ -668,6 +670,7 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		Tools:     tools,
 		MaxTokens: 4000,
 	}
+	trimRequestToFitContext(req)
 
 	// Call streaming API via the provider-agnostic interface
 	response, err := streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)

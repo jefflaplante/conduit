@@ -193,7 +193,7 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		}
 
 		log.Printf("Error generating AI response for WS client: %v", err)
-		g.sendErrorToClient(client, session.Key, "ai_error", "Failed to generate response")
+		g.sendErrorToClient(client, session.Key, "ai_error", ai.UserFriendlyError(err))
 
 		// Send StreamEnd with empty content to signal completion
 		g.sendToClient(client, &protocol.StreamEnd{
