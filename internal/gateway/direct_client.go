@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -54,6 +55,9 @@ type DirectClient struct {
 	// Active request tracking for /stop
 	activeRequests   map[string]context.CancelFunc
 	activeRequestsMu sync.RWMutex
+
+	// Dropped message tracking
+	droppedMessages atomic.Int64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -132,8 +136,14 @@ func (c *DirectClient) send(msg tea.Msg) {
 	select {
 	case c.inbox <- msg:
 	default:
-		log.Printf("[DirectClient] inbox full, dropping message %T", msg)
+		dropped := c.droppedMessages.Add(1)
+		log.Printf("[DirectClient] WARNING: inbox full, dropping message %T (total dropped: %d)", msg, dropped)
 	}
+}
+
+// DroppedMessages returns the total number of messages dropped due to a full inbox.
+func (c *DirectClient) DroppedMessages() int64 {
+	return c.droppedMessages.Load()
 }
 
 // SendChat processes a chat message in-process.

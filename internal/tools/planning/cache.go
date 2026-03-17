@@ -19,6 +19,7 @@ type ResultCache struct {
 	maxSize     int64
 	currentSize int64
 	mu          sync.RWMutex
+	done        chan struct{} // signals cleanup goroutine to stop
 }
 
 // CacheStorage defines the interface for cache storage backends
@@ -75,6 +76,7 @@ func NewResultCache(storage CacheStorage, maxSizeMB int) *ResultCache {
 		metrics:     &CacheMetrics{StartTime: time.Now()},
 		maxSize:     int64(maxSizeMB) * 1024 * 1024, // Convert MB to bytes
 		currentSize: 0,
+		done:        make(chan struct{}),
 	}
 
 	// Initialize with default policies
@@ -84,6 +86,11 @@ func NewResultCache(storage CacheStorage, maxSizeMB int) *ResultCache {
 	go cache.startCleanupRoutine()
 
 	return cache
+}
+
+// Close stops the cleanup goroutine and releases resources.
+func (rc *ResultCache) Close() {
+	close(rc.done)
 }
 
 // Get retrieves a cached result
@@ -489,9 +496,14 @@ func (rc *ResultCache) startCleanupRoutine() {
 	ticker := time.NewTicker(5 * time.Minute) // Clean every 5 minutes
 	defer ticker.Stop()
 
-	for range ticker.C {
-		ctx := context.Background()
-		rc.cleanupExpiredEntries(ctx)
+	for {
+		select {
+		case <-ticker.C:
+			ctx := context.Background()
+			rc.cleanupExpiredEntries(ctx)
+		case <-rc.done:
+			return
+		}
 	}
 }
 

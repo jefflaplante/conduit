@@ -100,6 +100,20 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 			}), nil
 	}
 
+	// Resolve relative paths against workspace context directory
+	path = t.resolvePath(path)
+
+	// Validate path against sandbox restrictions
+	if !t.isPathAllowed(path) {
+		return types.NewErrorResult("path_not_allowed",
+			fmt.Sprintf("Path '%s' is not allowed in sandbox", path)).
+			WithParameter("path", path).
+			WithSuggestions([]string{
+				"Use a path within the allowed sandbox directories",
+				"Check workspace configuration if using relative paths",
+			}), nil
+	}
+
 	// Check if file exists with rich error
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return types.NewErrorResult("file_not_found",
@@ -370,6 +384,68 @@ func countOccurrences(haystack, needle string) int {
 	}
 
 	return strings.Count(fuzzyHaystack, fuzzyNeedle)
+}
+
+// resolvePath resolves relative paths against workspace context directory
+func (t *EditTool) resolvePath(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+
+	// Try to get workspace context directory from config
+	if t.services != nil && t.services.ConfigMgr != nil {
+		contextDir := t.services.ConfigMgr.Workspace.ContextDir
+		if contextDir != "" {
+			return filepath.Join(contextDir, path)
+		}
+		workspaceDir := t.services.ConfigMgr.Tools.Sandbox.WorkspaceDir
+		if workspaceDir != "" {
+			return filepath.Join(workspaceDir, path)
+		}
+	}
+
+	return path
+}
+
+// isPathAllowed checks if the resolved path is within allowed sandbox directories
+func (t *EditTool) isPathAllowed(path string) bool {
+	if t.services == nil || t.services.ConfigMgr == nil {
+		return true // No sandbox config, allow all
+	}
+
+	sandboxCfg := t.services.ConfigMgr.Tools.Sandbox
+	if sandboxCfg.WorkspaceDir == "" && len(sandboxCfg.AllowedPaths) == 0 {
+		return true // No sandbox restrictions configured
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	absPath = filepath.Clean(absPath)
+
+	// Check against allowed paths
+	for _, allowedPath := range sandboxCfg.AllowedPaths {
+		cleanAllowed := filepath.Clean(allowedPath)
+		rel, err := filepath.Rel(cleanAllowed, absPath)
+		if err != nil {
+			continue
+		}
+		if !strings.HasPrefix(rel, "..") {
+			return true
+		}
+	}
+
+	// Check against workspace directory
+	if sandboxCfg.WorkspaceDir != "" {
+		cleanWorkspace := filepath.Clean(sandboxCfg.WorkspaceDir)
+		rel, err := filepath.Rel(cleanWorkspace, absPath)
+		if err == nil && !strings.HasPrefix(rel, "..") {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (t *EditTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {

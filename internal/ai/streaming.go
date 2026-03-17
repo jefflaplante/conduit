@@ -240,6 +240,17 @@ func (a *AnthropicProvider) parseSSEStream(body io.Reader, onDelta StreamCallbac
 	}
 
 	if err := scanner.Err(); err != nil {
+		// Return partial response with the error so callers know what was received.
+		// The Partial flag indicates the response is incomplete.
+		partialContent := contentBuilder.String()
+		if partialContent != "" || len(toolCalls) > 0 {
+			return &GenerateResponse{
+				Content:   partialContent,
+				ToolCalls: toolCalls,
+				Usage:     usage,
+				Partial:   true,
+			}, fmt.Errorf("error reading stream: %w", err)
+		}
 		return nil, fmt.Errorf("error reading stream: %w", err)
 	}
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -13,6 +14,25 @@ import (
 
 	"conduit/internal/tools/types"
 )
+
+// unifiHTTPClient returns an HTTP client configured for UniFi API access.
+// TLS verification is enabled by default. Set UNIFI_INSECURE_TLS=true to
+// skip verification (e.g., for self-signed certs on local UniFi controllers).
+func unifiHTTPClient() *http.Client {
+	tlsConfig := &tls.Config{}
+
+	if os.Getenv("UNIFI_INSECURE_TLS") == "true" {
+		log.Printf("[UniFi] WARNING: TLS certificate verification disabled via UNIFI_INSECURE_TLS=true")
+		tlsConfig.InsecureSkipVerify = true
+	}
+
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+		},
+		Timeout: 10 * time.Second,
+	}
+}
 
 // UniFiTool implements UniFi Network/Protect API functionality
 type UniFiTool struct {
@@ -134,12 +154,7 @@ func (t *UniFiTool) getSnapshot(ctx context.Context, cameraName string) (*types.
 	// Get snapshot from the camera
 	snapshotURL := fmt.Sprintf("%s/proxy/protect/api/cameras/%s/snapshot", unvrURL, cameraID)
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-		Timeout: 10 * time.Second,
-	}
+	client := unifiHTTPClient()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", snapshotURL, nil)
 	if err != nil {
@@ -247,12 +262,7 @@ func (t *UniFiTool) getStatus(ctx context.Context, system string) (*types.ToolRe
 }
 
 func (t *UniFiTool) fetchProtectCameras(unvrURL, apiKey string) ([]map[string]interface{}, error) {
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-		Timeout: 10 * time.Second,
-	}
+	client := unifiHTTPClient()
 
 	url := fmt.Sprintf("%s/proxy/protect/api/cameras", unvrURL)
 	req, err := http.NewRequest("GET", url, nil)
