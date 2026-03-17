@@ -32,6 +32,9 @@ type SchedulerInterface interface {
 
 	// Status returns scheduler status
 	Status() map[string]interface{}
+
+	// ReloadJobs forces an immediate reload of jobs from the jobs file
+	ReloadJobs() error
 }
 
 // Verify that Scheduler implements SchedulerInterface

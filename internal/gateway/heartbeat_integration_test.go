@@ -217,6 +217,10 @@ func (m *mockScheduler) Status() map[string]interface{} {
 	}
 }
 
+func (m *mockScheduler) ReloadJobs() error {
+	return nil
+}
+
 // mockMetricsCollector implements monitoring.MetricsCollectorInterface
 type mockMetricsCollector struct {
 	totalJobs        int
