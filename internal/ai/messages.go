@@ -2,6 +2,7 @@ package ai
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"conduit/internal/config"
@@ -176,6 +177,94 @@ func (r *Router) getRecentMessagesTokenAware(session *sessions.Session) ([]sessi
 		len(selected), estimatedTokens, session.Key)
 
 	return selected, nil
+}
+
+// trimRequestToFitContext estimates total token usage for a GenerateRequest and
+// drops the oldest conversation history messages until the request fits within
+// the model's context window. The system prompt (first message) and the current
+// user message (last message) are always preserved.
+func trimRequestToFitContext(req *GenerateRequest) {
+	if req == nil || len(req.Messages) < 2 {
+		return
+	}
+
+	contextWindow := ContextWindowForModel(req.Model)
+	charsPerToken := 4 // same estimate used elsewhere
+
+	// Reserve space for model output
+	outputReserve := req.MaxTokens
+	if outputReserve <= 0 {
+		outputReserve = 4000
+	}
+
+	// Budget available for the request (prompt tokens)
+	budget := contextWindow - outputReserve
+
+	// Estimate tool definition tokens (~JSON overhead per tool)
+	toolChars := 0
+	for _, t := range req.Tools {
+		toolChars += len(t.Name) + len(t.Description) + 200 // rough JSON overhead
+	}
+	budgetChars := budget*charsPerToken - toolChars
+
+	if budgetChars <= 0 {
+		// Context window is too small even without history — nothing we can do
+		return
+	}
+
+	// Estimate total message chars
+	totalChars := 0
+	for _, m := range req.Messages {
+		totalChars += len(m.Role) + len(m.Content) + 10
+	}
+
+	if totalChars <= budgetChars {
+		return // fits fine
+	}
+
+	// Need to trim. Preserve first message (system prompt) and last message (user input).
+	// Drop oldest history messages (indices 1..len-2) until it fits.
+	systemMsg := req.Messages[0]
+	userMsg := req.Messages[len(req.Messages)-1]
+	history := req.Messages[1 : len(req.Messages)-1]
+
+	// Chars for the preserved messages
+	fixedChars := len(systemMsg.Role) + len(systemMsg.Content) + 10 +
+		len(userMsg.Role) + len(userMsg.Content) + 10
+	availableChars := budgetChars - fixedChars
+
+	if availableChars <= 0 {
+		// System prompt + user message alone exceed budget — keep them anyway
+		req.Messages = []ChatMessage{systemMsg, userMsg}
+		log.Printf("[Router] Context trim: dropped all %d history messages (system+user alone ~%d tokens, budget %d)",
+			len(history), fixedChars/charsPerToken, budget)
+		return
+	}
+
+	// Keep history messages from newest end
+	keptChars := 0
+	keepFrom := len(history)
+	for i := len(history) - 1; i >= 0; i-- {
+		msgChars := len(history[i].Role) + len(history[i].Content) + 10
+		if keptChars+msgChars > availableChars {
+			break
+		}
+		keptChars += msgChars
+		keepFrom = i
+	}
+
+	dropped := keepFrom
+	if dropped > 0 {
+		trimmed := make([]ChatMessage, 0, 1+len(history)-dropped+1)
+		trimmed = append(trimmed, systemMsg)
+		trimmed = append(trimmed, history[keepFrom:]...)
+		trimmed = append(trimmed, userMsg)
+		req.Messages = trimmed
+
+		estimatedTokens := (fixedChars + keptChars + toolChars) / charsPerToken
+		log.Printf("[Router] Context trim: dropped %d oldest history messages to fit %s context (%d tokens, ~%d token estimate, budget %d)",
+			dropped, req.Model, contextWindow, estimatedTokens, budget)
+	}
 }
 
 // getHistoryConfig returns the history configuration, with defaults if not set

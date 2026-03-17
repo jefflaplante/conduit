@@ -265,7 +265,7 @@ func (c *DirectClient) streamChatWithID(session *sessions.Session, text, request
 			return
 		}
 		log.Printf("[DirectClient] AI error: %v", err)
-		c.send(tui.ErrorMsg{SessionKey: session.Key, RequestID: requestID, Code: "ai_error", Message: "Failed to generate response"})
+		c.send(tui.ErrorMsg{SessionKey: session.Key, RequestID: requestID, Code: "ai_error", Message: ai.UserFriendlyError(err)})
 		c.send(tui.StreamEndMsg{
 			SessionKey: session.Key,
 			RequestID:  requestID,
