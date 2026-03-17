@@ -11,6 +11,7 @@ import (
 
 // mockCollector implements a test metrics collector
 type mockCollector struct {
+	mu            sync.RWMutex
 	lastActivity  time.Time
 	collectError  error
 	metrics       *GatewayMetrics
@@ -25,14 +26,20 @@ func newMockCollector() *mockCollector {
 }
 
 func (m *mockCollector) IsIdle(duration time.Duration) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return time.Since(m.lastActivity) > duration
 }
 
 func (m *mockCollector) MarkActivity() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.lastActivity = time.Now()
 }
 
 func (m *mockCollector) GetLastActivityTime() time.Time {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.lastActivity
 }
 

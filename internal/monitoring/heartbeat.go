@@ -197,13 +197,14 @@ func (h *HeartbeatService) performHeartbeat(ctx context.Context) {
 	// Update heartbeat tracking
 	h.mutex.Lock()
 	h.heartbeatCount++
+	currentCount := h.heartbeatCount
 	h.lastHeartbeat = time.Now()
 	h.mutex.Unlock()
 
 	// Log metrics at debug level
 	if h.shouldLog("debug") {
 		h.logDebug("Heartbeat #%d: %d active sessions, %d goroutines, %.1f MB memory",
-			h.heartbeatCount,
+			currentCount,
 			metrics.ActiveSessions,
 			metrics.GoroutineCount,
 			metrics.MemoryUsageMB,
@@ -212,7 +213,7 @@ func (h *HeartbeatService) performHeartbeat(ctx context.Context) {
 
 	// Emit heartbeat event if enabled
 	if h.config.EnableEvents {
-		if err := h.emitHeartbeatEvent(ctx, metrics); err != nil {
+		if err := h.emitHeartbeatEvent(ctx, metrics, currentCount); err != nil {
 			h.recordError(fmt.Errorf("failed to emit heartbeat event: %w", err))
 		}
 	}
@@ -235,19 +236,19 @@ func (h *HeartbeatService) performHeartbeat(ctx context.Context) {
 }
 
 // emitHeartbeatEvent creates and stores a heartbeat event
-func (h *HeartbeatService) emitHeartbeatEvent(ctx context.Context, metrics *GatewayMetrics) error {
+func (h *HeartbeatService) emitHeartbeatEvent(ctx context.Context, metrics *GatewayMetrics, count int64) error {
 	if h.eventStore == nil {
 		return nil // No event store configured
 	}
 
 	// Create heartbeat event with metrics
 	event := NewHeartbeatEventWithMetrics(metrics,
-		fmt.Sprintf("Heartbeat #%d", h.heartbeatCount),
+		fmt.Sprintf("Heartbeat #%d", count),
 		"heartbeat_service")
 
 	// Add context information
 	event.AddContext("interval_seconds", fmt.Sprintf("%d", h.config.IntervalSeconds))
-	event.AddContext("heartbeat_count", fmt.Sprintf("%d", h.heartbeatCount))
+	event.AddContext("heartbeat_count", fmt.Sprintf("%d", count))
 
 	// Store the event
 	return h.eventStore.Store(event)
