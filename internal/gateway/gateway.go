@@ -86,9 +86,10 @@ type Gateway struct {
 	ftsSearcher *fts.Searcher
 
 	// Search database (separate from gateway.db)
-	searchDB      *searchdb.SearchDB
-	beadsIndexer  *searchdb.BeadsIndexer
-	messageSyncer *searchdb.MessageSyncer
+	searchDB       *searchdb.SearchDB
+	beadsIndexer   *searchdb.BeadsIndexer
+	messageSyncer  *searchdb.MessageSyncer
+	asyncMsgSyncer *searchdb.AsyncMessageSyncer
 
 	// Vector/semantic search (optional)
 	vectorService *vecgoservice.Service
@@ -411,9 +412,10 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 			// Initialize message syncer and wire callbacks
 			gw.messageSyncer = searchdb.NewMessageSyncer(sdb.DB(), sessionStore.DB())
+			gw.asyncMsgSyncer = searchdb.NewAsyncMessageSyncer(gw.messageSyncer, 256)
 			sessionStore.SetMessageCallbacks(
-				gw.messageSyncer.MessageAddedCallback(),
-				gw.messageSyncer.SessionClearedCallback(),
+				gw.asyncMsgSyncer.MessageAddedCallback(),       // non-blocking
+				gw.messageSyncer.SessionClearedCallback(), // session clear stays synchronous (rare)
 			)
 
 			// Run initial sync operations
@@ -898,6 +900,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Stop rate limiting middleware
 	if g.rateLimitMiddleware != nil {
 		g.rateLimitMiddleware.Stop()
+	}
+
+	// Drain async message syncer before closing search DB
+	if g.asyncMsgSyncer != nil {
+		g.asyncMsgSyncer.Close()
 	}
 
 	// Close vector search service
@@ -1428,15 +1435,18 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 
 		// Persist usage to session context for /context command
 		if usage := convResponse.GetUsage(); usage != nil {
-			_ = g.sessions.SetSessionContext(session.Key, "last_prompt_tokens", strconv.Itoa(usage.PromptTokens))
-			_ = g.sessions.SetSessionContext(session.Key, "last_completion_tokens", strconv.Itoa(usage.CompletionTokens))
-			_ = g.sessions.SetSessionContext(session.Key, "last_total_tokens", strconv.Itoa(usage.TotalTokens))
+			batch := map[string]string{
+				"last_prompt_tokens":     strconv.Itoa(usage.PromptTokens),
+				"last_completion_tokens": strconv.Itoa(usage.CompletionTokens),
+				"last_total_tokens":      strconv.Itoa(usage.TotalTokens),
+			}
 
 			// Proactive context window warning
 			if warning := contextWarningIfNeeded(session, usage.PromptTokens, modelOverride); warning.Text != "" {
 				responseContent += warning.Text
-				_ = g.sessions.SetSessionContext(session.Key, warning.Key, "true")
+				batch[warning.Key] = "true"
 			}
+			_ = g.sessions.SetSessionContextBatch(session.Key, batch)
 		}
 
 		// Check for silent response tokens (NO_REPLY, HEARTBEAT_OK)

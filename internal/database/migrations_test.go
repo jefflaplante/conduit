@@ -2,7 +2,9 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -14,6 +16,19 @@ func setupTestDB(t *testing.T) *sql.DB {
 	dbPath := filepath.Join(tmpDir, "test.db")
 
 	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open test database: %v", err)
+	}
+
+	return db
+}
+
+// setupTestDBWithDSN creates a temporary database using BuildDSN
+func setupTestDBWithDSN(t *testing.T) *sql.DB {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	db, err := sql.Open("sqlite", BuildDSN(dbPath))
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
 	}
@@ -209,4 +224,90 @@ func TestGetMigrations(t *testing.T) {
 			t.Errorf("Migration %s has empty SQL", migration.Name)
 		}
 	}
+}
+
+func TestBuildDSN(t *testing.T) {
+	dsn := BuildDSN("/tmp/test.db")
+
+	// Must start with file: scheme
+	if dsn[:5] != "file:" {
+		t.Errorf("DSN should start with file:, got %s", dsn)
+	}
+
+	// Must contain key pragmas
+	for _, want := range []string{"busy_timeout", "journal_mode", "synchronous", "cache_size", "foreign_keys"} {
+		if !containsSubstring(dsn, want) {
+			t.Errorf("DSN missing pragma %s: %s", want, dsn)
+		}
+	}
+
+	// Must contain _txlock=immediate
+	if !containsSubstring(dsn, "_txlock=immediate") {
+		t.Errorf("DSN missing _txlock=immediate: %s", dsn)
+	}
+}
+
+func TestPragmasAppliedToAllPoolConnections(t *testing.T) {
+	db := setupTestDBWithDSN(t)
+	defer db.Close()
+
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
+
+	// Force 4 concurrent connections and verify each has busy_timeout=5000
+	var wg sync.WaitGroup
+	errs := make(chan error, 4)
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var bt int
+			if err := db.QueryRow("PRAGMA busy_timeout").Scan(&bt); err != nil {
+				errs <- err
+				return
+			}
+			if bt != 5000 {
+				errs <- fmt.Errorf("busy_timeout=%d, want 5000", bt)
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+func TestConfigureDatabaseWithDSN(t *testing.T) {
+	db := setupTestDBWithDSN(t)
+	defer db.Close()
+
+	if err := ConfigureDatabase(db); err != nil {
+		t.Fatalf("ConfigureDatabase failed: %v", err)
+	}
+
+	// Verify migrations ran
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil {
+		t.Fatalf("Failed to count migrations: %v", err)
+	}
+	if count != len(GetMigrations()) {
+		t.Errorf("Expected %d migrations, got %d", len(GetMigrations()), count)
+	}
+}
+
+func containsSubstring(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsHelper(s, sub))
+}
+
+func containsHelper(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }

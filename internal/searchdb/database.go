@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"conduit/internal/database"
 	_ "modernc.org/sqlite"
 )
 
@@ -30,7 +31,7 @@ func NewSearchDB(searchPath, gatewayDBPath string, gatewayDB *sql.DB) (*SearchDB
 		searchPath = deriveSearchDBPath(gatewayDBPath)
 	}
 
-	db, err := sql.Open("sqlite", searchPath)
+	db, err := sql.Open("sqlite", database.BuildDSN(searchPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open search database: %w", err)
 	}
@@ -41,10 +42,7 @@ func NewSearchDB(searchPath, gatewayDBPath string, gatewayDB *sql.DB) (*SearchDB
 		gatewayDB: gatewayDB,
 	}
 
-	if err := sdb.configure(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to configure search database: %w", err)
-	}
+	sdb.configurePool()
 
 	if err := sdb.runMigrations(); err != nil {
 		db.Close()
@@ -90,29 +88,11 @@ func (s *SearchDB) IsAvailable() bool {
 	return s.db.Ping() == nil
 }
 
-// configure applies SQLite optimizations matching gateway.db settings.
-func (s *SearchDB) configure() error {
-	// Configure connection pool for SQLite
+// configurePool sets connection pool limits. PRAGMAs come from the DSN.
+func (s *SearchDB) configurePool() {
 	s.db.SetMaxOpenConns(4)
 	s.db.SetMaxIdleConns(2)
 	s.db.SetConnMaxLifetime(0)
-
-	// Apply SQLite performance configurations
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA busy_timeout=5000",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA cache_size=10000",
-		"PRAGMA foreign_keys=ON",
-	}
-
-	for _, pragma := range pragmas {
-		if _, err := s.db.Exec(pragma); err != nil {
-			return fmt.Errorf("failed to apply pragma '%s': %w", pragma, err)
-		}
-	}
-
-	return nil
 }
 
 // deriveSearchDBPath creates a search.db path from the gateway.db path.

@@ -197,16 +197,37 @@ func (t *DatabaseMaintenanceTask) copyFileBackup(backupPath string) TaskResult {
 	}
 }
 
-// performVacuum executes the VACUUM operation
+// performVacuum runs a WAL checkpoint first (lighter), then attempts VACUUM.
+// If VACUUM fails with a busy error, the checkpoint already reclaimed space.
 func (t *DatabaseMaintenanceTask) performVacuum(ctx context.Context) TaskResult {
 	// Get initial database size
 	initialSize, _ := t.getDatabaseSize()
 
+	// Run WAL checkpoint first — lighter alternative that reclaims WAL space
+	t.logger.Println("[DatabaseMaintenance] Running WAL checkpoint...")
+	if _, err := t.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		t.logger.Printf("[DatabaseMaintenance] WAL checkpoint warning: %v", err)
+	}
+
 	t.logger.Println("[DatabaseMaintenance] Starting VACUUM operation...")
 
-	// Execute VACUUM
-	_, err := t.db.ExecContext(ctx, "VACUUM")
+	// Use a 30-second timeout for VACUUM to avoid blocking indefinitely
+	vacuumCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	_, err := t.db.ExecContext(vacuumCtx, "VACUUM")
 	if err != nil {
+		// If VACUUM fails due to busy/timeout, WAL checkpoint already ran — not fatal
+		errMsg := err.Error()
+		if ctx.Err() != nil || vacuumCtx.Err() != nil ||
+			contains(errMsg, "database is locked") ||
+			contains(errMsg, "SQLITE_BUSY") {
+			t.logger.Printf("[DatabaseMaintenance] VACUUM skipped (database busy), WAL checkpoint already ran")
+			return TaskResult{
+				Success: true,
+				Message: "VACUUM skipped (busy), WAL checkpoint completed",
+			}
+		}
 		return TaskResult{
 			Success: false,
 			Message: "VACUUM operation failed",
@@ -230,6 +251,15 @@ func (t *DatabaseMaintenanceTask) performVacuum(ctx context.Context) TaskResult 
 		SpaceReclaimed: spaceReclaimed,
 		Message:        "VACUUM operation completed successfully",
 	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
 
 // optimizeIndexes analyzes and optimizes database indexes

@@ -460,6 +460,106 @@ func TestSetSessionContext_ConcurrentWrites(t *testing.T) {
 	}
 }
 
+func TestSetSessionContextBatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	session, err := store.GetOrCreateSession("user1", "channel1")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	// Batch set 5 keys
+	batch := map[string]string{
+		"last_prompt_tokens":     "100",
+		"last_completion_tokens": "200",
+		"last_total_tokens":      "300",
+		"session_total_cost":     "0.005000",
+		"session_request_count":  "1",
+	}
+	if err := store.SetSessionContextBatch(session.Key, batch); err != nil {
+		t.Fatalf("SetSessionContextBatch failed: %v", err)
+	}
+
+	// Verify all keys are present
+	updated, err := store.GetSession(session.Key)
+	if err != nil {
+		t.Fatalf("Failed to get session: %v", err)
+	}
+	for k, want := range batch {
+		if got := updated.Context[k]; got != want {
+			t.Errorf("Key %s: got %q, want %q", k, got, want)
+		}
+	}
+}
+
+func TestSetSessionContextBatch_Empty(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Empty map should be a no-op
+	if err := store.SetSessionContextBatch("any-key", map[string]string{}); err != nil {
+		t.Fatalf("Expected no error for empty batch, got: %v", err)
+	}
+}
+
+func TestIncrementMessageCount(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	session, err := store.GetOrCreateSession("user1", "channel1")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	// Add 5 messages
+	for i := 0; i < 5; i++ {
+		_, err = store.AddMessage(session.Key, "user", fmt.Sprintf("msg %d", i), nil)
+		if err != nil {
+			t.Fatalf("Failed to add message: %v", err)
+		}
+	}
+
+	s, _ := store.GetSession(session.Key)
+	if s.MessageCount != 5 {
+		t.Errorf("Expected 5 messages, got %d", s.MessageCount)
+	}
+
+	// Clear messages and add 2 more
+	if err := store.ClearSessionMessages(session.Key); err != nil {
+		t.Fatalf("Failed to clear messages: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		_, err = store.AddMessage(session.Key, "user", fmt.Sprintf("new msg %d", i), nil)
+		if err != nil {
+			t.Fatalf("Failed to add message: %v", err)
+		}
+	}
+
+	s, _ = store.GetSession(session.Key)
+	if s.MessageCount != 2 {
+		t.Errorf("After clear + 2 adds, expected 2 messages, got %d", s.MessageCount)
+	}
+}
+
 func TestSearchMessagesFTSTriggers(t *testing.T) {
 	// This test verifies that FTS triggers keep the index in sync
 	tmpDir := t.TempDir()

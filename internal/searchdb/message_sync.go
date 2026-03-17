@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"conduit/internal/database"
 )
 
 // MessageSyncer handles cross-database synchronization of messages
@@ -37,11 +39,13 @@ func (s *MessageSyncer) SyncSingleMessage(id, sessionKey, role, content string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Use INSERT OR REPLACE to handle both new and updated messages
-	_, err := s.searchDB.Exec(
-		`INSERT INTO messages_fts(message_id, session_key, role, content) VALUES (?, ?, ?, ?)`,
-		id, sessionKey, role, content,
-	)
+	err := database.RetryOnBusy(2, func() error {
+		_, err := s.searchDB.Exec(
+			`INSERT INTO messages_fts(message_id, session_key, role, content) VALUES (?, ?, ?, ?)`,
+			id, sessionKey, role, content,
+		)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("failed to sync message %s: %w", id, err)
 	}
@@ -233,4 +237,59 @@ func (s *MessageSyncer) SessionClearedCallback() func(sessionKey string) {
 			log.Printf("Warning: MessageSyncer session clear callback failed: %v", err)
 		}
 	}
+}
+
+// syncMessage is a message queued for async sync.
+type syncMessage struct {
+	id, sessionKey, role, content string
+}
+
+// AsyncMessageSyncer wraps MessageSyncer with a buffered channel so the
+// onMessageAdded callback never blocks the chat response path.
+type AsyncMessageSyncer struct {
+	syncer *MessageSyncer
+	queue  chan syncMessage
+	done   chan struct{}
+}
+
+// NewAsyncMessageSyncer creates an AsyncMessageSyncer with the given buffer size.
+func NewAsyncMessageSyncer(syncer *MessageSyncer, bufferSize int) *AsyncMessageSyncer {
+	if bufferSize <= 0 {
+		bufferSize = 256
+	}
+	a := &AsyncMessageSyncer{
+		syncer: syncer,
+		queue:  make(chan syncMessage, bufferSize),
+		done:   make(chan struct{}),
+	}
+	go a.drain()
+	return a
+}
+
+// drain processes queued messages until the channel is closed.
+func (a *AsyncMessageSyncer) drain() {
+	defer close(a.done)
+	for msg := range a.queue {
+		if err := a.syncer.SyncSingleMessage(msg.id, msg.sessionKey, msg.role, msg.content); err != nil {
+			log.Printf("Warning: async message sync failed for %s: %v", msg.id, err)
+		}
+	}
+}
+
+// MessageAddedCallback returns a non-blocking callback for session store.
+// If the queue is full the message is dropped (IncrementalSync catches it later).
+func (a *AsyncMessageSyncer) MessageAddedCallback() func(id, sessionKey, role, content string) {
+	return func(id, sessionKey, role, content string) {
+		select {
+		case a.queue <- syncMessage{id, sessionKey, role, content}:
+		default:
+			log.Printf("Warning: async message sync queue full, dropping message %s (incremental sync will catch it)", id)
+		}
+	}
+}
+
+// Close closes the queue and waits for all pending messages to be processed.
+func (a *AsyncMessageSyncer) Close() {
+	close(a.queue)
+	<-a.done
 }
