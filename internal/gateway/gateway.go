@@ -1115,7 +1115,10 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 	}
 }
 
-// handleClientWrite handles outgoing messages to a WebSocket client
+// handleClientWrite handles outgoing messages to a WebSocket client.
+// It monitors both the client's Send channel and the gateway's lifecycle context (g.ctx).
+// When the gateway shuts down, it sends a WebSocket close message and exits,
+// preventing goroutine leaks from long-lived connections.
 func (g *Gateway) handleClientWrite(client *Client) {
 	defer client.Conn.Close()
 
@@ -1123,6 +1126,7 @@ func (g *Gateway) handleClientWrite(client *Client) {
 		select {
 		case message, ok := <-client.Send:
 			if !ok {
+				// Send channel closed; send WebSocket close frame and exit.
 				client.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -1131,6 +1135,11 @@ func (g *Gateway) handleClientWrite(client *Client) {
 				log.Printf("WebSocket write error: %v", err)
 				return
 			}
+		case <-g.ctx.Done():
+			// Gateway is shutting down; send close frame and exit.
+			client.Conn.WriteMessage(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"))
+			return
 		}
 	}
 }

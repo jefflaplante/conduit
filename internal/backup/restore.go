@@ -207,7 +207,13 @@ func validateTarEntry(hdr *tar.Header, targetDir, dest string) error {
 	return nil
 }
 
+// maxExtractFileSize is the maximum allowed size for a single extracted file (1 GB).
+// This prevents decompression bomb attacks where a small compressed file expands to
+// an extremely large file on disk.
+const maxExtractFileSize = 1 << 30 // 1 GB
+
 // extractFile writes a tar entry to disk, creating parent directories as needed.
+// File size is capped at the smaller of hdr.Size and maxExtractFileSize.
 func extractFile(tr *tar.Reader, hdr *tar.Header, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
@@ -218,14 +224,26 @@ func extractFile(tr *tar.Reader, hdr *tar.Header, dest string) error {
 		mode = 0644
 	}
 
+	// Determine the size limit: use the smaller of the declared size and our cap
+	limit := int64(maxExtractFileSize)
+	if hdr.Size > 0 && hdr.Size < limit {
+		limit = hdr.Size
+	}
+
 	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	if _, err := io.Copy(f, tr); err != nil {
+	// Use LimitReader to prevent decompression bombs.
+	// Read limit+1 bytes so we can detect if the file exceeds the limit.
+	n, err := io.Copy(f, io.LimitReader(tr, limit+1))
+	if err != nil {
 		return err
+	}
+	if n > limit {
+		return fmt.Errorf("file %s exceeds size limit (%d bytes > %d byte cap)", hdr.Name, n, limit)
 	}
 	return nil
 }

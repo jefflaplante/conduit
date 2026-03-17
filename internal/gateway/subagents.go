@@ -16,6 +16,12 @@ func (g *Gateway) SpawnSubAgent(ctx context.Context, task, agentId, model, label
 	return g.SpawnSubAgentWithCallback(ctx, task, agentId, model, label, timeoutSeconds, "", "", false)
 }
 
+// deriveSubAgentContext creates a sub-agent context derived from the parent context
+// with the specified timeout. This ensures parent cancellation propagates to sub-agents.
+func deriveSubAgentContext(parentCtx context.Context, timeoutSeconds int) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parentCtx, time.Duration(timeoutSeconds)*time.Second)
+}
+
 // SpawnSubAgentWithCallback spawns a sub-agent with optional result announcement
 func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, parentChannelID, parentUserID string, announce bool) (string, error) {
 	// Create a unique session key for the sub-agent
@@ -29,7 +35,7 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 
 	// Run the sub-agent in a goroutine
 	go func() {
-		subCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+		subCtx, cancel := deriveSubAgentContext(ctx, timeoutSeconds)
 		defer cancel()
 
 		log.Printf("[SubAgent] Starting task: %s (session: %s, announce: %v)", task, session.Key, announce)
