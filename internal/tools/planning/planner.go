@@ -275,11 +275,11 @@ func (p *ExecutionPlanner) generateFallbacks(call ai.ToolCall) []ExecutionStep {
 
 	// Tool-specific fallback strategies
 	switch call.Name {
-	case "web_search":
+	case "WebSearch":
 		// Fallback to different search engines or reduced result count
 		fallback := ExecutionStep{
 			ID:       fmt.Sprintf("%s_fallback_1", call.ID),
-			ToolName: "web_search",
+			ToolName: "WebSearch",
 			Args:     p.createFallbackArgs(call.Args, "count", 5), // Reduce result count
 			Timeout:  time.Second * 15,                            // Shorter timeout
 			Retries:  1,
@@ -287,12 +287,12 @@ func (p *ExecutionPlanner) generateFallbacks(call ai.ToolCall) []ExecutionStep {
 		}
 		fallbacks = append(fallbacks, fallback)
 
-	case "web_fetch":
+	case "WebFetch":
 		// Fallback with different extraction mode
 		if _, hasMode := call.Args["extractMode"]; !hasMode {
 			fallback := ExecutionStep{
 				ID:       fmt.Sprintf("%s_fallback_1", call.ID),
-				ToolName: "web_fetch",
+				ToolName: "WebFetch",
 				Args:     p.createFallbackArgs(call.Args, "extractMode", "text"),
 				Timeout:  time.Second * 10,
 				Retries:  1,
@@ -301,7 +301,7 @@ func (p *ExecutionPlanner) generateFallbacks(call ai.ToolCall) []ExecutionStep {
 			fallbacks = append(fallbacks, fallback)
 		}
 
-	case "memory_search":
+	case "MemorySearch":
 		// Fallback with broader query
 		if query, hasQuery := call.Args["query"].(string); hasQuery && len(query) > 10 {
 			// Create simpler query by taking first few words
@@ -310,7 +310,7 @@ func (p *ExecutionPlanner) generateFallbacks(call ai.ToolCall) []ExecutionStep {
 				simpleQuery := strings.Join(words[:3], " ")
 				fallback := ExecutionStep{
 					ID:       fmt.Sprintf("%s_fallback_1", call.ID),
-					ToolName: "memory_search",
+					ToolName: "MemorySearch",
 					Args:     p.createFallbackArgs(call.Args, "query", simpleQuery),
 					Timeout:  time.Second * 5,
 					Retries:  1,
@@ -440,8 +440,8 @@ func (pr *PlanResult) ToToolResults() []*ai.ToolCall {
 // initializeDefaultProfiles sets up default tool performance profiles
 func (p *ExecutionPlanner) initializeDefaultProfiles() {
 	// Web search tool profile
-	p.toolProfiles["web_search"] = &ToolProfile{
-		Name:                 "web_search",
+	p.toolProfiles["WebSearch"] = &ToolProfile{
+		Name:                 "WebSearch",
 		AverageLatency:       time.Second * 2,
 		SuccessRate:          0.95,
 		CostPerCall:          0.005, // Relatively expensive
@@ -456,8 +456,8 @@ func (p *ExecutionPlanner) initializeDefaultProfiles() {
 	}
 
 	// Web fetch tool profile
-	p.toolProfiles["web_fetch"] = &ToolProfile{
-		Name:                 "web_fetch",
+	p.toolProfiles["WebFetch"] = &ToolProfile{
+		Name:                 "WebFetch",
 		AverageLatency:       time.Second * 3,
 		SuccessRate:          0.90,
 		CostPerCall:          0.002,
@@ -472,8 +472,8 @@ func (p *ExecutionPlanner) initializeDefaultProfiles() {
 	}
 
 	// Memory search tool profile
-	p.toolProfiles["memory_search"] = &ToolProfile{
-		Name:                 "memory_search",
+	p.toolProfiles["MemorySearch"] = &ToolProfile{
+		Name:                 "MemorySearch",
 		AverageLatency:       time.Millisecond * 500,
 		SuccessRate:          0.98,
 		CostPerCall:          0.0001, // Very cheap
@@ -488,7 +488,7 @@ func (p *ExecutionPlanner) initializeDefaultProfiles() {
 	}
 
 	// File operation tool profiles (fast and reliable)
-	for _, toolName := range []string{"read_file", "write_file", "list_files"} {
+	for _, toolName := range []string{"Read", "Write", "Glob"} {
 		p.toolProfiles[toolName] = &ToolProfile{
 			Name:                 toolName,
 			AverageLatency:       time.Millisecond * 100,
@@ -505,8 +505,8 @@ func (p *ExecutionPlanner) initializeDefaultProfiles() {
 	}
 
 	// Command execution profile (potentially slow and unreliable)
-	p.toolProfiles["exec"] = &ToolProfile{
-		Name:                 "exec",
+	p.toolProfiles["Bash"] = &ToolProfile{
+		Name:                 "Bash",
 		AverageLatency:       time.Second * 5,
 		SuccessRate:          0.85,
 		CostPerCall:          0.001,

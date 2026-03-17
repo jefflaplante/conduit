@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -401,6 +402,61 @@ func TestSearchMessages(t *testing.T) {
 
 	if len(results) > 1 {
 		t.Errorf("Expected at most 1 result with limit=1, got %d", len(results))
+	}
+}
+
+func TestSetSessionContext_ConcurrentWrites(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Limit to 1 open connection so the busy_timeout PRAGMA applies everywhere
+	// and concurrent goroutines queue up instead of getting SQLITE_BUSY.
+	store.db.SetMaxOpenConns(1)
+
+	session, err := store.GetOrCreateSession("user1", "channel1")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	// Spawn N goroutines, each setting a unique key concurrently.
+	// Because json_set is atomic per statement, no key should be lost.
+	const N = 20
+	errs := make(chan error, N)
+
+	for i := 0; i < N; i++ {
+		go func(idx int) {
+			key := fmt.Sprintf("key_%d", idx)
+			value := fmt.Sprintf("value_%d", idx)
+			errs <- store.SetSessionContext(session.Key, key, value)
+		}(i)
+	}
+
+	for i := 0; i < N; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("SetSessionContext goroutine %d failed: %v", i, err)
+		}
+	}
+
+	// Verify all keys are present
+	finalSession, err := store.GetSession(session.Key)
+	if err != nil {
+		t.Fatalf("Failed to get final session: %v", err)
+	}
+
+	for i := 0; i < N; i++ {
+		key := fmt.Sprintf("key_%d", i)
+		expected := fmt.Sprintf("value_%d", i)
+		if got, ok := finalSession.Context[key]; !ok {
+			t.Errorf("Missing key %s in context", key)
+		} else if got != expected {
+			t.Errorf("Key %s: expected %s, got %s", key, expected, got)
+		}
 	}
 }
 
