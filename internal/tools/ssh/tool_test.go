@@ -681,7 +681,7 @@ func TestSSHTool_GetUsageExamples(t *testing.T) {
 		}
 	}
 
-	expectedActions := []string{"exec", "hosts", "status", "session_start", "session_send", "session_close", "session_list"}
+	expectedActions := []string{"exec", "hosts", "status", "session_start", "session_send", "session_close", "session_list", "tunnel_create", "tunnel_list", "tunnel_close"}
 	for _, action := range expectedActions {
 		if !actions[action] {
 			t.Errorf("GetUsageExamples() missing example for action %s", action)
@@ -1046,6 +1046,317 @@ func TestSSHTool_GetSessionManager(t *testing.T) {
 	sm := tool.GetSessionManager()
 	if sm == nil {
 		t.Error("GetSessionManager() should return session manager")
+	}
+}
+
+// === Tunnel Action Tests ===
+
+func TestSSHTool_TunnelList_Empty(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "tunnel_list",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !result.Success {
+		t.Errorf("Execute() failed: %s", result.Error)
+	}
+
+	if !contains(result.Content, "No active tunnels") {
+		t.Error("Content should indicate no active tunnels")
+	}
+
+	count, ok := result.Data["count"].(int)
+	if !ok || count != 0 {
+		t.Errorf("Data count = %v, want 0", result.Data["count"])
+	}
+}
+
+func TestSSHTool_TunnelCreate_NoClient(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":      "tunnel_create",
+		"host":        "test-host",
+		"local_port":  0,
+		"remote_host": "localhost",
+		"remote_port": 3306,
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail when client is not connected")
+	}
+
+	if !contains(result.Error, "not connected") {
+		t.Errorf("Error should mention not connected, got: %s", result.Error)
+	}
+}
+
+func TestSSHTool_TunnelCreate_MissingHost(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":      "tunnel_create",
+		"remote_host": "localhost",
+		"remote_port": 3306,
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail without host")
+	}
+
+	if result.ErrorDetails == nil || result.ErrorDetails.Parameter != "host" {
+		t.Error("ErrorDetails should indicate missing host parameter")
+	}
+}
+
+func TestSSHTool_TunnelCreate_MissingRemoteHost(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":      "tunnel_create",
+		"host":        "test-host",
+		"remote_port": 3306,
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail without remote_host")
+	}
+
+	if result.ErrorDetails == nil || result.ErrorDetails.Parameter != "remote_host" {
+		t.Error("ErrorDetails should indicate missing remote_host parameter")
+	}
+}
+
+func TestSSHTool_TunnelCreate_MissingRemotePort(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":      "tunnel_create",
+		"host":        "test-host",
+		"remote_host": "localhost",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail without remote_port")
+	}
+
+	if result.ErrorDetails == nil || result.ErrorDetails.Parameter != "remote_port" {
+		t.Error("ErrorDetails should indicate missing remote_port parameter")
+	}
+}
+
+func TestSSHTool_TunnelCreate_InvalidHost(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":      "tunnel_create",
+		"host":        "nonexistent-host",
+		"remote_host": "localhost",
+		"remote_port": 3306,
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail with invalid host")
+	}
+
+	if result.ErrorDetails == nil {
+		t.Error("Should have error details")
+	}
+
+	if len(result.ErrorDetails.AvailableValues) == 0 {
+		t.Error("Should suggest available hosts")
+	}
+}
+
+func TestSSHTool_TunnelClose_MissingID(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "tunnel_close",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail without tunnel_id")
+	}
+
+	if result.ErrorDetails == nil || result.ErrorDetails.Parameter != "tunnel_id" {
+		t.Error("ErrorDetails should indicate missing tunnel_id parameter")
+	}
+}
+
+func TestSSHTool_TunnelClose_NotFound(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":    "tunnel_close",
+		"tunnel_id": "nonexistent-tunnel-id",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail with nonexistent tunnel")
+	}
+
+	if !contains(result.Error, "not found") {
+		t.Errorf("Error should mention not found, got: %s", result.Error)
+	}
+}
+
+func TestSSHTool_ValidateParameters_TunnelCreate(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	tests := []struct {
+		name      string
+		args      map[string]interface{}
+		wantValid bool
+		wantParam string
+	}{
+		{
+			name: "tunnel_create missing host",
+			args: map[string]interface{}{
+				"action":      "tunnel_create",
+				"remote_host": "localhost",
+				"remote_port": 3306,
+			},
+			wantValid: false,
+			wantParam: "host",
+		},
+		{
+			name: "tunnel_create missing remote_host",
+			args: map[string]interface{}{
+				"action":      "tunnel_create",
+				"host":        "test-host",
+				"remote_port": 3306,
+			},
+			wantValid: false,
+			wantParam: "remote_host",
+		},
+		{
+			name: "tunnel_create missing remote_port",
+			args: map[string]interface{}{
+				"action":      "tunnel_create",
+				"host":        "test-host",
+				"remote_host": "localhost",
+			},
+			wantValid: false,
+			wantParam: "remote_port",
+		},
+		{
+			name: "tunnel_create invalid host",
+			args: map[string]interface{}{
+				"action":      "tunnel_create",
+				"host":        "nonexistent",
+				"remote_host": "localhost",
+				"remote_port": 3306,
+			},
+			wantValid: false,
+			wantParam: "host",
+		},
+		{
+			name: "tunnel_close missing tunnel_id",
+			args: map[string]interface{}{
+				"action": "tunnel_close",
+			},
+			wantValid: false,
+			wantParam: "tunnel_id",
+		},
+		{
+			name: "tunnel_list valid",
+			args: map[string]interface{}{
+				"action": "tunnel_list",
+			},
+			wantValid: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tool.ValidateParameters(context.Background(), tt.args)
+
+			if result.Valid != tt.wantValid {
+				t.Errorf("ValidateParameters() valid = %v, want %v", result.Valid, tt.wantValid)
+			}
+
+			if !tt.wantValid && tt.wantParam != "" {
+				if len(result.Errors) == 0 {
+					t.Error("Expected validation errors")
+				} else if result.Errors[0].Parameter != tt.wantParam {
+					t.Errorf("Error parameter = %s, want %s", result.Errors[0].Parameter, tt.wantParam)
+				}
+			}
+		})
+	}
+}
+
+func TestSSHTool_GetTunnelManager(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	tm := tool.GetTunnelManager()
+	if tm == nil {
+		t.Error("GetTunnelManager() should return tunnel manager")
+	}
+}
+
+func TestSSHTool_GetStatus_WithTunnelInfo(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "status",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !result.Success {
+		t.Errorf("Execute() failed: %s", result.Error)
+	}
+
+	// Check that tunnel info is included
+	if !contains(result.Content, "Active Tunnels") {
+		t.Error("Content should include tunnel info")
+	}
+
+	// Check data structure has tunnel info
+	tunnels, ok := result.Data["tunnels"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Data should contain tunnels map")
+	}
+
+	if tunnels["active"] != 0 {
+		t.Errorf("tunnels.active = %v, want 0", tunnels["active"])
 	}
 }
 

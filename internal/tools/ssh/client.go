@@ -633,3 +633,17 @@ func (c *SSHClient) IsClosed() bool {
 	defer c.mu.Unlock()
 	return c.closed
 }
+
+// Dial opens a connection to the given address via the SSH connection
+// This is used for port forwarding/tunneling
+func (c *SSHClient) Dial(network, addr string) (net.Conn, error) {
+	c.mu.Lock()
+	if c.closed || c.conn == nil {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("client is closed")
+	}
+	c.lastUsedAt = time.Now()
+	c.mu.Unlock()
+
+	return c.conn.Dial(network, addr)
+}
