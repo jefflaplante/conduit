@@ -54,6 +54,9 @@ type SSHTool struct {
 	sessionManager *SessionManager
 	tunnelManager  *TunnelManager
 	auditLogger    *AuditLogger
+	pool           *Pool           // Connection pool for fan-out execution
+	fanoutExecutor *FanoutExecutor // Fan-out executor for group commands
+	inventoryManager *InventoryManager // Ansible inventory manager
 }
 
 // NewSSHTool creates a new SSH tool with the given services and configuration
@@ -78,6 +81,19 @@ func NewSSHTool(services *types.ToolServices, cfg *config.RemoteSSHConfig) (*SSH
 		return nil, fmt.Errorf("failed to create audit logger: %w", err)
 	}
 
+	// Create connection pool for fan-out execution
+	pool := NewPool(cfg.Hosts, cfg.Defaults, cfg.Pool)
+
+	// Create fan-out executor with pool and default max parallel from pool config
+	maxParallel := cfg.Pool.MaxConnectionsPerHost
+	if maxParallel == 0 {
+		maxParallel = 5 // Default
+	}
+	fanoutExecutor := NewFanoutExecutor(pool, maxParallel)
+
+	// Create inventory manager with config hosts
+	inventoryManager := NewInventoryManager(cfg.Hosts)
+
 	return &SSHTool{
 		services:       services,
 		securityEngine: securityEngine,
@@ -85,6 +101,9 @@ func NewSSHTool(services *types.ToolServices, cfg *config.RemoteSSHConfig) (*SSH
 		sessionManager: sessionManager,
 		tunnelManager:  NewTunnelManager(),
 		auditLogger:    auditLogger,
+		pool:           pool,
+		fanoutExecutor: fanoutExecutor,
+		inventoryManager: inventoryManager,
 		// client will be set via SetClient when the real implementation is available
 	}, nil
 }
@@ -104,6 +123,12 @@ func (t *SSHTool) Close() {
 	}
 	if t.auditLogger != nil {
 		_ = t.auditLogger.Close()
+	}
+	if t.pool != nil {
+		t.pool.Close()
+	}
+	if t.inventoryManager != nil {
+		t.inventoryManager.StopAutoRefresh()
 	}
 }
 
@@ -128,6 +153,7 @@ func (t *SSHTool) Description() string {
 
 Actions:
 - exec: Execute a command on a remote host (one-shot)
+- exec_group: Execute a command on a host group (fan-out)
 - hosts: List configured SSH hosts
 - status: Show connection pool, session, and tunnel status
 - session_start: Start a persistent session on a host
@@ -139,6 +165,9 @@ Actions:
 - tunnel_list: List all active tunnels
 - scp_upload: Upload a local file to a remote host
 - scp_download: Download a file from a remote host to local path
+- inventory_load: Load an Ansible inventory file (INI, YAML) or dynamic script
+- inventory_list: List hosts from inventory (optionally filtered by group)
+- inventory_refresh: Refresh all inventory sources
 
 Security:
 Commands are classified into security tiers (read, modify, dangerous, blocked).
@@ -151,6 +180,7 @@ Max 5 concurrent sessions. Sessions auto-close after 10 minutes of idle time.
 
 Examples:
 - One-shot exec: action=exec, host="web-prod-1", command="ls -la /var/log"
+- Group exec: action=exec_group, group="web-servers", command="uptime", timeout=60
 - Start session: action=session_start, host="web-prod-1"
 - Send to session: action=session_send, session_id="abc123", command="cd /var/log"
 - Close session: action=session_close, session_id="abc123"
@@ -159,7 +189,11 @@ Examples:
 - Close tunnel: action=tunnel_close, tunnel_id="abc-123"
 - List tunnels: action=tunnel_list
 - Upload file: action=scp_upload, host="web-prod-1", local_path="/tmp/data.json", remote_path="/var/www/data.json"
-- Download file: action=scp_download, host="web-prod-1", remote_path="/var/log/app.log", local_path="/tmp/app.log"`
+- Download file: action=scp_download, host="web-prod-1", remote_path="/var/log/app.log", local_path="/tmp/app.log"
+- Load inventory: action=inventory_load, path="/path/to/inventory.ini" (or .yaml)
+- Load dynamic inventory: action=inventory_load, path="/path/to/script.sh", type="dynamic"
+- List inventory hosts: action=inventory_list (all hosts) or action=inventory_list, group="webservers"
+- Refresh inventory: action=inventory_refresh`
 }
 
 // Parameters returns the JSON schema for tool parameters
@@ -169,12 +203,16 @@ func (t *SSHTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"exec", "hosts", "status", "session_start", "session_send", "session_close", "session_list", "tunnel_create", "tunnel_close", "tunnel_list", "scp_upload", "scp_download"},
+				"enum":        []string{"exec", "exec_group", "hosts", "status", "session_start", "session_send", "session_close", "session_list", "tunnel_create", "tunnel_close", "tunnel_list", "scp_upload", "scp_download"},
 				"description": "SSH operation to perform",
 			},
 			"host": map[string]interface{}{
 				"type":        "string",
 				"description": "Target host name (required for exec, session_start, and tunnel_create actions)",
+			},
+			"group": map[string]interface{}{
+				"type":        "string",
+				"description": "Target host group name (required for exec_group action)",
 			},
 			"command": map[string]interface{}{
 				"type":        "string",
@@ -188,6 +226,10 @@ func (t *SSHTool) Parameters() map[string]interface{} {
 				"type":        "integer",
 				"description": "Command execution timeout in seconds (default: 30)",
 				"default":     30,
+			},
+			"max_parallel": map[string]interface{}{
+				"type":        "integer",
+				"description": "Maximum parallel executions for exec_group (optional override, default from config or group setting)",
 			},
 			"local_port": map[string]interface{}{
 				"type":        "integer",
@@ -233,6 +275,8 @@ func (t *SSHTool) Execute(ctx context.Context, args map[string]interface{}) (*ty
 	switch action {
 	case "exec":
 		return t.executeCommand(ctx, args)
+	case "exec_group":
+		return t.executeGroupCommand(ctx, args)
 	case "hosts":
 		return t.listHosts(ctx, args)
 	case "status":
@@ -255,10 +299,16 @@ func (t *SSHTool) Execute(ctx context.Context, args map[string]interface{}) (*ty
 		return t.scpUpload(ctx, args)
 	case "scp_download":
 		return t.scpDownload(ctx, args)
+	case "inventory_load":
+		return t.inventoryLoad(ctx, args)
+	case "inventory_list":
+		return t.inventoryList(ctx, args)
+	case "inventory_refresh":
+		return t.inventoryRefresh(ctx, args)
 	default:
 		return &types.ToolResult{
 			Success: false,
-			Error:   fmt.Sprintf("unknown action: %s (valid actions: exec, hosts, status, session_start, session_send, session_close, session_list, tunnel_create, tunnel_close, tunnel_list, scp_upload, scp_download)", action),
+			Error:   fmt.Sprintf("unknown action: %s (valid actions: exec, exec_group, hosts, status, session_start, session_send, session_close, session_list, tunnel_create, tunnel_close, tunnel_list, scp_upload, scp_download, inventory_load, inventory_list, inventory_refresh)", action),
 		}, nil
 	}
 }
@@ -430,6 +480,170 @@ func (t *SSHTool) executeCommand(ctx context.Context, args map[string]interface{
 			"base_cmd":   classification.BaseCommand,
 		},
 	}, nil
+}
+
+// executeGroupCommand executes a command on a host group (fan-out execution)
+func (t *SSHTool) executeGroupCommand(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	groupName := t.getStringArg(args, "group", "")
+	command := t.getStringArg(args, "command", "")
+	timeout := t.getIntArg(args, "timeout", 30)
+	maxParallel := t.getIntArg(args, "max_parallel", 0)
+
+	// Validate required parameters
+	if groupName == "" {
+		return types.NewErrorResult("missing_parameter", "group parameter is required for exec_group action").
+			WithParameter("group", nil).
+			WithSuggestions([]string{"Use action=hosts to see configured host groups"}), nil
+	}
+
+	if command == "" {
+		return types.NewErrorResult("missing_parameter", "command parameter is required for exec_group action").
+			WithParameter("command", nil).
+			WithExamples([]string{"uptime", "df -h", "ps aux"}), nil
+	}
+
+	// Resolve hosts from group
+	hosts := t.config.GetHostsByGroup(groupName)
+	if len(hosts) == 0 {
+		return types.NewErrorResult("invalid_group", fmt.Sprintf("group '%s' has no hosts or does not exist", groupName)).
+			WithParameter("group", groupName).
+			WithSuggestions([]string{"Use action=hosts to see configured host groups"}), nil
+	}
+
+	// Find the group config to check for security tier and max parallel
+	var groupConfig *config.SSHHostGroup
+	for i := range t.config.HostGroups {
+		if t.config.HostGroups[i].Name == groupName {
+			groupConfig = &t.config.HostGroups[i]
+			break
+		}
+	}
+
+	// Determine the strictest security tier from the group or any host
+	securityTier := ""
+	if groupConfig != nil && groupConfig.SecurityTier != "" {
+		securityTier = groupConfig.SecurityTier
+	}
+
+	// Check each host for the most restrictive tier
+	for _, host := range hosts {
+		if host.SecurityTier != "" {
+			if securityTier == "" || isMoreRestrictive(host.SecurityTier, securityTier) {
+				securityTier = host.SecurityTier
+			}
+		}
+	}
+
+	// Classify the command for security using the strictest tier
+	classification := t.securityEngine.ValidateCommandForHost(command, securityTier)
+
+	// Block if command is blocked
+	if classification.Blocked {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("command blocked: %s", classification.Reason),
+			Data: map[string]interface{}{
+				"group":        groupName,
+				"tier":         string(classification.Tier),
+				"reason":       classification.Reason,
+				"base_cmd":     classification.BaseCommand,
+				"warnings":     classification.Warnings,
+				"has_subshell": classification.HasSubshell,
+			},
+		}, nil
+	}
+
+	// Check if approval is required
+	if classification.RequiresApproval {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("command requires approval (tier: %s)", classification.Tier),
+			Data: map[string]interface{}{
+				"group":             groupName,
+				"tier":              string(classification.Tier),
+				"reason":            classification.Reason,
+				"base_cmd":          classification.BaseCommand,
+				"requires_approval": true,
+				"warnings":          classification.Warnings,
+			},
+		}, nil
+	}
+
+	// Determine max parallel from: parameter > group config > default
+	if maxParallel == 0 && groupConfig != nil && groupConfig.MaxParallel > 0 {
+		maxParallel = groupConfig.MaxParallel
+	}
+	if maxParallel == 0 {
+		maxParallel = t.config.Pool.MaxConnectionsPerHost
+		if maxParallel == 0 {
+			maxParallel = 5
+		}
+	}
+
+	// Create fan-out executor with specified max parallel
+	executor := NewFanoutExecutor(t.pool, maxParallel)
+
+	// Extract host names
+	hostNames := make([]string, len(hosts))
+	for i, host := range hosts {
+		hostNames[i] = host.Name
+	}
+
+	// Execute on all hosts
+	execTimeout := time.Duration(timeout) * time.Second
+	fanoutResult := executor.Execute(ctx, hostNames, command, execTimeout)
+
+	// Log to audit
+	if t.auditLogger != nil && t.config.Audit.LogCommands {
+		for hostName, result := range fanoutResult.Results {
+			_ = t.auditLogger.LogExecution(&AuditEntry{
+				Host:         hostName,
+				Command:      command,
+				SecurityTier: string(classification.Tier),
+				Approved:     true,
+				ExitCode:     result.ExitCode,
+				Duration:     result.Duration.String(),
+				Stdout:       result.Stdout,
+				Stderr:       result.Stderr,
+				Error:        result.Error,
+				TimedOut:     result.TimedOut,
+			})
+		}
+	}
+
+	// Format results for display
+	includeOutput := true // Always include output for group executions
+	content := executor.FormatResults(fanoutResult, includeOutput)
+
+	// Determine overall success (all hosts succeeded)
+	success := len(fanoutResult.Failed) == 0
+
+	return &types.ToolResult{
+		Success: success,
+		Content: content,
+		Data: map[string]interface{}{
+			"group":     groupName,
+			"command":   command,
+			"total":     len(hostNames),
+			"succeeded": len(fanoutResult.Succeeded),
+			"failed":    len(fanoutResult.Failed),
+			"duration":  fanoutResult.Duration.String(),
+			"results":   fanoutResult.Results,
+			"tier":      string(classification.Tier),
+			"base_cmd":  classification.BaseCommand,
+		},
+	}, nil
+}
+
+// isMoreRestrictive returns true if tier1 is more restrictive than tier2
+func isMoreRestrictive(tier1, tier2 string) bool {
+	order := map[string]int{
+		"read":      0,
+		"modify":    1,
+		"dangerous": 2,
+		"blocked":   3,
+	}
+	return order[tier1] > order[tier2]
 }
 
 // listHosts returns the list of configured SSH hosts
@@ -1742,4 +1956,113 @@ func (t *SSHTool) GetUsageExamples() []types.ToolExample {
 			Expected: "File downloaded confirmation with size and duration",
 		},
 	}
+}
+
+// inventoryLoad loads an inventory file
+func (t *SSHTool) inventoryLoad(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	path := t.getStringArg(args, "path", "")
+	inventoryType := t.getStringArg(args, "type", "file") // "file" or "dynamic"
+	
+	if path == "" {
+		return &types.ToolResult{
+			Success: false,
+			Error:   "path parameter is required",
+		}, nil
+	}
+	
+	var err error
+	if inventoryType == "dynamic" {
+		err = t.inventoryManager.LoadDynamic(path)
+	} else {
+		err = t.inventoryManager.LoadFile(path)
+	}
+	
+	if err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to load inventory: %v", err),
+		}, nil
+	}
+	
+	// Get stats
+	hosts := t.inventoryManager.GetHosts()
+	groups := t.inventoryManager.GetGroups()
+	sources := t.inventoryManager.GetSources()
+	
+	return &types.ToolResult{
+		Success: true,
+		Data: map[string]interface{}{
+			"message":     fmt.Sprintf("Successfully loaded inventory from %s", path),
+			"type":        inventoryType,
+			"path":        path,
+			"hosts_count": len(hosts),
+			"groups":      groups,
+			"sources":     sources,
+		},
+	}, nil
+}
+
+// inventoryList lists hosts from inventory
+func (t *SSHTool) inventoryList(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	group := t.getStringArg(args, "group", "")
+	
+	var hosts []config.SSHHostConfig
+	if group != "" {
+		hosts = t.inventoryManager.GetHostsByGroup(group)
+	} else {
+		hosts = t.inventoryManager.GetHosts()
+	}
+	
+	// Format hosts for output
+	hostList := make([]map[string]interface{}, 0, len(hosts))
+	for _, host := range hosts {
+		hostList = append(hostList, map[string]interface{}{
+			"name":          host.Name,
+			"hostname":      host.Hostname,
+			"user":          host.User,
+			"port":          host.Port,
+			"identity_file": host.IdentityFile,
+			"groups":        host.Groups,
+			"enabled":       host.IsHostEnabled(),
+		})
+	}
+	
+	result := map[string]interface{}{
+		"hosts": hostList,
+		"count": len(hosts),
+	}
+	
+	if group != "" {
+		result["group"] = group
+	} else {
+		result["groups"] = t.inventoryManager.GetGroups()
+	}
+	
+	return &types.ToolResult{
+		Success: true,
+		Data:    result,
+	}, nil
+}
+
+// inventoryRefresh forces a refresh of all inventory sources
+func (t *SSHTool) inventoryRefresh(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	err := t.inventoryManager.Refresh()
+	if err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("refresh failed: %v", err),
+		}, nil
+	}
+	
+	hosts := t.inventoryManager.GetHosts()
+	sources := t.inventoryManager.GetSources()
+	
+	return &types.ToolResult{
+		Success: true,
+		Data: map[string]interface{}{
+			"message":     "Inventory refreshed successfully",
+			"hosts_count": len(hosts),
+			"sources":     sources,
+		},
+	}, nil
 }
