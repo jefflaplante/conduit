@@ -1288,6 +1288,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 				// Set up streaming state
 				var textBuilder strings.Builder
 				var lastEditTime time.Time
+				lastEditLen := 0 // track text length at last edit for delta detection
 				editInterval := 500 * time.Millisecond
 				minCharsForEdit := 50
 
@@ -1300,13 +1301,14 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 					// Edit message if enough time passed or enough chars accumulated or done
 					shouldEdit := done ||
 						(timeSinceEdit >= editInterval && len(currentText) > minCharsForEdit) ||
-						(len(currentText)-len(currentText) > 100) // Every 100 chars
+						(len(currentText)-lastEditLen > 100) // Every 100 new chars since last edit
 
 					if shouldEdit && len(currentText) > 0 {
 						if editErr := streamingAdapter.EditMessageText(chatID, placeholderMsgID, currentText); editErr != nil {
 							log.Printf("[Streaming] Edit failed: %v", editErr)
 						}
 						lastEditTime = time.Now()
+						lastEditLen = len(currentText)
 					}
 				}
 

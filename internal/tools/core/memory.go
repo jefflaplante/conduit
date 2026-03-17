@@ -598,7 +598,7 @@ func (t *MemorySearchTool) searchInFile(filePath, query string, minScore float64
 			context := t.getContext(lines, lineNum, 2)
 
 			relPath := strings.TrimPrefix(filePath, t.workspaceDir)
-			if relPath[0] == '/' {
+			if len(relPath) > 0 && relPath[0] == '/' {
 				relPath = relPath[1:]
 			}
 

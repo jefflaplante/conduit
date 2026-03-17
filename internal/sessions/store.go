@@ -475,33 +475,26 @@ func (s *Store) ClearSessionMessages(sessionKey string) error {
 	return nil
 }
 
-// SetSessionContext updates a key in the session's context
+// SetSessionContext updates a key in the session's context.
+// Uses json_set to perform an atomic read-modify-write in a single SQL statement,
+// preventing concurrent calls from losing each other's updates.
 func (s *Store) SetSessionContext(sessionKey, key, value string) error {
-	// Get current session
-	session, err := s.GetSession(sessionKey)
-	if err != nil {
-		return fmt.Errorf("failed to get session: %w", err)
-	}
-
-	// Update context
-	if session.Context == nil {
-		session.Context = make(map[string]string)
-	}
-	session.Context[key] = value
-
-	// Marshal and save
-	contextJSON, err := json.Marshal(session.Context)
-	if err != nil {
-		return fmt.Errorf("failed to marshal context: %w", err)
-	}
-
-	_, err = s.db.Exec(`
-		UPDATE sessions 
-		SET context = ?, updated_at = CURRENT_TIMESTAMP 
+	result, err := s.db.Exec(`
+		UPDATE sessions
+		SET context = json_set(context, '$.' || ?, ?),
+		    updated_at = CURRENT_TIMESTAMP
 		WHERE key = ?
-	`, string(contextJSON), sessionKey)
+	`, key, value, sessionKey)
 	if err != nil {
 		return fmt.Errorf("failed to update session context: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("session not found: %s", sessionKey)
 	}
 
 	return nil

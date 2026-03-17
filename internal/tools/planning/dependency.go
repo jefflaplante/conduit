@@ -201,13 +201,13 @@ func (da *DependencyAnalyzer) analyzeOrderingDependencies(graph *DependencyGraph
 			}
 		}
 
-		// Search -> Fetch patterns (web_search followed by web_fetch)
-		if call.Name == "web_fetch" {
+		// Search -> Fetch patterns (WebSearch followed by WebFetch)
+		if call.Name == "WebFetch" {
 			for j := 0; j < i; j++ {
 				prevStepID := fmt.Sprintf("step_%d", j)
 				prevCall := toolCalls[j]
 
-				if prevCall.Name == "web_search" {
+				if prevCall.Name == "WebSearch" {
 					// Check if fetch URL might come from search results
 					if da.couldUseFetchURL(call, prevCall) {
 						da.addDependencyEdge(graph, prevStepID, stepID, "data", 0.85,
@@ -339,7 +339,7 @@ func (da *DependencyAnalyzer) hasDataDependency(call, prevCall ai.ToolCall) bool
 	}
 
 	// Check for query expansion patterns
-	if query, hasQuery := call.Args["query"]; hasQuery && prevCall.Name == "web_search" {
+	if query, hasQuery := call.Args["query"]; hasQuery && prevCall.Name == "WebSearch" {
 		if queryStr, ok := query.(string); ok {
 			// If query contains "more", "additional", "details", it might expand on search
 			expandWords := []string{"more", "additional", "details", "follow", "continue"}
@@ -390,7 +390,7 @@ func (da *DependencyAnalyzer) hasConflict(call1, call2 ai.ToolCall) bool {
 	}
 
 	// Command execution conflicts (exec tools might interfere)
-	if call1.Name == "exec" && call2.Name == "exec" {
+	if call1.Name == "Bash" && call2.Name == "Bash" {
 		// Commands might conflict if they affect the same directory
 		if da.affectsSameDirectory(call1, call2) {
 			return true
@@ -403,7 +403,7 @@ func (da *DependencyAnalyzer) hasConflict(call1, call2 ai.ToolCall) bool {
 // Utility functions for dependency analysis
 
 func (da *DependencyAnalyzer) isFileOperation(toolName string) bool {
-	fileOps := []string{"read_file", "write_file", "list_files"}
+	fileOps := []string{"Read", "Write", "Glob"}
 	for _, op := range fileOps {
 		if toolName == op {
 			return true
@@ -453,7 +453,7 @@ func (da *DependencyAnalyzer) couldUseFetchURL(fetchCall, searchCall ai.ToolCall
 	// This is a heuristic - in a real implementation, we'd need to examine
 	// the search results to see if any URLs match the fetch URL
 	// For now, assume that if a web_fetch follows a web_search, they're likely related
-	if fetchCall.Name == "web_fetch" && searchCall.Name == "web_search" {
+	if fetchCall.Name == "WebFetch" && searchCall.Name == "WebSearch" {
 		// Check if the URL in fetch could reasonably come from search
 		if url, hasURL := fetchCall.Args["url"]; hasURL {
 			if urlStr, ok := url.(string); ok {
@@ -469,40 +469,40 @@ func (da *DependencyAnalyzer) couldUseFetchURL(fetchCall, searchCall ai.ToolCall
 // initializeDefaultRules sets up default dependency and conflict rules
 func (da *DependencyAnalyzer) initializeDefaultRules() {
 	// Dependency rules
-	da.dependencyRules["web_fetch"] = &DependencyRule{
-		ToolName:        "web_fetch",
-		DependsOn:       []string{"web_search"}, // Often follows web search
-		OutputsUsedBy:   []string{"memory_search"},
+	da.dependencyRules["WebFetch"] = &DependencyRule{
+		ToolName:        "WebFetch",
+		DependsOn:       []string{"WebSearch"}, // Often follows web search
+		OutputsUsedBy:   []string{"MemorySearch"},
 		RequiredOutputs: []string{"content"},
 		ConflictsWith:   []string{},
 	}
 
-	da.dependencyRules["write_file"] = &DependencyRule{
-		ToolName:        "write_file",
-		DependsOn:       []string{"read_file", "web_fetch"},
-		OutputsUsedBy:   []string{"read_file", "exec"},
+	da.dependencyRules["Write"] = &DependencyRule{
+		ToolName:        "Write",
+		DependsOn:       []string{"Read", "WebFetch"},
+		OutputsUsedBy:   []string{"Read", "Bash"},
 		RequiredOutputs: []string{},
-		ConflictsWith:   []string{"write_file"}, // Multiple writes to same file
+		ConflictsWith:   []string{"Write"}, // Multiple writes to same file
 	}
 
 	// Conflict rules
-	da.conflictRules["exec-exec"] = &ConflictRule{
-		Tool1:    "exec",
-		Tool2:    "exec",
+	da.conflictRules["Bash-Bash"] = &ConflictRule{
+		Tool1:    "Bash",
+		Tool2:    "Bash",
 		Reason:   "Command execution might interfere",
 		Severity: "performance",
 	}
 
-	da.conflictRules["write_file-write_file"] = &ConflictRule{
-		Tool1:    "write_file",
-		Tool2:    "write_file",
+	da.conflictRules["Write-Write"] = &ConflictRule{
+		Tool1:    "Write",
+		Tool2:    "Write",
 		Reason:   "Concurrent file writes might conflict",
 		Severity: "safety",
 	}
 
 	// Output matchers for pattern detection
-	da.outputMatchers["web_search"] = &OutputMatcher{
-		ToolName:       "web_search",
+	da.outputMatchers["WebSearch"] = &OutputMatcher{
+		ToolName:       "WebSearch",
 		OutputPatterns: []string{`"url":\s*"([^"]+)"`},
 		InputPatterns: map[string]string{
 			"url": `https?://[^\s]+`,

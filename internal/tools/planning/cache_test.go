@@ -25,14 +25,14 @@ func TestResultCache_BasicOperations(t *testing.T) {
 	// Test cache set and get
 	stepResult := &StepResult{
 		StepID:     "test_step",
-		ToolName:   "web_search",
+		ToolName:   "WebSearch",
 		Success:    true,
 		Content:    "Test search results",
 		Duration:   time.Second,
 		ExecutedAt: time.Now(),
 	}
 
-	err := cache.Set(ctx, "test_key", "web_search", map[string]interface{}{"query": "test"}, stepResult)
+	err := cache.Set(ctx, "test_key", "WebSearch", map[string]interface{}{"query": "test"}, stepResult)
 	if err != nil {
 		t.Fatalf("Cache set failed: %v", err)
 	}
@@ -110,20 +110,20 @@ func TestResultCache_Invalidation(t *testing.T) {
 	// Set multiple cache entries
 	stepResult1 := &StepResult{
 		StepID:   "step1",
-		ToolName: "web_search",
+		ToolName: "WebSearch",
 		Success:  true,
 		Content:  "Search result 1",
 	}
 
 	stepResult2 := &StepResult{
 		StepID:   "step2",
-		ToolName: "memory_search",
+		ToolName: "MemorySearch",
 		Success:  true,
 		Content:  "Memory result 1",
 	}
 
-	cache.Set(ctx, "key1", "web_search", map[string]interface{}{}, stepResult1)
-	cache.Set(ctx, "key2", "memory_search", map[string]interface{}{}, stepResult2)
+	cache.Set(ctx, "key1", "WebSearch", map[string]interface{}{}, stepResult1)
+	cache.Set(ctx, "key2", "MemorySearch", map[string]interface{}{}, stepResult2)
 
 	// Verify both are cached
 	if _, found := cache.Get(ctx, "key1"); !found {
@@ -133,8 +133,8 @@ func TestResultCache_Invalidation(t *testing.T) {
 		t.Error("key2 should be cached")
 	}
 
-	// Invalidate web_search entries
-	err := cache.Invalidate(ctx, "web_search")
+	// Invalidate WebSearch entries
+	err := cache.Invalidate(ctx, "WebSearch")
 	if err != nil {
 		t.Fatalf("Invalidation failed: %v", err)
 	}
@@ -154,15 +154,15 @@ func TestResultCache_ClearAll(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Set multiple entries (use web_search which has a default policy)
+	// Set multiple entries (use WebSearch which has a default policy)
 	for i := 0; i < 5; i++ {
 		stepResult := &StepResult{
 			StepID:   fmt.Sprintf("step_%d", i),
-			ToolName: "web_search",
+			ToolName: "WebSearch",
 			Success:  true,
 			Content:  fmt.Sprintf("Content %d", i),
 		}
-		cache.Set(ctx, fmt.Sprintf("key_%d", i), "web_search", map[string]interface{}{"query": fmt.Sprintf("test_%d", i)}, stepResult)
+		cache.Set(ctx, fmt.Sprintf("key_%d", i), "WebSearch", map[string]interface{}{"query": fmt.Sprintf("test_%d", i)}, stepResult)
 	}
 
 	// Verify entries exist
@@ -195,12 +195,12 @@ func TestResultCache_Policies(t *testing.T) {
 	// Test web search caching policy
 	webSearchResult := &StepResult{
 		StepID:   "web_search_step",
-		ToolName: "web_search",
+		ToolName: "WebSearch",
 		Success:  true,
 		Content:  "Search results",
 	}
 
-	err := cache.Set(ctx, "web_search_key", "web_search",
+	err := cache.Set(ctx, "web_search_key", "WebSearch",
 		map[string]interface{}{"query": "test"}, webSearchResult)
 	if err != nil {
 		t.Fatalf("Web search cache set failed: %v", err)
@@ -211,23 +211,23 @@ func TestResultCache_Policies(t *testing.T) {
 		t.Error("Web search result should be cached")
 	}
 
-	// Test exec command (should not be cached by default)
-	execResult := &StepResult{
-		StepID:   "exec_step",
-		ToolName: "exec",
+	// Test Bash command (should not be cached by default)
+	bashResult := &StepResult{
+		StepID:   "bash_step",
+		ToolName: "Bash",
 		Success:  true,
 		Content:  "Command output",
 	}
 
-	err = cache.Set(ctx, "exec_key", "exec",
-		map[string]interface{}{"command": "ls"}, execResult)
+	err = cache.Set(ctx, "bash_key", "Bash",
+		map[string]interface{}{"command": "ls"}, bashResult)
 	if err != nil {
-		t.Fatalf("Exec cache set should not fail: %v", err)
+		t.Fatalf("Bash cache set should not fail: %v", err)
 	}
 
-	// Should not be cached (exec is not cacheable by default)
-	if found := cache.HasCached("exec_key"); found {
-		t.Error("Exec command should not be cached")
+	// Should not be cached (Bash is not cacheable by default)
+	if found := cache.HasCached("bash_key"); found {
+		t.Error("Bash command should not be cached")
 	}
 }
 
@@ -236,12 +236,12 @@ func TestResultCache_KeyGeneration(t *testing.T) {
 	cache := NewResultCache(storage, 10)
 
 	// Test key generation for same tool with same args
-	key1 := cache.GenerateKey("web_search", map[string]interface{}{
+	key1 := cache.GenerateKey("WebSearch", map[string]interface{}{
 		"query": "test query",
 		"count": 10,
 	})
 
-	key2 := cache.GenerateKey("web_search", map[string]interface{}{
+	key2 := cache.GenerateKey("WebSearch", map[string]interface{}{
 		"query": "test query",
 		"count": 10,
 	})
@@ -251,7 +251,7 @@ func TestResultCache_KeyGeneration(t *testing.T) {
 	}
 
 	// Test key generation for different args
-	key3 := cache.GenerateKey("web_search", map[string]interface{}{
+	key3 := cache.GenerateKey("WebSearch", map[string]interface{}{
 		"query": "different query",
 		"count": 10,
 	})
@@ -261,7 +261,7 @@ func TestResultCache_KeyGeneration(t *testing.T) {
 	}
 
 	// Test key generation for different tools
-	key4 := cache.GenerateKey("memory_search", map[string]interface{}{
+	key4 := cache.GenerateKey("MemorySearch", map[string]interface{}{
 		"query": "test query",
 	})
 
@@ -278,7 +278,7 @@ func TestResultCache_Metrics(t *testing.T) {
 
 	stepResult := &StepResult{
 		StepID:   "metrics_step",
-		ToolName: "web_search",
+		ToolName: "WebSearch",
 		Success:  true,
 		Content:  "Metrics test",
 	}
@@ -296,7 +296,7 @@ func TestResultCache_Metrics(t *testing.T) {
 	}
 
 	// Cache set
-	cache.Set(ctx, "metrics_key", "web_search", map[string]interface{}{}, stepResult)
+	cache.Set(ctx, "metrics_key", "WebSearch", map[string]interface{}{}, stepResult)
 
 	// Cache hit
 	cache.Get(ctx, "metrics_key")

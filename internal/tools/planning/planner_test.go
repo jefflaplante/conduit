@@ -132,15 +132,15 @@ func TestExecutionPlanner_ToolProfiles(t *testing.T) {
 	}
 
 	// Check specific tool profiles
-	webSearchProfile := profiles["web_search"]
+	webSearchProfile := profiles["WebSearch"]
 	if webSearchProfile == nil {
-		t.Error("web_search profile not found")
+		t.Error("WebSearch profile not found")
 	} else {
 		if webSearchProfile.AverageLatency <= 0 {
-			t.Error("web_search latency should be positive")
+			t.Error("WebSearch latency should be positive")
 		}
 		if webSearchProfile.SuccessRate <= 0 || webSearchProfile.SuccessRate > 1 {
-			t.Error("web_search success rate should be between 0 and 1")
+			t.Error("WebSearch success rate should be between 0 and 1")
 		}
 	}
 
@@ -229,7 +229,7 @@ func TestExecutionStep_CacheKeyGeneration(t *testing.T) {
 
 	toolCall := ai.ToolCall{
 		ID:   "cache_test",
-		Name: "web_search",
+		Name: "WebSearch",
 		Args: map[string]interface{}{
 			"query": "cacheable query",
 			"count": 10,
@@ -245,7 +245,7 @@ func TestExecutionStep_CacheKeyGeneration(t *testing.T) {
 	// Test non-cacheable tool
 	nonCacheableCall := ai.ToolCall{
 		ID:   "no_cache_test",
-		Name: "exec",
+		Name: "Bash",
 		Args: map[string]interface{}{
 			"command": "ls -la",
 		},

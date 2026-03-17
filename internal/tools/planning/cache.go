@@ -331,7 +331,7 @@ func (rc *ResultCache) generateTags(toolName string, args map[string]interface{}
 
 	// Add domain-specific tags
 	switch toolName {
-	case "web_search", "web_fetch":
+	case "WebSearch", "WebFetch":
 		if url, ok := args["url"].(string); ok && len(url) > 0 {
 			// Extract domain from URL
 			if domain := rc.extractDomain(url); domain != "" {
@@ -340,10 +340,10 @@ func (rc *ResultCache) generateTags(toolName string, args map[string]interface{}
 		}
 		tags = append(tags, "network")
 
-	case "memory_search":
+	case "MemorySearch":
 		tags = append(tags, "memory")
 
-	case "read_file", "write_file", "list_files":
+	case "Read", "Write", "Glob":
 		tags = append(tags, "filesystem")
 	}
 
@@ -542,7 +542,7 @@ func (rc *ResultCache) initializeDefaultPolicies() {
 type WebSearchCachePolicy struct{}
 
 func (w *WebSearchCachePolicy) ShouldCache(toolName string, args map[string]interface{}, result *StepResult) bool {
-	if toolName != "web_search" {
+	if toolName != "WebSearch" {
 		return false
 	}
 
@@ -563,7 +563,7 @@ func (w *WebSearchCachePolicy) InvalidateOn(toolName string) []string {
 }
 
 func (w *WebSearchCachePolicy) GenerateKey(toolName string, args map[string]interface{}) string {
-	if toolName != "web_search" {
+	if toolName != "WebSearch" {
 		return ""
 	}
 
@@ -587,7 +587,7 @@ func (w *WebSearchCachePolicy) Priority(toolName string, args map[string]interfa
 type WebFetchCachePolicy struct{}
 
 func (w *WebFetchCachePolicy) ShouldCache(toolName string, args map[string]interface{}, result *StepResult) bool {
-	if toolName != "web_fetch" {
+	if toolName != "WebFetch" {
 		return false
 	}
 
@@ -605,7 +605,7 @@ func (w *WebFetchCachePolicy) InvalidateOn(toolName string) []string {
 }
 
 func (w *WebFetchCachePolicy) GenerateKey(toolName string, args map[string]interface{}) string {
-	if toolName != "web_fetch" {
+	if toolName != "WebFetch" {
 		return ""
 	}
 
@@ -626,7 +626,7 @@ func (w *WebFetchCachePolicy) Priority(toolName string, args map[string]interfac
 type MemorySearchCachePolicy struct{}
 
 func (m *MemorySearchCachePolicy) ShouldCache(toolName string, args map[string]interface{}, result *StepResult) bool {
-	if toolName != "memory_search" {
+	if toolName != "MemorySearch" {
 		return false
 	}
 
@@ -641,11 +641,11 @@ func (m *MemorySearchCachePolicy) TTL(toolName string, args map[string]interface
 
 func (m *MemorySearchCachePolicy) InvalidateOn(toolName string) []string {
 	// Invalidate when files change
-	return []string{"write_file", "exec"}
+	return []string{"Write", "Bash"}
 }
 
 func (m *MemorySearchCachePolicy) GenerateKey(toolName string, args map[string]interface{}) string {
-	if toolName != "memory_search" {
+	if toolName != "MemorySearch" {
 		return ""
 	}
 
