@@ -1,6 +1,8 @@
 module conduit
 
-go 1.24.13
+go 1.24.2
+
+toolchain go1.24.13
 
 replace github.com/jefflaplante/vecgo => ./vecgo
 

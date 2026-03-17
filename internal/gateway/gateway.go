@@ -733,16 +733,22 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 
 	// Start scheduler (loads jobs from cron_jobs.json)
+	schedulerReady := false
 	if g.scheduler != nil {
 		if err := g.scheduler.Start(); err != nil {
 			log.Printf("WARNING: Failed to start scheduler: %v", err)
+			log.Printf("WARNING: Skipping heartbeat initialization to avoid wiping cron_jobs.json")
+		} else {
+			schedulerReady = true
 		}
 	}
 
 	// Auto-create agent heartbeat job if enabled (MUST be after scheduler.Start() so
 	// existing jobs are loaded from disk before we check for duplicates and potentially save)
-	if err := g.initializeAgentHeartbeat(g.config); err != nil {
-		log.Printf("WARNING: Failed to initialize agent heartbeat: %v", err)
+	if schedulerReady {
+		if err := g.initializeAgentHeartbeat(g.config); err != nil {
+			log.Printf("WARNING: Failed to initialize agent heartbeat: %v", err)
+		}
 	}
 
 	// Start heartbeat service

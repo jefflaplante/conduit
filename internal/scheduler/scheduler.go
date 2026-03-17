@@ -61,6 +61,7 @@ type Scheduler struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	crontagMarker string // Marker to identify our entries in system crontab
+	jobsLoaded    bool   // True after successful loadJobs; prevents saveJobs from wiping unloaded data
 }
 
 // New creates a new scheduler
@@ -80,9 +81,9 @@ func New(workspaceDir string, executor JobExecutor) *Scheduler {
 
 // Start loads jobs and starts the scheduler
 func (s *Scheduler) Start() error {
-	// Load saved jobs
+	// Load saved jobs — failure is fatal to prevent saveJobs from wiping unloaded data
 	if err := s.loadJobs(); err != nil {
-		log.Printf("[Scheduler] Warning: failed to load jobs: %v", err)
+		return fmt.Errorf("failed to load jobs: %w", err)
 	}
 
 	// Schedule all enabled Go jobs
@@ -417,6 +418,7 @@ func (s *Scheduler) loadJobs() error {
 	data, err := os.ReadFile(s.jobsFile)
 	if err != nil {
 		if os.IsNotExist(err) {
+			s.jobsLoaded = true // No file yet is a valid initial state
 			return nil
 		}
 		return err
@@ -431,11 +433,16 @@ func (s *Scheduler) loadJobs() error {
 		s.jobs[job.ID] = job
 	}
 
+	s.jobsLoaded = true
 	return nil
 }
 
 // saveJobs saves jobs to disk
 func (s *Scheduler) saveJobs() error {
+	if !s.jobsLoaded {
+		return fmt.Errorf("refusing to save: jobs were not loaded from disk (would wipe existing data)")
+	}
+
 	if err := os.MkdirAll(filepath.Dir(s.jobsFile), 0755); err != nil {
 		return err
 	}
@@ -450,7 +457,12 @@ func (s *Scheduler) saveJobs() error {
 		return err
 	}
 
-	return os.WriteFile(s.jobsFile, data, 0644)
+	// Atomic write: temp file + rename to prevent corruption on crash
+	tmpFile := s.jobsFile + ".tmp"
+	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpFile, s.jobsFile)
 }
 
 // countByType counts jobs by type
