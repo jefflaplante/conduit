@@ -205,6 +205,27 @@ func TestCacheEntry_IsExpired(t *testing.T) {
 	assert.True(t, entry.IsExpired())
 }
 
+func TestSearchCache_CleanupStopsOnClose(t *testing.T) {
+	config := CacheConfig{TTLMinutes: 10, Enabled: true}
+	cache := NewSearchCache(config)
+
+	// The cleanup goroutine is running. Close should stop it.
+	cache.Close()
+
+	// After Close(), the done channel should be closed.
+	select {
+	case <-cache.done:
+		// expected - channel is closed, cleanup goroutine will exit
+	default:
+		t.Fatal("Expected done channel to be closed after Close()")
+	}
+
+	// Verify cache still works for reads after closing cleanup (graceful degradation)
+	params := SearchParameters{Query: "test"}
+	_, found := cache.Get(params)
+	assert.False(t, found)
+}
+
 func TestSearchCache_ConcurrentAccess(t *testing.T) {
 	config := CacheConfig{TTLMinutes: 10, Enabled: true}
 	cache := NewSearchCache(config)

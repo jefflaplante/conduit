@@ -342,3 +342,28 @@ func (t *TestCachePolicy) GenerateKey(toolName string, args map[string]interface
 func (t *TestCachePolicy) Priority(toolName string, args map[string]interface{}) int {
 	return 5
 }
+
+func TestResultCache_CleanupStopsOnClose(t *testing.T) {
+	storage := NewMemoryStorage()
+	cache := NewResultCache(storage, 10)
+
+	// The cleanup goroutine is running. Close should stop it.
+	// We verify by checking that the done channel is closed after Close().
+	cache.Close()
+
+	// After Close(), the done channel should be closed.
+	// Reading from a closed channel returns immediately.
+	select {
+	case <-cache.done:
+		// expected - channel is closed, cleanup goroutine will exit
+	case <-time.After(time.Second):
+		t.Fatal("Expected done channel to be closed after Close()")
+	}
+
+	// Verify cache still works for reads after closing cleanup (graceful degradation)
+	ctx := context.Background()
+	_, found := cache.Get(ctx, "any_key")
+	if found {
+		t.Error("Should not find a non-existent key")
+	}
+}

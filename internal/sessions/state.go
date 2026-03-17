@@ -45,8 +45,9 @@ type SessionStateTracker struct {
 	queueDepth      int64
 
 	// State change hooks
-	stateHooks []StateChangeHook
-	hooksMutex sync.RWMutex
+	stateHooks    []StateChangeHook
+	hooksMutex    sync.RWMutex
+	hookSemaphore chan struct{} // bounds concurrent hook goroutines
 }
 
 // SessionStateInfo contains detailed state information for a session
@@ -89,10 +90,14 @@ func DefaultStuckSessionConfig() StuckSessionConfig {
 }
 
 // NewSessionStateTracker creates a new session state tracker
+// maxHookConcurrency is the maximum number of hook goroutines that can run concurrently.
+const maxHookConcurrency = 10
+
 func NewSessionStateTracker() *SessionStateTracker {
 	return &SessionStateTracker{
 		sessionStates: make(map[string]*SessionStateInfo),
 		stateHooks:    make([]StateChangeHook, 0),
+		hookSemaphore: make(chan struct{}, maxHookConcurrency),
 	}
 }
 
@@ -393,7 +398,8 @@ func (t *SessionStateTracker) AddStateHook(hook StateChangeHook) {
 	t.stateHooks = append(t.stateHooks, hook)
 }
 
-// triggerStateHooks calls all registered state change hooks
+// triggerStateHooks calls all registered state change hooks.
+// Hook goroutines are bounded by the hookSemaphore to prevent unbounded goroutine growth.
 func (t *SessionStateTracker) triggerStateHooks(event StateChangeEvent) {
 	t.hooksMutex.RLock()
 	hooks := make([]StateChangeHook, len(t.stateHooks))
@@ -401,8 +407,12 @@ func (t *SessionStateTracker) triggerStateHooks(event StateChangeEvent) {
 	t.hooksMutex.RUnlock()
 
 	for _, hook := range hooks {
-		// Call hooks in separate goroutines to avoid blocking
+		// Acquire semaphore before launching goroutine to bound concurrency
+		t.hookSemaphore <- struct{}{}
 		go func(h StateChangeHook) {
+			defer func() {
+				<-t.hookSemaphore // Release semaphore
+			}()
 			defer func() {
 				if r := recover(); r != nil {
 					// Log hook panic but don't crash the system
