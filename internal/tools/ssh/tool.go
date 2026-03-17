@@ -4,6 +4,7 @@ package ssh
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -52,6 +53,7 @@ type SSHTool struct {
 	config         *config.RemoteSSHConfig
 	sessionManager *SessionManager
 	tunnelManager  *TunnelManager
+	auditLogger    *AuditLogger
 }
 
 // NewSSHTool creates a new SSH tool with the given services and configuration
@@ -70,12 +72,19 @@ func NewSSHTool(services *types.ToolServices, cfg *config.RemoteSSHConfig) (*SSH
 	// Create session manager
 	sessionManager := NewSessionManager(cfg.Sessions, cfg.Hosts, cfg.Defaults, cfg.Pool)
 
+	// Create audit logger if enabled
+	auditLogger, err := NewAuditLogger(cfg.Audit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create audit logger: %w", err)
+	}
+
 	return &SSHTool{
 		services:       services,
 		securityEngine: securityEngine,
 		config:         cfg,
 		sessionManager: sessionManager,
 		tunnelManager:  NewTunnelManager(),
+		auditLogger:    auditLogger,
 		// client will be set via SetClient when the real implementation is available
 	}, nil
 }
@@ -92,6 +101,9 @@ func (t *SSHTool) Close() {
 	}
 	if t.tunnelManager != nil {
 		t.tunnelManager.CloseAll()
+	}
+	if t.auditLogger != nil {
+		_ = t.auditLogger.Close()
 	}
 }
 
@@ -125,6 +137,8 @@ Actions:
 - tunnel_create: Create a local port forwarding tunnel
 - tunnel_close: Close an active tunnel
 - tunnel_list: List all active tunnels
+- scp_upload: Upload a local file to a remote host
+- scp_download: Download a file from a remote host to local path
 
 Security:
 Commands are classified into security tiers (read, modify, dangerous, blocked).
@@ -143,7 +157,9 @@ Examples:
 - List sessions: action=session_list
 - Create tunnel: action=tunnel_create, host="db-server", local_port=3307, remote_host="localhost", remote_port=3306
 - Close tunnel: action=tunnel_close, tunnel_id="abc-123"
-- List tunnels: action=tunnel_list`
+- List tunnels: action=tunnel_list
+- Upload file: action=scp_upload, host="web-prod-1", local_path="/tmp/data.json", remote_path="/var/www/data.json"
+- Download file: action=scp_download, host="web-prod-1", remote_path="/var/log/app.log", local_path="/tmp/app.log"`
 }
 
 // Parameters returns the JSON schema for tool parameters
@@ -153,7 +169,7 @@ func (t *SSHTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"exec", "hosts", "status", "session_start", "session_send", "session_close", "session_list", "tunnel_create", "tunnel_close", "tunnel_list"},
+				"enum":        []string{"exec", "hosts", "status", "session_start", "session_send", "session_close", "session_list", "tunnel_create", "tunnel_close", "tunnel_list", "scp_upload", "scp_download"},
 				"description": "SSH operation to perform",
 			},
 			"host": map[string]interface{}{
@@ -188,6 +204,14 @@ func (t *SSHTool) Parameters() map[string]interface{} {
 			"tunnel_id": map[string]interface{}{
 				"type":        "string",
 				"description": "Tunnel ID to close (required for tunnel_close action)",
+			},
+			"local_path": map[string]interface{}{
+				"type":        "string",
+				"description": "Local file path (required for scp_upload and scp_download actions)",
+			},
+			"remote_path": map[string]interface{}{
+				"type":        "string",
+				"description": "Remote file path (required for scp_upload and scp_download actions)",
 			},
 		},
 		"required": []string{"action"},
@@ -227,10 +251,14 @@ func (t *SSHTool) Execute(ctx context.Context, args map[string]interface{}) (*ty
 		return t.closeTunnel(ctx, args)
 	case "tunnel_list":
 		return t.listTunnels(ctx, args)
+	case "scp_upload":
+		return t.scpUpload(ctx, args)
+	case "scp_download":
+		return t.scpDownload(ctx, args)
 	default:
 		return &types.ToolResult{
 			Success: false,
-			Error:   fmt.Sprintf("unknown action: %s (valid actions: exec, hosts, status, session_start, session_send, session_close, session_list, tunnel_create, tunnel_close, tunnel_list)", action),
+			Error:   fmt.Sprintf("unknown action: %s (valid actions: exec, hosts, status, session_start, session_send, session_close, session_list, tunnel_create, tunnel_close, tunnel_list, scp_upload, scp_download)", action),
 		}, nil
 	}
 }
@@ -330,6 +358,19 @@ func (t *SSHTool) executeCommand(ctx context.Context, args map[string]interface{
 	execTimeout := time.Duration(timeout) * time.Second
 	result, err := t.client.Execute(ctx, host, command, execTimeout)
 	if err != nil {
+		// Log failed execution to audit
+		if t.auditLogger != nil && t.config.Audit.LogCommands {
+			_ = t.auditLogger.LogExecution(&AuditEntry{
+				Host:         host,
+				Command:      command,
+				SecurityTier: string(classification.Tier),
+				Approved:     true, // Command was approved by security check
+				ExitCode:     -1,
+				Duration:     "0s",
+				Error:        err.Error(),
+			})
+		}
+
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("execution failed: %v", err),
@@ -339,6 +380,22 @@ func (t *SSHTool) executeCommand(ctx context.Context, args map[string]interface{
 				"tier":    string(classification.Tier),
 			},
 		}, nil
+	}
+
+	// Log successful execution to audit
+	if t.auditLogger != nil && t.config.Audit.LogCommands {
+		_ = t.auditLogger.LogExecution(&AuditEntry{
+			Host:         result.Host,
+			Command:      result.Command,
+			SecurityTier: string(classification.Tier),
+			Approved:     true, // Command was approved by security check
+			ExitCode:     result.ExitCode,
+			Duration:     result.Duration.String(),
+			Stdout:       result.Stdout,
+			Stderr:       result.Stderr,
+			Error:        result.Error,
+			TimedOut:     result.TimedOut,
+		})
 	}
 
 	// Build response
@@ -658,6 +715,20 @@ func (t *SSHTool) sessionSend(ctx context.Context, args map[string]interface{}) 
 	execTimeout := time.Duration(timeout) * time.Second
 	output, err := t.sessionManager.SendCommand(sessionID, command, execTimeout)
 	if err != nil {
+		// Log failed execution to audit
+		if t.auditLogger != nil && t.config.Audit.LogCommands {
+			_ = t.auditLogger.LogExecution(&AuditEntry{
+				SessionID:    sessionID,
+				Host:         sessionInfo.Host,
+				Command:      command,
+				SecurityTier: string(classification.Tier),
+				Approved:     true, // Command was approved by security check
+				ExitCode:     -1,
+				Duration:     "0s",
+				Error:        err.Error(),
+			})
+		}
+
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("failed to send command: %v", err),
@@ -666,6 +737,21 @@ func (t *SSHTool) sessionSend(ctx context.Context, args map[string]interface{}) 
 				"command":    command,
 			},
 		}, nil
+	}
+
+	// Log successful execution to audit
+	if t.auditLogger != nil && t.config.Audit.LogCommands {
+		_ = t.auditLogger.LogExecution(&AuditEntry{
+			SessionID:    sessionID,
+			Host:         sessionInfo.Host,
+			Command:      command,
+			SecurityTier: string(classification.Tier),
+			Approved:     true, // Command was approved by security check
+			ExitCode:     output.ExitCode,
+			Duration:     output.Duration.String(),
+			Stdout:       output.Stdout,
+			Stderr:       output.Stderr,
+		})
 	}
 
 	// Build response
@@ -1004,6 +1090,219 @@ func (t *SSHTool) listTunnels(ctx context.Context, args map[string]interface{}) 
 		Data: map[string]interface{}{
 			"count":   len(tunnels),
 			"tunnels": tunnelData,
+		},
+	}, nil
+}
+
+// scpUpload uploads a local file to a remote host via SCP
+func (t *SSHTool) scpUpload(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	host := t.getStringArg(args, "host", "")
+	localPath := t.getStringArg(args, "local_path", "")
+	remotePath := t.getStringArg(args, "remote_path", "")
+
+	// Validate required parameters
+	if host == "" {
+		return types.NewErrorResult("missing_parameter", "host parameter is required for scp_upload action").
+			WithParameter("host", nil).
+			WithSuggestions([]string{"Use action=hosts to list available hosts"}), nil
+	}
+
+	if localPath == "" {
+		return types.NewErrorResult("missing_parameter", "local_path parameter is required for scp_upload action").
+			WithParameter("local_path", nil), nil
+	}
+
+	if remotePath == "" {
+		return types.NewErrorResult("missing_parameter", "remote_path parameter is required for scp_upload action").
+			WithParameter("remote_path", nil), nil
+	}
+
+	// Look up host configuration
+	hostConfig := t.config.GetHostByName(host)
+	if hostConfig == nil {
+		availableHosts := t.getHostNames()
+		return types.NewErrorResult("invalid_host", fmt.Sprintf("host '%s' not found in configuration", host)).
+			WithParameter("host", host).
+			WithAvailableValues(availableHosts).
+			WithSuggestions([]string{"Use action=hosts to see all configured hosts"}), nil
+	}
+
+	// Check if host is enabled
+	if !hostConfig.IsHostEnabled() {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("host '%s' is disabled", host),
+		}, nil
+	}
+
+	// Check if local file exists and get its info
+	localInfo, err := os.Stat(localPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &types.ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("local file not found: %s", localPath),
+			}, nil
+		}
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to stat local file: %v", err),
+		}, nil
+	}
+
+	if localInfo.IsDir() {
+		return &types.ToolResult{
+			Success: false,
+			Error:   "local_path is a directory; only single files are supported in v1",
+		}, nil
+	}
+
+	// Classify the operation (upload is modify-tier)
+	classification := t.securityEngine.ClassifyCommand(fmt.Sprintf("scp upload to %s", remotePath))
+	classification.Tier = TierModify // Override to ensure uploads are modify-tier
+
+	// Check if approval is required
+	if classification.RequiresApproval {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("SCP upload requires approval (tier: %s)", classification.Tier),
+			Data: map[string]interface{}{
+				"tier":              string(classification.Tier),
+				"requires_approval": true,
+			},
+		}, nil
+	}
+
+	// Get SSH client for the host
+	sshClient, err := t.getSSHClientForHost(host)
+	if err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to connect to host: %v", err),
+		}, nil
+	}
+
+	// Create SCP client
+	scpClient := NewSCPClient(sshClient)
+
+	// Perform the upload
+	startTime := time.Now()
+	if err := scpClient.Upload(localPath, remotePath, 0); err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("SCP upload failed: %v", err),
+			Data: map[string]interface{}{
+				"local_path":  localPath,
+				"remote_path": remotePath,
+				"host":        host,
+			},
+		}, nil
+	}
+	duration := time.Since(startTime)
+
+	return &types.ToolResult{
+		Success: true,
+		Content: fmt.Sprintf("File uploaded successfully:\n  Local: %s\n  Remote: %s\n  Size: %d bytes\n  Duration: %v",
+			localPath, remotePath, localInfo.Size(), duration),
+		Data: map[string]interface{}{
+			"local_path":  localPath,
+			"remote_path": remotePath,
+			"host":        host,
+			"size":        localInfo.Size(),
+			"duration_ms": duration.Milliseconds(),
+		},
+	}, nil
+}
+
+// scpDownload downloads a file from a remote host to a local path via SCP
+func (t *SSHTool) scpDownload(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	host := t.getStringArg(args, "host", "")
+	remotePath := t.getStringArg(args, "remote_path", "")
+	localPath := t.getStringArg(args, "local_path", "")
+
+	// Validate required parameters
+	if host == "" {
+		return types.NewErrorResult("missing_parameter", "host parameter is required for scp_download action").
+			WithParameter("host", nil).
+			WithSuggestions([]string{"Use action=hosts to list available hosts"}), nil
+	}
+
+	if remotePath == "" {
+		return types.NewErrorResult("missing_parameter", "remote_path parameter is required for scp_download action").
+			WithParameter("remote_path", nil), nil
+	}
+
+	if localPath == "" {
+		return types.NewErrorResult("missing_parameter", "local_path parameter is required for scp_download action").
+			WithParameter("local_path", nil), nil
+	}
+
+	// Look up host configuration
+	hostConfig := t.config.GetHostByName(host)
+	if hostConfig == nil {
+		availableHosts := t.getHostNames()
+		return types.NewErrorResult("invalid_host", fmt.Sprintf("host '%s' not found in configuration", host)).
+			WithParameter("host", host).
+			WithAvailableValues(availableHosts).
+			WithSuggestions([]string{"Use action=hosts to see all configured hosts"}), nil
+	}
+
+	// Check if host is enabled
+	if !hostConfig.IsHostEnabled() {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("host '%s' is disabled", host),
+		}, nil
+	}
+
+	// Classify the operation (download is read-tier)
+	classification := t.securityEngine.ClassifyCommand(fmt.Sprintf("scp download from %s", remotePath))
+	classification.Tier = TierRead // Override to ensure downloads are read-tier
+
+	// Get SSH client for the host
+	sshClient, err := t.getSSHClientForHost(host)
+	if err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to connect to host: %v", err),
+		}, nil
+	}
+
+	// Create SCP client
+	scpClient := NewSCPClient(sshClient)
+
+	// Perform the download
+	startTime := time.Now()
+	if err := scpClient.Download(remotePath, localPath); err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("SCP download failed: %v", err),
+			Data: map[string]interface{}{
+				"remote_path": remotePath,
+				"local_path":  localPath,
+				"host":        host,
+			},
+		}, nil
+	}
+	duration := time.Since(startTime)
+
+	// Get file info after download
+	localInfo, err := os.Stat(localPath)
+	var fileSize int64
+	if err == nil {
+		fileSize = localInfo.Size()
+	}
+
+	return &types.ToolResult{
+		Success: true,
+		Content: fmt.Sprintf("File downloaded successfully:\n  Remote: %s\n  Local: %s\n  Size: %d bytes\n  Duration: %v",
+			remotePath, localPath, fileSize, duration),
+		Data: map[string]interface{}{
+			"remote_path": remotePath,
+			"local_path":  localPath,
+			"host":        host,
+			"size":        fileSize,
+			"duration_ms": duration.Milliseconds(),
 		},
 	}, nil
 }
@@ -1419,6 +1718,28 @@ func (t *SSHTool) GetUsageExamples() []types.ToolExample {
 				"tunnel_id": "abc-123-def",
 			},
 			Expected: "Confirmation that tunnel was closed",
+		},
+		{
+			Name:        "Upload file",
+			Description: "Upload a local file to a remote host",
+			Args: map[string]interface{}{
+				"action":      "scp_upload",
+				"host":        "web-prod-1",
+				"local_path":  "/tmp/data.json",
+				"remote_path": "/var/www/html/data.json",
+			},
+			Expected: "File uploaded confirmation with size and duration",
+		},
+		{
+			Name:        "Download file",
+			Description: "Download a file from a remote host",
+			Args: map[string]interface{}{
+				"action":      "scp_download",
+				"host":        "web-prod-1",
+				"remote_path": "/var/log/application.log",
+				"local_path":  "/tmp/application.log",
+			},
+			Expected: "File downloaded confirmation with size and duration",
 		},
 	}
 }
