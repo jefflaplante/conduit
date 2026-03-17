@@ -280,6 +280,74 @@ func TestInvalidStates(t *testing.T) {
 	}
 }
 
+func TestStateHooks_BoundedConcurrency(t *testing.T) {
+	tracker := NewSessionStateTracker()
+
+	// Track concurrent hook executions
+	var currentConcurrency int64
+	var maxConcurrency int64
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// Register many hooks that sleep briefly to allow overlap
+	numHooks := 30
+	for i := 0; i < numHooks; i++ {
+		tracker.AddStateHook(func(event StateChangeEvent) {
+			defer wg.Done()
+
+			// Track concurrency
+			mu.Lock()
+			currentConcurrency++
+			if currentConcurrency > maxConcurrency {
+				maxConcurrency = currentConcurrency
+			}
+			mu.Unlock()
+
+			// Simulate some work
+			time.Sleep(50 * time.Millisecond)
+
+			mu.Lock()
+			currentConcurrency--
+			mu.Unlock()
+		})
+	}
+
+	// Trigger a state change which fires all hooks
+	wg.Add(numHooks)
+	err := tracker.UpdateState("bounded-test", SessionStateProcessing, nil)
+	if err != nil {
+		t.Fatalf("Failed to update state: %v", err)
+	}
+
+	// Wait for all hooks to complete
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// All hooks completed
+	case <-time.After(10 * time.Second):
+		t.Fatal("Hooks did not complete within timeout")
+	}
+
+	mu.Lock()
+	observed := maxConcurrency
+	mu.Unlock()
+
+	// Max concurrency should not exceed the semaphore capacity (maxHookConcurrency = 10)
+	if observed > int64(maxHookConcurrency) {
+		t.Errorf("Max concurrent hooks (%d) exceeded semaphore capacity (%d)", observed, maxHookConcurrency)
+	}
+
+	// Verify hooks actually ran concurrently (at least 2)
+	if observed < 2 {
+		t.Logf("Warning: only %d concurrent hooks observed; expected some parallelism", observed)
+	}
+}
+
 func TestSessionRemoval(t *testing.T) {
 	tracker := NewSessionStateTracker()
 	sessionKey := "removal-test"

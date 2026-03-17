@@ -38,6 +38,7 @@ type SearchCache struct {
 	config  CacheConfig
 	entries map[string]*CacheEntry
 	mutex   sync.RWMutex
+	done    chan struct{} // signals cleanup goroutine to stop
 }
 
 // NewSearchCache creates a new search cache
@@ -45,12 +46,18 @@ func NewSearchCache(config CacheConfig) *SearchCache {
 	cache := &SearchCache{
 		config:  config,
 		entries: make(map[string]*CacheEntry),
+		done:    make(chan struct{}),
 	}
 
 	// Start cleanup goroutine
 	go cache.startCleanup()
 
 	return cache
+}
+
+// Close stops the cleanup goroutine and releases resources.
+func (c *SearchCache) Close() {
+	close(c.done)
 }
 
 // Get retrieves a cached search result
@@ -159,8 +166,13 @@ func (c *SearchCache) startCleanup() {
 	ticker := time.NewTicker(5 * time.Minute) // Cleanup every 5 minutes
 	defer ticker.Stop()
 
-	for range ticker.C {
-		c.cleanupExpired()
+	for {
+		select {
+		case <-ticker.C:
+			c.cleanupExpired()
+		case <-c.done:
+			return
+		}
 	}
 }
 

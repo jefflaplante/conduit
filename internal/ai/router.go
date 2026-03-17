@@ -108,6 +108,7 @@ type GenerateResponse struct {
 	Content   string     `json:"content"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	Usage     Usage      `json:"usage,omitempty"`
+	Partial   bool       `json:"partial,omitempty"` // True when response is incomplete due to mid-stream error
 }
 
 // ChatMessage represents a message in a conversation

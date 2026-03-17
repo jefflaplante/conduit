@@ -405,3 +405,26 @@ func TestResultCache_ConcurrentGetSet(t *testing.T) {
 		t.Errorf("metrics should not be negative: hits=%d, misses=%d", metrics.Hits, metrics.Misses)
 	}
 }
+
+func TestResultCache_CleanupStopsOnClose(t *testing.T) {
+	storage := NewMemoryStorage()
+	cache := NewResultCache(storage, 10)
+
+	// The cleanup goroutine is running. Close should stop it.
+	cache.Close()
+
+	// After Close(), the done channel should be closed.
+	select {
+	case <-cache.done:
+		// expected - channel is closed, cleanup goroutine will exit
+	case <-time.After(time.Second):
+		t.Fatal("Expected done channel to be closed after Close()")
+	}
+
+	// Verify cache still works for reads after closing cleanup (graceful degradation)
+	ctx := context.Background()
+	_, found := cache.Get(ctx, "any_key")
+	if found {
+		t.Error("Should not find a non-existent key")
+	}
+}
