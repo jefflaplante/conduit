@@ -59,7 +59,7 @@ type Message struct {
 
 // NewStore creates a new session store
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", database.BuildDSN(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -333,17 +333,20 @@ func (s *Store) AddMessage(sessionKey, role, content string, metadata map[string
 		return nil, fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
-	_, err = s.db.Exec(`
-		INSERT INTO messages (id, session_key, role, content, timestamp, metadata)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`,
-		message.ID,
-		message.SessionKey,
-		message.Role,
-		message.Content,
-		message.Timestamp,
-		string(metadataJSON),
-	)
+	err = database.RetryOnBusy(2, func() error {
+		_, err := s.db.Exec(`
+			INSERT INTO messages (id, session_key, role, content, timestamp, metadata)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`,
+			message.ID,
+			message.SessionKey,
+			message.Role,
+			message.Content,
+			message.Timestamp,
+			string(metadataJSON),
+		)
+		return err
+	})
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to save message: %w", err)
@@ -431,16 +434,15 @@ func (s *Store) GetMessages(sessionKey string, limit int) ([]Message, error) {
 	return messages, nil
 }
 
-// updateSessionMessageCount updates the message count for a session
+// updateSessionMessageCount increments the message count for a session.
+// Uses atomic increment instead of COUNT(*) subquery to avoid a table scan.
 func (s *Store) updateSessionMessageCount(sessionKey string) error {
 	_, err := s.db.Exec(`
-		UPDATE sessions 
-		SET message_count = (
-			SELECT COUNT(*) FROM messages WHERE session_key = ?
-		),
-		updated_at = CURRENT_TIMESTAMP
+		UPDATE sessions
+		SET message_count = message_count + 1,
+		    updated_at = CURRENT_TIMESTAMP
 		WHERE key = ?
-	`, sessionKey, sessionKey)
+	`, sessionKey)
 
 	if err != nil {
 		return fmt.Errorf("failed to update session message count: %w", err)
@@ -487,6 +489,50 @@ func (s *Store) SetSessionContext(sessionKey, key, value string) error {
 	`, key, value, sessionKey)
 	if err != nil {
 		return fmt.Errorf("failed to update session context: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("session not found: %s", sessionKey)
+	}
+
+	return nil
+}
+
+// SetSessionContextBatch updates multiple keys in the session's context in a single statement.
+// This reduces write lock acquisitions from N to 1 compared to N individual SetSessionContext calls.
+func (s *Store) SetSessionContextBatch(sessionKey string, kvPairs map[string]string) error {
+	if len(kvPairs) == 0 {
+		return nil
+	}
+
+	// Build nested json_set: json_set(json_set(context, '$.k1', ?), '$.k2', ?)
+	expr := "context"
+	args := make([]interface{}, 0, len(kvPairs)*2+1)
+	for key, value := range kvPairs {
+		expr = fmt.Sprintf("json_set(%s, '$.'||?, ?)", expr)
+		args = append(args, key, value)
+	}
+	args = append(args, sessionKey)
+
+	query := fmt.Sprintf(`
+		UPDATE sessions
+		SET context = %s,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE key = ?
+	`, expr)
+
+	var result sql.Result
+	err := database.RetryOnBusy(2, func() error {
+		var execErr error
+		result, execErr = s.db.Exec(query, args...)
+		return execErr
+	})
+	if err != nil {
+		return fmt.Errorf("failed to batch update session context: %w", err)
 	}
 
 	rows, err := result.RowsAffected()

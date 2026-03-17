@@ -2,6 +2,7 @@ package searchdb
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -214,6 +215,77 @@ func TestMessageSyncerCallbacks(t *testing.T) {
 	err = sdb.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE session_key = 'session-1'").Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
+}
+
+func TestAsyncMessageSyncer_EventualSync(t *testing.T) {
+	tmpDir := t.TempDir()
+	searchPath := filepath.Join(tmpDir, "search.db")
+	gatewayPath := filepath.Join(tmpDir, "gateway.db")
+
+	gatewayDB, err := createTestGatewayDB(gatewayPath)
+	require.NoError(t, err)
+	defer gatewayDB.Close()
+
+	sdb, err := NewSearchDB(searchPath, gatewayPath, gatewayDB)
+	require.NoError(t, err)
+	defer sdb.Close()
+
+	syncer := NewMessageSyncer(sdb.DB(), gatewayDB)
+	async := NewAsyncMessageSyncer(syncer, 256)
+
+	// Fire 100 rapid messages through the async callback
+	cb := async.MessageAddedCallback()
+	for i := 0; i < 100; i++ {
+		cb(
+			fmt.Sprintf("msg-%d", i),
+			"session-1",
+			"user",
+			fmt.Sprintf("message content %d", i),
+		)
+	}
+
+	// Close waits for drain
+	async.Close()
+
+	// All 100 should now be in the FTS index
+	var count int
+	err = sdb.DB().QueryRow("SELECT COUNT(*) FROM messages_fts").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 100, count)
+}
+
+func TestAsyncMessageSyncer_QueueFull(t *testing.T) {
+	tmpDir := t.TempDir()
+	searchPath := filepath.Join(tmpDir, "search.db")
+	gatewayPath := filepath.Join(tmpDir, "gateway.db")
+
+	gatewayDB, err := createTestGatewayDB(gatewayPath)
+	require.NoError(t, err)
+	defer gatewayDB.Close()
+
+	sdb, err := NewSearchDB(searchPath, gatewayPath, gatewayDB)
+	require.NoError(t, err)
+	defer sdb.Close()
+
+	syncer := NewMessageSyncer(sdb.DB(), gatewayDB)
+	// Tiny buffer to force drops
+	async := NewAsyncMessageSyncer(syncer, 1)
+
+	// Fire many messages rapidly — some will be dropped, none should block or panic
+	cb := async.MessageAddedCallback()
+	for i := 0; i < 50; i++ {
+		cb(fmt.Sprintf("msg-%d", i), "session-1", "user", fmt.Sprintf("content %d", i))
+	}
+
+	async.Close()
+
+	// At least some messages should have been synced (the first one at minimum)
+	var count int
+	err = sdb.DB().QueryRow("SELECT COUNT(*) FROM messages_fts").Scan(&count)
+	require.NoError(t, err)
+	assert.True(t, count >= 1, "Expected at least 1 synced message, got %d", count)
+	// Should not have all 50 since queue was tiny
+	t.Logf("Synced %d out of 50 messages with buffer size 1", count)
 }
 
 func TestMessageSyncerGetStats(t *testing.T) {

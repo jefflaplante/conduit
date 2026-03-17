@@ -224,14 +224,11 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 			promptTokens = usage.PromptTokens
 			completionTokens = usage.CompletionTokens
 			totalTokens = usage.TotalTokens
-			_ = g.sessions.SetSessionContext(session.Key, "last_prompt_tokens", strconv.Itoa(promptTokens))
-			_ = g.sessions.SetSessionContext(session.Key, "last_completion_tokens", strconv.Itoa(completionTokens))
-			_ = g.sessions.SetSessionContext(session.Key, "last_total_tokens", strconv.Itoa(totalTokens))
 
 			// Proactive context window warning
-			if warning := contextWarningIfNeeded(session, promptTokens, modelOverride); warning.Text != "" {
+			warning := contextWarningIfNeeded(session, promptTokens, modelOverride)
+			if warning.Text != "" {
 				responseContent += warning.Text
-				_ = g.sessions.SetSessionContext(session.Key, warning.Key, "true")
 			}
 
 			// Accumulate session cost
@@ -239,8 +236,19 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 			prevCost, _ := strconv.ParseFloat(session.Context["session_total_cost"], 64)
 			sessionCost = prevCost + requestCost
 			prevCount, _ := strconv.Atoi(session.Context["session_request_count"])
-			_ = g.sessions.SetSessionContext(session.Key, "session_total_cost", fmt.Sprintf("%.6f", sessionCost))
-			_ = g.sessions.SetSessionContext(session.Key, "session_request_count", strconv.Itoa(prevCount+1))
+
+			// Batch all context updates into a single write
+			batch := map[string]string{
+				"last_prompt_tokens":     strconv.Itoa(promptTokens),
+				"last_completion_tokens": strconv.Itoa(completionTokens),
+				"last_total_tokens":      strconv.Itoa(totalTokens),
+				"session_total_cost":     fmt.Sprintf("%.6f", sessionCost),
+				"session_request_count":  strconv.Itoa(prevCount + 1),
+			}
+			if warning.Text != "" {
+				batch[warning.Key] = "true"
+			}
+			_ = g.sessions.SetSessionContextBatch(session.Key, batch)
 		}
 	}
 
@@ -342,11 +350,13 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			return
 		}
 		// Clear persisted context usage so /context reflects the reset
-		_ = g.sessions.SetSessionContext(sessionKey, "last_prompt_tokens", "")
-		_ = g.sessions.SetSessionContext(sessionKey, "last_completion_tokens", "")
-		_ = g.sessions.SetSessionContext(sessionKey, "last_total_tokens", "")
-		_ = g.sessions.SetSessionContext(sessionKey, "session_total_cost", "")
-		_ = g.sessions.SetSessionContext(sessionKey, "session_request_count", "")
+		_ = g.sessions.SetSessionContextBatch(sessionKey, map[string]string{
+			"last_prompt_tokens":     "",
+			"last_completion_tokens": "",
+			"last_total_tokens":      "",
+			"session_total_cost":     "",
+			"session_request_count":  "",
+		})
 		sendResponse("Session reset. Fresh start!")
 
 	case text == "/status" || strings.HasPrefix(text, "/status "):

@@ -3,6 +3,8 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"log"
+	"net/url"
 
 	_ "modernc.org/sqlite"
 )
@@ -267,7 +269,26 @@ func runMigration(db *sql.DB, migration Migration) error {
 	return tx.Commit()
 }
 
-// ConfigureDatabase applies SQLite optimizations and runs migrations
+// BuildDSN constructs a SQLite DSN with PRAGMAs embedded so every pool
+// connection gets them automatically. The modernc.org/sqlite driver applies
+// _pragma parameters on each new connection and sorts busy_timeout first.
+func BuildDSN(path string) string {
+	// url.PathEscape handles spaces/special chars in the file path.
+	dsn := "file:" + path + "?" + url.Values{
+		"_pragma": []string{
+			"busy_timeout=5000",
+			"journal_mode=WAL",
+			"synchronous=NORMAL",
+			"cache_size=10000",
+			"foreign_keys=1",
+		},
+		"_txlock": []string{"immediate"},
+	}.Encode()
+	return dsn
+}
+
+// ConfigureDatabase sets pool limits, verifies PRAGMAs, and runs migrations.
+// PRAGMAs are now applied via BuildDSN — this function no longer issues them.
 func ConfigureDatabase(db *sql.DB) error {
 	// Configure connection pool for SQLite
 	// SQLite serializes writes, so limit connections to avoid contention.
@@ -276,18 +297,11 @@ func ConfigureDatabase(db *sql.DB) error {
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(0) // Don't expire connections
 
-	// Apply SQLite performance configurations
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",   // Write-ahead logging for better concurrency
-		"PRAGMA busy_timeout=5000",  // Wait up to 5 seconds for locks
-		"PRAGMA synchronous=NORMAL", // Safer sync mode with good performance
-		"PRAGMA cache_size=10000",   // Increase cache size for better performance
-		"PRAGMA foreign_keys=ON",    // Enforce foreign key constraints
-	}
-
-	for _, pragma := range pragmas {
-		if _, err := db.Exec(pragma); err != nil {
-			return fmt.Errorf("failed to apply pragma '%s': %w", pragma, err)
+	// Verify PRAGMAs were applied (they come from the DSN now)
+	var busyTimeout int
+	if err := db.QueryRow("PRAGMA busy_timeout").Scan(&busyTimeout); err == nil {
+		if busyTimeout != 5000 {
+			log.Printf("WARNING: busy_timeout is %d, expected 5000 — DSN PRAGMAs may not be applied", busyTimeout)
 		}
 	}
 

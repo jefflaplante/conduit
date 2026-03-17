@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 
 	_ "modernc.org/sqlite"
 )
@@ -19,10 +20,23 @@ type SQLite struct {
 
 // NewSQLite creates a new SQLite storage at the given path.
 func NewSQLite(path string) (*SQLite, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn := "file:" + path + "?" + url.Values{
+		"_pragma": []string{
+			"busy_timeout=5000",
+			"journal_mode=WAL",
+			"synchronous=NORMAL",
+			"foreign_keys=1",
+		},
+		"_txlock": []string{"immediate"},
+	}.Encode()
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// Limit pool for this low-traffic database
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(1)
 
 	s := &SQLite{db: db, path: path}
 	if err := s.init(); err != nil {
@@ -34,20 +48,7 @@ func NewSQLite(path string) (*SQLite, error) {
 }
 
 func (s *SQLite) init() error {
-	// Configure SQLite
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA busy_timeout=5000",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA foreign_keys=ON",
-	}
-	for _, p := range pragmas {
-		if _, err := s.db.Exec(p); err != nil {
-			return fmt.Errorf("pragma failed: %w", err)
-		}
-	}
-
-	// Create tables
+	// PRAGMAs are applied via DSN. Just create tables.
 	schema := `
 		CREATE TABLE IF NOT EXISTS vectors (
 			id TEXT PRIMARY KEY,
