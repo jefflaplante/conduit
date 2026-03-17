@@ -279,8 +279,11 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		}, nil
 	}
 
-	// Start conversation history with initial request/response
-	conversationHistory := append(initialReq.Messages, ai.ChatMessage{
+	// Start conversation history with initial request/response.
+	// Use an explicit copy to avoid mutating the caller's slice when spare capacity exists.
+	msgs := make([]ai.ChatMessage, len(initialReq.Messages))
+	copy(msgs, initialReq.Messages)
+	conversationHistory := append(msgs, ai.ChatMessage{
 		Role:      "assistant",
 		Content:   initialResp.Content,
 		ToolCalls: initialResp.ToolCalls,

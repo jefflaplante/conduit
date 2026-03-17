@@ -60,6 +60,7 @@ func NewJobExecutor(workspaceDir string, sessionsStore SessionStoreInterface, co
 
 // ExecuteHeartbeatJob executes a heartbeat task by reading HEARTBEAT.md and executing the instructions
 func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExecutor) (*HeartbeatResult, error) {
+	startTime := time.Now()
 	log.Printf("[Heartbeat] Starting heartbeat task execution")
 
 	// Create timeout context
@@ -132,7 +133,7 @@ func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExec
 	}
 
 	result.SessionKey = sessionKey
-	result.ExecutionTime = time.Since(time.Now()) // This will be negative, but we'll fix it in actual usage
+	result.ExecutionTime = time.Since(startTime)
 
 	log.Printf("[Heartbeat] Completed execution: status=%s, action_count=%d",
 		result.Status, len(result.Actions))

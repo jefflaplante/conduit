@@ -89,9 +89,12 @@ func (ee *EnhancedExecutionEngine) executeWithPlanning(ctx context.Context, call
 	// Convert planning results to execution results
 	executionResults := ee.convertPlanningResults(calls, planningResult)
 
+	cacheHitRate := 0.0
+	if planningResult.TotalSteps > 0 {
+		cacheHitRate = float64(planningResult.CacheHits) / float64(planningResult.TotalSteps) * 100
+	}
 	log.Printf("Planned execution completed: %d steps, %v execution time, %.1f%% cache hit rate",
-		planningResult.TotalSteps, planningResult.ExecutionTime,
-		float64(planningResult.CacheHits)/float64(planningResult.TotalSteps)*100)
+		planningResult.TotalSteps, planningResult.ExecutionTime, cacheHitRate)
 
 	return executionResults, nil
 }

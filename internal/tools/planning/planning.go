@@ -176,8 +176,12 @@ func (pe *PlanningEngine) PlanAndExecute(ctx context.Context, toolCalls []ai.Too
 		EstimateAccuracy:     estimateAccuracy,
 	}
 
+	cacheHitRate := 0.0
+	if result.TotalSteps > 0 {
+		cacheHitRate = float64(result.CacheHits) / float64(result.TotalSteps) * 100
+	}
 	log.Printf("Planned execution completed: %d steps, %v planning time, %v execution time, %.1f%% cache hit rate",
-		result.TotalSteps, planningTime, executionTime, float64(result.CacheHits)/float64(result.TotalSteps)*100)
+		result.TotalSteps, planningTime, executionTime, cacheHitRate)
 
 	return planningResult, nil
 }

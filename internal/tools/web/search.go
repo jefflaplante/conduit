@@ -145,8 +145,8 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]interface{}
 		}, nil
 	}
 
-	// Debug logging
-	log.Printf("[WebSearch] API key loaded: %s", t.braveAPIKey[:8]+"...")
+	// Debug logging - only indicate key presence, never log key material
+	log.Printf("[WebSearch] API key loaded: [%d chars]", len(t.braveAPIKey))
 
 	// Perform search
 	results, err := t.searchBrave(ctx, query, count, country, freshness, searchLang)

@@ -20,6 +20,7 @@ type Adapter struct {
 	cancel         context.CancelFunc
 	mutex          sync.RWMutex
 	messageHandler func(*protocol.OutgoingMessage) error
+	stopped        bool
 }
 
 // NewAdapter creates a new TUI adapter
@@ -77,6 +78,11 @@ func (a *Adapter) Stop() error {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
 
+	if a.stopped {
+		return nil
+	}
+	a.stopped = true
+
 	if a.cancel != nil {
 		a.cancel()
 	}
@@ -96,6 +102,16 @@ func (a *Adapter) Stop() error {
 
 // SendMessage sends an outgoing message through this channel
 func (a *Adapter) SendMessage(msg *protocol.OutgoingMessage) error {
+	a.mutex.RLock()
+	if a.stopped {
+		a.mutex.RUnlock()
+		return &ChannelError{
+			Code:    "ADAPTER_STOPPED",
+			Message: "TUI adapter is stopped",
+		}
+	}
+	a.mutex.RUnlock()
+
 	select {
 	case a.outgoing <- msg:
 		return nil
@@ -130,6 +146,16 @@ func (a *Adapter) IsHealthy() bool {
 
 // SendIncomingMessage allows the TUI client to send messages into the adapter
 func (a *Adapter) SendIncomingMessage(msg *protocol.IncomingMessage) error {
+	a.mutex.RLock()
+	if a.stopped {
+		a.mutex.RUnlock()
+		return &ChannelError{
+			Code:    "ADAPTER_STOPPED",
+			Message: "TUI adapter is stopped",
+		}
+	}
+	a.mutex.RUnlock()
+
 	select {
 	case a.incoming <- msg:
 		return nil

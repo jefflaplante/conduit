@@ -297,11 +297,11 @@ func (t *WebFetchTool) extractText(doc *goquery.Document) string {
 
 // cleanContent cleans up extracted content
 func (t *WebFetchTool) cleanContent(content string) string {
-	// Remove excessive whitespace
-	re := regexp.MustCompile(`\s+`)
+	// Collapse runs of horizontal whitespace (spaces, tabs) but preserve newlines
+	re := regexp.MustCompile(`[^\S\n]+`)
 	content = re.ReplaceAllString(content, " ")
 
-	// Fix line breaks
+	// Collapse 3+ consecutive newlines down to 2
 	re = regexp.MustCompile(`\n\s*\n\s*\n`)
 	content = re.ReplaceAllString(content, "\n\n")
 
