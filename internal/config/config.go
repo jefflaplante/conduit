@@ -33,6 +33,7 @@ type Config struct {
 	AgentHeartbeat AgentHeartbeatConfig `json:"agent_heartbeat,omitempty"`
 	SSH            SSHServerConfig      `json:"ssh,omitempty"`
 	Vector         VectorConfig         `json:"vector,omitempty"`
+	RemoteSSH      RemoteSSHConfig      `json:"remote_ssh,omitempty"`
 }
 
 // VectorConfig holds configuration for the optional vector/semantic search service.
@@ -444,6 +445,7 @@ func Default() *Config {
 		},
 		Heartbeat:      DefaultHeartbeatConfig(),
 		AgentHeartbeat: DefaultAgentHeartbeatConfig(),
+		RemoteSSH:      DefaultRemoteSSHConfig(),
 		Channels: []ChannelConfig{
 			{
 				Name:    "telegram",
@@ -607,6 +609,11 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate remote SSH configuration
+	if err := c.RemoteSSH.Validate(); err != nil {
+		return fmt.Errorf("invalid remote SSH configuration: %w", err)
+	}
+
 	return nil
 }
 
@@ -651,6 +658,14 @@ func (c *Config) expandTilde() {
 	c.Database.Path = expand(c.Database.Path)
 	c.SSH.HostKeyPath = expand(c.SSH.HostKeyPath)
 	c.SSH.AuthorizedKeysPath = expand(c.SSH.AuthorizedKeysPath)
+
+	// Expand tilde in RemoteSSH config
+	c.RemoteSSH.Audit.LogPath = expand(c.RemoteSSH.Audit.LogPath)
+	c.RemoteSSH.Pool.KnownHostsFile = expand(c.RemoteSSH.Pool.KnownHostsFile)
+	c.RemoteSSH.Defaults.IdentityFile = expand(c.RemoteSSH.Defaults.IdentityFile)
+	for i := range c.RemoteSSH.Hosts {
+		c.RemoteSSH.Hosts[i].IdentityFile = expand(c.RemoteSSH.Hosts[i].IdentityFile)
+	}
 }
 
 // loadSecretsFile reads a KEY=VALUE file into the process environment.
