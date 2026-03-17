@@ -6,6 +6,7 @@ import (
 	"log"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,7 +16,7 @@ type MetricsCollector struct {
 	planMetrics         map[string]*PlanMetricData
 	mu                  sync.RWMutex
 	startTime           time.Time
-	enabled             bool
+	enabled             atomic.Bool
 	retentionDays       int
 	aggregationInterval time.Duration
 }
@@ -119,19 +120,20 @@ type PerformanceRecommendation struct {
 
 // NewMetricsCollector creates a new metrics collector
 func NewMetricsCollector() *MetricsCollector {
-	return &MetricsCollector{
+	mc := &MetricsCollector{
 		data:                make(map[string]*ToolMetricData),
 		planMetrics:         make(map[string]*PlanMetricData),
 		startTime:           time.Now(),
-		enabled:             true,
 		retentionDays:       30,
 		aggregationInterval: time.Minute * 5,
 	}
+	mc.enabled.Store(true)
+	return mc
 }
 
 // RecordExecution records a tool execution for metrics
 func (mc *MetricsCollector) RecordExecution(toolName string, duration time.Duration, success bool, cacheHit bool, retries int, fallbackUsed bool, cost float64, err error) {
-	if !mc.enabled {
+	if !mc.enabled.Load() {
 		return
 	}
 
@@ -220,7 +222,7 @@ func (mc *MetricsCollector) RecordExecution(toolName string, duration time.Durat
 
 // RecordPlanExecution records execution plan metrics
 func (mc *MetricsCollector) RecordPlanExecution(planResult *PlanResult, estimated EstimatedMetrics, optimizations []string) {
-	if !mc.enabled {
+	if !mc.enabled.Load() {
 		return
 	}
 
@@ -638,8 +640,8 @@ func (mc *MetricsCollector) Reset() {
 	log.Printf("Metrics collector reset")
 }
 
-// Enable/disable metrics collection
+// SetEnabled enables or disables metrics collection
 func (mc *MetricsCollector) SetEnabled(enabled bool) {
-	mc.enabled = enabled
+	mc.enabled.Store(enabled)
 	log.Printf("Metrics collection enabled: %v", enabled)
 }

@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -529,5 +530,65 @@ func BenchmarkSearchRouter_ProviderDetection(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		model := models[i%len(models)]
 		router.detectProviderFromModel(model)
+	}
+}
+
+func TestSearchRouter_ConcurrentAccess(t *testing.T) {
+	router := createTestRouter()
+
+	var wg sync.WaitGroup
+
+	// Concurrently set the current model
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			models := []string{"anthropic/claude-opus-4-6", "gpt-4", "claude-3-5-sonnet", ""}
+			router.SetCurrentModel(models[id%len(models)])
+		}(i)
+	}
+
+	// Concurrently perform searches
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx := context.Background()
+			params := SearchParameters{
+				Query: "concurrent test",
+				Count: 3,
+			}
+			_, _ = router.Search(ctx, params)
+		}()
+	}
+
+	// Concurrently read available providers
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 5; j++ {
+				_ = router.GetAvailableProviders()
+			}
+		}()
+	}
+
+	// Concurrently get usage stats
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 5; j++ {
+				_ = router.GetUsageStats()
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Verify router is in a consistent state
+	providers := router.GetAvailableProviders()
+	if len(providers) == 0 {
+		t.Error("expected at least one available provider")
 	}
 }

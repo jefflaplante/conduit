@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -608,5 +609,87 @@ func TestBuildEmailSection_NoAliases(t *testing.T) {
 	// Should not contain "Aliases:" line
 	if strings.Contains(section, "Aliases:") {
 		t.Error("email section should not contain Aliases line when no aliases configured")
+	}
+}
+
+func TestPromptBuilder_ConcurrentBuild(t *testing.T) {
+	pb := newTestPromptBuilder()
+
+	var wg sync.WaitGroup
+	// Concurrently build prompts with different sessions.
+	// This exercises the fix that Build() creates a local copy of sectionParams
+	// instead of mutating the shared one.
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			session := &sessions.Session{
+				Key:       "test-session",
+				ChannelID: "telegram-123",
+				UserID:    "user1",
+				Context:   map[string]string{"model": "claude-sonnet-4-20250514"},
+			}
+			blocks, err := pb.Build(context.Background(), session, false)
+			if err != nil {
+				t.Errorf("Build() failed in goroutine %d: %v", id, err)
+				return
+			}
+			if len(blocks) == 0 {
+				t.Errorf("Build() returned empty blocks in goroutine %d", id)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+func TestConduitAgent_ConcurrentSetAndBuild(t *testing.T) {
+	agent := newTestAgent()
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+
+	// Concurrently call SetTools
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			tools := []ai.Tool{
+				{Name: "TestTool", Description: "A test tool"},
+			}
+			agent.SetTools(tools)
+		}(i)
+	}
+
+	// Concurrently call BuildSystemPrompt
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			session := &sessions.Session{
+				Key:       "test-session",
+				ChannelID: "telegram-123",
+				UserID:    "user1",
+				Context:   map[string]string{"model": "claude-sonnet-4-20250514"},
+			}
+			_, _ = agent.BuildSystemPrompt(ctx, session)
+		}(i)
+	}
+
+	// Concurrently call GetToolDefinitions
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = agent.GetToolDefinitions()
+		}()
+	}
+
+	wg.Wait()
+
+	// Verify agent is in a consistent state
+	tools := agent.GetToolDefinitions()
+	if tools == nil {
+		t.Error("GetToolDefinitions should not return nil")
 	}
 }

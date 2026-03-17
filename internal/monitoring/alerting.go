@@ -296,9 +296,9 @@ func (am *AlertManager) Subscribe(handler AlertHandler) {
 // resolve any previously active alert. Returns the list of newly fired alerts.
 func (am *AlertManager) Evaluate() []Alert {
 	am.mu.Lock()
-	defer am.mu.Unlock()
 
 	if am.provider == nil {
+		am.mu.Unlock()
 		return nil
 	}
 
@@ -348,14 +348,13 @@ func (am *AlertManager) Evaluate() []Alert {
 		}
 	}
 
-	// Deliver alerts to handlers outside of the critical path but still under
-	// the same lock to guarantee ordering. Handlers should be lightweight;
-	// heavy work should be done asynchronously inside the handler.
+	// Copy handlers under lock, then release before calling them
+	// to avoid deadlocks in handler code.
 	handlers := make([]AlertHandler, len(am.handlers))
 	copy(handlers, am.handlers)
-
-	// Release lock before calling handlers to avoid deadlocks in handler code.
 	am.mu.Unlock()
+
+	// Deliver alerts to handlers outside of the lock.
 	for _, alert := range fired {
 		for _, h := range handlers {
 			func() {
@@ -368,7 +367,6 @@ func (am *AlertManager) Evaluate() []Alert {
 			}()
 		}
 	}
-	am.mu.Lock()
 
 	return fired
 }

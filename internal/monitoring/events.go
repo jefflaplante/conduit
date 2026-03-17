@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -212,6 +213,7 @@ type EventEmitterFilters struct {
 
 // MemoryEventStore is an in-memory implementation of EventStore
 type MemoryEventStore struct {
+	mu        sync.RWMutex
 	events    []*HeartbeatEvent
 	maxEvents int
 }
@@ -233,6 +235,9 @@ func (m *MemoryEventStore) Store(event *HeartbeatEvent) error {
 		return fmt.Errorf("event cannot be nil")
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	// Add the event
 	m.events = append(m.events, event)
 
@@ -248,6 +253,9 @@ func (m *MemoryEventStore) Store(event *HeartbeatEvent) error {
 
 // Query queries events from memory based on filter
 func (m *MemoryEventStore) Query(filter EventFilter) ([]*HeartbeatEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	var results []*HeartbeatEvent
 
 	for _, event := range m.events {
@@ -266,6 +274,9 @@ func (m *MemoryEventStore) Query(filter EventFilter) ([]*HeartbeatEvent, error) 
 
 // Count counts events matching the filter
 func (m *MemoryEventStore) Count(filter EventFilter) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	count := 0
 	for _, event := range m.events {
 		if event.MatchesFilter(filter) {
@@ -277,6 +288,9 @@ func (m *MemoryEventStore) Count(filter EventFilter) (int, error) {
 
 // Clear removes all events from memory
 func (m *MemoryEventStore) Clear() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.events = m.events[:0]
 	return nil
 }

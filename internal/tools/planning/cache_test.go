@@ -3,6 +3,7 @@ package planning
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -341,4 +342,66 @@ func (t *TestCachePolicy) GenerateKey(toolName string, args map[string]interface
 
 func (t *TestCachePolicy) Priority(toolName string, args map[string]interface{}) int {
 	return 5
+}
+
+func TestResultCache_ConcurrentGetSet(t *testing.T) {
+	storage := NewMemoryStorage()
+	cache := NewResultCache(storage, 10) // 10MB limit
+
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+
+	// Concurrently set cache entries
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			stepResult := &StepResult{
+				StepID:   fmt.Sprintf("step_%d", id),
+				ToolName: "web_search",
+				Success:  true,
+				Content:  fmt.Sprintf("Result %d", id),
+			}
+			cache.Set(ctx, fmt.Sprintf("key_%d", id), "web_search",
+				map[string]interface{}{"query": fmt.Sprintf("query_%d", id)}, stepResult)
+		}(i)
+	}
+
+	// Concurrently get cache entries
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 5; j++ {
+				cache.Get(ctx, fmt.Sprintf("key_%d", id%20))
+			}
+		}(i)
+	}
+
+	// Concurrently check cache metrics
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = cache.GetMetrics()
+		}()
+	}
+
+	// Concurrently invalidate entries
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cache.Invalidate(ctx, "web_search")
+		}()
+	}
+
+	wg.Wait()
+
+	// Verify cache is in a consistent state
+	metrics := cache.GetMetrics()
+	if metrics.Hits < 0 || metrics.Misses < 0 {
+		t.Errorf("metrics should not be negative: hits=%d, misses=%d", metrics.Hits, metrics.Misses)
+	}
 }

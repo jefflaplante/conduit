@@ -1250,6 +1250,44 @@ func TestMetricFromSnapshot_AllFields(t *testing.T) {
 	}
 }
 
+func TestAlertManagerEvaluate_NoDoubleUnlock(t *testing.T) {
+	// This test verifies that Evaluate does not double-unlock the mutex.
+	// Before the fix, Evaluate used defer mu.Unlock() and also called mu.Unlock()
+	// mid-function, causing a panic on the deferred unlock.
+	provider := newStaticProvider(map[string]float64{"error_rate": 50})
+	am := NewAlertManager(provider)
+
+	handler := &collectingHandler{}
+	am.Subscribe(handler)
+
+	am.AddRule(AlertRule{
+		Name:      "test_no_double_unlock",
+		Metric:    "error_rate",
+		Condition: ConditionGreaterThan,
+		Threshold: 10,
+		Severity:  AlertSeverityWarning,
+		Cooldown:  0,
+	})
+
+	// Run Evaluate multiple times concurrently to provoke any locking issues.
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// If double-unlock exists, this will panic.
+			fired := am.Evaluate()
+			_ = fired
+		}()
+	}
+	wg.Wait()
+
+	// Verify that the handler received alerts (proving Evaluate ran to completion).
+	if handler.count() < 1 {
+		t.Error("expected at least 1 alert from concurrent evaluations")
+	}
+}
+
 func TestMetricFromSnapshot_ErrorRateCalculation(t *testing.T) {
 	tests := []struct {
 		name      string

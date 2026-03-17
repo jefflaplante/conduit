@@ -1,8 +1,10 @@
 package ai
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -791,6 +793,122 @@ func TestStreamingAutoResolution(t *testing.T) {
 
 	if mockOllama.GetCallCount() != 1 {
 		t.Errorf("Expected ollama to be called, got %d", mockOllama.GetCallCount())
+	}
+}
+
+func TestAnthropicProvider_OAuthRefreshRace(t *testing.T) {
+	// Create a provider with an OAuth token that does NOT need refreshing.
+	// We exercise the concurrent read/write paths on apiKey and authCfg.
+	provider := &AnthropicProvider{
+		name:   "race-test",
+		apiKey: "sk-ant-oat01-initial-token",
+		model:  "claude-sonnet-4-20250514",
+		authCfg: &config.AuthConfig{
+			Type:       "oauth",
+			OAuthToken: "sk-ant-oat01-initial-token",
+			ExpiresAt:  time.Now().Add(1 * time.Hour).Unix(), // Valid, no refresh needed
+		},
+		client:  &http.Client{Timeout: 30 * time.Second},
+		isOAuth: true,
+	}
+
+	var wg sync.WaitGroup
+	// Concurrently call refreshOAuthToken (which acquires oauthMu and reads/writes apiKey)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = provider.refreshOAuthToken()
+		}()
+	}
+
+	// Concurrently read apiKey under the oauthMu lock (simulating what GenerateResponse does)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			provider.oauthMu.Lock()
+			_ = provider.apiKey
+			provider.oauthMu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+
+	// Verify the provider is still in a consistent state
+	if provider.apiKey == "" {
+		t.Error("apiKey should not be empty after concurrent access")
+	}
+}
+
+func TestRouter_ConcurrentProviderAccess(t *testing.T) {
+	cfg := config.AIConfig{
+		DefaultProvider: "mock",
+		Providers:       []config.ProviderConfig{},
+	}
+
+	router, err := NewRouter(cfg, nil)
+	if err != nil {
+		t.Fatalf("Failed to create router: %v", err)
+	}
+
+	// Register an initial mock provider
+	mock1 := NewMockProvider("mock")
+	mock1.AddResponse("Response from mock", nil)
+	router.RegisterProvider("mock", mock1)
+
+	var wg sync.WaitGroup
+
+	// Concurrently register providers
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			name := fmt.Sprintf("provider-%d", id)
+			p := NewMockProvider(name)
+			p.AddResponse(fmt.Sprintf("Response from %s", name), nil)
+			router.RegisterProvider(name, p)
+		}(i)
+	}
+
+	// Concurrently read providers via HasProviders, ListProviders, GetProviderMeta
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 5; j++ {
+				_ = router.HasProviders()
+				_ = router.ListProviders()
+				_, _ = router.GetProviderMeta("mock")
+			}
+		}()
+	}
+
+	// Concurrently call getProvider
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 5; j++ {
+				p, ok := router.getProvider("mock")
+				if ok && p == nil {
+					t.Error("getProvider returned ok=true but nil provider")
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Verify the router is in a consistent state
+	if !router.HasProviders() {
+		t.Error("router should have providers after concurrent registration")
+	}
+
+	// Verify we can retrieve the initially registered mock provider
+	p, ok := router.getProvider("mock")
+	if !ok || p == nil {
+		t.Error("expected to find 'mock' provider after concurrent access")
 	}
 }
 

@@ -88,8 +88,8 @@ func NewResultCache(storage CacheStorage, maxSizeMB int) *ResultCache {
 
 // Get retrieves a cached result
 func (rc *ResultCache) Get(ctx context.Context, key string) (*StepResult, bool) {
-	rc.mu.RLock()
-	defer rc.mu.RUnlock()
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
 
 	entry, err := rc.storage.Get(ctx, key)
 	if err != nil || entry == nil {
@@ -266,8 +266,10 @@ func (rc *ResultCache) Clear(ctx context.Context) error {
 
 // GetMetrics returns cache performance metrics
 func (rc *ResultCache) GetMetrics() *CacheMetrics {
+	// Acquire rc.mu first (broader lock) to read currentSize and EntryCount safely,
+	// then metrics.mu for the counters. Lock ordering: rc.mu before rc.metrics.mu.
+	rc.mu.RLock()
 	rc.metrics.mu.RLock()
-	defer rc.metrics.mu.RUnlock()
 
 	// Create copy to avoid race conditions
 	metrics := &CacheMetrics{
@@ -279,6 +281,9 @@ func (rc *ResultCache) GetMetrics() *CacheMetrics {
 		EntryCount:    rc.metrics.EntryCount,
 		StartTime:     rc.metrics.StartTime,
 	}
+
+	rc.metrics.mu.RUnlock()
+	rc.mu.RUnlock()
 
 	return metrics
 }

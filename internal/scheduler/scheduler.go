@@ -287,8 +287,11 @@ func (s *Scheduler) executeJob(job *Job) {
 	log.Printf("[Scheduler] Executing job: %s (%s)", job.ID, job.Name)
 
 	now := time.Now()
+
+	s.mu.Lock()
 	job.LastRun = &now
 	job.RunCount++
+	s.mu.Unlock()
 
 	var err error
 	if job.Type == JobTypeGo {
@@ -302,6 +305,7 @@ func (s *Scheduler) executeJob(job *Job) {
 		log.Printf("[Scheduler] Warning: executeJob called for system job %s", job.ID)
 	}
 
+	s.mu.Lock()
 	if err != nil {
 		job.LastError = err.Error()
 		log.Printf("[Scheduler] Job %s failed: %v", job.ID, err)
@@ -309,6 +313,7 @@ func (s *Scheduler) executeJob(job *Job) {
 		job.LastError = ""
 		log.Printf("[Scheduler] Job %s completed", job.ID)
 	}
+	s.mu.Unlock()
 
 	// Handle one-shot jobs
 	if job.OneShot {
@@ -324,14 +329,13 @@ func (s *Scheduler) executeJob(job *Job) {
 	}
 
 	// Update next run time
+	s.mu.Lock()
 	if job.Type == JobTypeGo && job.entryID != 0 {
 		entry := s.cron.Entry(job.entryID)
 		if !entry.Next.IsZero() {
 			job.NextRun = &entry.Next
 		}
 	}
-
-	s.mu.Lock()
 	s.saveJobs()
 	s.mu.Unlock()
 }
