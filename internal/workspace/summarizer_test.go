@@ -138,6 +138,9 @@ func TestSummaryManager_GetSummarizedContext_Summarizes(t *testing.T) {
 	if executor.callCount != 1 {
 		t.Errorf("executor should be called once, got %d calls", executor.callCount)
 	}
+
+	// Wait for async cache write to complete before test cleanup
+	time.Sleep(10 * time.Millisecond)
 }
 
 func TestSummaryManager_CacheHit(t *testing.T) {
@@ -252,6 +255,9 @@ func TestSummaryManager_CacheInvalidation(t *testing.T) {
 	if executor.callCount != 2 {
 		t.Errorf("changed content should invoke executor again, got %d calls", executor.callCount)
 	}
+
+	// Wait for async cache write to complete before test cleanup
+	time.Sleep(10 * time.Millisecond)
 }
 
 func TestComputeHash(t *testing.T) {
