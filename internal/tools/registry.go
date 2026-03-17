@@ -13,6 +13,7 @@ import (
 	"conduit/internal/tools/core"
 	"conduit/internal/tools/scheduling"
 	"conduit/internal/tools/schema"
+	"conduit/internal/tools/ssh"
 	"conduit/internal/tools/types"
 	"conduit/internal/tools/vision"
 	"conduit/internal/tools/web"
@@ -153,6 +154,16 @@ func (r *Registry) registerAllTools() {
 	allTools = append(allTools, []types.Tool{
 		&UniFiTool{registry: r},
 	}...)
+
+	// SSH remote execution tool (optional - requires configuration)
+	if r.services.ConfigMgr != nil && r.services.ConfigMgr.RemoteSSH.Enabled {
+		sshTool, err := ssh.NewSSHTool(r.services, &r.services.ConfigMgr.RemoteSSH)
+		if err != nil {
+			log.Printf("Failed to create SSH tool: %v", err)
+		} else {
+			allTools = append(allTools, sshTool)
+		}
+	}
 
 	// Google Workspace tools (optional - requires gws CLI)
 	allTools = append(allTools, []types.Tool{
