@@ -681,7 +681,7 @@ func TestSSHTool_GetUsageExamples(t *testing.T) {
 		}
 	}
 
-	expectedActions := []string{"exec", "hosts", "status"}
+	expectedActions := []string{"exec", "hosts", "status", "session_start", "session_send", "session_close", "session_list"}
 	for _, action := range expectedActions {
 		if !actions[action] {
 			t.Errorf("GetUsageExamples() missing example for action %s", action)
@@ -701,6 +701,351 @@ func TestSSHTool_SetClient(t *testing.T) {
 
 	if tool.client == nil {
 		t.Error("client should be set after SetClient")
+	}
+}
+
+// === Session Action Tests ===
+
+func TestSSHTool_SessionList_Empty(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	defer tool.Close()
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "session_list",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !result.Success {
+		t.Errorf("Execute() failed: %s", result.Error)
+	}
+
+	if !contains(result.Content, "No active") {
+		t.Error("Content should indicate no active sessions")
+	}
+
+	if result.Data["count"] != 0 {
+		t.Errorf("count = %v, want 0", result.Data["count"])
+	}
+}
+
+func TestSSHTool_SessionStart_MissingHost(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	defer tool.Close()
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "session_start",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail without host")
+	}
+
+	if result.ErrorDetails == nil {
+		t.Error("Should have error details")
+	}
+
+	if result.ErrorDetails.Parameter != "host" {
+		t.Errorf("ErrorDetails.Parameter = %s, want host", result.ErrorDetails.Parameter)
+	}
+}
+
+func TestSSHTool_SessionStart_InvalidHost(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	defer tool.Close()
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "session_start",
+		"host":   "nonexistent-host",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail with invalid host")
+	}
+
+	if result.ErrorDetails == nil {
+		t.Error("Should have error details")
+	}
+
+	// Should suggest available hosts
+	if len(result.ErrorDetails.AvailableValues) == 0 {
+		t.Error("Should suggest available hosts")
+	}
+}
+
+func TestSSHTool_SessionStart_DisabledHost(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	defer tool.Close()
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "session_start",
+		"host":   "disabled-host",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail with disabled host")
+	}
+
+	if !contains(result.Error, "disabled") {
+		t.Errorf("Error should mention disabled, got: %s", result.Error)
+	}
+}
+
+func TestSSHTool_SessionSend_MissingSessionID(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	defer tool.Close()
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":  "session_send",
+		"command": "ls",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail without session_id")
+	}
+
+	if result.ErrorDetails == nil {
+		t.Error("Should have error details")
+	}
+
+	if result.ErrorDetails.Parameter != "session_id" {
+		t.Errorf("ErrorDetails.Parameter = %s, want session_id", result.ErrorDetails.Parameter)
+	}
+}
+
+func TestSSHTool_SessionSend_MissingCommand(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	defer tool.Close()
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":     "session_send",
+		"session_id": "test-session",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail without command")
+	}
+
+	if result.ErrorDetails == nil {
+		t.Error("Should have error details")
+	}
+
+	if result.ErrorDetails.Parameter != "command" {
+		t.Errorf("ErrorDetails.Parameter = %s, want command", result.ErrorDetails.Parameter)
+	}
+}
+
+func TestSSHTool_SessionSend_InvalidSession(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	defer tool.Close()
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":     "session_send",
+		"session_id": "nonexistent-session",
+		"command":    "ls",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail with invalid session")
+	}
+
+	if !contains(result.Error, "not found") {
+		t.Errorf("Error should mention not found, got: %s", result.Error)
+	}
+}
+
+func TestSSHTool_SessionClose_MissingSessionID(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	defer tool.Close()
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "session_close",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail without session_id")
+	}
+
+	if result.ErrorDetails == nil {
+		t.Error("Should have error details")
+	}
+
+	if result.ErrorDetails.Parameter != "session_id" {
+		t.Errorf("ErrorDetails.Parameter = %s, want session_id", result.ErrorDetails.Parameter)
+	}
+}
+
+func TestSSHTool_SessionClose_InvalidSession(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	defer tool.Close()
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":     "session_close",
+		"session_id": "nonexistent-session",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Success {
+		t.Error("Execute() should fail with invalid session")
+	}
+
+	if !contains(result.Error, "not found") {
+		t.Errorf("Error should mention not found, got: %s", result.Error)
+	}
+}
+
+func TestSSHTool_SessionValidateParameters(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	defer tool.Close()
+
+	tests := []struct {
+		name      string
+		args      map[string]interface{}
+		wantValid bool
+		wantParam string
+	}{
+		{
+			name:      "valid session_list action",
+			args:      map[string]interface{}{"action": "session_list"},
+			wantValid: true,
+		},
+		{
+			name:      "session_start missing host",
+			args:      map[string]interface{}{"action": "session_start"},
+			wantValid: false,
+			wantParam: "host",
+		},
+		{
+			name:      "session_start invalid host",
+			args:      map[string]interface{}{"action": "session_start", "host": "nonexistent"},
+			wantValid: false,
+			wantParam: "host",
+		},
+		{
+			name:      "session_send missing session_id",
+			args:      map[string]interface{}{"action": "session_send", "command": "ls"},
+			wantValid: false,
+			wantParam: "session_id",
+		},
+		{
+			name:      "session_send missing command",
+			args:      map[string]interface{}{"action": "session_send", "session_id": "test"},
+			wantValid: false,
+			wantParam: "command",
+		},
+		{
+			name:      "session_close missing session_id",
+			args:      map[string]interface{}{"action": "session_close"},
+			wantValid: false,
+			wantParam: "session_id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tool.ValidateParameters(context.Background(), tt.args)
+
+			if result.Valid != tt.wantValid {
+				t.Errorf("ValidateParameters() valid = %v, want %v", result.Valid, tt.wantValid)
+			}
+
+			if !tt.wantValid && tt.wantParam != "" {
+				if len(result.Errors) == 0 {
+					t.Error("Expected validation errors")
+				} else if result.Errors[0].Parameter != tt.wantParam {
+					t.Errorf("Error parameter = %s, want %s", result.Errors[0].Parameter, tt.wantParam)
+				}
+			}
+		})
+	}
+}
+
+func TestSSHTool_GetStatus_WithSessionInfo(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	defer tool.Close()
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "status",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !result.Success {
+		t.Errorf("Execute() failed: %s", result.Error)
+	}
+
+	// Check that session info is included
+	if !contains(result.Content, "Persistent Sessions") {
+		t.Error("Content should include session info")
+	}
+
+	// Check data structure has session info
+	sessions, ok := result.Data["sessions"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Data should contain sessions map")
+	}
+
+	if sessions["active"] != 0 {
+		t.Errorf("sessions.active = %v, want 0", sessions["active"])
+	}
+
+	if sessions["max_sessions"] != 5 {
+		t.Errorf("sessions.max_sessions = %v, want 5", sessions["max_sessions"])
+	}
+}
+
+func TestSSHTool_Close(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	// Close should not panic
+	tool.Close()
+
+	// Double close should be safe
+	tool.Close()
+}
+
+func TestSSHTool_GetSessionManager(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	defer tool.Close()
+
+	sm := tool.GetSessionManager()
+	if sm == nil {
+		t.Error("GetSessionManager() should return session manager")
 	}
 }
 
