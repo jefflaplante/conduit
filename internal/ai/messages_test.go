@@ -7,7 +7,7 @@ import (
 
 func TestTrimRequestToFitContext_NilAndSmall(t *testing.T) {
 	// nil request — should not panic
-	trimRequestToFitContext(nil)
+	trimRequestToFitContext(nil, 0)
 
 	// Single message — nothing to trim
 	req := &GenerateRequest{
@@ -15,7 +15,7 @@ func TestTrimRequestToFitContext_NilAndSmall(t *testing.T) {
 		Model:     "codellama", // 16384 context
 		MaxTokens: 4000,
 	}
-	trimRequestToFitContext(req)
+	trimRequestToFitContext(req, 0)
 	if len(req.Messages) != 1 {
 		t.Errorf("expected 1 message, got %d", len(req.Messages))
 	}
@@ -32,7 +32,7 @@ func TestTrimRequestToFitContext_FitsWithinBudget(t *testing.T) {
 		Model:     "claude-sonnet-4", // 200k context — everything fits
 		MaxTokens: 4000,
 	}
-	trimRequestToFitContext(req)
+	trimRequestToFitContext(req, 0)
 	if len(req.Messages) != 4 {
 		t.Errorf("expected 4 messages (no trimming needed), got %d", len(req.Messages))
 	}
@@ -57,7 +57,7 @@ func TestTrimRequestToFitContext_TrimsOldestHistory(t *testing.T) {
 	}
 
 	origLen := len(req.Messages)
-	trimRequestToFitContext(req)
+	trimRequestToFitContext(req, 0)
 
 	if len(req.Messages) >= origLen {
 		t.Errorf("expected messages to be trimmed, got %d (was %d)", len(req.Messages), origLen)
@@ -90,7 +90,7 @@ func TestTrimRequestToFitContext_PreservesSystemAndUser(t *testing.T) {
 		MaxTokens: 4000,
 	}
 
-	trimRequestToFitContext(req)
+	trimRequestToFitContext(req, 0)
 
 	// Should have only system + current user (all history dropped)
 	if len(req.Messages) != 2 {
@@ -119,7 +119,7 @@ func TestTrimRequestToFitContext_LargeModel_NoTrim(t *testing.T) {
 		MaxTokens: 4000,
 	}
 
-	trimRequestToFitContext(req)
+	trimRequestToFitContext(req, 0)
 	if len(req.Messages) != 6 {
 		t.Errorf("expected no trimming for large context window, got %d messages", len(req.Messages))
 	}
@@ -151,9 +151,47 @@ func TestTrimRequestToFitContext_AccountsForTools(t *testing.T) {
 	}
 
 	origLen := len(req.Messages)
-	trimRequestToFitContext(req)
+	trimRequestToFitContext(req, 0)
 
 	if len(req.Messages) >= origLen {
 		t.Errorf("expected trimming with large tool set, got %d messages (was %d)", len(req.Messages), origLen)
+	}
+}
+
+func TestTrimRequestToFitContext_ConfigOverride(t *testing.T) {
+	bigContent := strings.Repeat("x", 20000) // ~5000 tokens each
+
+	req := &GenerateRequest{
+		Messages: []ChatMessage{
+			{Role: "system", Content: "system prompt"},
+			{Role: "user", Content: bigContent},
+			{Role: "assistant", Content: bigContent},
+			{Role: "user", Content: bigContent},
+			{Role: "assistant", Content: bigContent},
+			{Role: "user", Content: "current question"},
+		},
+		Model:     "", // empty model — would default to 200K and not trim
+		MaxTokens: 4000,
+	}
+
+	// Without override: empty model → 200K context → no trimming needed
+	trimRequestToFitContext(req, 0)
+	if len(req.Messages) != 6 {
+		t.Fatalf("expected no trimming with default 200K window, got %d", len(req.Messages))
+	}
+
+	// With override: 16384 context → must trim
+	trimRequestToFitContext(req, 16384)
+	if len(req.Messages) >= 6 {
+		t.Errorf("expected trimming with 16384 override, got %d messages", len(req.Messages))
+	}
+
+	// System and current user must survive
+	if req.Messages[0].Role != "system" {
+		t.Error("system message not preserved")
+	}
+	last := req.Messages[len(req.Messages)-1]
+	if last.Content != "current question" {
+		t.Errorf("current user message not preserved, got %q", last.Content)
 	}
 }

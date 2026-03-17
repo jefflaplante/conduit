@@ -183,12 +183,16 @@ func (r *Router) getRecentMessagesTokenAware(session *sessions.Session) ([]sessi
 // drops the oldest conversation history messages until the request fits within
 // the model's context window. The system prompt (first message) and the current
 // user message (last message) are always preserved.
-func trimRequestToFitContext(req *GenerateRequest) {
+// If contextWindowOverride > 0, it takes precedence over model-based detection.
+func trimRequestToFitContext(req *GenerateRequest, contextWindowOverride int) {
 	if req == nil || len(req.Messages) < 2 {
 		return
 	}
 
-	contextWindow := ContextWindowForModel(req.Model)
+	contextWindow := contextWindowOverride
+	if contextWindow <= 0 {
+		contextWindow = ContextWindowForModel(req.Model)
+	}
 	charsPerToken := 4 // same estimate used elsewhere
 
 	// Reserve space for model output

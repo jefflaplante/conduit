@@ -28,9 +28,10 @@ type ConversationResponse interface {
 
 // ProviderMeta holds metadata about a configured provider.
 type ProviderMeta struct {
-	Name         string
-	Type         string // "anthropic", "openai", "ollama"
-	DefaultModel string
+	Name          string
+	Type          string // "anthropic", "openai", "ollama"
+	DefaultModel  string
+	ContextWindow int // Configured context window override (0 = auto-detect from model)
 }
 
 // Router handles AI model interactions
@@ -171,6 +172,7 @@ var ContextWindowSizes = map[string]int{
 	"deepseek-coder":  16384,
 	"deepseek-coder2": 16384,
 	"qwen2.5":         32768,
+	"qwen3.5":         131072,
 	"phi-3":           128000,
 	"gemma2":          8192,
 }
@@ -298,9 +300,10 @@ func (r *Router) initializeProviders(cfg config.AIConfig) error {
 
 		r.providers[providerCfg.Name] = provider
 		r.providerMeta[providerCfg.Name] = ProviderMeta{
-			Name:         providerCfg.Name,
-			Type:         providerCfg.Type,
-			DefaultModel: providerCfg.Model,
+			Name:          providerCfg.Name,
+			Type:          providerCfg.Type,
+			DefaultModel:  providerCfg.Model,
+			ContextWindow: providerCfg.ContextWindow,
 		}
 	}
 
@@ -343,6 +346,17 @@ func (r *Router) GetProviderMeta(name string) (ProviderMeta, bool) {
 // DefaultProviderName returns the name of the default provider.
 func (r *Router) DefaultProviderName() string {
 	return r.default_
+}
+
+// contextWindowForProvider returns the configured context window for a provider,
+// or 0 if no override is set (meaning auto-detect from model name).
+func (r *Router) contextWindowForProvider(providerName string) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if meta, ok := r.providerMeta[providerName]; ok {
+		return meta.ContextWindow
+	}
+	return 0
 }
 
 // getProvider returns the named provider under a read lock.
@@ -436,7 +450,7 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 		Tools:     tools,
 		MaxTokens: 4000,
 	}
-	trimRequestToFitContext(req)
+	trimRequestToFitContext(req, r.contextWindowForProvider(providerName))
 
 	start := time.Now()
 	response, err := provider.GenerateResponse(ctx, req)
@@ -525,7 +539,7 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 		Tools:     tools,
 		MaxTokens: 4000,
 	}
-	trimRequestToFitContext(req)
+	trimRequestToFitContext(req, r.contextWindowForProvider(providerName))
 
 	// Get initial AI response
 	start := time.Now()
@@ -670,7 +684,7 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		Tools:     tools,
 		MaxTokens: 4000,
 	}
-	trimRequestToFitContext(req)
+	trimRequestToFitContext(req, r.contextWindowForProvider(providerName))
 
 	// Call streaming API via the provider-agnostic interface
 	response, err := streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
