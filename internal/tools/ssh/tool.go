@@ -50,6 +50,7 @@ type SSHTool struct {
 	securityEngine *SecurityEngine
 	client         Client
 	config         *config.RemoteSSHConfig
+	sessionManager *SessionManager
 }
 
 // NewSSHTool creates a new SSH tool with the given services and configuration
@@ -65,10 +66,14 @@ func NewSSHTool(services *types.ToolServices, cfg *config.RemoteSSHConfig) (*SSH
 		return nil, fmt.Errorf("failed to create security engine: %w", err)
 	}
 
+	// Create session manager
+	sessionManager := NewSessionManager(cfg.Sessions, cfg.Hosts, cfg.Defaults, cfg.Pool)
+
 	return &SSHTool{
 		services:       services,
 		securityEngine: securityEngine,
 		config:         cfg,
+		sessionManager: sessionManager,
 		// client will be set via SetClient when the real implementation is available
 	}, nil
 }
@@ -76,6 +81,18 @@ func NewSSHTool(services *types.ToolServices, cfg *config.RemoteSSHConfig) (*SSH
 // SetClient sets the SSH client implementation
 func (t *SSHTool) SetClient(client Client) {
 	t.client = client
+}
+
+// Close cleans up the SSH tool resources
+func (t *SSHTool) Close() {
+	if t.sessionManager != nil {
+		t.sessionManager.Close()
+	}
+}
+
+// GetSessionManager returns the session manager (for testing)
+func (t *SSHTool) GetSessionManager() *SessionManager {
+	return t.sessionManager
 }
 
 // Name returns the tool name
@@ -88,19 +105,28 @@ func (t *SSHTool) Description() string {
 	return `Execute commands on remote hosts via SSH with security controls.
 
 Actions:
-- exec: Execute a command on a remote host
+- exec: Execute a command on a remote host (one-shot)
 - hosts: List configured SSH hosts
-- status: Show connection pool status
+- status: Show connection pool and session status
+- session_start: Start a persistent session on a host
+- session_send: Send a command to an existing session
+- session_close: Close a persistent session
+- session_list: List active persistent sessions
 
 Security:
 Commands are classified into security tiers (read, modify, dangerous, blocked).
 Blocked commands are rejected. Dangerous commands may require approval.
 
+Persistent Sessions:
+Sessions maintain shell state between commands (environment variables, working directory).
+Max 5 concurrent sessions. Sessions auto-close after 10 minutes of idle time.
+
 Examples:
-- List files: action=exec, host="web-prod-1", command="ls -la /var/log"
-- Check disk: action=exec, host="db-server", command="df -h"
-- View hosts: action=hosts
-- Pool status: action=status`
+- One-shot exec: action=exec, host="web-prod-1", command="ls -la /var/log"
+- Start session: action=session_start, host="web-prod-1"
+- Send to session: action=session_send, session_id="abc123", command="cd /var/log"
+- Close session: action=session_close, session_id="abc123"
+- List sessions: action=session_list`
 }
 
 // Parameters returns the JSON schema for tool parameters
@@ -110,16 +136,20 @@ func (t *SSHTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"exec", "hosts", "status"},
+				"enum":        []string{"exec", "hosts", "status", "session_start", "session_send", "session_close", "session_list"},
 				"description": "SSH operation to perform",
 			},
 			"host": map[string]interface{}{
 				"type":        "string",
-				"description": "Target host name (required for exec action)",
+				"description": "Target host name (required for exec and session_start actions)",
 			},
 			"command": map[string]interface{}{
 				"type":        "string",
-				"description": "Command to execute on the remote host (required for exec action)",
+				"description": "Command to execute (required for exec and session_send actions)",
+			},
+			"session_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Session ID (required for session_send and session_close actions)",
 			},
 			"timeout": map[string]interface{}{
 				"type":        "integer",
@@ -150,10 +180,18 @@ func (t *SSHTool) Execute(ctx context.Context, args map[string]interface{}) (*ty
 		return t.listHosts(ctx, args)
 	case "status":
 		return t.getStatus(ctx, args)
+	case "session_start":
+		return t.sessionStart(ctx, args)
+	case "session_send":
+		return t.sessionSend(ctx, args)
+	case "session_close":
+		return t.sessionClose(ctx, args)
+	case "session_list":
+		return t.sessionList(ctx, args)
 	default:
 		return &types.ToolResult{
 			Success: false,
-			Error:   fmt.Sprintf("unknown action: %s (valid actions: exec, hosts, status)", action),
+			Error:   fmt.Sprintf("unknown action: %s (valid actions: exec, hosts, status, session_start, session_send, session_close, session_list)", action),
 		}, nil
 	}
 }
@@ -421,10 +459,303 @@ func (t *SSHTool) getStatus(ctx context.Context, args map[string]interface{}) (*
 	content.WriteString(fmt.Sprintf("\nConfigured Hosts: %d enabled\n", len(enabledHosts)))
 	data["host_count"] = len(enabledHosts)
 
+	// Session summary
+	if t.sessionManager != nil {
+		sessionCount := t.sessionManager.SessionCount()
+		content.WriteString(fmt.Sprintf("\nPersistent Sessions: %d/%d active\n", sessionCount, t.sessionManager.maxSessions))
+		data["sessions"] = map[string]interface{}{
+			"active":       sessionCount,
+			"max_sessions": t.sessionManager.maxSessions,
+		}
+	}
+
 	return &types.ToolResult{
 		Success: true,
 		Content: content.String(),
 		Data:    data,
+	}, nil
+}
+
+// sessionStart starts a new persistent session on a host
+func (t *SSHTool) sessionStart(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	host := t.getStringArg(args, "host", "")
+
+	// Validate required parameters
+	if host == "" {
+		return types.NewErrorResult("missing_parameter", "host parameter is required for session_start action").
+			WithParameter("host", nil).
+			WithAvailableValues(t.getHostNames()).
+			WithSuggestions([]string{"Use action=hosts to list available hosts"}), nil
+	}
+
+	// Look up host configuration
+	hostConfig := t.config.GetHostByName(host)
+	if hostConfig == nil {
+		return types.NewErrorResult("invalid_host", fmt.Sprintf("host '%s' not found in configuration", host)).
+			WithParameter("host", host).
+			WithAvailableValues(t.getHostNames()).
+			WithSuggestions([]string{"Use action=hosts to see all configured hosts"}), nil
+	}
+
+	// Check if host is enabled
+	if !hostConfig.IsHostEnabled() {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("host '%s' is disabled", host),
+		}, nil
+	}
+
+	// Start the session
+	sessionID, err := t.sessionManager.StartSession(host)
+	if err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to start session: %v", err),
+			Data: map[string]interface{}{
+				"host":          host,
+				"session_count": t.sessionManager.SessionCount(),
+				"max_sessions":  t.sessionManager.maxSessions,
+			},
+		}, nil
+	}
+
+	return &types.ToolResult{
+		Success: true,
+		Content: fmt.Sprintf("Started persistent session on %s\nSession ID: %s\n\nUse action=session_send with session_id=\"%s\" to send commands.\nUse action=session_close with session_id=\"%s\" to close when done.",
+			host, sessionID, sessionID, sessionID),
+		Data: map[string]interface{}{
+			"session_id":    sessionID,
+			"host":          host,
+			"session_count": t.sessionManager.SessionCount(),
+		},
+	}, nil
+}
+
+// sessionSend sends a command to an existing persistent session
+func (t *SSHTool) sessionSend(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	sessionID := t.getStringArg(args, "session_id", "")
+	command := t.getStringArg(args, "command", "")
+	timeout := t.getIntArg(args, "timeout", 30)
+
+	// Validate required parameters
+	if sessionID == "" {
+		sessions := t.sessionManager.ListSessions()
+		sessionIDs := make([]string, 0, len(sessions))
+		for _, s := range sessions {
+			sessionIDs = append(sessionIDs, s.ID)
+		}
+		return types.NewErrorResult("missing_parameter", "session_id parameter is required for session_send action").
+			WithParameter("session_id", nil).
+			WithAvailableValues(sessionIDs).
+			WithSuggestions([]string{"Use action=session_list to see active sessions", "Use action=session_start to create a new session"}), nil
+	}
+
+	if command == "" {
+		return types.NewErrorResult("missing_parameter", "command parameter is required for session_send action").
+			WithParameter("command", nil).
+			WithExamples([]string{"ls -la", "cd /var/log", "export FOO=bar"}), nil
+	}
+
+	// Get session info for security classification
+	sessionInfo, err := t.sessionManager.GetSession(sessionID)
+	if err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("session not found: %s", sessionID),
+			Data: map[string]interface{}{
+				"session_id": sessionID,
+			},
+		}, nil
+	}
+
+	// Classify the command for security
+	hostConfig := t.config.GetHostByName(sessionInfo.Host)
+	hostTier := ""
+	if hostConfig != nil {
+		hostTier = hostConfig.SecurityTier
+	}
+	classification := t.securityEngine.ValidateCommandForHost(command, hostTier)
+
+	// Block if command is blocked
+	if classification.Blocked {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("command blocked: %s", classification.Reason),
+			Data: map[string]interface{}{
+				"tier":         string(classification.Tier),
+				"reason":       classification.Reason,
+				"base_cmd":     classification.BaseCommand,
+				"session_id":   sessionID,
+				"has_subshell": classification.HasSubshell,
+			},
+		}, nil
+	}
+
+	// Check if approval is required
+	if classification.RequiresApproval {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("command requires approval (tier: %s)", classification.Tier),
+			Data: map[string]interface{}{
+				"tier":              string(classification.Tier),
+				"reason":            classification.Reason,
+				"base_cmd":          classification.BaseCommand,
+				"requires_approval": true,
+				"session_id":        sessionID,
+			},
+		}, nil
+	}
+
+	// Send the command
+	execTimeout := time.Duration(timeout) * time.Second
+	output, err := t.sessionManager.SendCommand(sessionID, command, execTimeout)
+	if err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to send command: %v", err),
+			Data: map[string]interface{}{
+				"session_id": sessionID,
+				"command":    command,
+			},
+		}, nil
+	}
+
+	// Build response
+	var content strings.Builder
+	content.WriteString(fmt.Sprintf("Session: %s (host: %s)\n", sessionID, sessionInfo.Host))
+	content.WriteString(fmt.Sprintf("Command: %s\n", command))
+	content.WriteString(fmt.Sprintf("Exit code: %d\n", output.ExitCode))
+	content.WriteString(fmt.Sprintf("Duration: %v\n", output.Duration))
+
+	if output.Stdout != "" {
+		content.WriteString("\n--- stdout ---\n")
+		content.WriteString(output.Stdout)
+	}
+
+	if output.Stderr != "" {
+		content.WriteString("\n--- stderr ---\n")
+		content.WriteString(output.Stderr)
+	}
+
+	return &types.ToolResult{
+		Success: output.ExitCode == 0,
+		Content: content.String(),
+		Data: map[string]interface{}{
+			"session_id":    sessionID,
+			"host":          sessionInfo.Host,
+			"command":       command,
+			"exit_code":     output.ExitCode,
+			"stdout":        output.Stdout,
+			"stderr":        output.Stderr,
+			"duration":      output.Duration.String(),
+			"tier":          string(classification.Tier),
+			"base_cmd":      classification.BaseCommand,
+			"command_count": sessionInfo.CommandCount + 1,
+		},
+	}, nil
+}
+
+// sessionClose closes a persistent session
+func (t *SSHTool) sessionClose(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	sessionID := t.getStringArg(args, "session_id", "")
+
+	// Validate required parameters
+	if sessionID == "" {
+		sessions := t.sessionManager.ListSessions()
+		sessionIDs := make([]string, 0, len(sessions))
+		for _, s := range sessions {
+			sessionIDs = append(sessionIDs, s.ID)
+		}
+		return types.NewErrorResult("missing_parameter", "session_id parameter is required for session_close action").
+			WithParameter("session_id", nil).
+			WithAvailableValues(sessionIDs).
+			WithSuggestions([]string{"Use action=session_list to see active sessions"}), nil
+	}
+
+	// Get session info before closing
+	sessionInfo, err := t.sessionManager.GetSession(sessionID)
+	if err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("session not found: %s", sessionID),
+			Data: map[string]interface{}{
+				"session_id": sessionID,
+			},
+		}, nil
+	}
+
+	// Close the session
+	if err := t.sessionManager.CloseSession(sessionID); err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to close session: %v", err),
+			Data: map[string]interface{}{
+				"session_id": sessionID,
+			},
+		}, nil
+	}
+
+	return &types.ToolResult{
+		Success: true,
+		Content: fmt.Sprintf("Closed session %s (host: %s)\nCommands executed: %d\nSession duration: %v",
+			sessionID, sessionInfo.Host, sessionInfo.CommandCount, time.Since(sessionInfo.CreatedAt).Round(time.Second)),
+		Data: map[string]interface{}{
+			"session_id":     sessionID,
+			"host":           sessionInfo.Host,
+			"command_count":  sessionInfo.CommandCount,
+			"session_count":  t.sessionManager.SessionCount(),
+		},
+	}, nil
+}
+
+// sessionList lists all active persistent sessions
+func (t *SSHTool) sessionList(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	sessions := t.sessionManager.ListSessions()
+
+	if len(sessions) == 0 {
+		return &types.ToolResult{
+			Success: true,
+			Content: "No active persistent sessions.\n\nUse action=session_start with host parameter to create a new session.",
+			Data: map[string]interface{}{
+				"sessions":     []interface{}{},
+				"count":        0,
+				"max_sessions": t.sessionManager.maxSessions,
+			},
+		}, nil
+	}
+
+	var content strings.Builder
+	content.WriteString(fmt.Sprintf("%d active session(s) (max %d):\n\n", len(sessions), t.sessionManager.maxSessions))
+
+	sessionData := make([]map[string]interface{}, 0, len(sessions))
+	for i, s := range sessions {
+		idleTime := time.Since(s.LastUsedAt).Round(time.Second)
+		sessionAge := time.Since(s.CreatedAt).Round(time.Second)
+
+		content.WriteString(fmt.Sprintf("%d. Session %s\n", i+1, s.ID))
+		content.WriteString(fmt.Sprintf("   Host: %s\n", s.Host))
+		content.WriteString(fmt.Sprintf("   Commands: %d\n", s.CommandCount))
+		content.WriteString(fmt.Sprintf("   Age: %v, Idle: %v\n", sessionAge, idleTime))
+
+		sessionData = append(sessionData, map[string]interface{}{
+			"id":            s.ID,
+			"host":          s.Host,
+			"created_at":    s.CreatedAt.Format(time.RFC3339),
+			"last_used_at":  s.LastUsedAt.Format(time.RFC3339),
+			"command_count": s.CommandCount,
+			"idle_seconds":  int(idleTime.Seconds()),
+			"age_seconds":   int(sessionAge.Seconds()),
+		})
+	}
+
+	return &types.ToolResult{
+		Success: true,
+		Content: content.String(),
+		Data: map[string]interface{}{
+			"sessions":     sessionData,
+			"count":        len(sessions),
+			"max_sessions": t.sessionManager.maxSessions,
+		},
 	}, nil
 }
 
@@ -463,7 +794,7 @@ func (t *SSHTool) ValidateParameters(ctx context.Context, args map[string]interf
 	action := t.getStringArg(args, "action", "")
 
 	// Validate action
-	validActions := []string{"exec", "hosts", "status"}
+	validActions := []string{"exec", "hosts", "status", "session_start", "session_send", "session_close", "session_list"}
 	actionValid := false
 	for _, a := range validActions {
 		if action == a {
@@ -485,15 +816,14 @@ func (t *SSHTool) ValidateParameters(ctx context.Context, args map[string]interf
 	}
 
 	// Validate exec-specific parameters
-	if action == "exec" {
+	if action == "exec" || action == "session_start" {
 		host := t.getStringArg(args, "host", "")
-		command := t.getStringArg(args, "command", "")
 
 		if host == "" {
 			result.Valid = false
 			result.Errors = append(result.Errors, types.ValidationError{
 				Parameter:       "host",
-				Message:         "host is required for exec action",
+				Message:         fmt.Sprintf("host is required for %s action", action),
 				AvailableValues: t.getHostNames(),
 				DiscoveryHint:   "Use action=hosts to list available hosts",
 				ErrorType:       "missing",
@@ -513,15 +843,57 @@ func (t *SSHTool) ValidateParameters(ctx context.Context, args map[string]interf
 				})
 			}
 		}
+	}
 
+	// Validate command for exec and session_send
+	if action == "exec" || action == "session_send" {
+		command := t.getStringArg(args, "command", "")
 		if command == "" {
 			result.Valid = false
 			result.Errors = append(result.Errors, types.ValidationError{
 				Parameter:   "command",
-				Message:     "command is required for exec action",
+				Message:     fmt.Sprintf("command is required for %s action", action),
 				Examples:    []interface{}{"ls -la", "df -h", "ps aux", "uptime"},
 				ErrorType:   "missing",
 			})
+		}
+	}
+
+	// Validate session_id for session_send and session_close
+	if action == "session_send" || action == "session_close" {
+		sessionID := t.getStringArg(args, "session_id", "")
+		if sessionID == "" {
+			sessions := t.sessionManager.ListSessions()
+			sessionIDs := make([]string, 0, len(sessions))
+			for _, s := range sessions {
+				sessionIDs = append(sessionIDs, s.ID)
+			}
+			result.Valid = false
+			result.Errors = append(result.Errors, types.ValidationError{
+				Parameter:       "session_id",
+				Message:         fmt.Sprintf("session_id is required for %s action", action),
+				AvailableValues: sessionIDs,
+				DiscoveryHint:   "Use action=session_list to see active sessions",
+				ErrorType:       "missing",
+			})
+		} else {
+			// Validate session exists
+			if !t.sessionManager.HasSession(sessionID) {
+				sessions := t.sessionManager.ListSessions()
+				sessionIDs := make([]string, 0, len(sessions))
+				for _, s := range sessions {
+					sessionIDs = append(sessionIDs, s.ID)
+				}
+				result.Valid = false
+				result.Errors = append(result.Errors, types.ValidationError{
+					Parameter:       "session_id",
+					Message:         fmt.Sprintf("session '%s' not found", sessionID),
+					ProvidedValue:   sessionID,
+					AvailableValues: sessionIDs,
+					DiscoveryHint:   "Use action=session_list to see active sessions",
+					ErrorType:       "invalid_value",
+				})
+			}
 		}
 	}
 
@@ -561,11 +933,47 @@ func (t *SSHTool) GetUsageExamples() []types.ToolExample {
 		},
 		{
 			Name:        "Pool status",
-			Description: "Check SSH connection pool status",
+			Description: "Check SSH connection pool and session status",
 			Args: map[string]interface{}{
 				"action": "status",
 			},
-			Expected: "Connection pool statistics and security configuration",
+			Expected: "Connection pool statistics, session count, and security configuration",
+		},
+		{
+			Name:        "Start persistent session",
+			Description: "Start a persistent shell session on a host",
+			Args: map[string]interface{}{
+				"action": "session_start",
+				"host":   "web-prod-1",
+			},
+			Expected: "Session ID for subsequent commands",
+		},
+		{
+			Name:        "Send command to session",
+			Description: "Execute a command in an existing session",
+			Args: map[string]interface{}{
+				"action":     "session_send",
+				"session_id": "abc12345",
+				"command":    "cd /var/log && ls -la",
+			},
+			Expected: "Command output with exit code",
+		},
+		{
+			Name:        "Close session",
+			Description: "Close a persistent session",
+			Args: map[string]interface{}{
+				"action":     "session_close",
+				"session_id": "abc12345",
+			},
+			Expected: "Session closed confirmation with statistics",
+		},
+		{
+			Name:        "List sessions",
+			Description: "View all active persistent sessions",
+			Args: map[string]interface{}{
+				"action": "session_list",
+			},
+			Expected: "List of active sessions with host, age, and command count",
 		},
 	}
 }
