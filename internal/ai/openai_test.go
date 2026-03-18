@@ -421,3 +421,65 @@ func TestStripProviderPrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertMessagesToOpenAI(t *testing.T) {
+	p := &OpenAIProvider{}
+
+	messages := []ChatMessage{
+		{Role: "system", Content: "You are helpful."},
+		{Role: "user", Content: "What's the weather?"},
+		{
+			Role:    "assistant",
+			Content: "",
+			ToolCalls: []ToolCall{
+				{ID: "call_123", Name: "get_weather", Args: map[string]interface{}{"location": "NYC"}},
+			},
+		},
+		{Role: "tool", Content: `{"temp": 72}`, ToolCallID: "call_123"},
+		{Role: "assistant", Content: "It's 72 degrees in NYC."},
+	}
+
+	converted := p.convertMessagesToOpenAI(messages)
+
+	if len(converted) != 5 {
+		t.Fatalf("expected 5 messages, got %d", len(converted))
+	}
+
+	// Check system message
+	if converted[0]["role"] != "system" || converted[0]["content"] != "You are helpful." {
+		t.Errorf("system message not converted correctly: %v", converted[0])
+	}
+
+	// Check assistant message with tool calls
+	assistantMsg := converted[2]
+	if assistantMsg["role"] != "assistant" {
+		t.Errorf("expected assistant role, got %v", assistantMsg["role"])
+	}
+	toolCalls, ok := assistantMsg["tool_calls"].([]map[string]interface{})
+	if !ok || len(toolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %v", assistantMsg["tool_calls"])
+	}
+	if toolCalls[0]["type"] != "function" {
+		t.Errorf("expected type 'function', got %v", toolCalls[0]["type"])
+	}
+	fn, ok := toolCalls[0]["function"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected function object, got %v", toolCalls[0]["function"])
+	}
+	if fn["name"] != "get_weather" {
+		t.Errorf("expected name 'get_weather', got %v", fn["name"])
+	}
+	// arguments should be JSON string
+	if _, ok := fn["arguments"].(string); !ok {
+		t.Errorf("expected arguments to be string, got %T", fn["arguments"])
+	}
+
+	// Check tool result message
+	toolMsg := converted[3]
+	if toolMsg["role"] != "tool" {
+		t.Errorf("expected tool role, got %v", toolMsg["role"])
+	}
+	if toolMsg["tool_call_id"] != "call_123" {
+		t.Errorf("expected tool_call_id 'call_123', got %v", toolMsg["tool_call_id"])
+	}
+}
