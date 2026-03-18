@@ -685,7 +685,8 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		return nil, fmt.Errorf("provider not found: %s", providerName)
 	}
 
-	log.Printf("[Router] Streaming: provider=%q model=%q", providerName, modelOverride)
+	contextWindow := r.contextWindowForProvider(providerName)
+	log.Printf("[Router] Streaming: provider=%q model=%q context_window=%d", providerName, modelOverride, contextWindow)
 
 	// Check if the provider supports streaming
 	streamingProvider, canStream := provider.(StreamingProvider)
@@ -722,7 +723,7 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		Tools:     tools,
 		MaxTokens: 4000,
 	}
-	trimRequestToFitContext(req, r.contextWindowForProvider(providerName))
+	trimRequestToFitContext(req, contextWindow)
 
 	// Call streaming API via the provider-agnostic interface
 	response, err := streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
