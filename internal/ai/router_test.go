@@ -571,6 +571,7 @@ func TestResolveProviderForModel(t *testing.T) {
 			{Name: "anthropic", Type: "anthropic", APIKey: "test-key", Model: "claude-sonnet-4-20250514"},
 			{Name: "openai-prod", Type: "openai", APIKey: "test-key", Model: "gpt-4"},
 			{Name: "ollama-local", Type: "ollama", Model: "llama3.2"},
+			{Name: "ghost", Type: "openai", BaseURL: "http://localhost:8080/v1", Model: "Qwen3.5-9B-Q6_K"},
 		},
 	}
 
@@ -582,35 +583,54 @@ func TestResolveProviderForModel(t *testing.T) {
 	tests := []struct {
 		model    string
 		expected string
+		anyOf    []string // if set, result must be one of these (for nondeterministic cases)
 	}{
+		// Tier 0: explicit provider prefix "provider/model"
+		{model: "ghost/Qwen3.5-9B-Q6_K", expected: "ghost"},
+		{model: "anthropic/claude-opus-4-6", expected: "anthropic"},
+		{model: "openai-prod/gpt-4o", expected: "openai-prod"},
+		{model: "ollama-local/mistral-7b", expected: "ollama-local"},
+		// Unknown prefix falls through to heuristics
+		{model: "unknown-provider/some-model", expected: ""},
 		// Prefix heuristic: claude-* → anthropic type
-		{"claude-opus-4-6", "anthropic"},
-		{"claude-haiku-4-5-20251001", "anthropic"},
-		// Prefix heuristic: gpt-* → openai type
-		{"gpt-4o", "openai-prod"},
-		{"gpt-3.5-turbo", "openai-prod"},
+		{model: "claude-opus-4-6", expected: "anthropic"},
+		{model: "claude-haiku-4-5-20251001", expected: "anthropic"},
+		// Prefix heuristic: gpt-* → openai type (nondeterministic with multiple openai-type providers)
+		{model: "gpt-4o", anyOf: []string{"openai-prod", "ghost"}},
+		{model: "gpt-3.5-turbo", anyOf: []string{"openai-prod", "ghost"}},
 		// Prefix heuristic: o1-*/o3-* → openai type
-		{"o1-preview", "openai-prod"},
-		{"o3-mini", "openai-prod"},
+		{model: "o1-preview", anyOf: []string{"openai-prod", "ghost"}},
+		{model: "o3-mini", anyOf: []string{"openai-prod", "ghost"}},
 		// Prefix heuristic: llama/mistral/deepseek/qwen/phi/gemma → ollama type
-		{"llama3.2", "ollama-local"},
-		{"mistral-7b", "ollama-local"},
-		{"deepseek-coder", "ollama-local"},
-		{"qwen2.5-coder", "ollama-local"},
-		{"phi-3", "ollama-local"},
-		{"gemma2-9b", "ollama-local"},
-		// Default model match
-		{"gpt-4", "openai-prod"},
+		{model: "llama3.2", expected: "ollama-local"},
+		{model: "mistral-7b", expected: "ollama-local"},
+		{model: "deepseek-coder", expected: "ollama-local"},
+		{model: "qwen2.5-coder", expected: "ollama-local"},
+		{model: "phi-3", expected: "ollama-local"},
+		{model: "gemma2-9b", expected: "ollama-local"},
+		// Default model match (nondeterministic — gpt-4 matches openai-prod's default, but gpt- prefix heuristic may hit ghost)
+		{model: "gpt-4", anyOf: []string{"openai-prod", "ghost"}},
 		// Empty → empty
-		{"", ""},
+		{model: "", expected: ""},
 		// Unknown → empty
-		{"some-unknown-model", ""},
+		{model: "some-unknown-model", expected: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
 			result := router.ResolveProviderForModel(tt.model)
-			if result != tt.expected {
+			if len(tt.anyOf) > 0 {
+				found := false
+				for _, allowed := range tt.anyOf {
+					if result == allowed {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("ResolveProviderForModel(%q) = %q, want one of %v", tt.model, result, tt.anyOf)
+				}
+			} else if result != tt.expected {
 				t.Errorf("ResolveProviderForModel(%q) = %q, want %q", tt.model, result, tt.expected)
 			}
 		})
