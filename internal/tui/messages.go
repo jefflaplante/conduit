@@ -43,6 +43,7 @@ type StreamEndMsg struct {
 	CompletionTokens int
 	TotalTokens      int
 	Model            string
+	ContextWindow    int // model's context window size in tokens
 	RequestCost      float64
 	SessionCost      float64
 }

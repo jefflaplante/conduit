@@ -176,6 +176,7 @@ type StreamEnd struct {
 	CompletionTokens int     `json:"completion_tokens,omitempty"` // tokens used for completion
 	TotalTokens      int     `json:"total_tokens,omitempty"`      // total tokens used
 	Model            string  `json:"model,omitempty"`             // model that generated the response
+	ContextWindow    int     `json:"context_window,omitempty"`    // model's context window size in tokens
 	RequestCost      float64 `json:"request_cost,omitempty"`      // cost of this request in USD
 	SessionCost      float64 `json:"session_cost,omitempty"`      // cumulative session cost in USD
 }
