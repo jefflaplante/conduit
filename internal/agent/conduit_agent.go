@@ -181,6 +181,29 @@ func (a *ConduitAgentWithIntegration) BuildSystemPrompt(ctx context.Context, ses
 	return blocks, nil
 }
 
+// BuildSystemPromptDebug builds the system prompt with full debug info, bypassing cache.
+func (a *ConduitAgentWithIntegration) BuildSystemPromptDebug(ctx context.Context, session *sessions.Session) (*PromptDebugInfo, error) {
+	// Initialize skills manager if needed
+	a.mu.RLock()
+	sm := a.skillsManager
+	caps := a.capabilities
+	a.mu.RUnlock()
+
+	if sm != nil && caps.SkillsIntegration && !sm.IsInitialized() {
+		if err := sm.Initialize(ctx); err != nil {
+			return nil, fmt.Errorf("failed to initialize skills manager: %w", err)
+		}
+	}
+
+	isOAuth := a.detectOAuthFromSession(session)
+
+	a.mu.RLock()
+	pb := a.promptBuilder
+	a.mu.RUnlock()
+
+	return pb.BuildDebug(ctx, session, isOAuth)
+}
+
 // buildPromptCacheKey creates a cache key from session and auth state.
 // The key includes session key, model, and OAuth status since these affect prompt content.
 func (a *ConduitAgentWithIntegration) buildPromptCacheKey(session *sessions.Session, isOAuth bool) string {

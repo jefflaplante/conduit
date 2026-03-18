@@ -34,13 +34,17 @@ func (t *GatewayTool) Parameters() map[string]interface{} {
 				"type": "string",
 				"enum": []string{
 					"status", "restart", "channels", "enable_channel", "disable_channel",
-					"config", "update_config", "metrics", "version",
+					"config", "update_config", "metrics", "version", "debug_prompt",
 				},
 				"description": "Gateway operation to perform",
 			},
 			"channelId": map[string]interface{}{
 				"type":        "string",
 				"description": "Channel ID for channel operations (required for enable_channel/disable_channel)",
+			},
+			"session": map[string]interface{}{
+				"type":        "string",
+				"description": "Session key for debug_prompt action (uses current session if omitted)",
 			},
 			"config": map[string]interface{}{
 				"type":        "object",
@@ -87,6 +91,8 @@ func (t *GatewayTool) Execute(ctx context.Context, args map[string]interface{}) 
 		return t.getMetrics(ctx)
 	case "version":
 		return t.getVersion(ctx)
+	case "debug_prompt":
+		return t.debugPrompt(ctx, args)
 	default:
 		return &types.ToolResult{
 			Success: false,
@@ -389,6 +395,74 @@ func (t *GatewayTool) formatMetrics(metrics map[string]interface{}) string {
 	}
 	if estimatedCost, ok := metrics["estimated_cost"].(float64); ok {
 		builder.WriteString(fmt.Sprintf("Estimated Cost: $%.4f\n", estimatedCost))
+	}
+
+	return builder.String()
+}
+
+func (t *GatewayTool) debugPrompt(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	sessionKey := t.getStringArg(args, "session", "")
+	if sessionKey == "" {
+		sessionKey = types.RequestSessionKey(ctx)
+	}
+
+	result, err := t.services.Gateway.GetSystemPromptDebug(ctx, sessionKey)
+	if err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to get prompt debug: %v", err),
+		}, nil
+	}
+
+	content := t.formatPromptDebug(result)
+
+	return &types.ToolResult{
+		Success: true,
+		Content: content,
+		Data:    result,
+	}, nil
+}
+
+func (t *GatewayTool) formatPromptDebug(data map[string]interface{}) string {
+	var builder strings.Builder
+	builder.WriteString("System Prompt Debug:\n\n")
+
+	if totalChars, ok := data["total_chars"].(int); ok {
+		builder.WriteString(fmt.Sprintf("Total chars:        %d\n", totalChars))
+	}
+	if estTokens, ok := data["estimated_tokens"].(int); ok {
+		builder.WriteString(fmt.Sprintf("Estimated tokens:   %d\n", estTokens))
+	}
+	if ctxWindow, ok := data["context_window"].(int); ok {
+		builder.WriteString(fmt.Sprintf("Context window:     %d\n", ctxWindow))
+	}
+	if budgetChars, ok := data["budget_chars"].(int); ok {
+		builder.WriteString(fmt.Sprintf("Budget (chars):     %d\n", budgetChars))
+	}
+	if constrained, ok := data["budget_constrained"].(bool); ok {
+		builder.WriteString(fmt.Sprintf("Budget constrained: %v\n", constrained))
+	}
+
+	builder.WriteString("\nSections:\n")
+	builder.WriteString(fmt.Sprintf("  %-25s %4s %7s %s\n", "Name", "Pri", "Chars", "Status"))
+	builder.WriteString(fmt.Sprintf("  %-25s %4s %7s %s\n", "----", "---", "-----", "------"))
+
+	if sections, ok := data["sections"].([]map[string]interface{}); ok {
+		for _, s := range sections {
+			name, _ := s["name"].(string)
+			priority, _ := s["priority"].(int)
+			chars, _ := s["chars"].(int)
+			included, _ := s["included"].(bool)
+			status := "included"
+			if !included {
+				status = "DROPPED"
+			}
+			builder.WriteString(fmt.Sprintf("  %-25s P%-3d %7d %s\n", name, priority, chars, status))
+		}
+	}
+
+	if dropped, ok := data["dropped_sections"].([]string); ok && len(dropped) > 0 {
+		builder.WriteString(fmt.Sprintf("\nDropped sections: %s\n", strings.Join(dropped, ", ")))
 	}
 
 	return builder.String()

@@ -714,6 +714,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// Protected API endpoints - wrapped with auth middleware and rate limiting
 	// Order: auth middleware first (sets context), then rate limiting (uses context), then handler
+	mux.Handle("/debug/prompt", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleDebugPrompt))))
 	mux.Handle("/api/channels/status", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleChannelStatus))))
 	mux.Handle("/api/test/message", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleTestMessage))))
 
