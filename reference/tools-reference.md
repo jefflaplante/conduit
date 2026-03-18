@@ -293,13 +293,18 @@ Manage gateway operations, status, and configuration.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `action` | string | Yes | "status", "channels", "metrics", "config" |
+| `action` | string | Yes | "status", "channels", "metrics", "config", "debug_prompt", etc. |
+| `session` | string | No | Session key for `debug_prompt` (uses current session if omitted) |
 
 ```json
 {"action": "status"}
 {"action": "channels"}
 {"action": "metrics"}
+{"action": "debug_prompt"}
+{"action": "debug_prompt", "session": "default"}
 ```
+
+The `debug_prompt` action returns a breakdown of the system prompt: each section's name, priority (P1-P4), character count, and whether it was included or dropped due to context window budget constraints. Useful for optimizing prompt size when running local LLMs with limited context windows.
 
 ### Context
 

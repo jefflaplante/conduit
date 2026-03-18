@@ -11,6 +11,7 @@ Reference for the Conduit Gateway HTTP endpoints and WebSocket protocol.
 | `/diagnostics` | GET | Yes | Real-time diagnostic events |
 | `/ws` | WebSocket | Yes | Real-time WebSocket API |
 | `/api/channels/status` | GET | Yes | Channel adapter status |
+| `/debug/prompt` | GET | Yes | System prompt debug inspection |
 
 ### Health Check
 
@@ -39,6 +40,42 @@ Response includes:
 - Memory usage
 - Request rates
 - Tool execution stats
+
+### Debug Prompt
+
+Inspect the system prompt: per-section breakdown with priorities, char counts, included/dropped status, token estimates, and context window budget info. Useful for optimizing prompt size on constrained context windows (e.g. local LLMs).
+
+```bash
+# Default (no session context)
+curl -H "Authorization: Bearer conduit_v1_..." http://localhost:18789/debug/prompt
+
+# With a specific session
+curl -H "Authorization: Bearer conduit_v1_..." "http://localhost:18789/debug/prompt?session=default"
+```
+
+| Query Param | Type | Required | Description |
+|-------------|------|----------|-------------|
+| `session` | string | No | Session key to build prompt for. Omit for session-less prompt. |
+
+Response:
+```json
+{
+  "prompt_text": "You are a personal assistant...",
+  "total_chars": 12345,
+  "estimated_tokens": 3086,
+  "context_window": 200000,
+  "budget_chars": 120000,
+  "budget_constrained": false,
+  "sections": [
+    {"name": "Identity", "priority": 1, "chars": 520, "included": true},
+    {"name": "Tooling", "priority": 1, "chars": 1843, "included": true},
+    {"name": "Voice/TTS", "priority": 4, "chars": 285, "included": true}
+  ],
+  "dropped_sections": []
+}
+```
+
+When `budget_constrained` is `true`, lower-priority sections may be dropped to fit within the token budget. The `dropped_sections` array lists any omitted sections.
 
 ### Diagnostics
 
