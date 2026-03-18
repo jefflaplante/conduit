@@ -82,7 +82,7 @@ func (o *OpenAIProvider) GenerateResponse(ctx context.Context, req *GenerateRequ
 
 	openaiReq := map[string]interface{}{
 		"model":      model,
-		"messages":   req.Messages,
+		"messages":   o.convertMessagesToOpenAI(req.Messages),
 		"max_tokens": req.MaxTokens,
 	}
 
@@ -141,7 +141,7 @@ func (o *OpenAIProvider) GenerateResponseStreaming(ctx context.Context, req *Gen
 
 	openaiReq := map[string]interface{}{
 		"model":      model,
-		"messages":   req.Messages,
+		"messages":   o.convertMessagesToOpenAI(req.Messages),
 		"max_tokens": req.MaxTokens,
 		"stream":     true,
 		"stream_options": map[string]interface{}{
@@ -350,6 +350,60 @@ func (o *OpenAIProvider) convertToolsToOpenAI(tools []Tool) []interface{} {
 		}
 	}
 	return openaiTools
+}
+
+// convertMessagesToOpenAI converts ChatMessage slice to OpenAI format.
+// This handles tool calls (which need type:"function" and nested function object)
+// and tool results (which use role:"tool" with tool_call_id).
+func (o *OpenAIProvider) convertMessagesToOpenAI(messages []ChatMessage) []map[string]interface{} {
+	result := make([]map[string]interface{}, 0, len(messages))
+
+	for _, msg := range messages {
+		converted := map[string]interface{}{
+			"role": msg.Role,
+		}
+
+		// Handle tool result messages
+		if msg.Role == "tool" && msg.ToolCallID != "" {
+			converted["tool_call_id"] = msg.ToolCallID
+			converted["content"] = msg.Content
+			result = append(result, converted)
+			continue
+		}
+
+		// Handle assistant messages with tool calls
+		if len(msg.ToolCalls) > 0 {
+			// OpenAI requires content to be null or omitted when there are tool calls
+			if msg.Content != "" {
+				converted["content"] = msg.Content
+			}
+
+			// Convert tool calls to OpenAI format
+			openaiToolCalls := make([]map[string]interface{}, len(msg.ToolCalls))
+			for i, tc := range msg.ToolCalls {
+				// Serialize arguments to JSON string as OpenAI expects
+				argsJSON, _ := json.Marshal(tc.Args)
+
+				openaiToolCalls[i] = map[string]interface{}{
+					"id":   tc.ID,
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":      tc.Name,
+						"arguments": string(argsJSON),
+					},
+				}
+			}
+			converted["tool_calls"] = openaiToolCalls
+			result = append(result, converted)
+			continue
+		}
+
+		// Regular message
+		converted["content"] = msg.Content
+		result = append(result, converted)
+	}
+
+	return result
 }
 
 // parseOpenAIContent extracts content and tool calls from OpenAI response
