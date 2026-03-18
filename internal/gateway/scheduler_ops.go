@@ -157,7 +157,7 @@ func (g *Gateway) initializeAgentHeartbeat(cfg *config.Config) error {
 	}
 
 	// Schedule the heartbeat job
-	if err := g.ScheduleHeartbeatJob(cronSchedule, target, "", true); err != nil {
+	if err := g.ScheduleHeartbeatJob(cronSchedule, target, cfg.AgentHeartbeat.Model, true); err != nil {
 		return fmt.Errorf("failed to schedule agent heartbeat job: %w", err)
 	}
 

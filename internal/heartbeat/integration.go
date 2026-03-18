@@ -34,9 +34,13 @@ type MetricsCollector interface {
 	UpdateHeartbeatJobs(total, enabled int)
 }
 
-// NewGatewayIntegration creates a new gateway integration
-func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, aiRouter *ai.Router, scheduler scheduler.SchedulerInterface, channelSender ChannelSender, metricsCollector MetricsCollector) *GatewayIntegration {
+// NewGatewayIntegration creates a new gateway integration.
+// model overrides the default AI model used for heartbeat prompts; pass "" for the built-in default.
+func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, aiRouter *ai.Router, scheduler scheduler.SchedulerInterface, channelSender ChannelSender, metricsCollector MetricsCollector, model string) *GatewayIntegration {
 	config := DefaultExecutorConfig()
+	if model != "" {
+		config.DefaultModel = model
+	}
 	executor := NewJobExecutor(workspaceDir, sessionsStore, config)
 
 	return &GatewayIntegration{
