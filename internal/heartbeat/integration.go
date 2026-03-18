@@ -35,11 +35,15 @@ type MetricsCollector interface {
 }
 
 // NewGatewayIntegration creates a new gateway integration.
-// model overrides the default AI model used for heartbeat prompts; pass "" for the built-in default.
-func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, aiRouter *ai.Router, scheduler scheduler.SchedulerInterface, channelSender ChannelSender, metricsCollector MetricsCollector, model string) *GatewayIntegration {
+// model overrides the default AI model; timeoutSeconds overrides the per-execution timeout.
+// Pass "" / 0 for built-in defaults.
+func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, aiRouter *ai.Router, scheduler scheduler.SchedulerInterface, channelSender ChannelSender, metricsCollector MetricsCollector, model string, timeoutSeconds int) *GatewayIntegration {
 	config := DefaultExecutorConfig()
 	if model != "" {
 		config.DefaultModel = model
+	}
+	if timeoutSeconds > 0 {
+		config.TimeoutSeconds = timeoutSeconds
 	}
 	executor := NewJobExecutor(workspaceDir, sessionsStore, config)
 

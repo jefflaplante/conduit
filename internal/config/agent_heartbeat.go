@@ -13,7 +13,8 @@ type AgentHeartbeatConfig struct {
 	Enabled         bool   `json:"enabled"`
 	IntervalMinutes int    `json:"interval_minutes"`
 	Timezone        string `json:"timezone"`
-	Model           string `json:"model,omitempty"` // AI model for heartbeat (e.g. "ghost/qwen3.5" for local LLM)
+	Model           string `json:"model,omitempty"`          // AI model for heartbeat (e.g. "ghost/qwen3.5" for local LLM)
+	TimeoutSeconds  int    `json:"timeout_seconds,omitempty"` // Per-execution timeout (default: 60, increase for local LLMs)
 
 	// Quiet hours configuration (times when warning/info alerts are suppressed)
 	QuietHours   QuietHoursConfig `json:"quiet_hours"`

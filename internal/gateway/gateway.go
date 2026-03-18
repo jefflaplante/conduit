@@ -545,7 +545,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	gw.scheduler = scheduler.New(workspaceDir, gw.executeScheduledJob)
 
 	// Initialize heartbeat integration
-	gw.heartbeatIntegration = heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, metricsCollector, cfg.AgentHeartbeat.Model)
+	gw.heartbeatIntegration = heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, metricsCollector, cfg.AgentHeartbeat.Model, cfg.AgentHeartbeat.TimeoutSeconds)
 
 	// NOTE: initializeAgentHeartbeat is called AFTER scheduler.Start() in the Run() method
 	// so that existing jobs are loaded from cron_jobs.json before the heartbeat job is added.
