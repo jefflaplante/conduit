@@ -311,6 +311,9 @@ func (c *DirectClient) streamChatWithID(session *sessions.Session, text, request
 		}
 	}
 
+	// Get context window: prefer provider config, fall back to model-based detection
+	contextWindow := c.getContextWindow(providerOverride, modelOverride)
+
 	// Check for silent response tokens (NO_REPLY, HEARTBEAT_OK)
 	if channels.IsSilentResponse(responseContent) {
 		log.Printf("[DirectClient] Silent response detected (%d chars), suppressing", len(responseContent))
@@ -323,6 +326,7 @@ func (c *DirectClient) streamChatWithID(session *sessions.Session, text, request
 			CompletionTokens: completionTokens,
 			TotalTokens:      totalTokens,
 			Model:            modelOverride,
+			ContextWindow:    contextWindow,
 			RequestCost:      requestCost,
 			SessionCost:      sessionCost,
 		})
@@ -341,6 +345,7 @@ func (c *DirectClient) streamChatWithID(session *sessions.Session, text, request
 		CompletionTokens: completionTokens,
 		TotalTokens:      totalTokens,
 		Model:            modelOverride,
+		ContextWindow:    contextWindow,
 		RequestCost:      requestCost,
 		SessionCost:      sessionCost,
 	})
@@ -706,4 +711,24 @@ func (c *DirectClient) ListSessions() error {
 
 	c.send(tui.SessionListMsg{Sessions: infos})
 	return nil
+}
+
+// getContextWindow returns the context window size for a provider/model combination.
+// It prefers the provider's configured context_window, falling back to model-based detection.
+func (c *DirectClient) getContextWindow(providerName, model string) int {
+	// Resolve provider if not specified
+	if providerName == "" && model != "" {
+		providerName = c.ai.ResolveProviderForModel(model)
+	}
+	if providerName == "" {
+		providerName = c.ai.DefaultProviderName()
+	}
+
+	// Check provider config for explicit context_window
+	if meta, ok := c.ai.GetProviderMeta(providerName); ok && meta.ContextWindow > 0 {
+		return meta.ContextWindow
+	}
+
+	// Fall back to model-based detection
+	return ai.ContextWindowForModel(model)
 }

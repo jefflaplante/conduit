@@ -295,7 +295,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebar.Model = msg.Model
 		m.statusBar.Model = msg.Model
 		if msg.PromptTokens > 0 {
-			contextWindow := ai.ContextWindowForModel(msg.Model)
+			// Use context window from message (provider config), fall back to model-based detection
+			contextWindow := msg.ContextWindow
+			if contextWindow <= 0 {
+				contextWindow = ai.ContextWindowForModel(msg.Model)
+			}
 			contextWindowF := float64(contextWindow)
 			m.statusBar.ContextPercent = float64(msg.PromptTokens) / contextWindowF * 100
 			m.statusBar.ContextProjected = float64(msg.TotalTokens) / contextWindowF * 100
@@ -315,7 +319,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.PromptTokens = msg.PromptTokens
 			s.CompletionTokens = msg.CompletionTokens
 			s.TotalTokens = msg.TotalTokens
-			s.ContextWindow = ai.ContextWindowForModel(msg.Model)
+			s.ContextWindow = m.sidebar.ContextWindow // use same value calculated above
 			s.ContextPercent = m.sidebar.ContextPercent
 			s.RequestCost = msg.RequestCost
 			s.SessionCost = msg.SessionCost

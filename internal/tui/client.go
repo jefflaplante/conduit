@@ -318,6 +318,7 @@ func (c *WSClient) readPump() {
 				CompletionTokens: msg.CompletionTokens,
 				TotalTokens:      msg.TotalTokens,
 				Model:            msg.Model,
+				ContextWindow:    msg.ContextWindow,
 				RequestCost:      msg.RequestCost,
 				SessionCost:      msg.SessionCost,
 			})
