@@ -65,10 +65,19 @@ func (o *OpenAIProvider) Name() string {
 	return o.name
 }
 
+// stripProviderPrefix removes a "provider/" prefix from a model name.
+// e.g. "ghost/Qwen3.5-9B-Q6_K" → "Qwen3.5-9B-Q6_K", "claude-sonnet" → "claude-sonnet"
+func stripProviderPrefix(model string) string {
+	if idx := strings.Index(model, "/"); idx > 0 {
+		return model[idx+1:]
+	}
+	return model
+}
+
 func (o *OpenAIProvider) GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
 	model := o.model
 	if req.Model != "" {
-		model = req.Model
+		model = stripProviderPrefix(req.Model)
 	}
 
 	openaiReq := map[string]interface{}{
@@ -127,7 +136,7 @@ func (o *OpenAIProvider) GenerateResponse(ctx context.Context, req *GenerateRequ
 func (o *OpenAIProvider) GenerateResponseStreaming(ctx context.Context, req *GenerateRequest, onDelta StreamCallback) (*GenerateResponse, error) {
 	model := o.model
 	if req.Model != "" {
-		model = req.Model
+		model = stripProviderPrefix(req.Model)
 	}
 
 	openaiReq := map[string]interface{}{

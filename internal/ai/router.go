@@ -367,6 +367,16 @@ func (r *Router) getProvider(name string) (Provider, bool) {
 	return p, ok
 }
 
+// providerMetaKeys returns the keys of the providerMeta map (for debugging).
+// Caller must hold r.mu.
+func (r *Router) providerMetaKeys() []string {
+	keys := make([]string, 0, len(r.providerMeta))
+	for k := range r.providerMeta {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // ResolveProviderForModel attempts to find the best provider for a given model name.
 // Returns the provider name, or "" if no match is found (caller should use default).
 func (r *Router) ResolveProviderForModel(model string) string {
@@ -378,6 +388,16 @@ func (r *Router) ResolveProviderForModel(model string) string {
 	defer r.mu.RUnlock()
 
 	lower := strings.ToLower(model)
+
+	// Tier 0: explicit provider prefix — "provider/model" format
+	// If the model contains a slash, check if the prefix matches a known provider name.
+	if idx := strings.Index(lower, "/"); idx > 0 {
+		prefix := lower[:idx]
+		if _, exists := r.providerMeta[prefix]; exists {
+			return prefix
+		}
+		log.Printf("[Router] ResolveProvider: prefix %q NOT in providerMeta (keys: %v) for model %q", prefix, r.providerMetaKeys(), model)
+	}
 
 	// Tier 1: prefix heuristics → provider type
 	var targetType string
@@ -498,9 +518,15 @@ func (r *Router) GenerateResponseWithTools(ctx context.Context, session *session
 
 // GenerateResponseWithToolsAndProgress is like GenerateResponseWithTools but with progress callbacks
 func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onProgress ProgressCallback) (ConversationResponse, error) {
-	// Resolve provider: explicit → auto-resolve from model → default
-	if providerName == "" && modelOverride != "" {
-		providerName = r.ResolveProviderForModel(modelOverride)
+	// Resolve provider: always re-resolve from model when present (provider may be stale)
+	if modelOverride != "" {
+		resolved := r.ResolveProviderForModel(modelOverride)
+		if resolved != "" {
+			if providerName != "" && providerName != resolved {
+				log.Printf("[Router] WithTools: overriding stale provider %q → %q (from model %q)", providerName, resolved, modelOverride)
+			}
+			providerName = resolved
+		}
 	}
 	if providerName == "" {
 		providerName = r.default_
@@ -636,9 +662,15 @@ func (r *Router) getConversationalProgress(toolCalls []ToolCall) string {
 // The onDelta callback is called with each text delta, and done=true when complete.
 // Any provider implementing StreamingProvider will stream; others fall back to non-streaming.
 func (r *Router) GenerateResponseStreaming(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onDelta StreamCallback) (ConversationResponse, error) {
-	// Resolve provider: explicit → auto-resolve from model → default
-	if providerName == "" && modelOverride != "" {
-		providerName = r.ResolveProviderForModel(modelOverride)
+	// Resolve provider: always re-resolve from model when present (provider may be stale)
+	if modelOverride != "" {
+		resolved := r.ResolveProviderForModel(modelOverride)
+		if resolved != "" {
+			if providerName != "" && providerName != resolved {
+				log.Printf("[Router] Streaming: overriding stale provider %q → %q (from model %q)", providerName, resolved, modelOverride)
+			}
+			providerName = resolved
+		}
 	}
 	if providerName == "" {
 		providerName = r.default_
@@ -648,6 +680,8 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	if !exists {
 		return nil, fmt.Errorf("provider not found: %s", providerName)
 	}
+
+	log.Printf("[Router] Streaming: provider=%q model=%q", providerName, modelOverride)
 
 	// Check if the provider supports streaming
 	streamingProvider, canStream := provider.(StreamingProvider)

@@ -398,3 +398,26 @@ func (m *mockNonStreamingProvider) Name() string { return m.name }
 func (m *mockNonStreamingProvider) GenerateResponse(_ context.Context, _ *GenerateRequest) (*GenerateResponse, error) {
 	return m.response, nil
 }
+
+func TestStripProviderPrefix(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"ghost/Qwen3.5-9B-Q6_K", "Qwen3.5-9B-Q6_K"},
+		{"anthropic/claude-opus-4-6", "claude-opus-4-6"},
+		{"claude-sonnet-4-6", "claude-sonnet-4-6"},
+		{"gpt-4o", "gpt-4o"},
+		{"", ""},
+		{"a/b/c", "b/c"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := stripProviderPrefix(tt.input)
+			if result != tt.expected {
+				t.Errorf("stripProviderPrefix(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
