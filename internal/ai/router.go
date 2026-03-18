@@ -518,12 +518,14 @@ func (r *Router) GenerateResponseWithTools(ctx context.Context, session *session
 
 // GenerateResponseWithToolsAndProgress is like GenerateResponseWithTools but with progress callbacks
 func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onProgress ProgressCallback) (ConversationResponse, error) {
-	// Resolve provider: always re-resolve from model when present (provider may be stale)
-	if modelOverride != "" {
+	// Resolve provider from model only when:
+	// 1. No provider explicitly specified, OR
+	// 2. Model has explicit provider prefix (e.g., "ghost/model")
+	if modelOverride != "" && (providerName == "" || strings.Contains(modelOverride, "/")) {
 		resolved := r.ResolveProviderForModel(modelOverride)
 		if resolved != "" {
 			if providerName != "" && providerName != resolved {
-				log.Printf("[Router] WithTools: overriding stale provider %q → %q (from model %q)", providerName, resolved, modelOverride)
+				log.Printf("[Router] WithTools: overriding provider %q → %q (from model %q)", providerName, resolved, modelOverride)
 			}
 			providerName = resolved
 		}
@@ -662,12 +664,14 @@ func (r *Router) getConversationalProgress(toolCalls []ToolCall) string {
 // The onDelta callback is called with each text delta, and done=true when complete.
 // Any provider implementing StreamingProvider will stream; others fall back to non-streaming.
 func (r *Router) GenerateResponseStreaming(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onDelta StreamCallback) (ConversationResponse, error) {
-	// Resolve provider: always re-resolve from model when present (provider may be stale)
-	if modelOverride != "" {
+	// Resolve provider from model only when:
+	// 1. No provider explicitly specified, OR
+	// 2. Model has explicit provider prefix (e.g., "ghost/model")
+	if modelOverride != "" && (providerName == "" || strings.Contains(modelOverride, "/")) {
 		resolved := r.ResolveProviderForModel(modelOverride)
 		if resolved != "" {
 			if providerName != "" && providerName != resolved {
-				log.Printf("[Router] Streaming: overriding stale provider %q → %q (from model %q)", providerName, resolved, modelOverride)
+				log.Printf("[Router] Streaming: overriding provider %q → %q (from model %q)", providerName, resolved, modelOverride)
 			}
 			providerName = resolved
 		}
