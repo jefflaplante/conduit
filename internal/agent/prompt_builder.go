@@ -34,6 +34,26 @@ type promptSection struct {
 	built    bool         // whether cached has been populated
 }
 
+// PromptSectionInfo describes a single section of the system prompt for debug inspection.
+type PromptSectionInfo struct {
+	Name     string `json:"name"`
+	Priority int    `json:"priority"`
+	Chars    int    `json:"chars"`
+	Included bool   `json:"included"`
+}
+
+// PromptDebugInfo provides a complete debug snapshot of the system prompt.
+type PromptDebugInfo struct {
+	PromptText        string              `json:"prompt_text"`
+	TotalChars        int                 `json:"total_chars"`
+	EstimatedTokens   int                 `json:"estimated_tokens"`
+	ContextWindow     int                 `json:"context_window"`
+	BudgetChars       int                 `json:"budget_chars"`
+	BudgetConstrained bool                `json:"budget_constrained"`
+	Sections          []PromptSectionInfo `json:"sections"`
+	DroppedSections   []string            `json:"dropped_sections"`
+}
+
 // PromptBuilder handles building system prompts with full Conduit integration
 type PromptBuilder struct {
 	agentName        string
@@ -233,6 +253,95 @@ func (pb *PromptBuilder) buildFullPromptWithParams(ctx context.Context, session 
 	}
 
 	return joinSectionsWithCache(allSections, included, dropped...)
+}
+
+// BuildDebug constructs the system prompt and returns detailed debug info about each section.
+// Always bypasses the prompt cache.
+func (pb *PromptBuilder) BuildDebug(ctx context.Context, session *sessions.Session, isOAuth bool) (*PromptDebugInfo, error) {
+	localParams := *pb.sectionParams
+	localParams.Session = session
+	localParams.IsMinimal = false
+
+	isCron := session != nil && strings.HasPrefix(session.Key, CronSessionKeyPrefix)
+	allSections := pb.buildSectionListWithParams(ctx, session, isOAuth, isCron, &localParams)
+
+	// Determine context window from session model.
+	model := ""
+	if session != nil && session.Context != nil {
+		model = session.Context["model"]
+	}
+	contextWindow := ai.ContextWindowForModel(model)
+
+	largeCtxThreshold := pb.promptScaling.LargeContextThreshold
+	if largeCtxThreshold <= 0 {
+		largeCtxThreshold = defaultLargeContextThreshold
+	}
+
+	cpt := pb.promptScaling.CharsPerToken
+	if cpt <= 0 {
+		cpt = defaultCharsPerToken
+	}
+
+	budgetPercent := pb.promptScaling.PromptBudgetPercent
+	if budgetPercent <= 0 {
+		budgetPercent = defaultPromptBudgetPercent
+	}
+
+	budgetConstrained := contextWindow < largeCtxThreshold
+	budgetChars := contextWindow * budgetPercent / 100 * cpt
+
+	// Build and cache all sections.
+	for i := range allSections {
+		if !allSections[i].built {
+			allSections[i].cached = strings.TrimSpace(allSections[i].build())
+			allSections[i].built = true
+		}
+	}
+
+	// Determine inclusion per section.
+	usedChars := 0
+	included := make([]bool, len(allSections))
+	var droppedNames []string
+	sectionInfos := make([]PromptSectionInfo, len(allSections))
+
+	for i := range allSections {
+		text := allSections[i].cached
+		chars := len(text)
+		info := PromptSectionInfo{
+			Name:     allSections[i].name,
+			Priority: allSections[i].priority,
+			Chars:    chars,
+		}
+
+		if !budgetConstrained || text == "" {
+			info.Included = true
+			included[i] = true
+			usedChars += chars
+		} else if usedChars+chars <= budgetChars {
+			info.Included = true
+			included[i] = true
+			usedChars += chars
+		} else {
+			info.Included = false
+			droppedNames = append(droppedNames, allSections[i].name)
+		}
+
+		sectionInfos[i] = info
+	}
+
+	promptText := joinSectionsWithCache(allSections, included, droppedNames...)
+	totalChars := len(promptText)
+
+	return &PromptDebugInfo{
+		PromptText:        promptText,
+		TotalChars:        totalChars,
+		EstimatedTokens:   totalChars / cpt,
+		ContextWindow:     contextWindow,
+		BudgetChars:       budgetChars,
+		BudgetConstrained: budgetConstrained,
+		Sections:          sectionInfos,
+		DroppedSections:   droppedNames,
+	}, nil
 }
 
 // buildSectionList returns all prompt sections tagged with priorities.

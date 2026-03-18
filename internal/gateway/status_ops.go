@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"conduit/internal/sessions"
 	"conduit/internal/version"
 )
 
@@ -82,4 +83,42 @@ func (g *Gateway) GetMetrics() (map[string]interface{}, error) {
 // GetVersion returns the gateway version
 func (g *Gateway) GetVersion() string {
 	return version.Info()
+}
+
+// GetSystemPromptDebug returns debug info about the system prompt for a session.
+func (g *Gateway) GetSystemPromptDebug(ctx context.Context, sessionKey string) (map[string]interface{}, error) {
+	var session *sessions.Session
+	if sessionKey != "" {
+		s, err := g.sessions.GetSession(sessionKey)
+		if err != nil {
+			return nil, fmt.Errorf("session %q not found: %w", sessionKey, err)
+		}
+		session = s
+	}
+
+	debug, err := g.agentSystem.BuildSystemPromptDebug(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build prompt debug: %w", err)
+	}
+
+	sections := make([]map[string]interface{}, len(debug.Sections))
+	for i, s := range debug.Sections {
+		sections[i] = map[string]interface{}{
+			"name":     s.Name,
+			"priority": s.Priority,
+			"chars":    s.Chars,
+			"included": s.Included,
+		}
+	}
+
+	return map[string]interface{}{
+		"prompt_text":        debug.PromptText,
+		"total_chars":        debug.TotalChars,
+		"estimated_tokens":   debug.EstimatedTokens,
+		"context_window":     debug.ContextWindow,
+		"budget_chars":       debug.BudgetChars,
+		"budget_constrained": debug.BudgetConstrained,
+		"sections":           sections,
+		"dropped_sections":   debug.DroppedSections,
+	}, nil
 }

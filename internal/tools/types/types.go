@@ -33,6 +33,7 @@ type GatewayService interface {
 	UpdateConfiguration(ctx context.Context, config map[string]interface{}) error
 	GetMetrics() (map[string]interface{}, error)
 	GetVersion() string
+	GetSystemPromptDebug(ctx context.Context, sessionKey string) (map[string]interface{}, error)
 
 	// Scheduler operations
 	ScheduleJob(job *SchedulerJob) error

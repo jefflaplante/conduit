@@ -107,6 +107,9 @@ func (m *mockGatewayService) GetMetrics() (map[string]interface{}, error) {
 func (m *mockGatewayService) GetVersion() string {
 	return "test"
 }
+func (m *mockGatewayService) GetSystemPromptDebug(ctx context.Context, sessionKey string) (map[string]interface{}, error) {
+	return nil, nil
+}
 
 func TestHeartbeatJobDetection(t *testing.T) {
 	testCases := []struct {
