@@ -277,6 +277,7 @@ func buildErrorRecoverySection(isMinimal bool) string {
 - When context is ambiguous, ask rather than guess.
 - When uncertain about system state, verify before acting.
 - Distinguish "I checked and it's fine" from "I didn't check but it's probably fine."
+- If a tool is unavailable or fails, say so. Never substitute a fabricated result.
 `
 }
 

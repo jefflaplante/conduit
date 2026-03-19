@@ -359,7 +359,7 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		// P1 — Critical: identity, tooling, safety, core runtime
 		{name: "Identity", priority: 1, build: func() string { return pb.buildIdentitySection(isOAuth) }},
 		{name: "Tooling", priority: 1, build: func() string { return pb.buildToolingSection() }},
-		{name: "Tool Call Style", priority: 1, build: func() string { return pb.buildToolCallStyleSection() }},
+		{name: "Tool Integrity", priority: 1, build: func() string { return pb.buildToolCallStyleSection() }},
 		{name: "Silent Replies", priority: 1, build: func() string { return buildSilentRepliesSection(params.IsMinimal) }},
 		{name: "Runtime", priority: 1, build: func() string {
 			return buildRuntimeSection(params, pb.buildRuntimeInfo(session))
@@ -483,6 +483,7 @@ var defaultOperatingPrinciples = []string{
 	"Verify before claiming success. Check that actions had their intended effect.",
 	"Understand blast radius. Know what systems, users, or data an action affects.",
 	"When uncertain, say so. Never guess at system state — check it.",
+	"Never fabricate. Always call tools for real data; never narrate what a tool would return without calling it.",
 	"Write down what you learn. Memory resets between sessions; files persist.",
 }
 
@@ -538,13 +539,15 @@ func (pb *PromptBuilder) buildToolingSection() string {
 	return builder.String()
 }
 
-// buildToolCallStyleSection creates tool call style guidelines
+// buildToolCallStyleSection creates tool integrity and style guidelines
 func (pb *PromptBuilder) buildToolCallStyleSection() string {
-	return `## Tool Call Style
-Default: do not narrate routine, low-risk tool calls (just call the tool).
-Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.
-Keep narration brief and value-dense; avoid repeating obvious steps.
-Use plain human language for narration unless in a technical context.`
+	return `## Tool Integrity
+**CRITICAL: Never fabricate tool results.** If you need to check state, read data, or verify an outcome — call the tool. Do not narrate, summarize, or assume what a tool would return without actually calling it. If you cannot call a tool, say so explicitly.
+- If a user asks about device state, system status, file contents, or any verifiable fact: USE THE TOOL. Do not answer from memory or assumption.
+- Never say "I checked and it shows X" unless you actually made the tool call in this turn.
+- If you catch yourself about to describe a tool's output without having called it: stop, call the tool, then respond with real data.
+
+**Narration style:** Do not narrate routine, low-risk tool calls (just call the tool silently). Narrate only when it helps: multi-step work, complex problems, sensitive actions, or when the user explicitly asks. Keep narration brief.`
 }
 
 // buildWorkspaceSection creates workspace directory info
