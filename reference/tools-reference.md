@@ -339,6 +339,32 @@ Analyze images using vision models.
 {"path": "diagram.jpg", "prompt": "Describe the architecture shown"}
 ```
 
+## IoT / Home Automation
+
+### MQTT
+
+Query MQTT device data and optionally publish messages. Requires `mqtt.enabled: true` in config. See [MQTT Integration](mqtt.md) for full documentation.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | Yes | "status", "topics", "recent", "history", "publish" |
+| `topic` | string | Conditional | Exact topic for history/publish |
+| `topic_pattern` | string | No | Glob filter for recent (e.g. `zigbee2mqtt/*`) |
+| `limit` | int | No | Max events (default 20, max 100) |
+| `payload` | string | Conditional | JSON payload for publish |
+| `qos` | int | No | QoS for publish (0-2, default 0) |
+| `retained` | bool | No | Retain flag for publish (default false) |
+
+```json
+{"action": "status"}
+{"action": "topics"}
+{"action": "recent", "topic_pattern": "zigbee2mqtt/*", "limit": 10}
+{"action": "history", "topic": "zigbee2mqtt/Living Room Sensor"}
+{"action": "publish", "topic": "zigbee2mqtt/Light/set", "payload": "{\"state\":\"ON\"}"}
+```
+
+Publish is gated by `mqtt.publish_allowed` config (default `false`).
+
 ## Adding Custom Tools
 
 Implement the `Tool` interface:
