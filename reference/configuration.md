@@ -440,6 +440,46 @@ Agent heartbeat for automated tasks. See [agent-heartbeat.md](agent-heartbeat.md
 }
 ```
 
+### MQTT
+
+Optional MQTT event ingest for IoT/home automation. See [MQTT Integration](mqtt.md) for full documentation.
+
+```json
+{
+  "mqtt": {
+    "enabled": true,
+    "broker_url": "tcp://192.168.1.10:1883",
+    "client_id": "conduit",
+    "username": "${MQTT_USERNAME}",
+    "password": "${MQTT_PASSWORD}",
+    "topics": ["zigbee2mqtt/#"],
+    "qos": 0,
+    "buffer_max_age_seconds": 3600,
+    "buffer_max_events": 1000,
+    "buffer_max_topics": 500,
+    "publish_allowed": false,
+    "tls": {
+      "ca_cert": "/path/to/ca.pem",
+      "insecure": false
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable MQTT event ingest |
+| `broker_url` | string | required | Broker address (`tcp://` or `ssl://`) |
+| `client_id` | string | `"conduit"` | MQTT client ID |
+| `username` | string | `""` | Broker username (supports `${ENV_VAR}`) |
+| `password` | string | `""` | Broker password (supports `${ENV_VAR}`) |
+| `topics` | string[] | required | Topic subscriptions (wildcards: `#`, `+`) |
+| `qos` | int | `0` | QoS level (0, 1, or 2) |
+| `buffer_max_age_seconds` | int | `3600` | Max event age before pruning |
+| `buffer_max_events` | int | `1000` | Max events per topic |
+| `buffer_max_topics` | int | `500` | Max tracked topics |
+| `publish_allowed` | bool | `false` | Allow AI to publish messages |
+
 ### Debug
 
 ```json
@@ -463,6 +503,8 @@ Common environment variables:
 | `ANTHROPIC_OAUTH_TOKEN` | OAuth token for Claude Code compatibility |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token |
 | `BRAVE_API_KEY` | Brave Search API key |
+| `MQTT_USERNAME` | MQTT broker username |
+| `MQTT_PASSWORD` | MQTT broker password |
 | `CONDUIT_CONFIG` | Config file path |
 | `CONDUIT_DATABASE` | Database file path |
 

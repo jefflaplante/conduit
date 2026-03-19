@@ -100,13 +100,15 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
     - planning/ — Planning engine with dependency resolution, optimization, caching, metrics
     - schema/ — Dynamic schema enhancement and parameter discovery
     - validation/ — Parameter validation
+    - mqtt/ — MQTT tool with action dispatch (status, topics, recent, history, publish)
     - errors/ — Tool error types
-- internal/tools/types/ — Single source of truth for tool-related types and service interfaces (Tool, ToolServices, GatewayService, ChannelSender, SearchService)
+- internal/tools/types/ — Single source of truth for tool-related types and service interfaces (Tool, ToolServices, GatewayService, ChannelSender, SearchService, MQTTService)
 - internal/channels/ — Channel adapter interface + manager; subdirectories:
   - telegram/ — Native Telegram adapter with pairing system (pairing storage, CLI, photo support)
   - tui/ — TUI channel adapter with factory for in-process BubbleTea connections
 - internal/sessions/ — SQLite session store with state tracking
-- internal/config/ — JSON config loading with ${ENV_VAR} expansion. Config struct includes: port, database, AI, agent, workspace, skills, tools, channels, debug, rate limiting, heartbeat, agent heartbeat, SSH
+- internal/mqtt/ — MQTT event ingest: paho client wrapper, per-topic ring buffers, service with background pruning, adapter to tool-layer interface
+- internal/config/ — JSON config loading with ${ENV_VAR} expansion. Config struct includes: port, database, AI, agent, workspace, skills, tools, channels, debug, rate limiting, heartbeat, agent heartbeat, SSH, MQTT
 - internal/database/ — SQLite migration system (4 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search)
 - internal/fts/ — FTS5 full-text search: document chunking, indexing, and search queries (Porter stemming, unicode61 tokenizer)
 - internal/search/ — Web search routing: Brave API, Anthropic search, result caching, strategy selection

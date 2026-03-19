@@ -37,6 +37,7 @@ A clean, high-performance rewrite of the Conduit gateway core in Go, with native
 │  │  • Authentication System    • Web Search Integration    │  │
 │  │  • Heartbeat Monitoring     • Alert Processing          │  │
 │  │  • SSH Server (Wish)        • TUI (BubbleTea)           │  │
+│  │  • MQTT Event Ingest        • IoT Device Awareness      │  │
 │  └─────────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────┘
 ```
@@ -93,6 +94,11 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **Cron Scheduling** — Recurring task execution
 - **[Agent Heartbeat](reference/agent-heartbeat.md)** — Automated HEARTBEAT.md task processing with shared alert queue
 - **Skills System** — Extensible AI capabilities via SKILL.md files
+
+### IoT & Home Automation
+- **[MQTT Integration](reference/mqtt.md)** — Subscribe to MQTT topics (zigbee2mqtt, Home Assistant) for real-time device data
+- **Event Buffering** — In-memory per-topic ring buffers with age-based pruning
+- **Heartbeat Monitoring** — Natural language rules in HEARTBEAT.md to check sensors and alert on anomalies
 
 ## Providers
 
@@ -187,6 +193,7 @@ Use `/model <alias>` to switch models. The provider auto-resolves based on the m
 | [API & Protocol](reference/api-protocol.md) | HTTP endpoints and WebSocket protocol |
 | [Skills System](reference/skills.md) | Creating and using skills |
 | [Authentication](reference/authentication.md) | Token and OAuth setup |
+| [MQTT Integration](reference/mqtt.md) | MQTT event ingest for IoT/home automation |
 | [Security](reference/security.md) | Security considerations |
 
 ### Guides
@@ -207,6 +214,7 @@ conduit/
 │   ├── ai/                # AI provider routing
 │   ├── tools/             # Tool registry and implementations
 │   ├── channels/          # Channel adapters (Telegram, TUI)
+│   ├── mqtt/              # MQTT event ingest (zigbee2mqtt, HA)
 │   ├── sessions/          # SQLite session storage
 │   ├── tui/               # BubbleTea terminal UI
 │   ├── ssh/               # Wish SSH server
