@@ -58,7 +58,7 @@ func TestBuildFullPrompt_LargeContext(t *testing.T) {
 		t.Error("large-context model should not trigger compact mode")
 	}
 	// Spot-check that P1 through P4 sections are present.
-	for _, want := range []string{"## Tooling", "## Tool Call Style", "## Silent Replies", "## Runtime", "## Messaging", "## Safety", "## Operating Principles", "## Error Handling"} {
+	for _, want := range []string{"## Tooling", "## Tool Integrity", "## Silent Replies", "## Runtime", "## Messaging", "## Safety", "## Operating Principles", "## Error Handling"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("expected section %q in full prompt", want)
 		}
@@ -72,7 +72,7 @@ func TestBuildFullPrompt_SmallContext(t *testing.T) {
 	prompt := pb.buildFullPrompt(context.Background(), session, false)
 
 	// P1 sections must always be present regardless of budget.
-	for _, want := range []string{"## Tooling", "## Tool Call Style", "## Silent Replies", "## Runtime"} {
+	for _, want := range []string{"## Tooling", "## Tool Integrity", "## Silent Replies", "## Runtime"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("P1 section %q should be present for mistral (32K)", want)
 		}
