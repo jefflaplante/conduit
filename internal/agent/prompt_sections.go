@@ -347,17 +347,6 @@ func buildModelAliasesSection(params *SectionParams) string {
 	return builder.String()
 }
 
-// buildTimezoneSection returns timezone info
-func buildTimezoneSection(params *SectionParams) string {
-	if params.UserTimezone == "" {
-		return ""
-	}
-
-	return fmt.Sprintf(`## Current Date & Time
-Time zone: %s
-`, params.UserTimezone)
-}
-
 // buildRuntimeSection returns runtime context
 func buildRuntimeSection(params *SectionParams, runtimeInfo map[string]string) string {
 	var parts []string
@@ -385,6 +374,11 @@ func buildRuntimeSection(params *SectionParams, runtimeInfo map[string]string) s
 	}
 
 	now := time.Now()
+	if params.UserTimezone != "" {
+		if loc, err := time.LoadLocation(params.UserTimezone); err == nil {
+			now = now.In(loc)
+		}
+	}
 
 	return fmt.Sprintf(`## Runtime
 Runtime: %s

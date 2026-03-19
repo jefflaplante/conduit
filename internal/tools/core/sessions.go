@@ -421,6 +421,11 @@ func (t *SessionStatusTool) Execute(ctx context.Context, args map[string]interfa
 }
 
 func (t *SessionStatusTool) formatSessionStatus(status map[string]interface{}) string {
+	loc := time.UTC
+	if t.services != nil && t.services.ConfigMgr != nil {
+		loc = t.services.ConfigMgr.GetLocation()
+	}
+
 	var builder strings.Builder
 	builder.WriteString("Session Status:\n\n")
 
@@ -440,10 +445,10 @@ func (t *SessionStatusTool) formatSessionStatus(status map[string]interface{}) s
 
 	// Timing info
 	if createdAt, ok := status["created_at"].(time.Time); ok {
-		builder.WriteString(fmt.Sprintf("Created: %s\n", createdAt.Format("2006-01-02 15:04:05")))
+		builder.WriteString(fmt.Sprintf("Created: %s\n", createdAt.In(loc).Format("2006-01-02 15:04:05 MST")))
 	}
 	if updatedAt, ok := status["updated_at"].(time.Time); ok {
-		builder.WriteString(fmt.Sprintf("Last Updated: %s\n", updatedAt.Format("2006-01-02 15:04:05")))
+		builder.WriteString(fmt.Sprintf("Last Updated: %s\n", updatedAt.In(loc).Format("2006-01-02 15:04:05 MST")))
 	}
 
 	// Model and usage info

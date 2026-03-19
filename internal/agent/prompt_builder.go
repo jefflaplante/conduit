@@ -382,12 +382,6 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 			return ""
 		}},
 		{name: "Workspace", priority: 2, build: func() string { return pb.buildWorkspaceSection() }},
-		{name: "Timezone", priority: 2, build: func() string {
-			if params.UserTimezone != "" {
-				return "If you need the current date, time, or day of week, run session_status."
-			}
-			return ""
-		}},
 
 		// P3 — Enhances behavior: skills, docs, aliases, tags
 		{name: "Skills", priority: 3, build: func() string {
