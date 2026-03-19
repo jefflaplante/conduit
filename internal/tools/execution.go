@@ -23,7 +23,7 @@ type toolEventCallbackKey struct{}
 // ToolEventInfo contains information about a tool execution event
 type ToolEventInfo struct {
 	ToolName  string
-	EventType string // "start", "complete", "error"
+	EventType string // "start", "complete", "error", "thinking"
 	Args      map[string]interface{}
 	Result    string
 	Error     string
@@ -42,6 +42,45 @@ func WithToolEventCallback(ctx context.Context, cb ToolEventCallback) context.Co
 func getToolEventCallback(ctx context.Context) ToolEventCallback {
 	cb, _ := ctx.Value(toolEventCallbackKey{}).(ToolEventCallback)
 	return cb
+}
+
+// startThinkingIndicator emits periodic "thinking" events via the tool event callback.
+// Returns a stop function that must be called when the LLM responds.
+func startThinkingIndicator(ctx context.Context, depth int) func() {
+	cb := getToolEventCallback(ctx)
+	if cb == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		cb(ToolEventInfo{
+			ToolName:  thinkingMessage(depth),
+			EventType: "thinking",
+		})
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cb(ToolEventInfo{
+					ToolName:  thinkingMessage(depth),
+					EventType: "thinking",
+				})
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
+func thinkingMessage(depth int) string {
+	if depth == 0 {
+		return "Thinking..."
+	}
+	return fmt.Sprintf("Thinking (step %d)...", depth+1)
 }
 
 // DefaultMaxToolResultChars is the default max characters for tool result content.
@@ -328,7 +367,9 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		MaxTokens: initialReq.MaxTokens,
 	}
 
+	stopThinking := startThinkingIndicator(ctx, depth)
 	finalResp, err := provider.GenerateResponse(ctx, finalReq)
+	stopThinking()
 	if err != nil {
 		return nil, fmt.Errorf("AI response after tool execution failed: %w", err)
 	}

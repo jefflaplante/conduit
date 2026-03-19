@@ -329,25 +329,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ToolEventMsg:
 		s, tabIdx := m.resolveTab(msg.RequestID, msg.SessionKey)
 		if s != nil {
-			info := ToolActivityInfo{
-				Name:     msg.ToolName,
-				Status:   msg.EventType,
-				Args:     msg.Args,
-				Result:   msg.Result,
-				Error:    msg.ToolEvent.Error,
-				Duration: msg.Duration,
-			}
-			m.sidebar.ActiveTools = updateToolList(m.sidebar.ActiveTools, info)
-			s.Tools = updateToolList(s.Tools, info)
-			if msg.EventType == "start" {
-				s.State = "tool: " + msg.ToolName
+			if msg.EventType == "thinking" {
+				s.State = msg.ToolName // e.g. "Thinking (step 2)..."
 				if tabIdx == m.tabBar.ActiveIdx {
 					m.sidebar.SessionState = s.State
 					m.statusBar.SessionState = s.State
 				}
-			}
-			if tabIdx != m.tabBar.ActiveIdx && tabIdx < len(m.tabBar.Tabs) {
-				m.tabBar.Tabs[tabIdx].HasUnread = true
+				// Re-trigger thinking animation during tool chain gaps
+				if s.Chat.Streaming && s.Chat.StreamBuf.Len() == 0 {
+					cmds = append(cmds, thinkingTickCmd())
+				}
+			} else {
+				info := ToolActivityInfo{
+					Name:     msg.ToolName,
+					Status:   msg.EventType,
+					Args:     msg.Args,
+					Result:   msg.Result,
+					Error:    msg.ToolEvent.Error,
+					Duration: msg.Duration,
+				}
+				m.sidebar.ActiveTools = updateToolList(m.sidebar.ActiveTools, info)
+				s.Tools = updateToolList(s.Tools, info)
+				if msg.EventType == "start" {
+					s.State = "tool: " + msg.ToolName
+					if tabIdx == m.tabBar.ActiveIdx {
+						m.sidebar.SessionState = s.State
+						m.statusBar.SessionState = s.State
+					}
+				}
+				if tabIdx != m.tabBar.ActiveIdx && tabIdx < len(m.tabBar.Tabs) {
+					m.tabBar.Tabs[tabIdx].HasUnread = true
+				}
 			}
 		}
 
