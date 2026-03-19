@@ -254,10 +254,11 @@ func DefaultPromptScalingConfig() PromptScalingConfig {
 
 // ToolsConfig contains tool execution settings
 type ToolsConfig struct {
-	EnabledTools  []string                          `json:"enabled_tools"`
-	MaxToolChains int                               `json:"max_tool_chains,omitempty"` // Maximum tool calls in a chain before stopping
-	Sandbox       SandboxConfig                     `json:"sandbox"`
-	Services      map[string]map[string]interface{} `json:"services,omitempty"`
+	EnabledTools       []string                          `json:"enabled_tools"`
+	MaxToolChains      int                               `json:"max_tool_chains,omitempty"`       // Maximum tool calls in a chain before stopping
+	MaxToolResultChars int                               `json:"max_tool_result_chars,omitempty"` // Maximum chars in tool result content (default 8192)
+	Sandbox            SandboxConfig                     `json:"sandbox"`
+	Services           map[string]map[string]interface{} `json:"services,omitempty"`
 }
 
 // SandboxConfig contains sandboxing settings for tool execution

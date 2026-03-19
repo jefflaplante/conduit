@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,13 +44,17 @@ func getToolEventCallback(ctx context.Context) ToolEventCallback {
 	return cb
 }
 
+// DefaultMaxToolResultChars is the default max characters for tool result content.
+const DefaultMaxToolResultChars = 8192
+
 // ExecutionEngine handles tool execution, chaining, and middleware
 type ExecutionEngine struct {
-	registry    ToolRegistry
-	middleware  []Middleware
-	maxParallel int
-	timeout     time.Duration
-	maxChains   int // Prevent infinite tool chains
+	registry          ToolRegistry
+	middleware        []Middleware
+	maxParallel       int
+	timeout           time.Duration
+	maxChains         int // Prevent infinite tool chains
+	maxResultChars    int // Max chars for tool result content (0 = use default)
 }
 
 // Middleware interface for tool execution pipeline
@@ -84,11 +89,19 @@ func NewExecutionEngine(registry ToolRegistry, maxParallel int, timeout time.Dur
 	}
 
 	return &ExecutionEngine{
-		registry:    registry,
-		middleware:  []Middleware{},
-		maxParallel: maxParallel,
-		timeout:     timeout,
-		maxChains:   maxChains,
+		registry:       registry,
+		middleware:     []Middleware{},
+		maxParallel:   maxParallel,
+		timeout:       timeout,
+		maxChains:     maxChains,
+		maxResultChars: DefaultMaxToolResultChars,
+	}
+}
+
+// SetMaxResultChars configures the maximum characters for tool result content.
+func (e *ExecutionEngine) SetMaxResultChars(maxChars int) {
+	if maxChars > 0 {
+		e.maxResultChars = maxChars
 	}
 }
 
@@ -347,7 +360,28 @@ func (e *ExecutionEngine) formatToolResultForAI(result *ExecutionResult) string 
 	}
 
 	if !result.Result.Success {
-		return fmt.Sprintf("Tool '%s' failed: %s", result.ToolCall.Name, result.Result.Error)
+		msg := fmt.Sprintf("Tool '%s' failed: %s", result.ToolCall.Name, result.Result.Error)
+
+		// Surface rich error details when available
+		if details := result.Result.ErrorDetails; details != nil {
+			if details.Type != "" {
+				msg += fmt.Sprintf("\nError type: %s", details.Type)
+			}
+			if len(details.Suggestions) > 0 {
+				msg += "\nSuggestions:"
+				for _, s := range details.Suggestions {
+					msg += fmt.Sprintf("\n- %s", s)
+				}
+			}
+			if len(details.AvailableValues) > 0 {
+				msg += fmt.Sprintf("\nAvailable values: %s", strings.Join(details.AvailableValues, ", "))
+			}
+			if len(details.Examples) > 0 {
+				msg += fmt.Sprintf("\nExamples: %s", strings.Join(details.Examples, ", "))
+			}
+		}
+
+		return msg
 	}
 
 	// Return the content, with metadata if available
@@ -357,6 +391,20 @@ func (e *ExecutionEngine) formatToolResultForAI(result *ExecutionResult) string 
 		if dataJSON, err := json.Marshal(result.Result.Data); err == nil {
 			content += fmt.Sprintf("\n\nStructured data: %s", string(dataJSON))
 		}
+	}
+
+	// Truncate oversized results to protect context window
+	maxChars := e.maxResultChars
+	if maxChars <= 0 {
+		maxChars = DefaultMaxToolResultChars
+	}
+	if len(content) > maxChars {
+		// Keep first 80% and last 20% of budget for useful context
+		headSize := maxChars * 4 / 5
+		tailSize := maxChars / 5
+		content = content[:headSize] +
+			fmt.Sprintf("\n\n...(truncated, showing %d of %d chars)...\n\n", maxChars, len(content)) +
+			content[len(content)-tailSize:]
 	}
 
 	return content

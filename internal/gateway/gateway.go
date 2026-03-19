@@ -224,6 +224,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 		maxToolChains = 25 // Default fallback
 	}
 	executionEngine := tools.NewExecutionEngine(toolsRegistry, 4, 60*time.Second, maxToolChains)
+	if cfg.Tools.MaxToolResultChars > 0 {
+		executionEngine.SetMaxResultChars(cfg.Tools.MaxToolResultChars)
+	}
 	executionAdapter := tools.NewExecutionEngineAdapter(executionEngine)
 
 	// Initialize AI router with agent system AND execution engine
@@ -683,10 +686,53 @@ func convertToolsToAIFormat(registry *tools.Registry) []ai.Tool {
 
 	availableTools := registry.GetAvailableTools()
 	for _, tool := range availableTools {
+		description := tool.Description()
+		params := tool.Parameters()
+
+		// Apply schema hints from EnhancedSchemaProvider
+		if esp, ok := tool.(types.EnhancedSchemaProvider); ok {
+			hints := esp.GetSchemaHints()
+			if len(hints) > 0 {
+				builder := schema.NewBuilder(nil)
+				params = builder.EnhanceSchema(context.Background(), params, hints)
+			}
+		}
+
+		// Append usage examples to description
+		if uep, ok := tool.(types.UsageExampleProvider); ok {
+			examples := uep.GetUsageExamples()
+			if len(examples) > 0 {
+				description += "\n\nUsage examples:"
+				for _, ex := range examples {
+					description += fmt.Sprintf("\n- %s: %s", ex.Name, ex.Description)
+				}
+			}
+		}
+
+		// Append per-action documentation
+		if adp, ok := tool.(types.ActionDocProvider); ok {
+			docs := adp.GetActionDocs()
+			if len(docs) > 0 {
+				description += "\n\nAction details:"
+				for action, doc := range docs {
+					description += fmt.Sprintf("\n[%s] %s", action, doc.Description)
+					if len(doc.RequiredParams) > 0 {
+						description += fmt.Sprintf(" Required: %s.", strings.Join(doc.RequiredParams, ", "))
+					}
+					if len(doc.OptionalParams) > 0 {
+						description += fmt.Sprintf(" Optional: %s.", strings.Join(doc.OptionalParams, ", "))
+					}
+					if doc.Returns != "" {
+						description += fmt.Sprintf(" Returns: %s.", doc.Returns)
+					}
+				}
+			}
+		}
+
 		aiTool := ai.Tool{
 			Name:        tool.Name(),
-			Description: tool.Description(),
-			Parameters:  tool.Parameters(),
+			Description: description,
+			Parameters:  params,
 		}
 		aiTools = append(aiTools, aiTool)
 	}

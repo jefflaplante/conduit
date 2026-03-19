@@ -55,6 +55,55 @@ func (t *GatewayTool) Parameters() map[string]interface{} {
 	}
 }
 
+func (t *GatewayTool) GetActionDocs() map[string]types.ActionDoc {
+	return map[string]types.ActionDoc{
+		"status": {
+			Description: "Get gateway health, uptime, connection count, and message stats",
+			Returns:     "uptime, health, active_connections, total_messages, memory_usage",
+		},
+		"restart": {
+			Description: "Restart the gateway (requires confirmation from user)",
+			Returns:     "restart confirmation with timestamp",
+		},
+		"channels": {
+			Description: "List all configured channels with their status",
+			Returns:     "per-channel status, enabled state, last activity, message count",
+		},
+		"enable_channel": {
+			Description:    "Enable a disabled channel",
+			RequiredParams: []string{"channelId"},
+			Returns:        "confirmation with channelId and timestamp",
+		},
+		"disable_channel": {
+			Description:    "Disable an active channel",
+			RequiredParams: []string{"channelId"},
+			Returns:        "confirmation with channelId and timestamp",
+		},
+		"config": {
+			Description: "Get current gateway configuration",
+			Returns:     "port, AI config, tools config, channels count",
+		},
+		"update_config": {
+			Description:    "Update gateway configuration fields",
+			RequiredParams: []string{"config"},
+			Returns:        "confirmation with applied config and timestamp",
+		},
+		"metrics": {
+			Description: "Get gateway performance metrics",
+			Returns:     "requests/min, avg response time, error rate, total tokens, cost",
+		},
+		"version": {
+			Description: "Get Conduit version string",
+			Returns:     "version string",
+		},
+		"debug_prompt": {
+			Description:    "Inspect system prompt sections, sizes, and budget allocation",
+			OptionalParams: []string{"session"},
+			Returns:        "section list with priority, char count, inclusion status",
+		},
+	}
+}
+
 func (t *GatewayTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
 	action, ok := args["action"].(string)
 	if !ok {
