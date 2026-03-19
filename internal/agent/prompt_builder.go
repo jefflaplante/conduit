@@ -372,6 +372,7 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		{name: "Memory Persistence", priority: 2, build: func() string { return buildMemoryPersistenceSection(params) }},
 		{name: "Heartbeats", priority: 2, build: func() string { return buildHeartbeatsSection(params) }},
 		{name: "Error Recovery", priority: 2, build: func() string { return buildErrorRecoverySection(params.IsMinimal) }},
+		{name: "Tool Strategy", priority: 2, build: func() string { return buildToolStrategySection(params.IsMinimal) }},
 		{name: "Messaging", priority: 2, build: func() string { return buildMessagingSection(params) }},
 		{name: "Email", priority: 2, build: func() string { return pb.buildEmailSection() }},
 		{name: "Cron Delivery", priority: 2, build: func() string {

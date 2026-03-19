@@ -3,10 +3,12 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"conduit/internal/ai"
+	"conduit/internal/tools/types"
 )
 
 // MockTool implements Tool interface for testing
@@ -570,3 +572,86 @@ func TestHandleToolCallFlow_ModelPropagation(t *testing.T) {
 		t.Fatalf("Expected model 'claude-sonnet-4-6' in follow-up request, got '%s'", followUpReq.Model)
 	}
 }
+
+// Test that formatToolResultForAI surfaces ErrorDetails
+func TestFormatToolResultForAI_ErrorDetails(t *testing.T) {
+	engine := NewExecutionEngine(NewMockRegistry(), 3, 30*time.Second, 10)
+
+	result := &ExecutionResult{
+		ToolCall: &ai.ToolCall{ID: "1", Name: "mqtt"},
+		Result: &ToolResult{
+			Success: false,
+			Error:   "publish failed: connection refused",
+			ErrorDetails: &types.ToolErrorDetails{
+				Type:            "connection_error",
+				Suggestions:     []string{"Check broker is running", "Verify MQTT config"},
+				AvailableValues: []string{"status", "topics", "recent"},
+				Examples:        []string{`action=status`, `action=topics`},
+			},
+		},
+	}
+
+	formatted := engine.formatToolResultForAI(result)
+
+	if !strings.Contains(formatted, "Error type: connection_error") {
+		t.Errorf("Expected error type in output, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "Check broker is running") {
+		t.Errorf("Expected suggestion in output, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "status, topics, recent") {
+		t.Errorf("Expected available values in output, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "action=status") {
+		t.Errorf("Expected examples in output, got: %s", formatted)
+	}
+}
+
+// Test that formatToolResultForAI truncates oversized results
+func TestFormatToolResultForAI_Truncation(t *testing.T) {
+	engine := NewExecutionEngine(NewMockRegistry(), 3, 30*time.Second, 10)
+	engine.SetMaxResultChars(100)
+
+	// Create a result with content larger than the limit
+	bigContent := ""
+	for i := 0; i < 200; i++ {
+		bigContent += "X"
+	}
+
+	result := &ExecutionResult{
+		ToolCall: &ai.ToolCall{ID: "1", Name: "test"},
+		Result: &ToolResult{
+			Success: true,
+			Content: bigContent,
+		},
+	}
+
+	formatted := engine.formatToolResultForAI(result)
+
+	if !strings.Contains(formatted, "truncated") {
+		t.Errorf("Expected truncation indicator in output, got length %d: %s", len(formatted), formatted)
+	}
+	if !strings.Contains(formatted, "200 chars") {
+		t.Errorf("Expected original size in truncation message, got: %s", formatted)
+	}
+}
+
+// Test that formatToolResultForAI does not truncate small results
+func TestFormatToolResultForAI_NoTruncation(t *testing.T) {
+	engine := NewExecutionEngine(NewMockRegistry(), 3, 30*time.Second, 10)
+
+	result := &ExecutionResult{
+		ToolCall: &ai.ToolCall{ID: "1", Name: "test"},
+		Result: &ToolResult{
+			Success: true,
+			Content: "small result",
+		},
+	}
+
+	formatted := engine.formatToolResultForAI(result)
+
+	if formatted != "small result" {
+		t.Errorf("Expected unmodified content, got: %s", formatted)
+	}
+}
+

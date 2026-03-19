@@ -209,13 +209,27 @@ func (r *Registry) GetServices() *types.ToolServices {
 func (r *Registry) ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (*types.ToolResult, error) {
 	// Check if tool is enabled
 	if !r.enabledTools[name] {
-		return types.NewErrorResult("tool_disabled", fmt.Sprintf("tool '%s' is not enabled", name)), nil
+		result := types.NewErrorResult("tool_disabled", fmt.Sprintf("tool '%s' is not enabled", name)).
+			WithSuggestions([]string{"Check the enabled_tools list in your config.json to enable this tool"})
+		// Suggest enabled tools of the same category
+		if similar := r.findSimilarEnabledTools(name); len(similar) > 0 {
+			result.WithAvailableValues(similar)
+		}
+		return result, nil
 	}
 
 	// Get tool
 	tool, exists := r.tools[name]
 	if !exists {
-		return types.NewErrorResult("tool_not_found", fmt.Sprintf("tool '%s' not found", name)), nil
+		result := types.NewErrorResult("tool_not_found", fmt.Sprintf("tool '%s' not found", name))
+		available := r.getEnabledToolNames()
+		if len(available) > 0 {
+			result.WithAvailableValues(available)
+		}
+		if closest := r.findClosestToolName(name); closest != "" {
+			result.WithSuggestions([]string{fmt.Sprintf("Did you mean '%s'?", closest)})
+		}
+		return result, nil
 	}
 
 	// Validate parameters if tool supports validation
@@ -300,6 +314,63 @@ func (r *Registry) GetAvailableTools() map[string]types.Tool {
 		}
 	}
 	return available
+}
+
+// getEnabledToolNames returns the names of all enabled tools.
+func (r *Registry) getEnabledToolNames() []string {
+	var names []string
+	for name := range r.tools {
+		if r.enabledTools[name] {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// findSimilarEnabledTools returns enabled tool names that share a prefix or substring with the given name.
+func (r *Registry) findSimilarEnabledTools(name string) []string {
+	lower := strings.ToLower(name)
+	var similar []string
+	for toolName := range r.tools {
+		if r.enabledTools[toolName] && strings.Contains(strings.ToLower(toolName), lower[:min(len(lower), 3)]) {
+			similar = append(similar, toolName)
+		}
+	}
+	return similar
+}
+
+// findClosestToolName returns the enabled tool name most similar to the given name, or "".
+func (r *Registry) findClosestToolName(name string) string {
+	lower := strings.ToLower(name)
+	best := ""
+	bestScore := 0
+	for toolName := range r.tools {
+		if r.enabledTools[toolName] {
+			score := commonPrefixLen(lower, strings.ToLower(toolName))
+			if score > bestScore {
+				bestScore = score
+				best = toolName
+			}
+		}
+	}
+	if bestScore >= 2 {
+		return best
+	}
+	return ""
+}
+
+// commonPrefixLen returns the length of the common prefix between two strings.
+func commonPrefixLen(a, b string) int {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return n
 }
 
 // GetToolSchemas returns JSON schemas for all available tools

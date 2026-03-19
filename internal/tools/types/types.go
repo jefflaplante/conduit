@@ -326,3 +326,17 @@ type UsageExampleProvider interface {
 	// GetUsageExamples returns example invocations of the tool
 	GetUsageExamples() []ToolExample
 }
+
+// ActionDoc describes a single action within a multi-action tool.
+type ActionDoc struct {
+	Description    string
+	RequiredParams []string
+	OptionalParams []string
+	Returns        string
+}
+
+// ActionDocProvider is an optional interface for multi-action tools that
+// document each action's parameters and return values individually.
+type ActionDocProvider interface {
+	GetActionDocs() map[string]ActionDoc
+}

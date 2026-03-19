@@ -271,10 +271,26 @@ func buildErrorRecoverySection(isMinimal bool) string {
 		return ""
 	}
 	return `## Error Handling
-- When a tool fails, report the error clearly. Do not silently retry or ignore.
+- When a tool fails, report the error clearly including the arguments you used. Do not silently retry or ignore.
+- Check the error type: transient errors (timeout, rate limit) may succeed on retry; permanent errors (invalid parameter, not found) require a different approach.
+- If a tool times out, verify state before retrying — the action may have partially completed.
 - When context is ambiguous, ask rather than guess.
 - When uncertain about system state, verify before acting.
 - Distinguish "I checked and it's fine" from "I didn't check but it's probably fine."
+`
+}
+
+// buildToolStrategySection returns tool chaining and execution strategy guidance
+func buildToolStrategySection(isMinimal bool) string {
+	if isMinimal {
+		return ""
+	}
+	return `## Tool Strategy
+- **Serial chaining**: When one tool's output feeds the next (e.g., discover topics → get history → publish), execute them in sequence.
+- **Parallel execution**: When tasks are independent (e.g., checking status of multiple systems), execute them together.
+- **Chain termination**: Stop chaining when you have a clear answer, when the result is a simple confirmation, or if you've called the same tool 3+ times without progress.
+- **Context budget**: Prefer focused tool calls over broad ones. A targeted query beats a full dump.
+- **Discovery first**: For unfamiliar tools, call with minimal args (status, list) to learn available options before attempting complex operations.
 `
 }
 

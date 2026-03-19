@@ -197,3 +197,25 @@ func TestMQTTTool_Name(t *testing.T) {
 	tool := NewMQTTTool(&types.ToolServices{})
 	assert.Equal(t, "MQTT", tool.Name())
 }
+
+func TestMQTTTool_ActionDocProvider(t *testing.T) {
+	tool := NewMQTTTool(&types.ToolServices{})
+
+	// Verify tool implements ActionDocProvider
+	adp, ok := interface{}(tool).(types.ActionDocProvider)
+	assert.True(t, ok, "MQTTTool should implement ActionDocProvider")
+
+	docs := adp.GetActionDocs()
+	assert.Len(t, docs, 5, "Should have docs for all 5 actions")
+
+	// Check publish requires topic and payload
+	pub := docs["publish"]
+	assert.Contains(t, pub.RequiredParams, "topic")
+	assert.Contains(t, pub.RequiredParams, "payload")
+	assert.NotEmpty(t, pub.Returns)
+
+	// Check status has no required params
+	status := docs["status"]
+	assert.Empty(t, status.RequiredParams)
+	assert.NotEmpty(t, status.Returns)
+}

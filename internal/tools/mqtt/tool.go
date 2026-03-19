@@ -85,6 +85,37 @@ func (t *MQTTTool) Parameters() map[string]interface{} {
 	}
 }
 
+func (t *MQTTTool) GetActionDocs() map[string]types.ActionDoc {
+	return map[string]types.ActionDoc{
+		"status": {
+			Description: "Check MQTT connection state and event counts",
+			Returns:     "connected, broker_url, active_topics, total_events, publish_allowed",
+		},
+		"topics": {
+			Description:    "List all active device topics with last value (start here for discovery)",
+			OptionalParams: []string{"limit"},
+			Returns:        "array of {topic, event_count, last_event, last_value}",
+		},
+		"recent": {
+			Description:    "Get recent events, optionally filtered by glob pattern",
+			OptionalParams: []string{"topic_pattern", "limit"},
+			Returns:        "array of {topic, payload, timestamp, retained}",
+		},
+		"history": {
+			Description:    "Get event history for one specific device topic",
+			RequiredParams: []string{"topic"},
+			OptionalParams: []string{"limit"},
+			Returns:        "array of {topic, payload, timestamp, retained}",
+		},
+		"publish": {
+			Description:    "Send a command to a device. Check history first to learn payload format",
+			RequiredParams: []string{"topic", "payload"},
+			OptionalParams: []string{"qos", "retained"},
+			Returns:        "topic, qos, retained, payload_size, broker_ack",
+		},
+	}
+}
+
 func (t *MQTTTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
 	if t.services.MQTTService == nil {
 		return &types.ToolResult{
