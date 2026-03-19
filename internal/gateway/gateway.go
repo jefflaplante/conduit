@@ -1363,6 +1363,14 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 			}
 		}()
 
+		// Attach tool event callback for thinking status and tool logging
+		reqCtx = tools.WithToolEventCallback(reqCtx, func(event tools.ToolEventInfo) {
+			if event.EventType == "thinking" {
+				g.channelManager.SendTypingIndicator(msg.ChannelID, msg.UserID)
+			}
+			log.Printf("[ToolEvent] channel=%s event=%s tool=%s", msg.ChannelID, event.EventType, event.ToolName)
+		})
+
 		// Get model and provider overrides from session context
 		modelOverride := session.Context["model"]
 		providerOverride := session.Context["provider"]
