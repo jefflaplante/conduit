@@ -6,32 +6,56 @@ import (
 	"time"
 )
 
-func TestSubAgent_ContextPropagation(t *testing.T) {
-	// Verify that deriveSubAgentContext derives from the parent context,
-	// so that cancelling the parent also cancels the sub-agent context.
+func TestSubAgent_GatewayContextUsed(t *testing.T) {
+	// Verify that sub-agents use the gateway context, not request context.
+	// Gateway shutdown should cancel sub-agents, but request cancellation should not.
 
-	parentCtx, parentCancel := context.WithCancel(context.Background())
+	gatewayCtx, gatewayCancel := context.WithCancel(context.Background())
+	defer gatewayCancel()
 
-	subCtx, subCancel := deriveSubAgentContext(parentCtx, 30)
+	subCtx, subCancel := deriveSubAgentContext(gatewayCtx, 30)
 	defer subCancel()
 
 	// Sub-agent context should not be done yet
 	select {
 	case <-subCtx.Done():
-		t.Fatal("Sub-agent context should not be done before parent cancellation")
+		t.Fatal("Sub-agent context should not be done before gateway shutdown")
 	default:
 		// expected
 	}
 
-	// Cancel the parent context
-	parentCancel()
+	// Cancel the gateway context (simulating shutdown)
+	gatewayCancel()
 
-	// Sub-agent context should now be done (with small wait for propagation)
+	// Sub-agent context should now be done
 	select {
 	case <-subCtx.Done():
-		// expected - parent cancellation propagated
+		// expected - gateway shutdown propagated
 	case <-time.After(100 * time.Millisecond):
-		t.Fatal("Sub-agent context should be cancelled when parent is cancelled")
+		t.Fatal("Sub-agent context should be cancelled when gateway shuts down")
+	}
+}
+
+func TestSubAgent_RequestCancellationDoesNotAffectSubAgent(t *testing.T) {
+	// Verify that cancelling the request context does NOT cancel sub-agents.
+	// Sub-agents are fire-and-forget and should outlive the parent request.
+
+	gatewayCtx := context.Background() // long-lived gateway context
+
+	// Sub-agent derives from gateway context, not request context
+	subCtx, subCancel := deriveSubAgentContext(gatewayCtx, 30)
+	defer subCancel()
+
+	// Simulate a request context that gets cancelled
+	_, requestCancel := context.WithCancel(context.Background())
+	requestCancel() // Request completes/cancels
+
+	// Sub-agent context should still be active (not affected by request cancellation)
+	select {
+	case <-subCtx.Done():
+		t.Fatal("Sub-agent context should NOT be cancelled by request cancellation")
+	default:
+		// expected - sub-agent continues running
 	}
 }
 

@@ -16,14 +16,19 @@ func (g *Gateway) SpawnSubAgent(ctx context.Context, task, agentId, model, label
 	return g.SpawnSubAgentWithCallback(ctx, task, agentId, model, label, timeoutSeconds, "", "", false)
 }
 
-// deriveSubAgentContext creates a sub-agent context derived from the parent context
-// with the specified timeout. This ensures parent cancellation propagates to sub-agents.
-func deriveSubAgentContext(parentCtx context.Context, timeoutSeconds int) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(parentCtx, time.Duration(timeoutSeconds)*time.Second)
+// deriveSubAgentContext creates a sub-agent context from the gateway lifecycle context
+// with the specified timeout. Sub-agents outlive parent requests but respect gateway shutdown.
+func deriveSubAgentContext(gatewayCtx context.Context, timeoutSeconds int) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(gatewayCtx, time.Duration(timeoutSeconds)*time.Second)
 }
 
 // SpawnSubAgentWithCallback spawns a sub-agent with optional result announcement
 func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, parentChannelID, parentUserID string, announce bool) (string, error) {
+	// Check if caller's context is already done (don't spawn if request was canceled)
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("cannot spawn sub-agent: parent context already canceled")
+	}
+
 	// Create a unique session key for the sub-agent
 	sessionKey := fmt.Sprintf("subagent_%d", time.Now().UnixNano())
 
@@ -35,7 +40,9 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 
 	// Run the sub-agent in a goroutine
 	go func() {
-		subCtx, cancel := deriveSubAgentContext(ctx, timeoutSeconds)
+		// Use gateway lifecycle context, not request context.
+		// Sub-agents are fire-and-forget - they should outlive the parent request.
+		subCtx, cancel := deriveSubAgentContext(g.ctx, timeoutSeconds)
 		defer cancel()
 
 		log.Printf("[SubAgent] Starting task: %s (session: %s, announce: %v)", task, session.Key, announce)
