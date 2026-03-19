@@ -98,6 +98,15 @@ type MQTTServiceStatus struct {
 	PublishAllowed   bool     `json:"publish_allowed"`
 }
 
+// MQTTPublishResult confirms broker acknowledgement of a published message.
+type MQTTPublishResult struct {
+	Topic       string `json:"topic"`
+	QoS         byte   `json:"qos"`
+	Retained    bool   `json:"retained"`
+	PayloadSize int    `json:"payload_size"`
+	BrokerAck   bool   `json:"broker_ack"` // true = broker confirmed receipt (QoS >= 1)
+}
+
 // MQTTService provides MQTT event data to tools.
 type MQTTService interface {
 	Status() MQTTServiceStatus
@@ -105,7 +114,7 @@ type MQTTService interface {
 	RecentForTopic(topic string, limit int) []MQTTEvent
 	RecentMatching(pattern string, limit int) []MQTTEvent
 	Topics() []MQTTTopicSummary
-	Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) error
+	Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) (*MQTTPublishResult, error)
 }
 
 // VectorSearchResult represents a single result from vector/semantic search.
