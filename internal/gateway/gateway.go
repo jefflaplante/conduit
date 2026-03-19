@@ -26,6 +26,7 @@ import (
 	"conduit/internal/heartbeat"
 	"conduit/internal/middleware"
 	"conduit/internal/monitoring"
+	"conduit/internal/mqtt"
 	"conduit/internal/scheduler"
 	"conduit/internal/searchdb"
 	"conduit/internal/sessions"
@@ -93,6 +94,9 @@ type Gateway struct {
 
 	// Vector/semantic search (optional)
 	vectorService *vecgoservice.Service
+
+	// MQTT event ingest (optional)
+	mqttService *mqtt.Service
 
 	// SSH server (optional)
 	sshServer *charmssh.Server
@@ -490,6 +494,12 @@ func New(cfg *config.Config) (*Gateway, error) {
 		}
 	}
 
+	// Initialize optional MQTT event ingest service
+	if cfg.MQTT.Enabled {
+		gw.mqttService = mqtt.NewService(cfg.MQTT)
+		log.Printf("MQTT service configured for %s (%d topics)", cfg.MQTT.BrokerURL, len(cfg.MQTT.Topics))
+	}
+
 	// Create schema builder with discovery providers for enhanced tool schemas
 	schemaBuilder := createSchemaBuilder(gw, cfg)
 
@@ -497,6 +507,12 @@ func New(cfg *config.Config) (*Gateway, error) {
 	var vectorSearch types.VectorService
 	if gw.vectorService != nil {
 		vectorSearch = gw.vectorService
+	}
+
+	// Build MQTTService interface value (nil if disabled)
+	var mqttSvc types.MQTTService
+	if gw.mqttService != nil {
+		mqttSvc = mqtt.NewServiceAdapter(gw.mqttService)
 	}
 
 	toolServices := &tools.ToolServices{
@@ -507,6 +523,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		Gateway:       gw, // Gateway implements GatewayService interface
 		Searcher:      ftsSearcher,
 		VectorSearch:  vectorSearch,
+		MQTTService:   mqttSvc,
 		SchemaBuilder: schemaBuilder,
 	}
 	toolsRegistry.SetServices(toolServices)
@@ -558,6 +575,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	log.Printf("  - Scheduler: enabled")
 	log.Printf("  - Auth: enabled (middleware + WebSocket authenticator)")
 	log.Printf("  - Vector Search: %v", gw.vectorService != nil)
+	log.Printf("  - MQTT: %v", gw.mqttService != nil)
 	if cfg.RateLimiting.Enabled {
 		log.Printf("  - Rate Limiting: enabled (anonymous: %d req/%ds, authenticated: %d req/%ds)",
 			cfg.RateLimiting.Anonymous.MaxRequests, cfg.RateLimiting.Anonymous.WindowSeconds,
@@ -801,6 +819,15 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}()
 	}
 
+	// Start MQTT service if configured
+	if g.mqttService != nil {
+		if err := g.mqttService.Start(ctx); err != nil {
+			log.Printf("WARNING: Failed to start MQTT service: %v", err)
+		} else {
+			log.Printf("MQTT service started")
+		}
+	}
+
 	// Start SSH server if configured
 	if g.config.SSH.Enabled {
 		sshConfig := internalssh.SSHConfig{
@@ -906,6 +933,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Drain async message syncer before closing search DB
 	if g.asyncMsgSyncer != nil {
 		g.asyncMsgSyncer.Close()
+	}
+
+	// Stop MQTT service
+	if g.mqttService != nil {
+		g.mqttService.Stop()
 	}
 
 	// Close vector search service

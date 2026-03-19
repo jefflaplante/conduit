@@ -2,7 +2,10 @@ package types
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
+	"time"
 
 	"conduit/internal/config"
 	"conduit/internal/fts"
@@ -10,6 +13,9 @@ import (
 	"conduit/internal/skills"
 	"conduit/internal/tools/schema"
 )
+
+// ErrMQTTPublishNotAllowed is returned when publish is attempted but not configured.
+var ErrMQTTPublishNotAllowed = errors.New("mqtt: publishing is not allowed (publish_allowed is false)")
 
 // ChannelSender interface for sending messages via channels
 type ChannelSender interface {
@@ -66,6 +72,42 @@ type SearchService interface {
 	Search(ctx context.Context, query string, limit int) ([]fts.SearchResult, error)
 }
 
+// MQTTEvent represents a single MQTT message for the tool layer.
+type MQTTEvent struct {
+	Topic     string          `json:"topic"`
+	Payload   json.RawMessage `json:"payload"`
+	Timestamp time.Time       `json:"timestamp"`
+	Retained  bool            `json:"retained,omitempty"`
+}
+
+// MQTTTopicSummary provides an overview of a single MQTT topic.
+type MQTTTopicSummary struct {
+	Topic      string          `json:"topic"`
+	EventCount int             `json:"event_count"`
+	LastEvent  time.Time       `json:"last_event"`
+	LastValue  json.RawMessage `json:"last_value"`
+}
+
+// MQTTServiceStatus reports the current state of the MQTT service.
+type MQTTServiceStatus struct {
+	Connected        bool     `json:"connected"`
+	BrokerURL        string   `json:"broker_url"`
+	SubscribedTopics []string `json:"subscribed_topics"`
+	ActiveTopics     int      `json:"active_topics"`
+	TotalEvents      int64    `json:"total_events"`
+	PublishAllowed   bool     `json:"publish_allowed"`
+}
+
+// MQTTService provides MQTT event data to tools.
+type MQTTService interface {
+	Status() MQTTServiceStatus
+	Recent(limit int) []MQTTEvent
+	RecentForTopic(topic string, limit int) []MQTTEvent
+	RecentMatching(pattern string, limit int) []MQTTEvent
+	Topics() []MQTTTopicSummary
+	Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) error
+}
+
 // VectorSearchResult represents a single result from vector/semantic search.
 type VectorSearchResult struct {
 	ID       string            `json:"id"`
@@ -92,6 +134,7 @@ type ToolServices struct {
 	Gateway       GatewayService // Interface for gateway operations
 	Searcher      SearchService  // FTS5 full-text search
 	VectorSearch  VectorService  // Optional vector/semantic search
+	MQTTService   MQTTService    // Optional MQTT event ingest
 
 	// Schema enhancement
 	SchemaBuilder *schema.Builder // For enhancing tool schemas with discovery data

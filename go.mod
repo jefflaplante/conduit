@@ -15,7 +15,7 @@ require (
 	github.com/charmbracelet/wish v1.4.7
 	github.com/go-telegram/bot v1.8.0
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.1
+	github.com/gorilla/websocket v1.5.3
 	github.com/jefflaplante/vecgo v0.0.0-00010101000000-000000000000
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
@@ -47,6 +47,7 @@ require (
 	github.com/creack/pty v1.1.21 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/eclipse/paho.mqtt.golang v1.5.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/go-logfmt/logfmt v0.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -65,6 +66,7 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/net v0.47.0 // indirect
+	golang.org/x/sync v0.18.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	modernc.org/libc v1.67.6 // indirect

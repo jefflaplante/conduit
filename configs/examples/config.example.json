@@ -54,6 +54,19 @@
       ]
     }
   },
+  "mqtt": {
+    "enabled": false,
+    "broker_url": "tcp://192.168.1.10:1883",
+    "client_id": "conduit",
+    "username": "${MQTT_USERNAME}",
+    "password": "${MQTT_PASSWORD}",
+    "topics": ["zigbee2mqtt/#"],
+    "qos": 0,
+    "buffer_max_age_seconds": 3600,
+    "buffer_max_events": 1000,
+    "buffer_max_topics": 500,
+    "publish_allowed": false
+  },
   "channels": [
     {
       "name": "telegram",

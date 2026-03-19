@@ -375,6 +375,29 @@ Current time: %s
 `, strings.Join(parts, " | "), now.Format("Mon 2006-01-02 15:04 MST"))
 }
 
+// buildMQTTSection returns MQTT/IoT instructions if the MQTT tool is available.
+func buildMQTTSection(params *SectionParams) string {
+	if params.IsMinimal || !params.AvailableTools["MQTT"] {
+		return ""
+	}
+
+	return `## MQTT / IoT Devices
+The MQTT tool connects to a local MQTT broker (zigbee2mqtt, Home Assistant, etc.) and buffers recent device events in memory.
+
+**Quick reference:**
+- ` + "`MQTT(action=\"status\")`" + ` — connection state, active topic count
+- ` + "`MQTT(action=\"topics\")`" + ` — list all active device topics with last value
+- ` + "`MQTT(action=\"recent\", topic_pattern=\"zigbee2mqtt/*\")`" + ` — recent events filtered by glob
+- ` + "`MQTT(action=\"history\", topic=\"zigbee2mqtt/Living Room Sensor\")`" + ` — event history for one device
+
+**zigbee2mqtt topic patterns:**
+- ` + "`zigbee2mqtt/<device_name>`" + ` — device state (temperature, humidity, battery, etc.)
+- ` + "`zigbee2mqtt/bridge/*`" + ` — bridge status and device list
+
+Use MQTT data for home-awareness: check temperatures, detect motion, monitor device health, and report anomalies during heartbeat cycles.
+`
+}
+
 // buildCronDeliverySection returns instructions for cron/scheduled job output delivery.
 // This is injected only for sessions with a "cron_" prefix to ensure scheduled jobs
 // use the Message tool and do not attempt shell-based delivery.

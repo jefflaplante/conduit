@@ -395,6 +395,7 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 			}
 			return ""
 		}},
+		{name: "MQTT/IoT", priority: 3, build: func() string { return buildMQTTSection(params) }},
 		{name: "Reply Tags", priority: 3, build: func() string { return buildReplyTagsSection(params.IsMinimal) }},
 		{name: "Model Aliases", priority: 3, build: func() string { return buildModelAliasesSection(params) }},
 		{name: "Docs", priority: 3, build: func() string { return buildDocsSection(params) }},

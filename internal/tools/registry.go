@@ -11,6 +11,7 @@ import (
 	"conduit/internal/config"
 	"conduit/internal/tools/communication"
 	"conduit/internal/tools/core"
+	mqttTool "conduit/internal/tools/mqtt"
 	"conduit/internal/tools/scheduling"
 	"conduit/internal/tools/schema"
 	"conduit/internal/tools/ssh"
@@ -154,6 +155,11 @@ func (r *Registry) registerAllTools() {
 	allTools = append(allTools, []types.Tool{
 		&UniFiTool{registry: r},
 	}...)
+
+	// MQTT/IoT tools (optional - requires configuration)
+	if r.services.MQTTService != nil {
+		allTools = append(allTools, mqttTool.NewMQTTTool(r.services))
+	}
 
 	// SSH remote execution tool (optional - requires configuration)
 	if r.services.ConfigMgr != nil && r.services.ConfigMgr.RemoteSSH.Enabled {
