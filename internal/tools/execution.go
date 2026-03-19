@@ -53,8 +53,10 @@ func startThinkingIndicator(ctx context.Context, depth int) func() {
 	}
 	done := make(chan struct{})
 	go func() {
+		msg := thinkingMessage(depth)
+		log.Printf("[ThinkingIndicator] Emitting thinking status: %s", msg)
 		cb(ToolEventInfo{
-			ToolName:  thinkingMessage(depth),
+			ToolName:  msg,
 			EventType: "thinking",
 		})
 		ticker := time.NewTicker(3 * time.Second)
@@ -66,8 +68,10 @@ func startThinkingIndicator(ctx context.Context, depth int) func() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				msg := thinkingMessage(depth)
+				log.Printf("[ThinkingIndicator] Tick: %s", msg)
 				cb(ToolEventInfo{
-					ToolName:  thinkingMessage(depth),
+					ToolName:  msg,
 					EventType: "thinking",
 				})
 			}
