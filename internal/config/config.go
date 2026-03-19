@@ -34,6 +34,7 @@ type Config struct {
 	SSH            SSHServerConfig      `json:"ssh,omitempty"`
 	Vector         VectorConfig         `json:"vector,omitempty"`
 	RemoteSSH      RemoteSSHConfig      `json:"remote_ssh,omitempty"`
+	MQTT           MQTTConfig           `json:"mqtt,omitempty"`
 }
 
 // VectorConfig holds configuration for the optional vector/semantic search service.
@@ -570,6 +571,11 @@ func (c *Config) expandEnvVars() error {
 		c.Vector.OpenAI.APIKey = os.ExpandEnv(c.Vector.OpenAI.APIKey)
 	}
 
+	// Expand MQTT configuration
+	c.MQTT.BrokerURL = os.ExpandEnv(c.MQTT.BrokerURL)
+	c.MQTT.Username = os.ExpandEnv(c.MQTT.Username)
+	c.MQTT.Password = os.ExpandEnv(c.MQTT.Password)
+
 	return nil
 }
 
@@ -613,6 +619,11 @@ func (c *Config) Validate() error {
 	// Validate remote SSH configuration
 	if err := c.RemoteSSH.Validate(); err != nil {
 		return fmt.Errorf("invalid remote SSH configuration: %w", err)
+	}
+
+	// Validate MQTT configuration
+	if err := c.MQTT.Validate(); err != nil {
+		return fmt.Errorf("invalid MQTT configuration: %w", err)
 	}
 
 	return nil
