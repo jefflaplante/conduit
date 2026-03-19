@@ -32,14 +32,20 @@ Job Types:
 - "go" (default): In-process scheduling, can run AI prompts and spawn sub-agents
 - "system": System crontab, runs shell commands without LLM involvement
 
+Skill Scoping (important for small-context models):
+- Set skills=["solar"] to load ONLY the "solar" skill into the prompt and tools for that job
+- This dramatically reduces prompt size; use it when a job only needs specific skills
+- Omit skills or set skills=[] to load all skills (default)
+
 Regular Actions:
 - Schedule a reminder: action=schedule, command="Remind Jeff to check email", delayMinutes=30
 - Daily report: action=schedule, schedule="0 9 * * *", command="Generate daily briefing", type="go"
+- Scoped job: action=schedule, schedule="*/30 * * * *", command="Check solar production", model="haiku", skills=["solar"]
 - System backup: action=schedule, schedule="0 2 * * *", command="/usr/local/bin/backup.sh", type="system"
 
 Heartbeat Management:
 - List heartbeat jobs: action=heartbeat_list
-- Enable all heartbeat jobs: action=heartbeat_enable  
+- Enable all heartbeat jobs: action=heartbeat_enable
 - Disable all heartbeat jobs: action=heartbeat_disable
 - Check heartbeat status: action=heartbeat_status`
 }
