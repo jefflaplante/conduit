@@ -392,7 +392,7 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		// P3 — Enhances behavior: skills, docs, aliases, tags
 		{name: "Skills", priority: 3, build: func() string {
 			if pb.capabilities.SkillsIntegration && pb.skillsManager != nil {
-				return pb.buildSkillsSection(ctx)
+				return pb.buildSkillsSection(ctx, session)
 			}
 			return ""
 		}},
@@ -582,8 +582,9 @@ func (pb *PromptBuilder) buildEmailSection() string {
 	return builder.String()
 }
 
-// buildSkillsSection creates skills integration context
-func (pb *PromptBuilder) buildSkillsSection(ctx context.Context) string {
+// buildSkillsSection creates skills integration context.
+// When session contains a "skill_filter", only those skills are included in the prompt.
+func (pb *PromptBuilder) buildSkillsSection(ctx context.Context, session *sessions.Session) string {
 	if pb.skillsManager == nil || !pb.skillsManager.IsEnabled() {
 		return ""
 	}
@@ -595,7 +596,26 @@ func (pb *PromptBuilder) buildSkillsSection(ctx context.Context) string {
 		}
 	}
 
-	skillsContext, err := pb.skillsManager.BuildSystemPromptContext(ctx)
+	// Parse skill filter from session context
+	var skillFilter map[string]bool
+	if session != nil && session.Context != nil {
+		if filterStr := session.Context["skill_filter"]; filterStr != "" {
+			skillFilter = make(map[string]bool)
+			for _, name := range strings.Split(filterStr, ",") {
+				if trimmed := strings.TrimSpace(name); trimmed != "" {
+					skillFilter[trimmed] = true
+				}
+			}
+		}
+	}
+
+	var skillsContext string
+	var err error
+	if len(skillFilter) > 0 {
+		skillsContext, err = pb.skillsManager.BuildSystemPromptContextFiltered(ctx, skillFilter)
+	} else {
+		skillsContext, err = pb.skillsManager.BuildSystemPromptContext(ctx)
+	}
 	if err != nil || skillsContext == "" {
 		return ""
 	}

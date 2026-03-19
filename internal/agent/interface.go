@@ -16,8 +16,10 @@ type AgentSystem interface {
 	// BuildSystemPrompt builds the system prompt for a given session
 	BuildSystemPrompt(ctx context.Context, session *sessions.Session) ([]ai.SystemBlock, error)
 
-	// GetToolDefinitions returns the available tool definitions
-	GetToolDefinitions() []ai.Tool
+	// GetToolDefinitions returns the available tool definitions.
+	// When session is non-nil and contains a "skill_filter" context key,
+	// only tools from the named skills are returned.
+	GetToolDefinitions(session *sessions.Session) []ai.Tool
 
 	// SetTools updates the agent's tool definitions (for deferred initialization)
 	SetTools(tools []ai.Tool)

@@ -681,14 +681,14 @@ func TestConduitAgent_ConcurrentSetAndBuild(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = agent.GetToolDefinitions()
+			_ = agent.GetToolDefinitions(nil)
 		}()
 	}
 
 	wg.Wait()
 
 	// Verify agent is in a consistent state
-	tools := agent.GetToolDefinitions()
+	tools := agent.GetToolDefinitions(nil)
 	if tools == nil {
 		t.Error("GetToolDefinitions should not return nil")
 	}

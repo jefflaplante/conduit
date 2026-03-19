@@ -263,8 +263,10 @@ func (a *ConduitAgentWithIntegration) SetPromptCacheTTL(ttl time.Duration) {
 	a.promptCacheTTL = ttl
 }
 
-// GetToolDefinitions returns available tool definitions including skills-generated tools
-func (a *ConduitAgentWithIntegration) GetToolDefinitions() []ai.Tool {
+// GetToolDefinitions returns available tool definitions including skills-generated tools.
+// When session contains a "skill_filter" context key (comma-separated skill names),
+// only tools from those skills are included. Pass nil for all tools.
+func (a *ConduitAgentWithIntegration) GetToolDefinitions(session *sessions.Session) []ai.Tool {
 	a.mu.RLock()
 	allTools := make([]ai.Tool, len(a.tools))
 	copy(allTools, a.tools)
@@ -272,11 +274,30 @@ func (a *ConduitAgentWithIntegration) GetToolDefinitions() []ai.Tool {
 	caps := a.capabilities
 	a.mu.RUnlock()
 
+	// Parse skill filter from session context
+	var skillFilter map[string]bool
+	if session != nil && session.Context != nil {
+		if filterStr := session.Context["skill_filter"]; filterStr != "" {
+			skillFilter = make(map[string]bool)
+			for _, name := range strings.Split(filterStr, ",") {
+				if trimmed := strings.TrimSpace(name); trimmed != "" {
+					skillFilter[trimmed] = true
+				}
+			}
+		}
+	}
+
 	// Add skills-generated tools if skills integration is enabled
 	if sm != nil && caps.SkillsIntegration && sm.IsEnabled() {
 		ctx := context.Background()
-		if skillTools, err := sm.GenerateTools(ctx); err == nil {
-			// Convert skill tools to ai.Tool format
+		var skillTools []skills.SkillToolInterface
+		var err error
+		if len(skillFilter) > 0 {
+			skillTools, err = sm.GenerateToolsFiltered(ctx, skillFilter)
+		} else {
+			skillTools, err = sm.GenerateTools(ctx)
+		}
+		if err == nil {
 			for _, skillTool := range skillTools {
 				aiTool := ai.Tool{
 					Name:        skillTool.Name(),
