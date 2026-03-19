@@ -2,6 +2,7 @@ package mqtt
 
 import (
 	"encoding/json"
+	"log"
 	"path"
 	"sync"
 	"time"
@@ -97,12 +98,13 @@ func (tb *topicBuffer) prune(cutoff time.Time) int {
 
 // EventBuffer holds per-topic ring buffers with a global topic cap.
 type EventBuffer struct {
-	mu          sync.RWMutex
-	topics      map[string]*topicBuffer
-	maxAge      time.Duration
-	maxEvents   int // per topic
-	maxTopics   int
-	totalEvents int64
+	mu            sync.RWMutex
+	topics        map[string]*topicBuffer
+	maxAge        time.Duration
+	maxEvents     int // per topic
+	maxTopics     int
+	totalEvents   int64
+	droppedTopics int64
 }
 
 // NewEventBuffer creates a new event buffer with the given limits.
@@ -124,6 +126,11 @@ func (eb *EventBuffer) Add(e Event) {
 	if !ok {
 		// Enforce topic cap: if at limit, drop the event.
 		if len(eb.topics) >= eb.maxTopics {
+			eb.droppedTopics++
+			if eb.droppedTopics == 1 || eb.droppedTopics%100 == 0 {
+				log.Printf("[MQTT] Topic cap reached (%d): dropping topic %s (total dropped: %d). Consider increasing buffer_max_topics.",
+					eb.maxTopics, e.Topic, eb.droppedTopics)
+			}
 			return
 		}
 		tb = newTopicBuffer(eb.maxEvents)

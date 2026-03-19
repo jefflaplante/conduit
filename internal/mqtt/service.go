@@ -20,18 +20,22 @@ type ServiceStatus struct {
 
 // Service owns the MQTT client and event buffer, providing the query API.
 type Service struct {
-	cfg    config.MQTTConfig
-	client *Client
-	buffer *EventBuffer
-	cancel context.CancelFunc
+	cfg            config.MQTTConfig
+	client         *Client
+	buffer         *EventBuffer
+	retained       *RetainedStore
+	deviceRegistry *DeviceRegistry
+	cancel         context.CancelFunc
 }
 
 // NewService creates a new MQTT service (does not start yet).
 func NewService(cfg config.MQTTConfig) *Service {
 	buffer := NewEventBuffer(cfg.BufferMaxAge, cfg.BufferMaxEvents, cfg.BufferMaxTopics)
 	return &Service{
-		cfg:    cfg,
-		buffer: buffer,
+		cfg:            cfg,
+		buffer:         buffer,
+		retained:       NewRetainedStore(),
+		deviceRegistry: NewDeviceRegistry(),
 	}
 }
 
@@ -39,6 +43,18 @@ func NewService(cfg config.MQTTConfig) *Service {
 func (s *Service) Start(ctx context.Context) error {
 	s.client = NewClient(s.cfg, func(e Event) {
 		s.buffer.Add(e)
+
+		// Store retained messages persistently
+		if e.Retained {
+			s.retained.Set(e.Topic, e.Payload, e.Timestamp)
+		}
+
+		// Parse zigbee2mqtt device list
+		if e.Topic == "zigbee2mqtt/bridge/devices" {
+			if err := s.deviceRegistry.Update(e.Payload); err != nil {
+				log.Printf("[MQTT] Failed to parse bridge/devices: %v", err)
+			}
+		}
 	})
 
 	if err := s.client.Connect(ctx); err != nil {
@@ -110,6 +126,21 @@ func (s *Service) RecentMatching(pattern string, limit int) []Event {
 // Topics returns summaries of all active topics.
 func (s *Service) Topics() []TopicSummary {
 	return s.buffer.Topics()
+}
+
+// Devices returns the parsed zigbee2mqtt device list.
+func (s *Service) Devices() []Device {
+	return s.deviceRegistry.Devices()
+}
+
+// RetainedByPrefix returns retained messages matching a topic prefix.
+func (s *Service) RetainedByPrefix(prefix string) []RetainedMessage {
+	return s.retained.GetByPrefix(prefix)
+}
+
+// RetainedPrefixes returns unique top-level prefixes of retained topics.
+func (s *Service) RetainedPrefixes() []string {
+	return s.retained.Prefixes()
 }
 
 // Publish sends a message to a topic (gated by config).

@@ -81,9 +81,17 @@ func (c *Client) Connect(ctx context.Context) error {
 	// Message handler
 	opts.SetDefaultPublishHandler(func(client pahomqtt.Client, msg pahomqtt.Message) {
 		if c.onMessage != nil {
+			// Defensive copy of payload before passing to callback
+			payload := make([]byte, len(msg.Payload()))
+			copy(payload, msg.Payload())
+
+			if msg.Retained() {
+				log.Printf("[MQTT] Retained message: %s (%d bytes)", msg.Topic(), len(payload))
+			}
+
 			c.onMessage(Event{
 				Topic:     msg.Topic(),
-				Payload:   msg.Payload(),
+				Payload:   payload,
 				Timestamp: time.Now(),
 				Retained:  msg.Retained(),
 			})

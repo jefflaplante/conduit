@@ -69,6 +69,42 @@ func (a *ServiceAdapter) Publish(ctx context.Context, topic string, payload []by
 	}, nil
 }
 
+func (a *ServiceAdapter) Devices() []types.MQTTDevice {
+	devices := a.svc.Devices()
+	out := make([]types.MQTTDevice, len(devices))
+	for i, d := range devices {
+		out[i] = types.MQTTDevice{
+			IEEEAddress:  d.IEEEAddress,
+			FriendlyName: d.FriendlyName,
+			Type:         d.Type,
+			ModelID:      d.ModelID,
+			Manufacturer: d.Manufacturer,
+			Description:  d.Description,
+			Supported:    d.Supported,
+			Disabled:     d.Disabled,
+			MQTTTopic:    "zigbee2mqtt/" + d.FriendlyName,
+		}
+	}
+	return out
+}
+
+func (a *ServiceAdapter) RetainedByPrefix(prefix string) []types.MQTTRetainedMessage {
+	msgs := a.svc.RetainedByPrefix(prefix)
+	out := make([]types.MQTTRetainedMessage, len(msgs))
+	for i, m := range msgs {
+		out[i] = types.MQTTRetainedMessage{
+			Topic:     m.Topic,
+			Payload:   m.Payload,
+			Timestamp: m.Timestamp,
+		}
+	}
+	return out
+}
+
+func (a *ServiceAdapter) RetainedPrefixes() []string {
+	return a.svc.RetainedPrefixes()
+}
+
 func convertEvents(events []Event) []types.MQTTEvent {
 	out := make([]types.MQTTEvent, len(events))
 	for i, e := range events {

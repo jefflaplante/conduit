@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
+	"strings"
 
 	"conduit/internal/tools/types"
 )
@@ -23,19 +25,23 @@ func (t *MQTTTool) Description() string {
 	return `Query home automation sensors and control smart devices via MQTT (zigbee2mqtt, Home Assistant).
 
 Actions:
+- devices: Discover all paired devices and MQTT sources (START HERE)
 - status: Check MQTT connection and event counts
-- topics: List all devices/sensors with their current values (start here to discover devices)
+- topics: List active event streams with current values
 - recent: Get recent events across all topics, optionally filtered by pattern
 - history: Get event history for one specific device/topic
 - publish: Send a command to control a device (lights, switches, etc.)
 
 Typical Workflow:
-1. Use action=topics to discover available devices and their topic names
-2. Use action=history with a topic to see a device's recent state values
-3. For control: inspect history to see the payload format the device uses, then publish with matching format
+1. Use action=devices to discover all paired devices and MQTT sources
+2. Use action=topics to see which devices are actively publishing
+3. Use action=history with a topic to see a device's recent state values
+4. For control: use action=publish with the correct topic and payload format
 
 Examples:
-- List all devices: action=topics
+- Discover devices: action=devices
+- Filter devices: action=devices, name_pattern="*light*"
+- Active streams: action=topics
 - Check connection: action=status
 - Recent motion events: action=recent, topic_pattern="*motion*", limit=10
 - Device history: action=history, topic="zigbee2mqtt/Living Room Sensor", limit=10
@@ -53,8 +59,12 @@ func (t *MQTTTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"status", "topics", "recent", "history", "publish"},
-				"description": "Action: status (connection info), topics (list devices—START HERE), recent (recent events), history (one device's events), publish (control a device)",
+				"enum":        []string{"devices", "status", "topics", "recent", "history", "publish"},
+				"description": "Action: devices (discover all paired devices—START HERE), status (connection info), topics (active event streams), recent (recent events), history (one device's events), publish (control a device)",
+			},
+			"name_pattern": map[string]interface{}{
+				"type":        "string",
+				"description": "Glob pattern for devices action to filter by name (e.g. '*light*', '*sensor*')",
 			},
 			"topic": map[string]interface{}{
 				"type":        "string",
@@ -87,12 +97,17 @@ func (t *MQTTTool) Parameters() map[string]interface{} {
 
 func (t *MQTTTool) GetActionDocs() map[string]types.ActionDoc {
 	return map[string]types.ActionDoc{
+		"devices": {
+			Description:    "Discover all paired devices and MQTT sources (start here)",
+			OptionalParams: []string{"name_pattern"},
+			Returns:        "zigbee2mqtt devices with mqtt_topic, retained state prefixes for other sources",
+		},
 		"status": {
 			Description: "Check MQTT connection state and event counts",
 			Returns:     "connected, broker_url, active_topics, total_events, publish_allowed",
 		},
 		"topics": {
-			Description:    "List all active device topics with last value (start here for discovery)",
+			Description:    "List active event streams with current values",
 			OptionalParams: []string{"limit"},
 			Returns:        "array of {topic, event_count, last_event, last_value}",
 		},
@@ -126,6 +141,8 @@ func (t *MQTTTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 
 	action := getStr(args, "action")
 	switch action {
+	case "devices":
+		return t.devices(args)
 	case "status":
 		return t.status()
 	case "topics":
@@ -140,7 +157,7 @@ func (t *MQTTTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 		return types.NewErrorResult("invalid_action",
 			fmt.Sprintf("Unknown action: %s", action)).
 			WithParameter("action", action).
-			WithAvailableValues([]string{"status", "topics", "recent", "history", "publish"}), nil
+			WithAvailableValues([]string{"devices", "status", "topics", "recent", "history", "publish"}), nil
 	}
 }
 
@@ -158,6 +175,92 @@ func (t *MQTTTool) status() (*types.ToolResult, error) {
 			"total_events":     s.TotalEvents,
 			"publish_allowed":  s.PublishAllowed,
 		},
+	}, nil
+}
+
+func (t *MQTTTool) devices(args map[string]interface{}) (*types.ToolResult, error) {
+	namePattern := getStr(args, "name_pattern")
+
+	// Get zigbee2mqtt devices
+	allDevices := t.services.MQTTService.Devices()
+
+	// Apply name filter if provided
+	var devices []types.MQTTDevice
+	if namePattern != "" {
+		for _, d := range allDevices {
+			matched, _ := matchGlobInsensitive(namePattern, d.FriendlyName)
+			if matched {
+				devices = append(devices, d)
+			}
+		}
+	} else {
+		devices = allDevices
+	}
+
+	// Get retained state prefixes (for non-zigbee2mqtt sources)
+	prefixes := t.services.MQTTService.RetainedPrefixes()
+
+	// Build response
+	data := map[string]interface{}{}
+	var parts []string
+
+	if len(devices) > 0 {
+		deviceItems := make([]interface{}, len(devices))
+		for i, d := range devices {
+			item := map[string]interface{}{
+				"friendly_name": d.FriendlyName,
+				"mqtt_topic":    d.MQTTTopic,
+				"type":          d.Type,
+			}
+			if d.Manufacturer != "" {
+				item["manufacturer"] = d.Manufacturer
+			}
+			if d.ModelID != "" {
+				item["model_id"] = d.ModelID
+			}
+			if d.Description != "" {
+				item["description"] = d.Description
+			}
+			if d.Disabled {
+				item["disabled"] = true
+			}
+			deviceItems[i] = item
+		}
+		data["zigbee2mqtt_devices"] = deviceItems
+		parts = append(parts, fmt.Sprintf("%d zigbee2mqtt devices", len(devices)))
+	}
+
+	// Summarize retained state by prefix (excluding zigbee2mqtt which is covered by device registry)
+	var otherPrefixes []string
+	for _, p := range prefixes {
+		if p != "zigbee2mqtt" {
+			otherPrefixes = append(otherPrefixes, p)
+		}
+	}
+	if len(otherPrefixes) > 0 {
+		retainedSources := make([]interface{}, 0, len(otherPrefixes))
+		for _, prefix := range otherPrefixes {
+			msgs := t.services.MQTTService.RetainedByPrefix(prefix + "/")
+			retainedSources = append(retainedSources, map[string]interface{}{
+				"prefix":         prefix,
+				"retained_topics": len(msgs),
+			})
+		}
+		data["other_sources"] = retainedSources
+		parts = append(parts, fmt.Sprintf("%d other MQTT sources", len(otherPrefixes)))
+	}
+
+	if len(parts) == 0 {
+		return &types.ToolResult{
+			Success: true,
+			Content: "No devices discovered yet. Retained messages from the broker may still be arriving. Try again in a few seconds, or use action=topics to check for active event streams.",
+		}, nil
+	}
+
+	return &types.ToolResult{
+		Success: true,
+		Content: fmt.Sprintf("Discovered: %s", joinParts(parts)),
+		Data:    data,
 	}, nil
 }
 
@@ -346,4 +449,12 @@ func getBool(args map[string]interface{}, key string) bool {
 		}
 	}
 	return false
+}
+
+func matchGlobInsensitive(pattern, name string) (bool, error) {
+	return path.Match(strings.ToLower(pattern), strings.ToLower(name))
+}
+
+func joinParts(parts []string) string {
+	return strings.Join(parts, ", ")
 }

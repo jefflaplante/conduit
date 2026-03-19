@@ -107,6 +107,26 @@ type MQTTPublishResult struct {
 	BrokerAck   bool   `json:"broker_ack"` // true = broker confirmed receipt (QoS >= 1)
 }
 
+// MQTTDevice represents a parsed zigbee2mqtt device for the tool layer.
+type MQTTDevice struct {
+	IEEEAddress  string `json:"ieee_address"`
+	FriendlyName string `json:"friendly_name"`
+	Type         string `json:"type"`
+	ModelID      string `json:"model_id"`
+	Manufacturer string `json:"manufacturer"`
+	Description  string `json:"description"`
+	Supported    bool   `json:"supported"`
+	Disabled     bool   `json:"disabled"`
+	MQTTTopic    string `json:"mqtt_topic"` // synthetic: zigbee2mqtt/<friendly_name>
+}
+
+// MQTTRetainedMessage represents a retained MQTT message for the tool layer.
+type MQTTRetainedMessage struct {
+	Topic     string          `json:"topic"`
+	Payload   json.RawMessage `json:"payload"`
+	Timestamp time.Time       `json:"timestamp"`
+}
+
 // MQTTService provides MQTT event data to tools.
 type MQTTService interface {
 	Status() MQTTServiceStatus
@@ -115,6 +135,9 @@ type MQTTService interface {
 	RecentMatching(pattern string, limit int) []MQTTEvent
 	Topics() []MQTTTopicSummary
 	Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) (*MQTTPublishResult, error)
+	Devices() []MQTTDevice
+	RetainedByPrefix(prefix string) []MQTTRetainedMessage
+	RetainedPrefixes() []string
 }
 
 // VectorSearchResult represents a single result from vector/semantic search.
