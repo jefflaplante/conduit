@@ -14,10 +14,11 @@ import (
 
 // mockMQTTService implements types.MQTTService for testing.
 type mockMQTTService struct {
-	status types.MQTTServiceStatus
-	events []types.MQTTEvent
-	topics []types.MQTTTopicSummary
-	pubErr error
+	status    types.MQTTServiceStatus
+	events    []types.MQTTEvent
+	topics    []types.MQTTTopicSummary
+	pubErr    error
+	pubResult *types.MQTTPublishResult
 }
 
 func (m *mockMQTTService) Status() types.MQTTServiceStatus { return m.status }
@@ -48,8 +49,20 @@ func (m *mockMQTTService) RecentMatching(pattern string, limit int) []types.MQTT
 
 func (m *mockMQTTService) Topics() []types.MQTTTopicSummary { return m.topics }
 
-func (m *mockMQTTService) Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) error {
-	return m.pubErr
+func (m *mockMQTTService) Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) (*types.MQTTPublishResult, error) {
+	if m.pubErr != nil {
+		return nil, m.pubErr
+	}
+	if m.pubResult != nil {
+		return m.pubResult, nil
+	}
+	return &types.MQTTPublishResult{
+		Topic:       topic,
+		QoS:         1,
+		Retained:    retained,
+		PayloadSize: len(payload),
+		BrokerAck:   true,
+	}, nil
 }
 
 func TestMQTTTool_NotConfigured(t *testing.T) {
@@ -140,13 +153,25 @@ func TestMQTTTool_History(t *testing.T) {
 	assert.True(t, result.Success)
 }
 
+func TestMQTTTool_Publish_Success(t *testing.T) {
+	svc := &mockMQTTService{}
+	tool := NewMQTTTool(&types.ToolServices{MQTTService: svc})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":  "publish",
+		"topic":   "zigbee2mqtt/Light/set",
+		"payload": `{"state":"ON"}`,
+	})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Contains(t, result.Content, "broker ACK confirmed")
+	assert.Equal(t, true, result.Data["broker_ack"])
+	assert.Equal(t, "zigbee2mqtt/Light/set", result.Data["topic"])
+}
+
 func TestMQTTTool_Publish_NotAllowed(t *testing.T) {
 	svc := &mockMQTTService{
-		pubErr: nil, // won't reach because tool checks config first
-		status: types.MQTTServiceStatus{PublishAllowed: false},
+		pubErr: types.ErrMQTTPublishNotAllowed,
 	}
-	// Use a service that returns an error for publish
-	svc.pubErr = types.ErrMQTTPublishNotAllowed
 	tool := NewMQTTTool(&types.ToolServices{MQTTService: svc})
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"action":  "publish",

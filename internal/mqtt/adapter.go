@@ -55,8 +55,18 @@ func (a *ServiceAdapter) Topics() []types.MQTTTopicSummary {
 	return out
 }
 
-func (a *ServiceAdapter) Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) error {
-	return a.svc.Publish(ctx, topic, payload, qos, retained)
+func (a *ServiceAdapter) Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) (*types.MQTTPublishResult, error) {
+	r, err := a.svc.Publish(ctx, topic, payload, qos, retained)
+	if err != nil {
+		return nil, err
+	}
+	return &types.MQTTPublishResult{
+		Topic:       r.Topic,
+		QoS:         r.QoS,
+		Retained:    r.Retained,
+		PayloadSize: r.PayloadSize,
+		BrokerAck:   r.BrokerAck,
+	}, nil
 }
 
 func convertEvents(events []Event) []types.MQTTEvent {

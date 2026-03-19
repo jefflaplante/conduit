@@ -178,7 +178,7 @@ func (t *MQTTTool) publish(ctx context.Context, args map[string]interface{}) (*t
 	}
 	retained := getBool(args, "retained")
 
-	err := t.services.MQTTService.Publish(ctx, topic, []byte(payloadStr), qos, retained)
+	result, err := t.services.MQTTService.Publish(ctx, topic, []byte(payloadStr), qos, retained)
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,
@@ -186,9 +186,21 @@ func (t *MQTTTool) publish(ctx context.Context, args map[string]interface{}) (*t
 		}, nil
 	}
 
+	ackStatus := "broker ACK confirmed (QoS 1 PUBACK)"
+	if !result.BrokerAck {
+		ackStatus = "sent (no broker ACK — QoS 0)"
+	}
+
 	return &types.ToolResult{
 		Success: true,
-		Content: fmt.Sprintf("Published to %s (QoS %d, retained=%v)", topic, qos, retained),
+		Content: fmt.Sprintf("Published to %s — %s (%d bytes, retained=%v)", result.Topic, ackStatus, result.PayloadSize, result.Retained),
+		Data: map[string]interface{}{
+			"topic":        result.Topic,
+			"qos":          result.QoS,
+			"retained":     result.Retained,
+			"payload_size": result.PayloadSize,
+			"broker_ack":   result.BrokerAck,
+		},
 	}, nil
 }
 

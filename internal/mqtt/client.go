@@ -130,16 +130,25 @@ func (c *Client) subscribeAll(client pahomqtt.Client) {
 	}
 }
 
-// Publish sends a message to a topic.
-func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) error {
+// PublishResult holds the outcome of a publish operation.
+type PublishResult struct {
+	Topic       string
+	QoS         byte
+	Retained    bool
+	PayloadSize int
+	BrokerAck   bool // true when broker confirmed receipt (QoS >= 1)
+}
+
+// Publish sends a message to a topic and waits for broker acknowledgement.
+func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) (*PublishResult, error) {
 	if c.pahoClient == nil {
-		return fmt.Errorf("mqtt client not initialized")
+		return nil, fmt.Errorf("mqtt client not initialized")
 	}
 	if !c.pahoClient.IsConnected() {
-		return fmt.Errorf("mqtt client not connected to broker")
+		return nil, fmt.Errorf("mqtt client not connected to broker")
 	}
 
-	// Force QoS 1 minimum for publish so we get broker ACK
+	// Force QoS 1 minimum for publish so we get broker ACK (PUBACK)
 	if qos < 1 {
 		qos = 1
 	}
@@ -156,14 +165,20 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos 
 	select {
 	case <-ctx.Done():
 		log.Printf("[MQTT] Publish to %s cancelled: %v", topic, ctx.Err())
-		return ctx.Err()
+		return nil, ctx.Err()
 	case <-done:
 		if token.Error() != nil {
 			log.Printf("[MQTT] Publish to %s failed: %v", topic, token.Error())
-			return token.Error()
+			return nil, token.Error()
 		}
-		log.Printf("[MQTT] Published to %s successfully", topic)
-		return nil
+		log.Printf("[MQTT] Published to %s — broker ACK received (QoS %d)", topic, qos)
+		return &PublishResult{
+			Topic:       topic,
+			QoS:         qos,
+			Retained:    retained,
+			PayloadSize: len(payload),
+			BrokerAck:   true, // token.Wait() + no error = PUBACK received at QoS 1
+		}, nil
 	}
 }
 
