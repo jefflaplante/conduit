@@ -14,11 +14,14 @@ import (
 
 // mockMQTTService implements types.MQTTService for testing.
 type mockMQTTService struct {
-	status    types.MQTTServiceStatus
-	events    []types.MQTTEvent
-	topics    []types.MQTTTopicSummary
-	pubErr    error
-	pubResult *types.MQTTPublishResult
+	status           types.MQTTServiceStatus
+	events           []types.MQTTEvent
+	topics           []types.MQTTTopicSummary
+	pubErr           error
+	pubResult        *types.MQTTPublishResult
+	devices          []types.MQTTDevice
+	retainedByPrefix map[string][]types.MQTTRetainedMessage
+	retainedPrefixes []string
 }
 
 func (m *mockMQTTService) Status() types.MQTTServiceStatus { return m.status }
@@ -48,6 +51,17 @@ func (m *mockMQTTService) RecentMatching(pattern string, limit int) []types.MQTT
 }
 
 func (m *mockMQTTService) Topics() []types.MQTTTopicSummary { return m.topics }
+
+func (m *mockMQTTService) Devices() []types.MQTTDevice { return m.devices }
+
+func (m *mockMQTTService) RetainedByPrefix(prefix string) []types.MQTTRetainedMessage {
+	if m.retainedByPrefix != nil {
+		return m.retainedByPrefix[prefix]
+	}
+	return nil
+}
+
+func (m *mockMQTTService) RetainedPrefixes() []string { return m.retainedPrefixes }
 
 func (m *mockMQTTService) Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) (*types.MQTTPublishResult, error) {
 	if m.pubErr != nil {
@@ -206,7 +220,7 @@ func TestMQTTTool_ActionDocProvider(t *testing.T) {
 	assert.True(t, ok, "MQTTTool should implement ActionDocProvider")
 
 	docs := adp.GetActionDocs()
-	assert.Len(t, docs, 5, "Should have docs for all 5 actions")
+	assert.Len(t, docs, 6, "Should have docs for all 6 actions")
 
 	// Check publish requires topic and payload
 	pub := docs["publish"]
@@ -218,4 +232,83 @@ func TestMQTTTool_ActionDocProvider(t *testing.T) {
 	status := docs["status"]
 	assert.Empty(t, status.RequiredParams)
 	assert.NotEmpty(t, status.Returns)
+
+	// Check devices action exists
+	devDoc := docs["devices"]
+	assert.NotEmpty(t, devDoc.Returns)
+}
+
+func TestMQTTTool_Devices_WithZigbeeDevices(t *testing.T) {
+	svc := &mockMQTTService{
+		devices: []types.MQTTDevice{
+			{FriendlyName: "Living Room Sensor", Type: "EndDevice", Manufacturer: "SONOFF", MQTTTopic: "zigbee2mqtt/Living Room Sensor", Description: "Temp sensor"},
+			{FriendlyName: "Kitchen Light", Type: "Router", Manufacturer: "Philips", MQTTTopic: "zigbee2mqtt/Kitchen Light", ModelID: "LCA001"},
+		},
+		retainedPrefixes: []string{"zigbee2mqtt", "solar_assistant"},
+		retainedByPrefix: map[string][]types.MQTTRetainedMessage{
+			"solar_assistant/": {
+				{Topic: "solar_assistant/battery_soc/state"},
+				{Topic: "solar_assistant/pv_power/state"},
+			},
+		},
+	}
+	tool := NewMQTTTool(&types.ToolServices{MQTTService: svc})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "devices",
+	})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Contains(t, result.Content, "2 zigbee2mqtt devices")
+	assert.Contains(t, result.Content, "1 other MQTT sources")
+	assert.NotNil(t, result.Data["zigbee2mqtt_devices"])
+	assert.NotNil(t, result.Data["other_sources"])
+}
+
+func TestMQTTTool_Devices_Filtered(t *testing.T) {
+	svc := &mockMQTTService{
+		devices: []types.MQTTDevice{
+			{FriendlyName: "Living Room Sensor", Type: "EndDevice", MQTTTopic: "zigbee2mqtt/Living Room Sensor"},
+			{FriendlyName: "Kitchen Light", Type: "Router", MQTTTopic: "zigbee2mqtt/Kitchen Light"},
+			{FriendlyName: "Bedroom Light", Type: "Router", MQTTTopic: "zigbee2mqtt/Bedroom Light"},
+		},
+	}
+	tool := NewMQTTTool(&types.ToolServices{MQTTService: svc})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":       "devices",
+		"name_pattern": "*light*",
+	})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Contains(t, result.Content, "2 zigbee2mqtt devices")
+}
+
+func TestMQTTTool_Devices_Empty(t *testing.T) {
+	svc := &mockMQTTService{}
+	tool := NewMQTTTool(&types.ToolServices{MQTTService: svc})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "devices",
+	})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Contains(t, result.Content, "No devices discovered")
+}
+
+func TestMQTTTool_Devices_OnlyRetainedSources(t *testing.T) {
+	svc := &mockMQTTService{
+		retainedPrefixes: []string{"solar_assistant"},
+		retainedByPrefix: map[string][]types.MQTTRetainedMessage{
+			"solar_assistant/": {
+				{Topic: "solar_assistant/battery_soc/state"},
+			},
+		},
+	}
+	tool := NewMQTTTool(&types.ToolServices{MQTTService: svc})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "devices",
+	})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Contains(t, result.Content, "1 other MQTT sources")
+	assert.Nil(t, result.Data["zigbee2mqtt_devices"])
+	assert.NotNil(t, result.Data["other_sources"])
 }

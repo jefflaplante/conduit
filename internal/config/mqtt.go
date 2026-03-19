@@ -55,7 +55,7 @@ func (m *MQTTConfig) Validate() error {
 		m.BufferMaxEvents = 1000
 	}
 	if m.BufferMaxTopics <= 0 {
-		m.BufferMaxTopics = 500
+		m.BufferMaxTopics = 1000
 	}
 
 	return nil
