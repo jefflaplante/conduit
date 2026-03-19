@@ -115,6 +115,7 @@ func (s *Service) Topics() []TopicSummary {
 // Publish sends a message to a topic (gated by config).
 func (s *Service) Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) error {
 	if !s.cfg.PublishAllowed {
+		log.Printf("[MQTT] Publish rejected: publish_allowed is false")
 		return ErrPublishNotAllowed
 	}
 	if s.client == nil {

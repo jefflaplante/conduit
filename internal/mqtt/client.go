@@ -133,8 +133,18 @@ func (c *Client) subscribeAll(client pahomqtt.Client) {
 // Publish sends a message to a topic.
 func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) error {
 	if c.pahoClient == nil {
-		return fmt.Errorf("mqtt client not connected")
+		return fmt.Errorf("mqtt client not initialized")
 	}
+	if !c.pahoClient.IsConnected() {
+		return fmt.Errorf("mqtt client not connected to broker")
+	}
+
+	// Force QoS 1 minimum for publish so we get broker ACK
+	if qos < 1 {
+		qos = 1
+	}
+
+	log.Printf("[MQTT] Publishing to %s (QoS %d, retained=%v, %d bytes)", topic, qos, retained, len(payload))
 	token := c.pahoClient.Publish(topic, qos, retained, payload)
 
 	done := make(chan struct{})
@@ -145,9 +155,15 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos 
 
 	select {
 	case <-ctx.Done():
+		log.Printf("[MQTT] Publish to %s cancelled: %v", topic, ctx.Err())
 		return ctx.Err()
 	case <-done:
-		return token.Error()
+		if token.Error() != nil {
+			log.Printf("[MQTT] Publish to %s failed: %v", topic, token.Error())
+			return token.Error()
+		}
+		log.Printf("[MQTT] Published to %s successfully", topic)
+		return nil
 	}
 }
 
