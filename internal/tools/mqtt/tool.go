@@ -20,7 +20,31 @@ func NewMQTTTool(services *types.ToolServices) *MQTTTool {
 
 func (t *MQTTTool) Name() string        { return "MQTT" }
 func (t *MQTTTool) Description() string {
-	return "Query MQTT/IoT device data (temperature, motion, lights, etc.) and publish messages to control devices. Actions: status (connection info), topics (list active topics with last value), recent (recent events, optional topic_pattern glob), history (events for one topic, requires topic), publish (send message, requires topic and payload)."
+	return `Query home automation sensors and control smart devices via MQTT (zigbee2mqtt, Home Assistant).
+
+Actions:
+- status: Check MQTT connection and event counts
+- topics: List all devices/sensors with their current values (start here to discover devices)
+- recent: Get recent events across all topics, optionally filtered by pattern
+- history: Get event history for one specific device/topic
+- publish: Send a command to control a device (lights, switches, etc.)
+
+Typical Workflow:
+1. Use action=topics to discover available devices and their topic names
+2. Use action=history with a topic to see a device's recent state values
+3. For control: inspect history to see the payload format the device uses, then publish with matching format
+
+Examples:
+- List all devices: action=topics
+- Check connection: action=status
+- Recent motion events: action=recent, topic_pattern="*motion*", limit=10
+- Device history: action=history, topic="zigbee2mqtt/Living Room Sensor", limit=10
+- Control device: action=publish, topic="<topic from discovery>", payload="<format from history>"
+
+Publishing Commands:
+- FIRST check device history (action=topics or action=history) to learn the correct topic and payload format
+- Payload formats vary by device—some use simple values (ON, OFF), others use JSON
+- Store learned device patterns in memory so you don't have to re-learn them`
 }
 
 func (t *MQTTTool) Parameters() map[string]interface{} {
@@ -30,15 +54,15 @@ func (t *MQTTTool) Parameters() map[string]interface{} {
 			"action": map[string]interface{}{
 				"type":        "string",
 				"enum":        []string{"status", "topics", "recent", "history", "publish"},
-				"description": "Action to perform: status=connection info, topics=list active topics, recent=recent events across topics, history=events for one specific topic, publish=send a message to a topic",
+				"description": "Action: status (connection info), topics (list devices—START HERE), recent (recent events), history (one device's events), publish (control a device)",
 			},
 			"topic": map[string]interface{}{
 				"type":        "string",
-				"description": "Required for history and publish. Exact MQTT topic path (e.g. zigbee2mqtt/Living Room Sensor, zigbee2mqtt/ParlorTorchier/set)",
+				"description": "Exact MQTT topic path. Use action=topics first to discover available topics and their naming patterns.",
 			},
 			"topic_pattern": map[string]interface{}{
 				"type":        "string",
-				"description": "Optional glob pattern to filter topics for the recent action (e.g. zigbee2mqtt/*, zigbee2mqtt/bridge/*)",
+				"description": "Glob pattern for recent action (e.g. '*motion*', 'zigbee2mqtt/*', '*Sensor')",
 			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
@@ -46,7 +70,7 @@ func (t *MQTTTool) Parameters() map[string]interface{} {
 			},
 			"payload": map[string]interface{}{
 				"type":        "string",
-				"description": "Required for publish. Message payload — can be plain text (e.g. ON, OFF, TOGGLE) or JSON (e.g. {\"state\":\"ON\",\"brightness\":128}). For zigbee2mqtt /set topics, use the device's expected format.",
+				"description": "Command payload for publish. Check device history first to see the format it expects—many use simple values (ON, OFF, TOGGLE), some use JSON.",
 			},
 			"qos": map[string]interface{}{
 				"type":        "integer",
