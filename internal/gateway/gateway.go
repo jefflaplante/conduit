@@ -623,6 +623,15 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 		model = fullModel
 	}
 
+	// Store model and skill filter in session context for prompt/tool filtering
+	if session.Context == nil {
+		session.Context = make(map[string]string)
+	}
+	session.Context["model"] = model
+	if len(job.Skills) > 0 {
+		session.Context["skill_filter"] = strings.Join(job.Skills, ",")
+	}
+
 	// Execute the job command as an AI prompt
 	response, err := g.ai.GenerateResponseWithTools(ctx, session, job.Command, "", model)
 	if err != nil {

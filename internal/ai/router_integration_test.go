@@ -69,7 +69,7 @@ func (m *MockAgentSystem) BuildSystemPrompt(ctx context.Context, session *sessio
 	}, nil
 }
 
-func (m *MockAgentSystem) GetToolDefinitions() []Tool {
+func (m *MockAgentSystem) GetToolDefinitions(session *sessions.Session) []Tool {
 	return m.tools
 }
 

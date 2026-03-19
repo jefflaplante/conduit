@@ -92,6 +92,11 @@ func (t *CronTool) Parameters() map[string]interface{} {
 				"type":        "integer",
 				"description": "Schedule to run in X minutes (alternative to cron expression)",
 			},
+			"skills": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "Skill names to load for this job (empty = all skills). Use to reduce prompt size for small-context models.",
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -176,6 +181,18 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 		}, nil
 	}
 
+	// Extract skills filter
+	var jobSkills []string
+	if raw, ok := args["skills"]; ok {
+		if arr, ok := raw.([]interface{}); ok {
+			for _, v := range arr {
+				if s, ok := v.(string); ok && s != "" {
+					jobSkills = append(jobSkills, s)
+				}
+			}
+		}
+	}
+
 	// Create job
 	job := &types.SchedulerJob{
 		ID:       uuid.New().String()[:8],
@@ -187,6 +204,7 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 		Target:   t.getStringArg(args, "target", ""),
 		Enabled:  true,
 		OneShot:  oneshot,
+		Skills:   jobSkills,
 	}
 
 	// Default name for delay-based schedules
@@ -270,6 +288,9 @@ func (t *CronTool) listJobs(ctx context.Context, args map[string]interface{}) (*
 
 		builder.WriteString(fmt.Sprintf("%d. %s%s%s\n", i+1, name, jobType, status))
 		builder.WriteString(fmt.Sprintf("   %s\n", job.Schedule))
+		if len(job.Skills) > 0 {
+			builder.WriteString(fmt.Sprintf("   skills: %s\n", strings.Join(job.Skills, ", ")))
+		}
 		if job.OneShot {
 			builder.WriteString("   (runs once)\n")
 		}

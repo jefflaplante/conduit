@@ -129,7 +129,7 @@ func (r *Router) GenerateResponseSmartWithProgress(ctx context.Context, session 
 	// Incorporate tool availability into complexity estimate
 	var tools []Tool
 	if r.agentSystem != nil {
-		tools = r.agentSystem.GetToolDefinitions()
+		tools = r.agentSystem.GetToolDefinitions(nil)
 	}
 	toolComplexity := analyzer.AnalyzeToolDefinitions(tools)
 	combined := analyzer.CombineScores(msgComplexity, toolComplexity)

@@ -61,7 +61,8 @@ type SchedulerJob struct {
 	Model    string `json:"model,omitempty"`
 	Target   string `json:"target,omitempty"`
 	Enabled  bool   `json:"enabled"`
-	OneShot  bool   `json:"oneshot,omitempty"`
+	OneShot  bool     `json:"oneshot,omitempty"`
+	Skills   []string `json:"skills,omitempty"`
 }
 
 // SearchService provides FTS5-backed full-text search over documents, messages, and beads.

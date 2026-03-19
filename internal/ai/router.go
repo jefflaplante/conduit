@@ -64,7 +64,7 @@ type AgentProcessedResponse struct {
 // AgentSystem interface for dependency injection
 type AgentSystem interface {
 	BuildSystemPrompt(ctx context.Context, session *sessions.Session) ([]SystemBlock, error)
-	GetToolDefinitions() []Tool
+	GetToolDefinitions(session *sessions.Session) []Tool
 	ProcessResponse(ctx context.Context, response *GenerateResponse) (*AgentProcessedResponse, error)
 }
 
@@ -462,7 +462,7 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 	// Include tool definitions from agent system
 	var tools []Tool
 	if r.agentSystem != nil {
-		tools = r.agentSystem.GetToolDefinitions()
+		tools = r.agentSystem.GetToolDefinitions(session)
 	}
 
 	req := &GenerateRequest{
@@ -558,7 +558,7 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 	// Include tool definitions from agent system
 	var tools []Tool
 	if r.agentSystem != nil {
-		tools = r.agentSystem.GetToolDefinitions()
+		tools = r.agentSystem.GetToolDefinitions(session)
 	}
 
 	req := &GenerateRequest{
@@ -714,7 +714,7 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	// Get tools
 	var tools []Tool
 	if r.agentSystem != nil {
-		tools = r.agentSystem.GetToolDefinitions()
+		tools = r.agentSystem.GetToolDefinitions(session)
 	}
 
 	req := &GenerateRequest{

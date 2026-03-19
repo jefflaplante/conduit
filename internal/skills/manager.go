@@ -185,6 +185,60 @@ func (m *Manager) GenerateTools(ctx context.Context) ([]SkillToolInterface, erro
 	return m.integrator.GenerateToolsFromSkills(skills), nil
 }
 
+// GenerateToolsFiltered creates tool instances from only the named skills.
+// If filter is nil or empty, falls through to GenerateTools (all skills).
+func (m *Manager) GenerateToolsFiltered(ctx context.Context, filter map[string]bool) ([]SkillToolInterface, error) {
+	if len(filter) == 0 {
+		return m.GenerateTools(ctx)
+	}
+	if !m.config.Enabled {
+		return []SkillToolInterface{}, nil
+	}
+
+	allSkills, err := m.GetAvailableSkills(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get skills: %w", err)
+	}
+
+	var filtered []Skill
+	for _, s := range allSkills {
+		if filter[s.Name] {
+			filtered = append(filtered, s)
+		}
+	}
+
+	return m.integrator.GenerateToolsFromSkills(filtered), nil
+}
+
+// BuildSystemPromptContextFiltered creates contextual information for only the named skills.
+// If filter is nil or empty, falls through to BuildSystemPromptContext (all skills).
+func (m *Manager) BuildSystemPromptContextFiltered(ctx context.Context, filter map[string]bool) (string, error) {
+	if len(filter) == 0 {
+		return m.BuildSystemPromptContext(ctx)
+	}
+	if !m.config.Enabled {
+		return "", nil
+	}
+
+	allSkills, err := m.GetAvailableSkills(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get skills: %w", err)
+	}
+
+	var filtered []Skill
+	for _, s := range allSkills {
+		if filter[s.Name] {
+			filtered = append(filtered, s)
+		}
+	}
+
+	if len(filtered) == 0 {
+		return "", nil
+	}
+
+	return m.integrator.BuildSkillsContext(filtered), nil
+}
+
 // BuildSystemPromptContext creates contextual information for agent prompts
 func (m *Manager) BuildSystemPromptContext(ctx context.Context) (string, error) {
 	if !m.config.Enabled {

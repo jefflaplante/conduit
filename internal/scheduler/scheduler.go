@@ -41,6 +41,7 @@ type Job struct {
 	Target    string                 `json:"target,omitempty"` // Channel/session to send output
 	Enabled   bool                   `json:"enabled"`
 	OneShot   bool                   `json:"oneshot,omitempty"`
+	Skills    []string               `json:"skills,omitempty"`    // Skill names to load (empty = all)
 	CreatedAt time.Time              `json:"created_at"`
 	LastRun   *time.Time             `json:"last_run,omitempty"`
 	NextRun   *time.Time             `json:"next_run,omitempty"`
@@ -690,6 +691,7 @@ func (s *Scheduler) reloadFromData(data []byte, hash [32]byte) error {
 			existingJob.Model = fileJob.Model
 			existingJob.Target = fileJob.Target
 			existingJob.OneShot = fileJob.OneShot
+			existingJob.Skills = fileJob.Skills
 
 			if existingJob.Enabled && existingJob.Type == JobTypeGo {
 				if err := s.scheduleGoJob(existingJob); err != nil {

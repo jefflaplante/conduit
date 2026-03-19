@@ -27,6 +27,7 @@ func (g *Gateway) ScheduleJob(job *types.SchedulerJob) error {
 		Target:   job.Target,
 		Enabled:  job.Enabled,
 		OneShot:  job.OneShot,
+		Skills:   job.Skills,
 	}
 
 	return g.scheduler.AddJob(schedJob)
@@ -59,6 +60,7 @@ func (g *Gateway) ListJobs() []*types.SchedulerJob {
 			Target:   job.Target,
 			Enabled:  job.Enabled,
 			OneShot:  job.OneShot,
+			Skills:   job.Skills,
 		}
 	}
 	return result
