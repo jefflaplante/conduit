@@ -528,7 +528,7 @@ func (pb *PromptBuilder) buildToolingSection() string {
 	}
 
 	builder.WriteString("TOOLS.md does not control tool availability; it is user guidance for how to use external tools.\n")
-	builder.WriteString("If a task is more complex or takes longer, spawn a sub-agent. It will do the work for you and ping you when it's done. You can always check up on it.\n")
+	builder.WriteString("To delegate work, call SessionsSpawn — this is the ONLY way to spawn a sub-agent. Never claim you spawned one without the tool call. Results arrive automatically (announce=true) or via SessionStatus (announce=false).\n")
 
 	return builder.String()
 }

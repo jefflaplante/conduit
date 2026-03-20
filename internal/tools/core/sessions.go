@@ -247,7 +247,7 @@ func (t *SessionsSpawnTool) Name() string {
 }
 
 func (t *SessionsSpawnTool) Description() string {
-	return "Spawn a new sub-agent session to handle a specific task. By default, results are announced back to the user when complete. Set announce=false for quiet orchestration where you'll check results via SessionStatus."
+	return "Spawn a new sub-agent to work on a task asynchronously. You MUST call this tool to delegate work — describing or narrating a spawn does nothing. The sub-agent runs independently; with announce=true (default), results are delivered back to the user automatically. With announce=false, poll SessionStatus to check progress."
 }
 
 func (t *SessionsSpawnTool) Parameters() map[string]interface{} {
@@ -256,7 +256,7 @@ func (t *SessionsSpawnTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"task": map[string]interface{}{
 				"type":        "string",
-				"description": "Task description for the sub-agent",
+				"description": "The complete task prompt for the sub-agent. Be specific — this is the only instruction it receives.",
 			},
 			"agentId": map[string]interface{}{
 				"type":        "string",
@@ -319,10 +319,9 @@ func (t *SessionsSpawnTool) Execute(ctx context.Context, args map[string]interfa
 		}, nil
 	}
 
-	// Keep response minimal - session key is in Data if model needs it
-	resultMsg := "Sub-agent spawned."
+	resultMsg := fmt.Sprintf("Sub-agent spawned (session: %s, task: %q).", sessionKey, truncateTask(task, 80))
 	if !announce {
-		resultMsg += " Running quietly."
+		resultMsg += " Running quietly — poll SessionStatus to check progress."
 	}
 
 	return &types.ToolResult{
@@ -362,6 +361,13 @@ func (t *SessionsSpawnTool) getBoolArg(args map[string]interface{}, key string, 
 		return val
 	}
 	return defaultVal
+}
+
+func truncateTask(task string, maxLen int) string {
+	if len(task) <= maxLen {
+		return task
+	}
+	return task[:maxLen] + "..."
 }
 
 // SessionStatusTool provides session usage and status information
