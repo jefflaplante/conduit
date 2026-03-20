@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"conduit/internal/config"
+	"conduit/internal/skills"
 	"conduit/internal/tools/communication"
 	"conduit/internal/tools/core"
 	mqttTool "conduit/internal/tools/mqtt"
@@ -33,6 +34,27 @@ type ChannelSender = types.ChannelSender
 type ToolServices = types.ToolServices
 type Tool = types.Tool
 type ToolResult = types.ToolResult
+
+// skillToolBridge adapts *skills.SkillToolAdapter to satisfy types.Tool.
+// SkillToolAdapter.Execute returns *skills.RegistryToolResult (to avoid circular imports),
+// so this bridge converts it to *types.ToolResult.
+type skillToolBridge struct {
+	adapter *skills.SkillToolAdapter
+}
+
+func (b *skillToolBridge) Name() string                       { return b.adapter.Name() }
+func (b *skillToolBridge) Description() string                { return b.adapter.Description() }
+func (b *skillToolBridge) Parameters() map[string]interface{} { return b.adapter.Parameters() }
+func (b *skillToolBridge) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	result, err := b.adapter.Execute(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	if !result.Success {
+		return types.NewErrorResult("skill_error", result.Error), nil
+	}
+	return &types.ToolResult{Success: true, Content: result.Content, Data: result.Data}, nil
+}
 
 // NewRegistry creates a new tools registry with service dependencies
 func NewRegistry(cfg config.ToolsConfig) *Registry {
@@ -176,21 +198,6 @@ func (r *Registry) registerAllTools() {
 		&GoogleWorkspaceTool{registry: r},
 	}...)
 
-	// TODO: Fix skills integration after core tools are working
-	// Skills-based tools (if skills system is available and enabled)
-	// if r.services.SkillsManager != nil && r.services.SkillsManager.IsEnabled() {
-	//	skillAdapters, err := skills.GenerateToolAdapters(context.Background(), r.services.SkillsManager)
-	//	if err != nil {
-	//		log.Printf("Failed to register skill tools: %v", err)
-	//	} else {
-	//		// Add skill adapters directly - they implement the Tool interface
-	//		for _, adapter := range skillAdapters {
-	//			allTools = append(allTools, adapter)
-	//		}
-	//		log.Printf("Successfully registered %d skill-based tools", len(skillAdapters))
-	//	}
-	// }
-
 	// Register all tools
 	for _, tool := range allTools {
 		if tool != nil {
@@ -198,11 +205,56 @@ func (r *Registry) registerAllTools() {
 			log.Printf("Registered tool: %s", tool.Name())
 		}
 	}
+
+	// Register skill-based tools (written directly to r.tools/r.enabledTools)
+	r.registerSkillTools()
 }
 
 // GetServices returns the service dependencies for tools that need them
 func (r *Registry) GetServices() *types.ToolServices {
 	return r.services
+}
+
+// registerSkillTools discovers skill adapters and registers them as enabled tools.
+func (r *Registry) registerSkillTools() {
+	if r.services.SkillsManager == nil || !r.services.SkillsManager.IsEnabled() {
+		return
+	}
+	skillAdapters, err := skills.GenerateToolAdapters(context.Background(), r.services.SkillsManager)
+	if err != nil {
+		log.Printf("Failed to register skill tools: %v", err)
+		return
+	}
+	for _, adapter := range skillAdapters {
+		bridge := &skillToolBridge{adapter: adapter}
+		r.tools[bridge.Name()] = bridge
+		r.enabledTools[bridge.Name()] = true
+	}
+	if len(skillAdapters) > 0 {
+		log.Printf("Registered and enabled %d skill-based tools", len(skillAdapters))
+	}
+}
+
+// RefreshSkillTools removes old skill tools and re-registers from fresh state.
+// Returns the number of skill tools now registered.
+func (r *Registry) RefreshSkillTools() int {
+	// Remove old skill tools (identified by bridge type)
+	for name, tool := range r.tools {
+		if _, ok := tool.(*skillToolBridge); ok {
+			delete(r.tools, name)
+			delete(r.enabledTools, name)
+		}
+	}
+	// Re-register from fresh skills manager state
+	r.registerSkillTools()
+	// Count registered skill tools
+	count := 0
+	for _, tool := range r.tools {
+		if _, ok := tool.(*skillToolBridge); ok {
+			count++
+		}
+	}
+	return count
 }
 
 // ExecuteTool executes a tool by name with the given arguments, including validation
