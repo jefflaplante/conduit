@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -341,7 +342,47 @@ func (a *ConduitAgentWithIntegration) ProcessResponse(ctx context.Context, respo
 		processed.Modified = true
 	}
 
+	// Detect spawn claims without actual SessionsSpawn tool call.
+	// The LLM sometimes generates text claiming it spawned a sub-agent
+	// without actually emitting the tool_use block.
+	if !processed.Silent && looksLikeSpawnClaim(response.Content) && !hasToolCall(response.ToolCalls, "SessionsSpawn") {
+		processed.Content += "\n\n[System: No SessionsSpawn tool call was detected. The sub-agent was NOT spawned. You must call SessionsSpawn to delegate work.]"
+		processed.Modified = true
+		log.Printf("[Agent] WARNING: spawn claim detected without SessionsSpawn tool call")
+	}
+
 	return processed, nil
+}
+
+// looksLikeSpawnClaim checks if text contains language suggesting a sub-agent was spawned.
+func looksLikeSpawnClaim(content string) bool {
+	lower := strings.ToLower(content)
+	spawnIndicators := []string{
+		"sub-agent spawned",
+		"sub-agent started",
+		"spawned a sub-agent",
+		"spawning sub-agent",
+		"delegated to sub-agent",
+		"spinning up sub-agent",
+		"launched sub-agent",
+		"kicked off sub-agent",
+	}
+	for _, indicator := range spawnIndicators {
+		if strings.Contains(lower, indicator) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasToolCall checks if the tool call list contains a call to the named tool.
+func hasToolCall(toolCalls []ai.ToolCall, name string) bool {
+	for _, tc := range toolCalls {
+		if tc.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // detectOAuthFromSession determines if the session is using OAuth

@@ -761,6 +761,23 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		return nil, err
 	}
 
+	// Process response through agent system (same as non-streaming path)
+	if r.agentSystem != nil {
+		processed, err := r.agentSystem.ProcessResponse(ctx, response)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process streaming response: %w", err)
+		}
+		if processed.Modified {
+			response.Content = processed.Content
+		}
+		if processed.Silent {
+			response.Content = ""
+		}
+		if len(processed.ToolCalls) > 0 {
+			response.ToolCalls = processed.ToolCalls
+		}
+	}
+
 	// Check if tool calls were detected during streaming
 	if len(response.ToolCalls) > 0 && r.executionEngine != nil {
 		convResponse, err := r.executionEngine.HandleToolCallFlow(ctx, provider, req, response)
