@@ -67,6 +67,36 @@ func TestSanitizeOutgoingText(t *testing.T) {
 			input:    "See this MEDIA: /path line",
 			expected: "See this MEDIA: /path line",
 		},
+		{
+			name:     "trailing NO_REPLY stripped",
+			input:    "Here is your cron job output. NO_REPLY",
+			expected: "Here is your cron job output.",
+		},
+		{
+			name:     "trailing HEARTBEAT_OK stripped",
+			input:    "System status is normal. HEARTBEAT_OK",
+			expected: "System status is normal.",
+		},
+		{
+			name:     "trailing NO_REPLY with extra whitespace stripped",
+			input:    "Done processing.   NO_REPLY   ",
+			expected: "Done processing.",
+		},
+		{
+			name:     "trailing NO_REPLY case insensitive",
+			input:    "Task complete. no_reply",
+			expected: "Task complete.",
+		},
+		{
+			name:     "mid-text NO_REPLY preserved",
+			input:    "The NO_REPLY token is used for silent responses.",
+			expected: "The NO_REPLY token is used for silent responses.",
+		},
+		{
+			name:     "mid-text HEARTBEAT_OK preserved",
+			input:    "When status is good, respond with HEARTBEAT_OK instead of verbose output.",
+			expected: "When status is good, respond with HEARTBEAT_OK instead of verbose output.",
+		},
 	}
 
 	for _, tt := range tests {
