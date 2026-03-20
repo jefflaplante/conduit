@@ -448,6 +448,8 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 		return nil, fmt.Errorf("provider not found: %s", providerName)
 	}
 
+	log.Printf("[Router] Generate: provider=%q", providerName)
+
 	// Build system prompt using agent system
 	var systemBlocks []SystemBlock
 	if r.agentSystem != nil {
@@ -553,6 +555,9 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 	if !exists {
 		return nil, fmt.Errorf("provider not found: %s", providerName)
 	}
+
+	contextWindow := r.contextWindowForProvider(providerName)
+	log.Printf("[Router] WithTools: provider=%q model=%q context_window=%d", providerName, modelOverride, contextWindow)
 
 	// Build system prompt using agent system
 	var systemBlocks []SystemBlock
