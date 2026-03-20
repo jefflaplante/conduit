@@ -65,9 +65,9 @@ func NewRegistry(cfg config.ToolsConfig) *Registry {
 		services:     &types.ToolServices{}, // Initialize empty services
 	}
 
-	// Mark enabled tools
+	// Mark enabled tools (normalized for case/underscore-insensitive matching)
 	for _, toolName := range cfg.EnabledTools {
-		registry.enabledTools[toolName] = true
+		registry.enabledTools[normalizeToolName(toolName)] = true
 	}
 
 	// Don't register tools here - wait for services to be set
@@ -215,6 +215,18 @@ func (r *Registry) GetServices() *types.ToolServices {
 	return r.services
 }
 
+// normalizeToolName converts a tool name to a canonical form for case-insensitive matching.
+// Handles both PascalCase (SessionsSpawn) and snake_case (sessions_spawn) inputs.
+func normalizeToolName(name string) string {
+	// Remove underscores and convert to lowercase
+	return strings.ToLower(strings.ReplaceAll(name, "_", ""))
+}
+
+// isToolEnabled checks if a tool is enabled (case-insensitive, underscore-insensitive).
+func (r *Registry) isToolEnabled(name string) bool {
+	return r.enabledTools[normalizeToolName(name)]
+}
+
 // registerSkillTools discovers skill adapters and registers them as enabled tools.
 func (r *Registry) registerSkillTools() {
 	if r.services.SkillsManager == nil || !r.services.SkillsManager.IsEnabled() {
@@ -228,7 +240,7 @@ func (r *Registry) registerSkillTools() {
 	for _, adapter := range skillAdapters {
 		bridge := &skillToolBridge{adapter: adapter}
 		r.tools[bridge.Name()] = bridge
-		r.enabledTools[bridge.Name()] = true
+		r.enabledTools[normalizeToolName(bridge.Name())] = true
 	}
 	if len(skillAdapters) > 0 {
 		log.Printf("Registered and enabled %d skill-based tools", len(skillAdapters))
@@ -260,7 +272,7 @@ func (r *Registry) RefreshSkillTools() int {
 // ExecuteTool executes a tool by name with the given arguments, including validation
 func (r *Registry) ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (*types.ToolResult, error) {
 	// Check if tool is enabled
-	if !r.enabledTools[name] {
+	if !r.isToolEnabled(name) {
 		result := types.NewErrorResult("tool_disabled", fmt.Sprintf("tool '%s' is not enabled", name)).
 			WithSuggestions([]string{"Check the enabled_tools list in your config.json to enable this tool"})
 		// Suggest enabled tools of the same category
@@ -361,7 +373,7 @@ func (r *Registry) createValidationErrorResult(toolName string, validation *type
 func (r *Registry) GetAvailableTools() map[string]types.Tool {
 	available := make(map[string]types.Tool)
 	for name, tool := range r.tools {
-		if r.enabledTools[name] {
+		if r.isToolEnabled(name) {
 			available[name] = tool
 		}
 	}
@@ -372,7 +384,7 @@ func (r *Registry) GetAvailableTools() map[string]types.Tool {
 func (r *Registry) getEnabledToolNames() []string {
 	var names []string
 	for name := range r.tools {
-		if r.enabledTools[name] {
+		if r.isToolEnabled(name) {
 			names = append(names, name)
 		}
 	}
@@ -384,7 +396,7 @@ func (r *Registry) findSimilarEnabledTools(name string) []string {
 	lower := strings.ToLower(name)
 	var similar []string
 	for toolName := range r.tools {
-		if r.enabledTools[toolName] && strings.Contains(strings.ToLower(toolName), lower[:min(len(lower), 3)]) {
+		if r.isToolEnabled(toolName) && strings.Contains(strings.ToLower(toolName), lower[:min(len(lower), 3)]) {
 			similar = append(similar, toolName)
 		}
 	}
@@ -397,7 +409,7 @@ func (r *Registry) findClosestToolName(name string) string {
 	best := ""
 	bestScore := 0
 	for toolName := range r.tools {
-		if r.enabledTools[toolName] {
+		if r.isToolEnabled(toolName) {
 			score := commonPrefixLen(lower, strings.ToLower(toolName))
 			if score > bestScore {
 				bestScore = score
@@ -461,7 +473,7 @@ func (r *Registry) GetToolSchemasWithContext(ctx context.Context) []map[string]i
 // GetToolHelp returns comprehensive help information for a specific tool including examples
 func (r *Registry) GetToolHelp(toolName string) map[string]interface{} {
 	tool, exists := r.tools[toolName]
-	if !exists || !r.enabledTools[toolName] {
+	if !exists || !r.isToolEnabled(toolName) {
 		return map[string]interface{}{
 			"error": fmt.Sprintf("Tool '%s' not found or not enabled", toolName),
 		}
@@ -471,7 +483,7 @@ func (r *Registry) GetToolHelp(toolName string) map[string]interface{} {
 		"name":        tool.Name(),
 		"description": tool.Description(),
 		"parameters":  tool.Parameters(),
-		"enabled":     r.enabledTools[toolName],
+		"enabled":     r.isToolEnabled(toolName),
 	}
 
 	// Add schema hints if available
