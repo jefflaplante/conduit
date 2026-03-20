@@ -537,3 +537,80 @@ func TestIsPathAllowed(t *testing.T) {
 		})
 	}
 }
+
+func TestRegistry_CaseInsensitiveToolEnabling(t *testing.T) {
+	// Config uses snake_case names (as users write them)
+	cfg := config.ToolsConfig{
+		EnabledTools: []string{
+			"sessions_spawn", // snake_case in config
+			"Sessions_List",  // mixed case
+			"SESSIONSSEND",   // all caps (weird but should work) - note double 's'
+			"read_file",      // snake_case
+		},
+	}
+
+	registry := NewRegistry(cfg)
+
+	tests := []struct {
+		name     string
+		toolName string
+		want     bool
+	}{
+		// snake_case config -> PascalCase tool name
+		{"PascalCase matches snake_case config", "SessionsSpawn", true},
+		{"lowercase matches snake_case config", "sessionsspawn", true},
+		{"exact snake_case matches", "sessions_spawn", true},
+
+		// Mixed case config -> various lookups
+		{"PascalCase matches mixed config", "SessionsList", true},
+		{"lowercase matches mixed config", "sessionslist", true},
+
+		// All caps config -> various lookups
+		{"lowercase matches ALLCAPS config", "sessionssend", true},
+		{"PascalCase matches ALLCAPS config", "SessionsSend", true},
+
+		// snake_case config for ReadFile
+		{"PascalCase matches snake_case", "ReadFile", true},
+		{"snake_case matches snake_case", "read_file", true},
+
+		// Not enabled tools
+		{"not enabled tool returns false", "WriteFile", false},
+		{"not enabled tool lowercase", "writefile", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := registry.isToolEnabled(tt.toolName)
+			if got != tt.want {
+				t.Errorf("isToolEnabled(%q) = %v, want %v", tt.toolName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRegistry_EnabledToolsNormalized(t *testing.T) {
+	cfg := config.ToolsConfig{
+		EnabledTools: []string{
+			"SessionsSpawn", // PascalCase in config
+			"sessions_list", // snake_case in config
+		},
+	}
+
+	registry := NewRegistry(cfg)
+
+	// Both should be stored normalized (lowercase, no underscores)
+	if !registry.enabledTools["sessionsspawn"] {
+		t.Error("PascalCase tool not normalized in storage")
+	}
+	if !registry.enabledTools["sessionslist"] {
+		t.Error("snake_case tool not normalized in storage (underscores should be removed)")
+	}
+
+	// Original case/format should not be stored
+	if registry.enabledTools["SessionsSpawn"] {
+		t.Error("PascalCase key should not exist (should be normalized)")
+	}
+	if registry.enabledTools["sessions_list"] {
+		t.Error("snake_case key should not exist (should be normalized)")
+	}
+}
