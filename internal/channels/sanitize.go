@@ -14,6 +14,9 @@ var MediaLineRe = regexp.MustCompile(`(?m)^MEDIA:\s*\S+.*$`)
 // excessiveNewlines matches three or more consecutive newlines for collapsing.
 var excessiveNewlines = regexp.MustCompile(`\n{3,}`)
 
+// trailingSilentTokenRe matches trailing silent tokens (NO_REPLY, HEARTBEAT_OK) with optional whitespace.
+var trailingSilentTokenRe = regexp.MustCompile(`(?i)\s*(NO_REPLY|HEARTBEAT_OK)\s*$`)
+
 // SanitizeOutgoingText strips all internal signal markers from text before it
 // reaches a user-facing output path. It removes reply tags, MEDIA: lines, and
 // collapses excessive blank lines.
@@ -30,6 +33,9 @@ func SanitizeOutgoingText(text string) string {
 
 	// Collapse three-or-more consecutive newlines down to two
 	cleaned = excessiveNewlines.ReplaceAllString(cleaned, "\n\n")
+
+	// Strip trailing silent tokens (NO_REPLY, HEARTBEAT_OK)
+	cleaned = stripTrailingSilentTokens(cleaned)
 
 	return strings.TrimSpace(cleaned)
 }
@@ -51,4 +57,10 @@ func IsSilentResponse(content string) bool {
 		return strings.Contains(upper, constants.SilentReplyToken) || strings.Contains(upper, constants.HeartbeatOKToken)
 	}
 	return false
+}
+
+// stripTrailingSilentTokens removes trailing NO_REPLY or HEARTBEAT_OK tokens
+// from text, including any leading whitespace before the token.
+func stripTrailingSilentTokens(text string) string {
+	return trailingSilentTokenRe.ReplaceAllString(text, "")
 }
