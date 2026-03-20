@@ -107,6 +107,67 @@ func TestSanitizeOutgoingText(t *testing.T) {
 	}
 }
 
+func TestStripTrailingSilentTokens(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "trailing NO_REPLY stripped",
+			input:    "Here is your output. NO_REPLY",
+			expected: "Here is your output.",
+		},
+		{
+			name:     "trailing HEARTBEAT_OK stripped",
+			input:    "Status is normal. HEARTBEAT_OK",
+			expected: "Status is normal.",
+		},
+		{
+			name:     "trailing with extra whitespace",
+			input:    "Done processing.   NO_REPLY   ",
+			expected: "Done processing.",
+		},
+		{
+			name:     "case insensitive",
+			input:    "Complete. no_reply",
+			expected: "Complete.",
+		},
+		{
+			name:     "mid-text preserved",
+			input:    "The NO_REPLY token is used for silent responses.",
+			expected: "The NO_REPLY token is used for silent responses.",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "no token present",
+			input:    "Hello world",
+			expected: "Hello world",
+		},
+		{
+			name:     "partial streaming with trailing token",
+			input:    "Here is the response so far NO_RE",
+			expected: "Here is the response so far NO_RE",
+		},
+		{
+			name:     "partial streaming then complete token",
+			input:    "Here is the response so far NO_REPLY",
+			expected: "Here is the response so far",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := StripTrailingSilentTokens(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestIsSilentResponse(t *testing.T) {
 	tests := []struct {
 		name     string

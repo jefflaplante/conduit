@@ -35,7 +35,7 @@ func SanitizeOutgoingText(text string) string {
 	cleaned = excessiveNewlines.ReplaceAllString(cleaned, "\n\n")
 
 	// Strip trailing silent tokens (NO_REPLY, HEARTBEAT_OK)
-	cleaned = stripTrailingSilentTokens(cleaned)
+	cleaned = StripTrailingSilentTokens(cleaned)
 
 	return strings.TrimSpace(cleaned)
 }
@@ -59,8 +59,9 @@ func IsSilentResponse(content string) bool {
 	return false
 }
 
-// stripTrailingSilentTokens removes trailing NO_REPLY or HEARTBEAT_OK tokens
+// StripTrailingSilentTokens removes trailing NO_REPLY or HEARTBEAT_OK tokens
 // from text, including any leading whitespace before the token.
-func stripTrailingSilentTokens(text string) string {
+// Exported for use in streaming delta callbacks.
+func StripTrailingSilentTokens(text string) string {
 	return trailingSilentTokenRe.ReplaceAllString(text, "")
 }

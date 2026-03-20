@@ -1416,8 +1416,12 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 						(len(currentText)-lastEditLen > 100) // Every 100 new chars since last edit
 
 					if shouldEdit && len(currentText) > 0 {
-						if editErr := streamingAdapter.EditMessageText(chatID, placeholderMsgID, currentText); editErr != nil {
-							log.Printf("[Streaming] Edit failed: %v", editErr)
+						// Strip trailing silent tokens before showing to user
+						displayText := channels.StripTrailingSilentTokens(currentText)
+						if displayText != "" {
+							if editErr := streamingAdapter.EditMessageText(chatID, placeholderMsgID, displayText); editErr != nil {
+								log.Printf("[Streaming] Edit failed: %v", editErr)
+							}
 						}
 						lastEditTime = time.Now()
 						lastEditLen = len(currentText)
