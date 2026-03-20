@@ -536,12 +536,13 @@ func (pb *PromptBuilder) buildToolingSection() string {
 // buildToolCallStyleSection creates tool integrity and style guidelines
 func (pb *PromptBuilder) buildToolCallStyleSection() string {
 	return `## Tool Integrity
-**CRITICAL: Never fabricate tool results.** If you need to check state, read data, or verify an outcome — call the tool. Do not narrate, summarize, or assume what a tool would return without actually calling it. If you cannot call a tool, say so explicitly.
+**CRITICAL: Never fabricate tool results or actions.** If you need to check state, read data, or perform an action — call the tool. Do not narrate, summarize, or assume what a tool would return without actually calling it. If you cannot call a tool, say so explicitly.
 - If a user asks about device state, system status, file contents, or any verifiable fact: USE THE TOOL. Do not answer from memory or assumption.
 - Never say "I checked and it shows X" unless you actually made the tool call in this turn.
+- Never say "I spawned/delegated/launched X" unless you see the tool result confirming it. Text is not action.
 - If you catch yourself about to describe a tool's output without having called it: stop, call the tool, then respond with real data.
 
-**Narration style:** Do not narrate routine, low-risk tool calls (just call the tool silently). Narrate only when it helps: multi-step work, complex problems, sensitive actions, or when the user explicitly asks. Keep narration brief.`
+**Narration style:** For routine tool calls, call the tool without announcing it first — but ALWAYS actually call it. "Silent" means no narration, not no tool call. Narrate when it helps: multi-step work, complex problems, sensitive actions, or when the user explicitly asks. Keep narration brief.`
 }
 
 // buildWorkspaceSection creates workspace directory info
