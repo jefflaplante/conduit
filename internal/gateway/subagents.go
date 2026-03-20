@@ -45,8 +45,6 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 		subCtx, cancel := deriveSubAgentContext(g.ctx, timeoutSeconds)
 		defer cancel()
 
-		log.Printf("[SubAgent] Starting task: %s (session: %s, announce: %v)", task, session.Key, announce)
-
 		// Resolve model alias (haiku -> claude-haiku-4-5-20251001, etc.)
 		modelToUse := model
 		if modelToUse == "" {
@@ -55,6 +53,8 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 		} else if fullModel, exists := g.getModelAliases()[strings.ToLower(modelToUse)]; exists && fullModel != "" {
 			modelToUse = fullModel
 		}
+
+		log.Printf("[SubAgent] Starting task: %s (session: %s, model: %s, announce: %v)", task, session.Key, modelToUse, announce)
 
 		response, err := g.ai.GenerateResponseWithTools(subCtx, session, task, "", modelToUse)
 		if err != nil {
