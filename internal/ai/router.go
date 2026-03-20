@@ -428,6 +428,11 @@ func (r *Router) ResolveProviderForModel(model string) string {
 		}
 	}
 
+	// Tier 3: model string is itself a known provider name
+	if _, exists := r.providerMeta[lower]; exists {
+		return lower
+	}
+
 	return ""
 }
 
@@ -518,6 +523,16 @@ func (r *Router) GenerateResponseWithTools(ctx context.Context, session *session
 
 // GenerateResponseWithToolsAndProgress is like GenerateResponseWithTools but with progress callbacks
 func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onProgress ProgressCallback) (ConversationResponse, error) {
+	// Handle bare provider name used as model (e.g., model="ghost" where "ghost" is a provider)
+	if modelOverride != "" && !strings.Contains(modelOverride, "/") {
+		resolved := r.ResolveProviderForModel(modelOverride)
+		if resolved != "" && strings.EqualFold(resolved, modelOverride) {
+			log.Printf("[Router] Bare provider name %q used as model — routing to provider with its default model", modelOverride)
+			providerName = resolved
+			modelOverride = ""
+		}
+	}
+
 	// Resolve provider from model only when:
 	// 1. No provider explicitly specified, OR
 	// 2. Model has explicit provider prefix (e.g., "ghost/model")
@@ -664,6 +679,16 @@ func (r *Router) getConversationalProgress(toolCalls []ToolCall) string {
 // The onDelta callback is called with each text delta, and done=true when complete.
 // Any provider implementing StreamingProvider will stream; others fall back to non-streaming.
 func (r *Router) GenerateResponseStreaming(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onDelta StreamCallback) (ConversationResponse, error) {
+	// Handle bare provider name used as model (e.g., model="ghost" where "ghost" is a provider)
+	if modelOverride != "" && !strings.Contains(modelOverride, "/") {
+		resolved := r.ResolveProviderForModel(modelOverride)
+		if resolved != "" && strings.EqualFold(resolved, modelOverride) {
+			log.Printf("[Router] Bare provider name %q used as model — routing to provider with its default model", modelOverride)
+			providerName = resolved
+			modelOverride = ""
+		}
+	}
+
 	// Resolve provider from model only when:
 	// 1. No provider explicitly specified, OR
 	// 2. Model has explicit provider prefix (e.g., "ghost/model")

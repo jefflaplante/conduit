@@ -610,6 +610,10 @@ func TestResolveProviderForModel(t *testing.T) {
 		{model: "gemma2-9b", expected: "ollama-local"},
 		// Default model match (nondeterministic — gpt-4 matches openai-prod's default, but gpt- prefix heuristic may hit ghost)
 		{model: "gpt-4", anyOf: []string{"openai-prod", "ghost"}},
+		// Tier 3: bare provider name resolves to itself
+		{model: "ghost", expected: "ghost"},
+		{model: "ollama-local", expected: "ollama-local"},
+		{model: "Ghost", expected: "ghost"}, // case-insensitive
 		// Empty → empty
 		{model: "", expected: ""},
 		// Unknown → empty
