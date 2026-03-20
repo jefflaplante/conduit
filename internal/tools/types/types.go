@@ -41,6 +41,9 @@ type GatewayService interface {
 	GetVersion() string
 	GetSystemPromptDebug(ctx context.Context, sessionKey string) (map[string]interface{}, error)
 
+	// Skill hot-reload
+	ReloadSkillTools(ctx context.Context) (int, error)
+
 	// Scheduler operations
 	ScheduleJob(job *SchedulerJob) error
 	CancelJob(jobID string) error

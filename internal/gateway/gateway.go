@@ -532,27 +532,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 	toolsRegistry.SetServices(toolServices)
 
 	// NOW convert tools to AI format (after SetServices registered them)
+	// Note: skill tools are already included via the registry (registered by registerSkillTools).
+	// The agent's GetToolDefinitions() also adds skills dynamically for per-session filtering.
 	aiTools := convertToolsToAIFormat(toolsRegistry)
-
-	// Add skills-generated tools if available
-	if skillsManager != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if skillTools, err := skillsManager.GenerateTools(ctx); err == nil {
-			log.Printf("Adding %d skills-generated tools", len(skillTools))
-			for _, skillTool := range skillTools {
-				aiTool := ai.Tool{
-					Name:        skillTool.Name(),
-					Description: skillTool.Description(),
-					Parameters:  skillTool.Parameters(),
-				}
-				aiTools = append(aiTools, aiTool)
-			}
-		} else {
-			log.Printf("WARNING: Failed to generate skills tools: %v", err)
-		}
-	}
 
 	// Update agent with the now-registered tools
 	agentSystem.SetTools(aiTools)

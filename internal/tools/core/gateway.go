@@ -23,7 +23,7 @@ func (t *GatewayTool) Name() string {
 }
 
 func (t *GatewayTool) Description() string {
-	return "Manage gateway operations including status, channels, configuration, and metrics"
+	return "Manage gateway operations including status, channels, configuration, metrics, and skill hot-reload"
 }
 
 func (t *GatewayTool) Parameters() map[string]interface{} {
@@ -35,6 +35,7 @@ func (t *GatewayTool) Parameters() map[string]interface{} {
 				"enum": []string{
 					"status", "restart", "channels", "enable_channel", "disable_channel",
 					"config", "update_config", "metrics", "version", "debug_prompt",
+					"reload_skills",
 				},
 				"description": "Gateway operation to perform",
 			},
@@ -101,6 +102,14 @@ func (t *GatewayTool) GetActionDocs() map[string]types.ActionDoc {
 			OptionalParams: []string{"session"},
 			Returns:        "section list with priority, char count, inclusion status",
 		},
+		"reload_skills": {
+			Description: "Hot-reload skills from the filesystem without restarting the gateway. " +
+				"Re-scans all skill search paths for SKILL.md files, registers new skill tools, " +
+				"and removes tools for deleted skills. Use after writing or editing a SKILL.md file " +
+				"(e.g. via the Write tool) so the new skill becomes callable immediately. " +
+				"No parameters needed.",
+			Returns: "count of skill tools registered after reload",
+		},
 	}
 }
 
@@ -142,6 +151,8 @@ func (t *GatewayTool) Execute(ctx context.Context, args map[string]interface{}) 
 		return t.getVersion(ctx)
 	case "debug_prompt":
 		return t.debugPrompt(ctx, args)
+	case "reload_skills":
+		return t.reloadSkills(ctx)
 	default:
 		return &types.ToolResult{
 			Success: false,
@@ -515,6 +526,33 @@ func (t *GatewayTool) formatPromptDebug(data map[string]interface{}) string {
 	}
 
 	return builder.String()
+}
+
+func (t *GatewayTool) reloadSkills(ctx context.Context) (*types.ToolResult, error) {
+	count, err := t.services.Gateway.ReloadSkillTools(ctx)
+	if err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to reload skills: %v", err),
+		}, nil
+	}
+
+	content := fmt.Sprintf("Skills reloaded successfully. %d skill tools now registered.", count)
+	if count == 0 {
+		content += " No SKILL.md files found in skill search paths."
+	} else {
+		content += " All skill tools are callable immediately."
+	}
+
+	return &types.ToolResult{
+		Success: true,
+		Content: content,
+		Data: map[string]interface{}{
+			"action":      "reload_skills",
+			"skill_tools": count,
+			"timestamp":   time.Now(),
+		},
+	}, nil
 }
 
 func (t *GatewayTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {

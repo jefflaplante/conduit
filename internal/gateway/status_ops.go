@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"conduit/internal/sessions"
 	"conduit/internal/version"
@@ -83,6 +84,22 @@ func (g *Gateway) GetMetrics() (map[string]interface{}, error) {
 // GetVersion returns the gateway version
 func (g *Gateway) GetVersion() string {
 	return version.Info()
+}
+
+// ReloadSkillTools rediscovers skills from the filesystem and re-registers them
+// in the tool registry. Returns the count of skill tools now registered.
+func (g *Gateway) ReloadSkillTools(ctx context.Context) (int, error) {
+	if g.skillsManager == nil {
+		return 0, fmt.Errorf("skills system not configured")
+	}
+	// Rediscover skills from filesystem
+	if err := g.skillsManager.ReloadSkills(ctx); err != nil {
+		return 0, fmt.Errorf("failed to reload skills: %w", err)
+	}
+	// Re-register skill tools in the registry
+	count := g.tools.RefreshSkillTools()
+	log.Printf("Skills hot-reloaded: %d skill tools registered", count)
+	return count, nil
 }
 
 // GetSystemPromptDebug returns debug info about the system prompt for a session.
