@@ -188,7 +188,6 @@ func buildDocsSection(params *SectionParams) string {
 		docsPath = "./docs"
 	}
 
-	// TODO: Update URLs when new domains are ready
 	return fmt.Sprintf(`## Documentation
 Conduit docs: %s
 For Conduit behavior, commands, config, or architecture: consult local docs first.
@@ -204,14 +203,8 @@ func buildSilentRepliesSection(isMinimal bool) string {
 
 	return fmt.Sprintf(`## Silent Replies
 When you have nothing to say, respond with ONLY: %s
-⚠️ Rules:
-- It must be your ENTIRE message — nothing else
-- Never append it to an actual response (never include "%s" in real replies)
-- Never wrap it in markdown or code blocks
-❌ Wrong: "Here's help... %s"
-❌ Wrong: "%s"
-✅ Right: %s
-`, SILENT_REPLY_TOKEN, SILENT_REPLY_TOKEN, SILENT_REPLY_TOKEN, SILENT_REPLY_TOKEN, SILENT_REPLY_TOKEN)
+It must be your entire message — no other text, no markdown wrapping, no code blocks.
+`, SILENT_REPLY_TOKEN)
 }
 
 // buildHeartbeatsSection returns detailed heartbeat instructions
@@ -277,7 +270,6 @@ func buildErrorRecoverySection(isMinimal bool) string {
 - When context is ambiguous, ask rather than guess.
 - When uncertain about system state, verify before acting.
 - Distinguish "I checked and it's fine" from "I didn't check but it's probably fine."
-- If a tool is unavailable or fails, say so. Never substitute a fabricated result.
 `
 }
 
@@ -292,6 +284,14 @@ func buildToolStrategySection(isMinimal bool) string {
 - **Chain termination**: Stop chaining when you have a clear answer, when the result is a simple confirmation, or if you've called the same tool 3+ times without progress.
 - **Context budget**: Prefer focused tool calls over broad ones. A targeted query beats a full dump.
 - **Discovery first**: For unfamiliar tools, call with minimal args (status, list) to learn available options before attempting complex operations.
+
+### Stopping Conditions
+Stop working and respond to the user when:
+1. You have a clear, verified answer to their question
+2. You've completed the requested action and confirmed the result
+3. You need user input, approval, or clarification to continue
+4. You've hit an unrecoverable error (report it, don't spin)
+5. You've made 3+ tool calls without meaningful progress (reassess approach)
 `
 }
 

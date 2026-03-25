@@ -165,17 +165,17 @@ func TestPromptSectionPriorities(t *testing.T) {
 		counts[sec.priority]++
 	}
 
-	if counts[1] != 6 {
-		t.Errorf("expected 6 P1 sections, got %d", counts[1])
+	if counts[1] != 3 {
+		t.Errorf("expected 3 P1 sections, got %d", counts[1])
 	}
-	if counts[2] < 8 {
-		t.Errorf("expected at least 8 P2 sections, got %d", counts[2])
+	if counts[2] < 11 {
+		t.Errorf("expected at least 11 P2 sections, got %d", counts[2])
 	}
 	if counts[3] < 4 {
 		t.Errorf("expected at least 4 P3 sections, got %d", counts[3])
 	}
-	if counts[4] < 3 {
-		t.Errorf("expected at least 3 P4 sections, got %d", counts[4])
+	if counts[4] < 4 {
+		t.Errorf("expected at least 4 P4 sections, got %d", counts[4])
 	}
 
 	// Verify sorted by priority.
