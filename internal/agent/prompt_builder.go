@@ -737,6 +737,15 @@ func (pb *PromptBuilder) buildRuntimeInfo(session *sessions.Session) map[string]
 	if session != nil && session.Context != nil && session.Context["model"] != "" {
 		model = session.Context["model"]
 	}
+	if model == "" {
+		// Fall back to config default aliases rather than hardcoding a model string.
+		aliases := config.DefaultModelAliases()
+		if defaultModel, ok := aliases["default"]; ok && defaultModel != "" {
+			model = defaultModel
+		} else {
+			model = "claude-sonnet-4-6" // last resort
+		}
+	}
 	info["model"] = model
 
 	info["channel"] = pb.sectionParams.RuntimeChannel
