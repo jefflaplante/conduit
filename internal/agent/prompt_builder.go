@@ -354,25 +354,25 @@ func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions
 func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session *sessions.Session, isOAuth, isCron bool, params *SectionParams) []promptSection {
 
 	// Define all sections with priorities.
-	// P1=critical (never dropped), P2=important for SRE value, P3=enhances behavior, P4=cosmetic/optional.
+	// P1=critical (never dropped), P2=core value, P3=enhances behavior, P4=cosmetic/optional.
+	// Within each priority, declaration order is preserved by stable sort.
 	raw := []promptSection{
-		// P1 — Critical: identity, tooling, safety, core runtime
+		// P1 — Critical: identity, runtime, safety (never dropped)
 		{name: "Identity", priority: 1, build: func() string { return pb.buildIdentitySection(isOAuth) }},
-		{name: "Tooling", priority: 1, build: func() string { return pb.buildToolingSection() }},
-		{name: "Tool Integrity", priority: 1, build: func() string { return pb.buildToolCallStyleSection() }},
-		{name: "Silent Replies", priority: 1, build: func() string { return buildSilentRepliesSection(params.IsMinimal) }},
 		{name: "Runtime", priority: 1, build: func() string {
 			return buildRuntimeSection(params, pb.buildRuntimeInfo(session))
 		}},
 		{name: "Safety", priority: 1, build: func() string { return buildSafetySection(params.IsMinimal) }},
 
-		// P2 — Core value: workspace context, memory, messaging, error handling
+		// P2 — Core value: grounding data first, then tools and behavior
 		{name: "Project Context", priority: 2, build: func() string { return pb.buildWorkspaceContextSection(ctx, session) }},
 		{name: "Memory Recall", priority: 2, build: func() string { return buildMemorySection(params) }},
 		{name: "Memory Persistence", priority: 2, build: func() string { return buildMemoryPersistenceSection(params) }},
-		{name: "Heartbeats", priority: 2, build: func() string { return buildHeartbeatsSection(params) }},
-		{name: "Error Recovery", priority: 2, build: func() string { return buildErrorRecoverySection(params.IsMinimal) }},
+		{name: "Tooling", priority: 2, build: func() string { return pb.buildToolingSection() }},
+		{name: "Tool Integrity", priority: 2, build: func() string { return pb.buildToolCallStyleSection() }},
 		{name: "Tool Strategy", priority: 2, build: func() string { return buildToolStrategySection(params.IsMinimal) }},
+		{name: "Error Recovery", priority: 2, build: func() string { return buildErrorRecoverySection(params.IsMinimal) }},
+		{name: "Heartbeats", priority: 2, build: func() string { return buildHeartbeatsSection(params) }},
 		{name: "Messaging", priority: 2, build: func() string { return buildMessagingSection(params) }},
 		{name: "Email", priority: 2, build: func() string { return pb.buildEmailSection() }},
 		{name: "Cron Delivery", priority: 2, build: func() string {
@@ -396,6 +396,7 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		{name: "Docs", priority: 3, build: func() string { return buildDocsSection(params) }},
 
 		// P4 — Nice-to-have: cosmetic features, CLI reference
+		{name: "Silent Replies", priority: 4, build: func() string { return buildSilentRepliesSection(params.IsMinimal) }},
 		{name: "Voice/TTS", priority: 4, build: func() string { return buildVoiceSection(params) }},
 		{name: "Reactions", priority: 4, build: func() string { return buildReactionsSection(params) }},
 		{name: "Conduit CLI", priority: 4, build: func() string { return buildConduitCLISection(params.IsMinimal) }},
@@ -476,8 +477,7 @@ var defaultOperatingPrinciples = []string{
 	"Ask before destroying. Confirm deletions, restarts, or irreversible changes.",
 	"Verify before claiming success. Check that actions had their intended effect.",
 	"Understand blast radius. Know what systems, users, or data an action affects.",
-	"When uncertain, say so. Never guess at system state — check it.",
-	"Never fabricate. Always call tools for real data; never narrate what a tool would return without calling it.",
+	"Verify before claiming. (See Tool Integrity for fabrication rules.)",
 	"Write down what you learn. Memory resets between sessions; files persist.",
 }
 
@@ -496,7 +496,7 @@ func (pb *PromptBuilder) buildIdentitySection(isOAuth bool) string {
 		builder.WriteString(identity)
 		builder.WriteString(" You are running inside Conduit.\n")
 	} else {
-		builder.WriteString("You are a personal assistant running inside Conduit.\n")
+		builder.WriteString("You are a sardonic, competent personal assistant and home automation agent running inside Conduit.\n")
 	}
 
 	// Add operating principles
@@ -536,11 +536,11 @@ func (pb *PromptBuilder) buildToolingSection() string {
 // buildToolCallStyleSection creates tool integrity and style guidelines
 func (pb *PromptBuilder) buildToolCallStyleSection() string {
 	return `## Tool Integrity
-**CRITICAL: Never fabricate tool results or actions.** If you need to check state, read data, or perform an action — call the tool. Do not narrate, summarize, or assume what a tool would return without actually calling it. If you cannot call a tool, say so explicitly.
-- If a user asks about device state, system status, file contents, or any verifiable fact: USE THE TOOL. Do not answer from memory or assumption.
-- Never say "I checked and it shows X" unless you actually made the tool call in this turn.
-- Never say "I spawned/delegated/launched X" unless you see the tool result confirming it. Text is not action.
+**Never fabricate tool results.** Always call the tool before reporting its results.
+- If a user asks about device state, system status, file contents, or any verifiable fact: call the tool. Do not answer from memory or assumption.
+- Always confirm tool execution succeeded before claiming an action was completed. Receipts or it didn't happen.
 - If you catch yourself about to describe a tool's output without having called it: stop, call the tool, then respond with real data.
+- If you cannot call a tool, say so explicitly rather than approximating.
 
 **Narration style:** For routine tool calls, call the tool without announcing it first — but ALWAYS actually call it. "Silent" means no narration, not no tool call. Narrate when it helps: multi-step work, complex problems, sensitive actions, or when the user explicitly asks. Keep narration brief.`
 }
@@ -728,12 +728,12 @@ func (pb *PromptBuilder) buildRuntimeInfo(session *sessions.Session) map[string]
 
 	info["repo"] = pb.sectionParams.WorkspaceDir
 
-	info["os"] = fmt.Sprintf("%s %s (%s)", runtime.GOOS, "", runtime.GOARCH)
+	info["os"] = fmt.Sprintf("%s (%s)", runtime.GOOS, runtime.GOARCH)
 
 	info["node"] = runtime.Version()
 
 	// Get model from session context, or use default
-	model := "anthropic/claude-sonnet-4-20250514"
+	model := config.DefaultModelAliases()["default"]
 	if session != nil && session.Context != nil && session.Context["model"] != "" {
 		model = session.Context["model"]
 	}
