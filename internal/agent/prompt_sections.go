@@ -130,7 +130,7 @@ func buildMessagingSection(params *SectionParams) string {
 		builder.WriteString(fmt.Sprintf(`
 ### message tool
 - Use %cmessage%c for proactive sends + channel actions (polls, reactions, etc.).
-- For %caction=send%c, include %cto%c and %cmessage%c.
+- For %caction=send%c, include %ctarget%c and %cmessage%c.
 - If multiple channels are configured, pass %cchannel%c (%s).
 - If you use %cmessage%c (%caction=send%c) to deliver your user-visible reply, respond with ONLY: %s (avoid duplicate replies).
 `, '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', channelOptions, '`', '`', '`', '`', SILENT_REPLY_TOKEN))
