@@ -2,7 +2,6 @@ package mqtt
 
 import (
 	"encoding/json"
-	"log"
 	"path"
 	"strings"
 	"sync"
@@ -76,7 +75,7 @@ func (dr *DeviceRegistry) Update(payload []byte) error {
 	dr.lastUpdated = time.Now()
 	dr.mu.Unlock()
 
-	log.Printf("[MQTT] Device registry updated: %d devices", len(devices))
+	debugf("[MQTT] Device registry updated: %d devices", len(devices))
 	return nil
 }
 

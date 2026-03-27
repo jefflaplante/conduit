@@ -75,7 +75,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	})
 
 	opts.SetReconnectingHandler(func(client pahomqtt.Client, opts *pahomqtt.ClientOptions) {
-		log.Printf("[MQTT] Reconnecting to %s...", c.cfg.BrokerURL)
+		debugf("[MQTT] Reconnecting to %s...", c.cfg.BrokerURL)
 	})
 
 	// Message handler
@@ -86,7 +86,7 @@ func (c *Client) Connect(ctx context.Context) error {
 			copy(payload, msg.Payload())
 
 			if msg.Retained() {
-				log.Printf("[MQTT] Retained message: %s (%d bytes)", msg.Topic(), len(payload))
+				debugf("[MQTT] Retained message: %s (%d bytes)", msg.Topic(), len(payload))
 			}
 
 			c.onMessage(Event{
@@ -133,7 +133,7 @@ func (c *Client) subscribeAll(client pahomqtt.Client) {
 		if token.Error() != nil {
 			log.Printf("[MQTT] Failed to subscribe to %s: %v", topic, token.Error())
 		} else {
-			log.Printf("[MQTT] Subscribed to %s (QoS %d)", topic, qos)
+			debugf("[MQTT] Subscribed to %s (QoS %d)", topic, qos)
 		}
 	}
 }
@@ -161,7 +161,7 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos 
 		qos = 1
 	}
 
-	log.Printf("[MQTT] Publishing to %s (QoS %d, retained=%v, %d bytes)", topic, qos, retained, len(payload))
+	debugf("[MQTT] Publishing to %s (QoS %d, retained=%v, %d bytes)", topic, qos, retained, len(payload))
 	token := c.pahoClient.Publish(topic, qos, retained, payload)
 
 	done := make(chan struct{})
@@ -179,7 +179,7 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos 
 			log.Printf("[MQTT] Publish to %s failed: %v", topic, token.Error())
 			return nil, token.Error()
 		}
-		log.Printf("[MQTT] Published to %s — broker ACK received (QoS %d)", topic, qos)
+		debugf("[MQTT] Published to %s — broker ACK received (QoS %d)", topic, qos)
 		return &PublishResult{
 			Topic:       topic,
 			QoS:         qos,
