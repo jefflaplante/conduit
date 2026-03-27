@@ -73,7 +73,7 @@ func (s *Service) Start(ctx context.Context) error {
 				return
 			case <-ticker.C:
 				if n := s.buffer.Prune(); n > 0 {
-					log.Printf("[MQTT] Pruned %d old events", n)
+					debugf("[MQTT] Pruned %d old events", n)
 				}
 			}
 		}

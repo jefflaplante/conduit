@@ -12,6 +12,10 @@ import (
 	"strings"
 )
 
+// VerboseLogging controls whether debug-level AI messages appear in the journal.
+// Set from gateway.go using the config value: ai.VerboseLogging = cfg.Debug.VerboseLogging
+var VerboseLogging bool
+
 // StreamCallback is called with text deltas during streaming
 type StreamCallback func(delta string, done bool)
 
@@ -220,7 +224,9 @@ func (a *AnthropicProvider) parseSSEStream(body io.Reader, onDelta StreamCallbac
 			// Message-level delta (usually contains stop_reason and usage)
 			if delta, ok := event["delta"].(map[string]interface{}); ok {
 				if stopReason, ok := delta["stop_reason"].(string); ok {
-					log.Printf("[Streaming] Stop reason: %s", stopReason)
+					if VerboseLogging {
+						log.Printf("[Streaming] Stop reason: %s", stopReason)
+					}
 				}
 			}
 			// Anthropic sends output_tokens in message_delta usage

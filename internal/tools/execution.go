@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"conduit/internal/ai"
+	"conduit/internal/tools/debuglog"
 )
 
 // ToolRegistry interface for tool execution
@@ -54,7 +55,7 @@ func startThinkingIndicator(ctx context.Context, depth int) func() {
 	done := make(chan struct{})
 	go func() {
 		msg := thinkingMessage(depth)
-		log.Printf("[ThinkingIndicator] Emitting thinking status: %s", msg)
+		// Thinking indicators go to ring buffer only (pure noise in journal)
 		cb(ToolEventInfo{
 			ToolName:  msg,
 			EventType: "thinking",
@@ -69,7 +70,6 @@ func startThinkingIndicator(ctx context.Context, depth int) func() {
 				return
 			case <-ticker.C:
 				msg := thinkingMessage(depth)
-				log.Printf("[ThinkingIndicator] Tick: %s", msg)
 				cb(ToolEventInfo{
 					ToolName:  msg,
 					EventType: "thinking",
@@ -98,6 +98,8 @@ type ExecutionEngine struct {
 	timeout           time.Duration
 	maxChains         int // Prevent infinite tool chains
 	maxResultChars    int // Max chars for tool result content (0 = use default)
+	debugBuffer       *debuglog.RingBuffer // In-memory ring buffer for debug entries (nil-safe)
+	verboseLogging    bool                 // When true, log full args to journal
 }
 
 // Middleware interface for tool execution pipeline
@@ -124,7 +126,8 @@ type ConversationResponse struct {
 	ChainDepth  int                `json:"chain_depth"`
 }
 
-// NewExecutionEngine creates a new tool execution engine
+// NewExecutionEngine creates a new tool execution engine.
+// debugBuffer may be nil (debug logging disabled). verboseLogging controls journal output.
 func NewExecutionEngine(registry ToolRegistry, maxParallel int, timeout time.Duration, maxChains int) *ExecutionEngine {
 	// Default to 25 if not specified or invalid
 	if maxChains <= 0 {
@@ -139,6 +142,16 @@ func NewExecutionEngine(registry ToolRegistry, maxParallel int, timeout time.Dur
 		maxChains:     maxChains,
 		maxResultChars: DefaultMaxToolResultChars,
 	}
+}
+
+// SetDebugBuffer configures the in-memory ring buffer for debug log entries.
+func (e *ExecutionEngine) SetDebugBuffer(buf *debuglog.RingBuffer) {
+	e.debugBuffer = buf
+}
+
+// SetVerboseLogging controls whether full tool args are logged to the journal.
+func (e *ExecutionEngine) SetVerboseLogging(v bool) {
+	e.verboseLogging = v
 }
 
 // SetMaxResultChars configures the maximum characters for tool result content.
@@ -179,7 +192,19 @@ func (e *ExecutionEngine) ExecuteToolCalls(ctx context.Context, calls []ai.ToolC
 // executeSingle executes a single tool call
 func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *ExecutionResult {
 	start := time.Now()
-	log.Printf("[ExecutionEngine] Executing tool: %s with args: %v", call.Name, call.Args)
+
+	// Log tool name only to journal (never args at INFO)
+	log.Printf("[ExecutionEngine] Executing tool: %s", call.Name)
+
+	// Capture full details in ring buffer (private, in-memory only)
+	if e.debugBuffer != nil {
+		e.debugBuffer.Add(debuglog.ToolStart(call.Name, call.Args))
+	}
+
+	// Verbose mode: also log args to journal (opt-in)
+	if e.verboseLogging {
+		log.Printf("[ExecutionEngine] Tool args: %v", call.Args)
+	}
 
 	// Create result structure
 	execResult := &ExecutionResult{
@@ -223,6 +248,10 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 	// Handle execution errors gracefully
 	if err != nil {
 		log.Printf("Tool execution failed: tool=%s error=%v", call.Name, err)
+		// Record error in ring buffer
+		if e.debugBuffer != nil {
+			e.debugBuffer.Add(debuglog.ToolError(call.Name, execResult.Duration, err.Error()))
+		}
 		// Create a user-friendly error result
 		if execResult.Result == nil {
 			execResult.Result = &ToolResult{
@@ -241,6 +270,17 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 			})
 		}
 	} else {
+		// Record completion in ring buffer (truncated result)
+		if e.debugBuffer != nil {
+			summary := ""
+			if result != nil {
+				summary = result.Content
+				if len(summary) > 500 {
+					summary = summary[:500] + "…"
+				}
+			}
+			e.debugBuffer.Add(debuglog.ToolComplete(call.Name, execResult.Duration, summary))
+		}
 		// Notify callback of completion
 		if cb := getToolEventCallback(ctx); cb != nil {
 			resultStr := ""
@@ -488,7 +528,7 @@ func NewLoggingMiddleware() *LoggingMiddleware {
 }
 
 func (lm *LoggingMiddleware) BeforeExecution(ctx context.Context, call *ai.ToolCall) error {
-	lm.logger("Executing tool: %s with args: %v", call.Name, call.Args)
+	lm.logger("Executing tool: %s", call.Name)
 	return nil
 }
 

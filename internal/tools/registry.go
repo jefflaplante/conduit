@@ -193,6 +193,11 @@ func (r *Registry) registerAllTools() {
 		}
 	}
 
+	// Debug log tool (optional - requires ring buffer)
+	if r.services.DebugLog != nil {
+		allTools = append(allTools, core.NewDebugLogTool(r.services, r.services.DebugLog))
+	}
+
 	// Google Workspace tools (optional - requires gws CLI)
 	allTools = append(allTools, []types.Tool{
 		&GoogleWorkspaceTool{registry: r},

@@ -33,6 +33,7 @@ import (
 	"conduit/internal/skills"
 	internalssh "conduit/internal/ssh"
 	"conduit/internal/tools"
+	"conduit/internal/tools/debuglog"
 	"conduit/internal/tools/schema"
 	"conduit/internal/tools/types"
 	"conduit/internal/tui"
@@ -227,6 +228,16 @@ func New(cfg *config.Config) (*Gateway, error) {
 	if cfg.Tools.MaxToolResultChars > 0 {
 		executionEngine.SetMaxResultChars(cfg.Tools.MaxToolResultChars)
 	}
+
+	// Create debug ring buffer and wire verbose logging
+	debugBuffer := debuglog.NewRingBuffer(debuglog.DefaultCapacity)
+	executionEngine.SetDebugBuffer(debugBuffer)
+	executionEngine.SetVerboseLogging(cfg.Debug.VerboseLogging)
+
+	// Set package-level verbose logging for MQTT and AI
+	mqtt.VerboseLogging = cfg.Debug.VerboseLogging
+	ai.VerboseLogging = cfg.Debug.VerboseLogging
+
 	executionAdapter := tools.NewExecutionEngineAdapter(executionEngine)
 
 	// Initialize AI router with agent system AND execution engine
@@ -528,6 +539,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		VectorSearch:  vectorSearch,
 		MQTTService:   mqttSvc,
 		SchemaBuilder: schemaBuilder,
+		DebugLog:      debugBuffer,
 	}
 	toolsRegistry.SetServices(toolServices)
 

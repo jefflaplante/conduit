@@ -11,6 +11,7 @@ import (
 	"conduit/internal/fts"
 	"conduit/internal/sessions"
 	"conduit/internal/skills"
+	"conduit/internal/tools/debuglog"
 	"conduit/internal/tools/schema"
 )
 
@@ -174,6 +175,9 @@ type ToolServices struct {
 
 	// Schema enhancement
 	SchemaBuilder *schema.Builder // For enhancing tool schemas with discovery data
+
+	// Debug
+	DebugLog *debuglog.RingBuffer // In-memory ring buffer for debug log entries (nil-safe)
 }
 
 // Context key types for per-request values (replaces shared mutable fields).
