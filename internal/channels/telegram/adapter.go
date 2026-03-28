@@ -827,6 +827,7 @@ func (a *Adapter) registerCommands(ctx context.Context) {
 		{Command: "provider", Description: "Switch or view current AI provider"},
 		{Command: "context", Description: "Show context window usage"},
 		{Command: "stop", Description: "Stop the current operation"},
+		{Command: "ring", Description: "Show debug ring buffer activity"},
 	}
 
 	_, err := a.bot.SetMyCommands(ctx, &bot.SetMyCommandsParams{

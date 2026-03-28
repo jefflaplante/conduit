@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
 	"conduit/internal/config"
 	"conduit/internal/sessions"
+	"conduit/internal/tools/debuglog"
 	"conduit/internal/version"
 	"conduit/pkg/protocol"
 )
@@ -84,6 +86,12 @@ func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessa
 		return true
 	}
 
+	// Check for /ring command
+	if text == "/ring" || strings.HasPrefix(text, "/ring ") {
+		g.handleRingCommand(msg, text)
+		return true
+	}
+
 	return false
 }
 
@@ -133,10 +141,91 @@ func (g *Gateway) handleHelpCommand(msg *protocol.IncomingMessage) {
 /provider - View/switch provider
 /context - Show context window usage
 /stop - Stop current operation
+/ring - Show debug ring buffer activity
 
 _Conduit Go Gateway_`
 
 	g.sendCommandResponse(msg, help)
+}
+
+// handleRingCommand shows debug ring buffer contents
+func (g *Gateway) handleRingCommand(msg *protocol.IncomingMessage, text string) {
+	if g.ringBuffer == nil {
+		g.sendCommandResponse(msg, "❌ Debug ring buffer not available")
+		return
+	}
+
+	parts := strings.Fields(text)
+
+	// Parse action and limit
+	action := "dump"
+	limit := 20
+	if len(parts) > 1 {
+		switch parts[1] {
+		case "clear":
+			action = "clear"
+		case "status":
+			action = "status"
+		default:
+			// Try to parse as a number (limit)
+			if n, err := strconv.Atoi(parts[1]); err == nil && n > 0 {
+				limit = n
+				if limit > 100 {
+					limit = 100
+				}
+			}
+		}
+	}
+	if len(parts) > 2 {
+		if n, err := strconv.Atoi(parts[2]); err == nil && n > 0 {
+			limit = n
+			if limit > 100 {
+				limit = 100
+			}
+		}
+	}
+
+	switch action {
+	case "clear":
+		count := g.ringBuffer.Len()
+		g.ringBuffer.Clear()
+		g.sendCommandResponse(msg, fmt.Sprintf("🧹 Ring buffer cleared (%d entries removed)", count))
+
+	case "status":
+		g.sendCommandResponse(msg, fmt.Sprintf("📊 Ring buffer: %d entries (capacity: %d)",
+			g.ringBuffer.Len(), debuglog.DefaultCapacity))
+
+	default: // dump
+		entries := g.ringBuffer.Last(limit)
+		if len(entries) == 0 {
+			g.sendCommandResponse(msg, "📭 Ring buffer is empty")
+			return
+		}
+
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("🔍 *Debug Ring Buffer* (%d entries)\n\n", len(entries)))
+
+		for _, e := range entries {
+			ts := e.Timestamp.Format("15:04:05")
+			switch e.Type {
+			case debuglog.EntryToolStart:
+				sb.WriteString(fmt.Sprintf("`%s` ▶ *%s*\n", ts, e.ToolName))
+			case debuglog.EntryToolComplete:
+				sb.WriteString(fmt.Sprintf("`%s` ✓ *%s* (%s)\n", ts, e.ToolName, e.Duration))
+			case debuglog.EntryToolError:
+				sb.WriteString(fmt.Sprintf("`%s` ✗ *%s* ERROR\n", ts, e.ToolName))
+			case debuglog.EntryThinking:
+				sb.WriteString(fmt.Sprintf("`%s` 💭 thinking...\n", ts))
+			case debuglog.EntryLLMRequest:
+				sb.WriteString(fmt.Sprintf("`%s` → LLM request\n", ts))
+			case debuglog.EntryLLMResponse:
+				sb.WriteString(fmt.Sprintf("`%s` ← LLM response (%s)\n", ts, e.Duration))
+			}
+		}
+
+		sb.WriteString("\n_Use /ring clear to reset_")
+		g.sendCommandResponse(msg, sb.String())
+	}
 }
 
 // getModelAliases returns the configured model aliases, falling back to defaults

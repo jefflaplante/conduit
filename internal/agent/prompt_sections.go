@@ -121,6 +121,17 @@ func buildMessagingSection(params *SectionParams) string {
 - Never use exec/curl for provider messaging; Conduit handles all routing internally.
 `)
 
+	if params.AvailableTools["StatusUpdate"] {
+		builder.WriteString(`
+### Progress Updates
+During multi-step or long-running tasks, use StatusUpdate to keep the user informed:
+- At major phases: "Searching codebase for authentication files..."
+- After findings: "Found 5 matching files, analyzing patterns..."
+- When pivoting: "Initial search found nothing, trying broader query..."
+Keep updates concise (1 sentence). Don't spam — roughly every 3-5 tool calls or when something meaningful happens.
+`)
+	}
+
 	if params.AvailableTools["Message"] {
 		channelOptions := strings.Join(SupportedChannels, "|")
 		if len(params.MessageChannels) > 0 {
