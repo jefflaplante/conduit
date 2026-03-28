@@ -160,6 +160,7 @@ func (r *Registry) registerAllTools() {
 	// Communication tools
 	allTools = append(allTools, []types.Tool{
 		communication.NewMessageTool(r.services),
+		communication.NewStatusUpdateTool(r.services),
 		communication.NewTTSTool(r.services),
 	}...)
 

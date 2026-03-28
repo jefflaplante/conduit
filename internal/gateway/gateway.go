@@ -101,6 +101,9 @@ type Gateway struct {
 
 	// SSH server (optional)
 	sshServer *charmssh.Server
+
+	// Debug ring buffer (for /ring command)
+	ringBuffer *debuglog.RingBuffer
 }
 
 // Client represents a WebSocket client connection
@@ -382,6 +385,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		eventStore:          eventStore,
 		clients:             make(map[string]*Client),
 		activeRequests:      make(map[string]context.CancelFunc),
+		ringBuffer:          debugBuffer,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: checkOrigin(cfg.AllowedOrigins),
 			Subprotocols: []string{"conduit-auth"},
