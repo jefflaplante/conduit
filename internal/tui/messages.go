@@ -103,3 +103,10 @@ type ErrorMsg struct {
 	Code       string
 	Message    string
 }
+
+// ShellResultMsg delivers the result of a shell escape command (! prefix)
+type ShellResultMsg struct {
+	SessionKey string
+	Output     string
+	Err        error
+}
