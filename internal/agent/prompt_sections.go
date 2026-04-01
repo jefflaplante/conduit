@@ -4,10 +4,26 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"conduit/internal/ai"
 	"conduit/internal/sessions"
 )
+
+// sanitizeRuntimeValue strips newlines, control characters, and null bytes
+// from a string value, preserving normal printable characters and spaces.
+// This prevents prompt injection via runtime info fields.
+func sanitizeRuntimeValue(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == 0 {
+			return -1
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
 
 // SectionParams contains parameters for building prompt sections
 type SectionParams struct {
@@ -363,25 +379,25 @@ func buildRuntimeSection(params *SectionParams, runtimeInfo map[string]string) s
 	var parts []string
 
 	if v, ok := runtimeInfo["agent"]; ok && v != "" {
-		parts = append(parts, fmt.Sprintf("agent=%s", v))
+		parts = append(parts, fmt.Sprintf("agent=%s", sanitizeRuntimeValue(v)))
 	}
 	if v, ok := runtimeInfo["host"]; ok && v != "" {
-		parts = append(parts, fmt.Sprintf("host=%s", v))
+		parts = append(parts, fmt.Sprintf("host=%s", sanitizeRuntimeValue(v)))
 	}
 	if v, ok := runtimeInfo["repo"]; ok && v != "" {
-		parts = append(parts, fmt.Sprintf("repo=%s", v))
+		parts = append(parts, fmt.Sprintf("repo=%s", sanitizeRuntimeValue(v)))
 	}
 	if v, ok := runtimeInfo["os"]; ok && v != "" {
-		parts = append(parts, fmt.Sprintf("os=%s", v))
+		parts = append(parts, fmt.Sprintf("os=%s", sanitizeRuntimeValue(v)))
 	}
 	if v, ok := runtimeInfo["node"]; ok && v != "" {
-		parts = append(parts, fmt.Sprintf("node=%s", v))
+		parts = append(parts, fmt.Sprintf("node=%s", sanitizeRuntimeValue(v)))
 	}
 	if v, ok := runtimeInfo["model"]; ok && v != "" {
-		parts = append(parts, fmt.Sprintf("model=%s", v))
+		parts = append(parts, fmt.Sprintf("model=%s", sanitizeRuntimeValue(v)))
 	}
 	if v, ok := runtimeInfo["channel"]; ok && v != "" {
-		parts = append(parts, fmt.Sprintf("channel=%s", v))
+		parts = append(parts, fmt.Sprintf("channel=%s", sanitizeRuntimeValue(v)))
 	}
 
 	now := time.Now()

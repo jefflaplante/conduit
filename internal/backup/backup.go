@@ -106,8 +106,9 @@ func CreateBackup(ctx context.Context, opts BackupOptions) (*BackupResult, error
 		Components:  components,
 	}
 
-	// Create archive.
-	outFile, err := os.Create(outPath)
+	// Create archive with restrictive permissions (owner read/write only).
+	// Backup archives contain sensitive data (database, config, SSH keys).
+	outFile, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("create output file: %w", err)
 	}
@@ -217,6 +218,10 @@ func snapshotDatabase(ctx context.Context, srcPath, dstPath string) (DatabaseInf
 
 		_, vacErr := db.ExecContext(ctx, fmt.Sprintf("VACUUM INTO '%s'", strings.ReplaceAll(dstPath, "'", "''")))
 		if vacErr == nil {
+			// Restrict permissions on the snapshot file created by SQLite.
+			if chmodErr := os.Chmod(dstPath, 0600); chmodErr != nil {
+				return info, fmt.Errorf("restrict snapshot permissions: %w", chmodErr)
+			}
 			return info, nil
 		}
 	}
@@ -329,7 +334,7 @@ func copyFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.Create(dst)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}

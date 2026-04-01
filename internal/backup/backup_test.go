@@ -632,6 +632,86 @@ func TestExtractFile_RejectsSymlinksInArchive(t *testing.T) {
 	}
 }
 
+func TestBackupFilePermissions(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	dbPath := filepath.Join(tmpDir, "gateway.db")
+	createTestDB(t, dbPath)
+
+	wsDir := filepath.Join(tmpDir, "workspace")
+	os.MkdirAll(wsDir, 0755)
+	os.WriteFile(filepath.Join(wsDir, "SOUL.md"), []byte("# Soul\npermission test"), 0644)
+
+	cfgPath := writeTestConfig(t, tmpDir, dbPath, wsDir)
+	outPath := filepath.Join(tmpDir, "perms-test.tar.gz")
+
+	_, err := CreateBackup(context.Background(), BackupOptions{
+		ConfigPath: cfgPath,
+		OutputPath: outPath,
+	})
+	if err != nil {
+		t.Fatalf("CreateBackup: %v", err)
+	}
+
+	// Verify the backup archive has restrictive permissions (0600).
+	info, err := os.Stat(outPath)
+	if err != nil {
+		t.Fatalf("stat backup: %v", err)
+	}
+	perm := info.Mode().Perm()
+	if perm != 0600 {
+		t.Errorf("backup archive permissions: got %o, want 0600", perm)
+	}
+}
+
+func TestSnapshotDatabasePermissions(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	srcPath := filepath.Join(tmpDir, "source.db")
+	createTestDB(t, srcPath)
+
+	dstPath := filepath.Join(tmpDir, "snapshot.db")
+
+	_, err := snapshotDatabase(context.Background(), srcPath, dstPath)
+	if err != nil {
+		t.Fatalf("snapshotDatabase: %v", err)
+	}
+
+	// Verify the snapshot file has restrictive permissions (0600).
+	info, err := os.Stat(dstPath)
+	if err != nil {
+		t.Fatalf("stat snapshot: %v", err)
+	}
+	perm := info.Mode().Perm()
+	if perm != 0600 {
+		t.Errorf("snapshot permissions: got %o, want 0600", perm)
+	}
+}
+
+func TestCopyFilePermissions(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	src := filepath.Join(tmpDir, "source.txt")
+	if err := os.WriteFile(src, []byte("test data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(tmpDir, "copy.txt")
+	if err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile: %v", err)
+	}
+
+	// Verify the copied file has restrictive permissions (0600).
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatalf("stat copy: %v", err)
+	}
+	perm := info.Mode().Perm()
+	if perm != 0600 {
+		t.Errorf("copy permissions: got %o, want 0600", perm)
+	}
+}
+
 func TestMissingWorkspaceFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 

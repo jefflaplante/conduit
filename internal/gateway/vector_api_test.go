@@ -103,7 +103,7 @@ func TestVectorAPI_Search_MalformedJSON(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	var resp map[string]string
 	decodeJSON(t, rec, &resp)
-	assert.Contains(t, resp["error"], "invalid JSON")
+	assert.Contains(t, resp["error"], "invalid request body")
 }
 
 func TestVectorAPI_Search_EmptyQuery(t *testing.T) {

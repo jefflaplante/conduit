@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -781,4 +782,101 @@ func createTestGatewayWithDiagnosticsConfig(t *testing.T, requireAuth bool, heal
 // boolPtr returns a pointer to a bool value
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+// mockFailingCollector implements monitoring.MetricsCollectorInterface with a failing database
+type mockFailingCollector struct {
+	dbErr error
+}
+
+func (m *mockFailingCollector) IsIdle(d time.Duration) bool                            { return false }
+func (m *mockFailingCollector) MarkActivity()                                          {}
+func (m *mockFailingCollector) GetLastActivityTime() time.Time                         { return time.Now() }
+func (m *mockFailingCollector) CollectMetrics(_ context.Context) (*monitoring.GatewayMetrics, error) {
+	return monitoring.NewGatewayMetrics(), nil
+}
+func (m *mockFailingCollector) DetectStuckSessions(_ context.Context, _ time.Duration) ([]string, error) {
+	return nil, nil
+}
+func (m *mockFailingCollector) ValidateDatabase(_ context.Context) error { return m.dbErr }
+func (m *mockFailingCollector) UpdateWebSocketConnections(count int)     {}
+func (m *mockFailingCollector) UpdateActiveRequests(count int)           {}
+func (m *mockFailingCollector) UpdateQueueDepth(depth int)              {}
+func (m *mockFailingCollector) UpdateHeartbeatJobs(total, enabled int)  {}
+func (m *mockFailingCollector) GetHeartbeatMetrics() monitoring.HeartbeatMetrics {
+	return monitoring.HeartbeatMetrics{}
+}
+
+func TestMetricsEndpoint_SanitizesDatabaseErrors(t *testing.T) {
+	gw := createTestGateway(t)
+
+	// Replace the metrics collector with one that returns a detailed database error
+	sensitiveErr := fmt.Errorf("FATAL: password authentication failed for user \"conduit\" at 192.168.1.50:5432/conduit_db")
+	gw.metricsCollector = &mockFailingCollector{dbErr: sensitiveErr}
+
+	req, err := http.NewRequest("GET", "/metrics", nil)
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(gw.handleMetrics)
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rr.Code)
+	}
+
+	// Parse the response
+	var response MetricsResponse
+	if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	// Database should be marked as disconnected
+	if response.Database.Connected {
+		t.Error("Expected database to be disconnected")
+	}
+
+	// The error message should be generic, not containing sensitive details
+	if response.Database.Error != "database unavailable" {
+		t.Errorf("Expected generic error message 'database unavailable', got %q", response.Database.Error)
+	}
+
+	// Verify sensitive details are NOT in the response
+	body := rr.Body.String()
+	if strings.Contains(body, "password") {
+		t.Error("Response should not contain 'password'")
+	}
+	if strings.Contains(body, "192.168.1.50") {
+		t.Error("Response should not contain internal IP addresses")
+	}
+	if strings.Contains(body, "conduit_db") {
+		t.Error("Response should not contain database names")
+	}
+}
+
+func TestDebugEndpoint_SanitizesErrors(t *testing.T) {
+	gw := createTestGateway(t)
+
+	// Call the debug endpoint with a session key that will cause an error
+	// The gateway has no agent system configured, so GetSystemPromptDebug will fail
+	req, err := http.NewRequest("GET", "/debug/prompt?session=nonexistent", nil)
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(gw.handleDebugPrompt)
+	handler.ServeHTTP(rr, req)
+
+	// If it returns an error, verify the message is generic
+	if rr.Code == http.StatusInternalServerError {
+		body := rr.Body.String()
+		if body != "internal server error\n" {
+			t.Errorf("Expected generic error message, got %q", body)
+		}
+	}
+	// If it returns 200 (no error), that's also fine - the test just verifies
+	// that when errors occur, they are sanitized
 }

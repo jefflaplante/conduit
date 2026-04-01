@@ -144,7 +144,8 @@ func (g *Gateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if g.metricsCollector != nil {
 		if err := g.metricsCollector.ValidateDatabase(ctx); err != nil {
 			response.Database.Connected = false
-			response.Database.Error = err.Error()
+			response.Database.Error = "database unavailable"
+			log.Printf("[Metrics] Database validation failed: %v", err)
 		}
 	}
 
