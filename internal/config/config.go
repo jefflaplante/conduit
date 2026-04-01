@@ -390,6 +390,11 @@ type RateLimitingConfig struct {
 	Anonymous              RateLimitTierConfig `json:"anonymous"`
 	Authenticated          RateLimitTierConfig `json:"authenticated"`
 	CleanupIntervalSeconds int                 `json:"cleanupIntervalSeconds"`
+	// TrustProxy controls how X-Forwarded-For headers are handled for IP extraction.
+	// When false (default), only the direct connection IP (RemoteAddr) is used.
+	// When true, the rightmost non-private IP from X-Forwarded-For is used.
+	// Only enable this when running behind a trusted reverse proxy (nginx, Cloudflare, etc).
+	TrustProxy bool `json:"trustProxy"`
 }
 
 // RateLimitTierConfig defines rate limiting for a specific tier (anonymous vs authenticated)
