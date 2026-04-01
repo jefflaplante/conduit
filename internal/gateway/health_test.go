@@ -724,7 +724,7 @@ func createTestGatewayWithDiagnosticsConfig(t *testing.T, requireAuth bool, heal
 	}
 
 	// Create auth storage and a test token
-	authStorage := auth.NewTokenStorage(sessionStore.DB())
+	authStorage := auth.NewTokenStorage(sessionStore.DB(), "test-secret")
 	tokenResp, err := authStorage.CreateToken(auth.CreateTokenRequest{
 		ClientName: "test-client",
 	})

@@ -36,6 +36,7 @@ func setupWSTestDB(t *testing.T) (*sql.DB, func()) {
 			token_id TEXT PRIMARY KEY,
 			client_name TEXT NOT NULL,
 			hashed_token TEXT UNIQUE NOT NULL,
+			hash_version INTEGER NOT NULL DEFAULT 1,
 			created_at DATETIME NOT NULL,
 			expires_at DATETIME,
 			last_used_at DATETIME,
@@ -76,7 +77,7 @@ func TestWebSocketAuthenticator_ValidToken(t *testing.T) {
 	db, cleanup := setupWSTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 	token := createWSTestToken(t, storage, "ws-client", nil)
 
 	authenticator := NewWebSocketAuthenticator(storage)
@@ -148,7 +149,7 @@ func TestWebSocketAuthenticator_InvalidToken(t *testing.T) {
 	db, cleanup := setupWSTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 	authenticator := NewWebSocketAuthenticator(storage)
 
 	tests := []struct {
@@ -210,7 +211,7 @@ func TestWebSocketAuthenticator_ExpiredToken(t *testing.T) {
 	db, cleanup := setupWSTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 	pastTime := time.Now().Add(-1 * time.Hour)
 	token := createWSTestToken(t, storage, "expired-ws-client", &pastTime)
 
@@ -233,7 +234,7 @@ func TestWebSocketAuthenticator_RejectUpgrade(t *testing.T) {
 	db, cleanup := setupWSTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 	authenticator := NewWebSocketAuthenticator(storage)
 
 	rec := httptest.NewRecorder()
@@ -373,7 +374,7 @@ func TestAuthenticatedUpgrader_Integration(t *testing.T) {
 	db, cleanup := setupWSTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 	token := createWSTestToken(t, storage, "ws-integration-client", nil)
 
 	upgrader := &websocket.Upgrader{

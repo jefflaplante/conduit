@@ -38,6 +38,15 @@ type Config struct {
 	Vector         VectorConfig         `json:"vector,omitempty"`
 	RemoteSSH      RemoteSSHConfig      `json:"remote_ssh,omitempty"`
 	MQTT           MQTTConfig           `json:"mqtt,omitempty"`
+	Auth           AuthTokenConfig      `json:"auth,omitempty"`
+}
+
+// AuthTokenConfig holds configuration for the token authentication system
+type AuthTokenConfig struct {
+	// TokenSecret is the HMAC key used for hashing tokens (hex-encoded, 32 bytes).
+	// If empty, a random key is generated at startup (tokens won't survive restarts).
+	// Supports ${ENV_VAR} expansion.
+	TokenSecret string `json:"token_secret,omitempty"`
 }
 
 // VectorConfig holds configuration for the optional vector/semantic search service.
@@ -717,6 +726,9 @@ func (c *Config) expandEnvVars() error {
 	c.MQTT.BrokerURL = os.ExpandEnv(c.MQTT.BrokerURL)
 	c.MQTT.Username = os.ExpandEnv(c.MQTT.Username)
 	c.MQTT.Password = os.ExpandEnv(c.MQTT.Password)
+
+	// Expand auth configuration
+	c.Auth.TokenSecret = os.ExpandEnv(c.Auth.TokenSecret)
 
 	return nil
 }

@@ -1,22 +1,38 @@
 package auth
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
+const (
+	// HashVersionPlainSHA256 is the original plain SHA256 hash (v1)
+	HashVersionPlainSHA256 = 1
+	// HashVersionHMACSHA256 is the HMAC-SHA256 hash with server secret (v2)
+	HashVersionHMACSHA256 = 2
+)
+
+// RevocationCallback is called when a token is revoked, with the token ID.
+type RevocationCallback func(tokenID string)
+
 // TokenStorage manages authentication tokens in the database
 type TokenStorage struct {
-	db *sql.DB
+	db       *sql.DB
+	secret   []byte // HMAC secret key for token hashing
+	onRevoke RevocationCallback
+	revokeMu sync.Mutex
 }
 
 // AuthToken represents an authentication token
@@ -55,9 +71,39 @@ type CreateTokenResponse struct {
 	TokenInfo TokenInfo `json:"token_info"` // Public token information
 }
 
-// NewTokenStorage creates a new token storage instance
-func NewTokenStorage(db *sql.DB) *TokenStorage {
-	return &TokenStorage{db: db}
+// NewTokenStorage creates a new token storage instance.
+// The secret parameter is the HMAC key for token hashing. If empty, a random
+// 32-byte key is generated (tokens won't survive process restarts without a
+// configured secret).
+func NewTokenStorage(db *sql.DB, secret string) *TokenStorage {
+	var key []byte
+	if secret != "" {
+		// Try hex-decoding first; fall back to raw string
+		decoded, err := hex.DecodeString(secret)
+		if err == nil {
+			key = decoded
+		} else {
+			key = []byte(secret)
+		}
+	} else {
+		key = make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			// This should never happen; if it does, fall back to an insecure key
+			log.Printf("WARNING: failed to generate random HMAC key: %v", err)
+			key = []byte("insecure-fallback-key-change-me!")
+		}
+		log.Printf("WARNING: No token_secret configured in auth config — generated ephemeral HMAC key. Tokens created now won't validate after restart. Set auth.token_secret in your config for persistence.")
+	}
+	return &TokenStorage{db: db, secret: key}
+}
+
+// OnRevoke registers a callback that is invoked after a token is successfully
+// revoked. The callback receives the token ID that was revoked. Only one
+// callback can be registered; subsequent calls replace the previous one.
+func (ts *TokenStorage) OnRevoke(cb RevocationCallback) {
+	ts.revokeMu.Lock()
+	defer ts.revokeMu.Unlock()
+	ts.onRevoke = cb
 }
 
 // CreateToken generates and stores a new authentication token
@@ -76,10 +122,8 @@ func (ts *TokenStorage) CreateToken(req CreateTokenRequest) (*CreateTokenRespons
 	// Create token string with prefix for easy identification
 	rawToken := "conduit_" + hex.EncodeToString(tokenBytes)
 
-	// Hash token for storage
-	hasher := sha256.New()
-	hasher.Write([]byte(rawToken))
-	hashedToken := hex.EncodeToString(hasher.Sum(nil))
+	// Hash token for storage using HMAC-SHA256
+	hashedToken := ts.hashTokenHMAC(rawToken)
 
 	// Generate token ID
 	tokenID := uuid.New().String()
@@ -94,15 +138,16 @@ func (ts *TokenStorage) CreateToken(req CreateTokenRequest) (*CreateTokenRespons
 		return nil, fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
-	// Insert into database
+	// Insert into database with hash_version = 2 (HMAC-SHA256)
 	_, err = ts.db.Exec(`
-		INSERT INTO auth_tokens 
-		(token_id, client_name, hashed_token, created_at, expires_at, is_active, metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO auth_tokens
+		(token_id, client_name, hashed_token, hash_version, created_at, expires_at, is_active, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		tokenID,
 		strings.TrimSpace(req.ClientName),
 		hashedToken,
+		HashVersionHMACSHA256,
 		time.Now(),
 		req.ExpiresAt,
 		true,
@@ -136,10 +181,8 @@ func (ts *TokenStorage) CreateTokenWithCustomFormat(req CreateTokenRequest, rawT
 		return nil, fmt.Errorf("token is required")
 	}
 
-	// Hash token for storage
-	hasher := sha256.New()
-	hasher.Write([]byte(rawToken))
-	hashedToken := hex.EncodeToString(hasher.Sum(nil))
+	// Hash token for storage using HMAC-SHA256
+	hashedToken := ts.hashTokenHMAC(rawToken)
 
 	// Generate token ID
 	tokenID := uuid.New().String()
@@ -154,15 +197,16 @@ func (ts *TokenStorage) CreateTokenWithCustomFormat(req CreateTokenRequest, rawT
 		return nil, fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
-	// Insert into database
+	// Insert into database with hash_version = 2 (HMAC-SHA256)
 	_, err = ts.db.Exec(`
-		INSERT INTO auth_tokens 
-		(token_id, client_name, hashed_token, created_at, expires_at, is_active, metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO auth_tokens
+		(token_id, client_name, hashed_token, hash_version, created_at, expires_at, is_active, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		tokenID,
 		strings.TrimSpace(req.ClientName),
 		hashedToken,
+		HashVersionHMACSHA256,
 		time.Now(),
 		req.ExpiresAt,
 		true,
@@ -185,31 +229,33 @@ func (ts *TokenStorage) CreateTokenWithCustomFormat(req CreateTokenRequest, rawT
 	}, nil
 }
 
-// ValidateToken checks if a token is valid and updates last_used_at
+// ValidateToken checks if a token is valid and updates last_used_at.
+// It first tries HMAC-SHA256 (v2), then falls back to plain SHA256 (v1) for
+// backwards compatibility with tokens created before the HMAC migration.
+// When a v1 token is validated successfully, it is re-hashed as v2.
 func (ts *TokenStorage) ValidateToken(rawToken string) (*TokenInfo, error) {
 	if rawToken == "" {
 		return nil, fmt.Errorf("token is required")
 	}
 
-	// Hash the provided token
-	hasher := sha256.New()
-	hasher.Write([]byte(rawToken))
-	hashedToken := hex.EncodeToString(hasher.Sum(nil))
+	// Try HMAC-SHA256 hash first (v2)
+	hmacHash := ts.hashTokenHMAC(rawToken)
 
-	// Query for the token
 	var token AuthToken
 	var metadataJSON string
+	var hashVersion int
 
 	row := ts.db.QueryRow(`
-		SELECT token_id, client_name, hashed_token, created_at, expires_at, last_used_at, is_active, metadata
-		FROM auth_tokens 
+		SELECT token_id, client_name, hashed_token, hash_version, created_at, expires_at, last_used_at, is_active, metadata
+		FROM auth_tokens
 		WHERE hashed_token = ? AND is_active = 1
-	`, hashedToken)
+	`, hmacHash)
 
 	err := row.Scan(
 		&token.TokenID,
 		&token.ClientName,
 		&token.HashedToken,
+		&hashVersion,
 		&token.CreatedAt,
 		&token.ExpiresAt,
 		&token.LastUsedAt,
@@ -217,11 +263,39 @@ func (ts *TokenStorage) ValidateToken(rawToken string) (*TokenInfo, error) {
 		&metadataJSON,
 	)
 
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("invalid token")
-		}
+	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("failed to validate token: %w", err)
+	}
+
+	// If v2 lookup failed, fall back to plain SHA256 (v1)
+	needsRehash := false
+	if err == sql.ErrNoRows {
+		plainHash := hashTokenPlain(rawToken)
+		row = ts.db.QueryRow(`
+			SELECT token_id, client_name, hashed_token, hash_version, created_at, expires_at, last_used_at, is_active, metadata
+			FROM auth_tokens
+			WHERE hashed_token = ? AND is_active = 1
+		`, plainHash)
+
+		err = row.Scan(
+			&token.TokenID,
+			&token.ClientName,
+			&token.HashedToken,
+			&hashVersion,
+			&token.CreatedAt,
+			&token.ExpiresAt,
+			&token.LastUsedAt,
+			&token.IsActive,
+			&metadataJSON,
+		)
+
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return nil, fmt.Errorf("invalid token")
+			}
+			return nil, fmt.Errorf("failed to validate token: %w", err)
+		}
+		needsRehash = true
 	}
 
 	// Check if token is expired
@@ -232,7 +306,11 @@ func (ts *TokenStorage) ValidateToken(rawToken string) (*TokenInfo, error) {
 	// Update last_used_at
 	if err := ts.updateLastUsed(token.TokenID); err != nil {
 		// Log error but don't fail the validation
-		// In production, you might want to use a proper logger here
+	}
+
+	// Re-hash v1 token as v2 for future lookups
+	if needsRehash {
+		ts.rehashToken(token.TokenID, hmacHash)
 	}
 
 	// Parse metadata
@@ -406,6 +484,14 @@ func (ts *TokenStorage) RevokeToken(tokenID string) error {
 		return fmt.Errorf("token not found: %s", tokenID)
 	}
 
+	// Notify revocation listener (best-effort)
+	ts.revokeMu.Lock()
+	cb := ts.onRevoke
+	ts.revokeMu.Unlock()
+	if cb != nil {
+		cb(tokenID)
+	}
+
 	return nil
 }
 
@@ -473,6 +559,35 @@ func (ts *TokenStorage) CleanupExpiredTokens() (int64, error) {
 	}
 
 	return result.RowsAffected()
+}
+
+// rehashToken upgrades a v1 (plain SHA256) token to v2 (HMAC-SHA256).
+// This is best-effort; failures are logged but do not affect validation.
+func (ts *TokenStorage) rehashToken(tokenID, newHash string) {
+	_, err := ts.db.Exec(`
+		UPDATE auth_tokens
+		SET hashed_token = ?, hash_version = ?
+		WHERE token_id = ?
+	`, newHash, HashVersionHMACSHA256, tokenID)
+	if err != nil {
+		log.Printf("[Auth] Failed to re-hash token %s from v1 to v2: %v", tokenID, err)
+	} else {
+		log.Printf("[Auth] Upgraded token %s from plain SHA256 (v1) to HMAC-SHA256 (v2)", tokenID)
+	}
+}
+
+// hashTokenHMAC computes HMAC-SHA256 of the raw token using the server secret
+func (ts *TokenStorage) hashTokenHMAC(rawToken string) string {
+	mac := hmac.New(sha256.New, ts.secret)
+	mac.Write([]byte(rawToken))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// hashTokenPlain computes a plain SHA256 hash of the raw token (legacy v1)
+func hashTokenPlain(rawToken string) string {
+	h := sha256.New()
+	h.Write([]byte(rawToken))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // updateLastUsed updates the last_used_at timestamp for a token

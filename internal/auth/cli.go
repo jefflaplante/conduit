@@ -18,6 +18,7 @@ import (
 // CLIConfig holds configuration for CLI commands
 type CLIConfig struct {
 	DatabasePath string
+	TokenSecret  string
 	Verbose      bool
 }
 
@@ -134,6 +135,7 @@ func createToken(config *CLIConfig, clientName, expiresIn string) error {
 	if verbose := os.Getenv("CONDUIT_VERBOSE"); verbose == "true" {
 		config.Verbose = true
 	}
+	resolveTokenSecret(config)
 	// Validate input
 	if strings.TrimSpace(clientName) == "" {
 		return fmt.Errorf("client-name is required")
@@ -158,7 +160,7 @@ func createToken(config *CLIConfig, clientName, expiresIn string) error {
 	defer db.Close()
 
 	// Create token storage
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, config.TokenSecret)
 
 	// Generate new token
 	token, err := tokenspkg.GenerateToken()
@@ -208,6 +210,7 @@ func listTokens(config *CLIConfig, includeRevoked bool) error {
 			config.DatabasePath = "gateway.db" // default
 		}
 	}
+	resolveTokenSecret(config)
 	// Open database
 	db, err := openDatabase(config.DatabasePath)
 	if err != nil {
@@ -216,7 +219,7 @@ func listTokens(config *CLIConfig, includeRevoked bool) error {
 	defer db.Close()
 
 	// Create token storage
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, config.TokenSecret)
 
 	// List tokens
 	tokenList, err := storage.ListTokens("", includeRevoked)
@@ -285,6 +288,7 @@ func revokeToken(config *CLIConfig, tokenPrefix string) error {
 			config.DatabasePath = "gateway.db" // default
 		}
 	}
+	resolveTokenSecret(config)
 	// Open database
 	db, err := openDatabase(config.DatabasePath)
 	if err != nil {
@@ -293,7 +297,7 @@ func revokeToken(config *CLIConfig, tokenPrefix string) error {
 	defer db.Close()
 
 	// Create token storage
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, config.TokenSecret)
 
 	// Find token by prefix
 	tokenID, err := findTokenByPrefix(storage, tokenPrefix)
@@ -332,6 +336,7 @@ func exportToken(config *CLIConfig, tokenPrefix, format string) error {
 			config.DatabasePath = "gateway.db" // default
 		}
 	}
+	resolveTokenSecret(config)
 	// Open database
 	db, err := openDatabase(config.DatabasePath)
 	if err != nil {
@@ -340,7 +345,7 @@ func exportToken(config *CLIConfig, tokenPrefix, format string) error {
 	defer db.Close()
 
 	// Create token storage
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, config.TokenSecret)
 
 	// Find token by prefix
 	tokenID, err := findTokenByPrefix(storage, tokenPrefix)
@@ -381,6 +386,13 @@ func exportToken(config *CLIConfig, tokenPrefix, format string) error {
 }
 
 // Helper functions
+
+// resolveTokenSecret populates the token secret from environment if not already set
+func resolveTokenSecret(config *CLIConfig) {
+	if config.TokenSecret == "" {
+		config.TokenSecret = os.Getenv("CONDUIT_TOKEN_SECRET")
+	}
+}
 
 // openDatabase opens the SQLite database and runs migrations
 func openDatabase(dbPath string) (*sql.DB, error) {

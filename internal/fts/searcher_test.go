@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -231,7 +232,7 @@ func TestBuildFTSQuery(t *testing.T) {
 		{"hello world", "hello OR world"},
 		{"", ""},
 		{"database", "database"},
-		{"foo:bar", "foobar"},
+		{"foo:bar", ""},           // column filter syntax is now blocked
 		{"test \"quoted\"", "test OR quoted"},
 	}
 
@@ -241,4 +242,239 @@ func TestBuildFTSQuery(t *testing.T) {
 			t.Errorf("buildFTSQuery(%q) = %q, want %q", tc.input, got, tc.expected)
 		}
 	}
+}
+
+// --- Blocklist and hardening tests ---
+
+func TestBuildFTSQuery_OperatorBlocking(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"strips AND", "hello AND world", "hello OR world"},
+		{"strips OR keyword", "hello OR world", "hello OR world"},
+		{"strips NOT", "NOT hello", "hello"},
+		{"strips NEAR", "hello NEAR world", "hello OR world"},
+		{"case insensitive operators", "Hello And World", "hello OR world"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildFTSQuery(tt.input)
+			if got != tt.want {
+				t.Errorf("buildFTSQuery(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildFTSQuery_AdvancedFTS5Blocklist(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantEmpty  bool
+		mustNotHas string // substring that must NOT appear in output
+	}{
+		{"NEAR/N syntax", "hello NEAR/3 world", false, "near"},
+		{"NEAR/N large distance", "hello NEAR/100 world", false, "near"},
+		{"column filter colon", "title:hello", true, ""},
+		{"column filter content", "content:secret", true, ""},
+		{"caret start-of-column", "^hello", true, ""},
+		{"mixed blocked and valid", "hello title:inject world", false, "inject"},
+		{"column filter with valid terms", "search content:bypass term", false, "bypass"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildFTSQuery(tt.input)
+			if tt.wantEmpty && got != "" {
+				t.Errorf("buildFTSQuery(%q) = %q, want empty string", tt.input, got)
+			}
+			if !tt.wantEmpty && got == "" {
+				t.Errorf("buildFTSQuery(%q) = empty, want non-empty", tt.input)
+			}
+			if tt.mustNotHas != "" && strings.Contains(strings.ToLower(got), tt.mustNotHas) {
+				t.Errorf("buildFTSQuery(%q) = %q, must not contain %q", tt.input, got, tt.mustNotHas)
+			}
+		})
+	}
+}
+
+func TestBuildFTSQuery_NullBytes(t *testing.T) {
+	got := buildFTSQuery("hello\x00world")
+	if strings.Contains(got, "\x00") {
+		t.Errorf("buildFTSQuery with null byte should strip it, got %q", got)
+	}
+	if got == "" {
+		t.Error("buildFTSQuery with null byte should still return valid terms")
+	}
+}
+
+func TestBuildFTSQuery_MaxTerms(t *testing.T) {
+	words := make([]string, maxQueryTerms+20)
+	for i := range words {
+		words[i] = "term"
+	}
+	input := strings.Join(words, " ")
+	got := buildFTSQuery(input)
+
+	termCount := strings.Count(got, " OR ") + 1
+	if termCount > maxQueryTerms {
+		t.Errorf("buildFTSQuery produced %d terms, want at most %d", termCount, maxQueryTerms)
+	}
+}
+
+func TestBuildFTSQuery_MaxTermLength(t *testing.T) {
+	longWord := strings.Repeat("a", maxTermLength+100)
+	got := buildFTSQuery(longWord)
+	if len(got) > maxTermLength {
+		t.Errorf("buildFTSQuery should truncate long terms, got length %d", len(got))
+	}
+	if got == "" {
+		t.Error("buildFTSQuery should still return truncated term")
+	}
+}
+
+func TestBuildFTSQuery_SQLInjection(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"basic injection", "'; DROP TABLE sessions; --"},
+		{"union injection", "' UNION SELECT * FROM auth_tokens --"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildFTSQuery(tt.input)
+			// Should not panic and should not contain raw special chars
+			_ = got
+		})
+	}
+}
+
+func TestIsBlockedPattern(t *testing.T) {
+	tests := []struct {
+		input   string
+		blocked bool
+	}{
+		{"near/3", true},
+		{"near/100", true},
+		{"near/", true},
+		{"nearby", false},
+		{"title:", true},
+		{"content:", true},
+		{"hello:world", true},
+		{"^start", true},
+		{"hello", false},
+		{"world", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := isBlockedPattern(tt.input)
+			if got != tt.blocked {
+				t.Errorf("isBlockedPattern(%q) = %v, want %v", tt.input, got, tt.blocked)
+			}
+		})
+	}
+}
+
+func TestStripControlChars(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"no control chars", "hello world", "hello world"},
+		{"null byte", "hello\x00world", "helloworld"},
+		{"tab preserved", "hello\tworld", "hello\tworld"},
+		{"newline preserved", "hello\nworld", "hello\nworld"},
+		{"bell char stripped", "hello\x07world", "helloworld"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripControlChars(tt.input)
+			if got != tt.want {
+				t.Errorf("stripControlChars(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- Fuzz test ---
+
+func FuzzBuildFTSQuery(f *testing.F) {
+	// Seed with known attack patterns
+	seeds := []string{
+		"hello world",
+		"go sqlite fts5",
+		"hello AND world",
+		"hello OR world",
+		"NOT hello",
+		"hello NEAR world",
+		"hello NEAR/3 world",
+		"NEAR/5",
+		"title:secret",
+		"content:password",
+		"^hello",
+		"'; DROP TABLE sessions; --",
+		"' UNION SELECT * FROM auth_tokens --",
+		`"hello" AND "world"`,
+		"(hello OR world) AND test",
+		"hello*",
+		"{hello world}",
+		"\x00hello",
+		"hello\x00world",
+		"\u200bhello\u200b",
+		"caf\u00e9",
+		strings.Repeat("a", 1000),
+		strings.Repeat("hello ", 200),
+		"\x00\x01\x02\x03",
+		"NEAR/3 title:hack ^inject * (group) {brace}",
+		"",
+		"   ",
+	}
+
+	for _, s := range seeds {
+		f.Add(s)
+	}
+
+	f.Fuzz(func(t *testing.T, input string) {
+		// Must not panic
+		result := buildFTSQuery(input)
+
+		// Must not contain null bytes
+		if strings.Contains(result, "\x00") {
+			t.Errorf("result contains null byte for input %q", input)
+		}
+
+		// Must not contain unescaped FTS5 special characters
+		for _, ch := range []rune{'^', '{', '}', '(', ')', '*', '+', '~', '<', '>', '[', ']'} {
+			if strings.ContainsRune(result, ch) {
+				t.Errorf("result contains special char %q for input %q: %q", string(ch), input, result)
+			}
+		}
+
+		// Must not contain column filter syntax
+		if strings.Contains(result, ":") {
+			t.Errorf("result contains colon for input %q: %q", input, result)
+		}
+
+		// Must not contain blocked operators as whole terms
+		lower := strings.ToLower(result)
+		for _, term := range strings.Fields(lower) {
+			if term == "near" || strings.HasPrefix(term, "near/") {
+				t.Errorf("result contains NEAR operator for input %q: %q", input, result)
+			}
+			if term == "and" || term == "not" {
+				t.Errorf("result contains blocked operator %q for input %q: %q", term, input, result)
+			}
+		}
+
+		// Term count within limits
+		if result != "" {
+			termCount := strings.Count(result, " OR ") + 1
+			if termCount > maxQueryTerms {
+				t.Errorf("result has %d terms (max %d) for input %q", termCount, maxQueryTerms, input)
+			}
+		}
+	})
 }

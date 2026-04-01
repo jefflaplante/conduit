@@ -24,7 +24,7 @@ func TestRateLimitingIntegration(t *testing.T) {
 	defer db.Close()
 
 	// Create auth storage
-	authStorage := auth.NewTokenStorage(db.DB())
+	authStorage := auth.NewTokenStorage(db.DB(), "test-secret")
 
 	// Create a test token for authenticated requests
 	clientName := "test_client"
