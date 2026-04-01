@@ -230,8 +230,8 @@ func TestRateLimitMiddleware_DifferentIPs(t *testing.T) {
 	}
 }
 
-func TestRateLimitMiddleware_XForwardedFor(t *testing.T) {
-	// Create rate limiter: 1 request per minute for anonymous
+func TestRateLimitMiddleware_XForwardedFor_TrustProxy(t *testing.T) {
+	// Create rate limiter with TrustProxy enabled: 1 request per minute for anonymous
 	config := RateLimitConfig{
 		Enabled: true,
 		Anonymous: struct {
@@ -249,6 +249,7 @@ func TestRateLimitMiddleware_XForwardedFor(t *testing.T) {
 			MaxRequests:   10,
 		},
 		CleanupIntervalSeconds: 300,
+		TrustProxy:             true, // Enable proxy trust
 	}
 
 	middleware := NewRateLimitMiddleware(RateLimitMiddlewareConfig{Config: config})
@@ -260,9 +261,10 @@ func TestRateLimitMiddleware_XForwardedFor(t *testing.T) {
 		w.Write([]byte("OK"))
 	}))
 
-	// Test X-Forwarded-For header handling
+	// Test X-Forwarded-For header handling with TrustProxy enabled
+	// Uses rightmost non-private IP (203.0.113.1)
 	req1 := httptest.NewRequest("GET", "/test", nil)
-	req1.RemoteAddr = "10.0.0.1:12345" // Proxy IP
+	req1.RemoteAddr = "10.0.0.1:12345" // Proxy IP (private)
 	req1.Header.Set("X-Forwarded-For", "203.0.113.1, 10.0.0.1")
 	w1 := httptest.NewRecorder()
 	handler.ServeHTTP(w1, req1)
@@ -271,7 +273,7 @@ func TestRateLimitMiddleware_XForwardedFor(t *testing.T) {
 		t.Errorf("First request should succeed, got status %d", w1.Code)
 	}
 
-	// Second request with same X-Forwarded-For should be rate limited
+	// Second request with same public IP should be rate limited
 	req2 := httptest.NewRequest("GET", "/test", nil)
 	req2.RemoteAddr = "10.0.0.2:12346" // Different proxy IP
 	req2.Header.Set("X-Forwarded-For", "203.0.113.1, 10.0.0.2")
@@ -280,6 +282,125 @@ func TestRateLimitMiddleware_XForwardedFor(t *testing.T) {
 
 	if w2.Code != http.StatusTooManyRequests {
 		t.Errorf("Second request with same client IP should be rate limited, got status %d", w2.Code)
+	}
+}
+
+func TestRateLimitMiddleware_XForwardedFor_NoTrustProxy(t *testing.T) {
+	// Create rate limiter WITHOUT TrustProxy (default): 1 request per minute for anonymous
+	config := RateLimitConfig{
+		Enabled: true,
+		Anonymous: struct {
+			WindowSeconds int `json:"windowSeconds"`
+			MaxRequests   int `json:"maxRequests"`
+		}{
+			WindowSeconds: 60,
+			MaxRequests:   1,
+		},
+		Authenticated: struct {
+			WindowSeconds int `json:"windowSeconds"`
+			MaxRequests   int `json:"maxRequests"`
+		}{
+			WindowSeconds: 60,
+			MaxRequests:   10,
+		},
+		CleanupIntervalSeconds: 300,
+		TrustProxy:             false, // Default: don't trust proxy headers
+	}
+
+	middleware := NewRateLimitMiddleware(RateLimitMiddlewareConfig{Config: config})
+	defer middleware.Stop()
+
+	// Create test handler
+	handler := middleware.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}))
+
+	// With TrustProxy=false, X-Forwarded-For should be IGNORED
+	// Both requests come from same RemoteAddr, so second should be rate limited
+	req1 := httptest.NewRequest("GET", "/test", nil)
+	req1.RemoteAddr = "192.168.1.100:12345"
+	req1.Header.Set("X-Forwarded-For", "203.0.113.1") // Should be ignored
+	w1 := httptest.NewRecorder()
+	handler.ServeHTTP(w1, req1)
+
+	if w1.Code != http.StatusOK {
+		t.Errorf("First request should succeed, got status %d", w1.Code)
+	}
+
+	// Second request from same RemoteAddr should be rate limited (XFF ignored)
+	req2 := httptest.NewRequest("GET", "/test", nil)
+	req2.RemoteAddr = "192.168.1.100:12346"
+	req2.Header.Set("X-Forwarded-For", "203.0.113.2") // Different XFF, but ignored
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusTooManyRequests {
+		t.Errorf("Second request from same RemoteAddr should be rate limited (XFF ignored), got status %d", w2.Code)
+	}
+}
+
+func TestRateLimitMiddleware_SpoofingPrevention(t *testing.T) {
+	// Test that spoofed X-Forwarded-For headers cannot bypass rate limiting
+	// when TrustProxy is false
+	config := RateLimitConfig{
+		Enabled: true,
+		Anonymous: struct {
+			WindowSeconds int `json:"windowSeconds"`
+			MaxRequests   int `json:"maxRequests"`
+		}{
+			WindowSeconds: 60,
+			MaxRequests:   1,
+		},
+		Authenticated: struct {
+			WindowSeconds int `json:"windowSeconds"`
+			MaxRequests   int `json:"maxRequests"`
+		}{
+			WindowSeconds: 60,
+			MaxRequests:   10,
+		},
+		CleanupIntervalSeconds: 300,
+		TrustProxy:             false, // Don't trust proxy headers
+	}
+
+	middleware := NewRateLimitMiddleware(RateLimitMiddlewareConfig{Config: config})
+	defer middleware.Stop()
+
+	handler := middleware.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}))
+
+	// Attacker's real IP
+	attackerIP := "192.168.1.100:12345"
+
+	// First request succeeds
+	req1 := httptest.NewRequest("GET", "/test", nil)
+	req1.RemoteAddr = attackerIP
+	w1 := httptest.NewRecorder()
+	handler.ServeHTTP(w1, req1)
+
+	if w1.Code != http.StatusOK {
+		t.Errorf("First request should succeed, got status %d", w1.Code)
+	}
+
+	// Attacker tries to bypass by spoofing different X-Forwarded-For IPs
+	spoofedIPs := []string{
+		"1.2.3.4",
+		"5.6.7.8",
+		"9.10.11.12",
+	}
+
+	for _, spoofedIP := range spoofedIPs {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.RemoteAddr = attackerIP // Same real IP
+		req.Header.Set("X-Forwarded-For", spoofedIP)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusTooManyRequests {
+			t.Errorf("Spoofed XFF %s should not bypass rate limit, got status %d", spoofedIP, w.Code)
+		}
 	}
 }
 
@@ -451,7 +572,8 @@ func TestRateLimitMiddleware_GetStats(t *testing.T) {
 	}
 }
 
-func TestExtractClientIP(t *testing.T) {
+func TestExtractClientIP_NoTrustProxy(t *testing.T) {
+	// When TrustProxy is false, only RemoteAddr should be used
 	tests := []struct {
 		name          string
 		remoteAddr    string
@@ -465,29 +587,16 @@ func TestExtractClientIP(t *testing.T) {
 			expectedIP: "192.168.1.100",
 		},
 		{
-			name:          "X-Forwarded-For single IP",
+			name:          "X-Forwarded-For ignored when TrustProxy=false",
 			remoteAddr:    "10.0.0.1:12345",
 			xForwardedFor: "203.0.113.1",
-			expectedIP:    "203.0.113.1",
+			expectedIP:    "10.0.0.1", // Uses RemoteAddr, not XFF
 		},
 		{
-			name:          "X-Forwarded-For multiple IPs",
-			remoteAddr:    "10.0.0.1:12345",
-			xForwardedFor: "203.0.113.1, 10.0.0.2, 10.0.0.1",
-			expectedIP:    "203.0.113.1",
-		},
-		{
-			name:       "X-Real-IP",
+			name:       "X-Real-IP ignored when TrustProxy=false",
 			remoteAddr: "10.0.0.1:12345",
 			xRealIP:    "203.0.113.2",
-			expectedIP: "203.0.113.2",
-		},
-		{
-			name:          "X-Forwarded-For takes precedence over X-Real-IP",
-			remoteAddr:    "10.0.0.1:12345",
-			xForwardedFor: "203.0.113.1",
-			xRealIP:       "203.0.113.2",
-			expectedIP:    "203.0.113.1",
+			expectedIP: "10.0.0.1", // Uses RemoteAddr, not X-Real-IP
 		},
 		{
 			name:       "IPv6",
@@ -512,9 +621,136 @@ func TestExtractClientIP(t *testing.T) {
 				req.Header.Set("X-Real-IP", tt.xRealIP)
 			}
 
-			ip := extractClientIP(req)
+			ip := extractClientIP(req, false) // TrustProxy=false
 			if ip != tt.expectedIP {
 				t.Errorf("Expected IP: %s, got: %s", tt.expectedIP, ip)
+			}
+		})
+	}
+}
+
+func TestExtractClientIP_TrustProxy(t *testing.T) {
+	// When TrustProxy is true, use rightmost non-private IP from XFF
+	tests := []struct {
+		name          string
+		remoteAddr    string
+		xForwardedFor string
+		xRealIP       string
+		expectedIP    string
+	}{
+		{
+			name:       "Remote address only (no headers)",
+			remoteAddr: "192.168.1.100:12345",
+			expectedIP: "192.168.1.100",
+		},
+		{
+			name:          "X-Forwarded-For single public IP",
+			remoteAddr:    "10.0.0.1:12345",
+			xForwardedFor: "203.0.113.1",
+			expectedIP:    "203.0.113.1",
+		},
+		{
+			name:          "X-Forwarded-For multiple IPs - uses rightmost non-private",
+			remoteAddr:    "10.0.0.1:12345",
+			xForwardedFor: "1.2.3.4, 203.0.113.1, 10.0.0.2",
+			expectedIP:    "203.0.113.1", // Rightmost non-private
+		},
+		{
+			name:          "X-Forwarded-For all private IPs - uses leftmost",
+			remoteAddr:    "10.0.0.1:12345",
+			xForwardedFor: "192.168.1.1, 10.0.0.2, 172.16.0.1",
+			expectedIP:    "192.168.1.1", // Leftmost when all are private
+		},
+		{
+			name:          "X-Forwarded-For spoofed + real - uses rightmost non-private",
+			remoteAddr:    "10.0.0.1:12345",
+			xForwardedFor: "spoofed.ip.here, 1.2.3.4, 203.0.113.99",
+			expectedIP:    "203.0.113.99", // Rightmost valid non-private
+		},
+		{
+			name:       "X-Real-IP when no XFF",
+			remoteAddr: "10.0.0.1:12345",
+			xRealIP:    "203.0.113.2",
+			expectedIP: "203.0.113.2",
+		},
+		{
+			name:          "X-Forwarded-For takes precedence over X-Real-IP",
+			remoteAddr:    "10.0.0.1:12345",
+			xForwardedFor: "203.0.113.1",
+			xRealIP:       "203.0.113.2",
+			expectedIP:    "203.0.113.1",
+		},
+		{
+			name:       "IPv6 remote address",
+			remoteAddr: "[2001:db8::1]:12345",
+			expectedIP: "2001:db8::1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/test", nil)
+			req.RemoteAddr = tt.remoteAddr
+			if tt.xForwardedFor != "" {
+				req.Header.Set("X-Forwarded-For", tt.xForwardedFor)
+			}
+			if tt.xRealIP != "" {
+				req.Header.Set("X-Real-IP", tt.xRealIP)
+			}
+
+			ip := extractClientIP(req, true) // TrustProxy=true
+			if ip != tt.expectedIP {
+				t.Errorf("Expected IP: %s, got: %s", tt.expectedIP, ip)
+			}
+		})
+	}
+}
+
+func TestIsPrivateIP(t *testing.T) {
+	tests := []struct {
+		ip        string
+		isPrivate bool
+	}{
+		// IPv4 private ranges
+		{"10.0.0.1", true},
+		{"10.255.255.255", true},
+		{"172.16.0.1", true},
+		{"172.31.255.255", true},
+		{"172.15.0.1", false}, // Just below 172.16
+		{"172.32.0.1", false}, // Just above 172.31
+		{"192.168.0.1", true},
+		{"192.168.255.255", true},
+		{"127.0.0.1", true},
+		{"127.255.255.255", true},
+		{"169.254.0.1", true},   // Link-local
+		{"100.64.0.1", true},    // Carrier-grade NAT
+		{"100.127.255.255", true},
+		{"100.63.255.255", false}, // Just below CGNAT
+		{"100.128.0.0", false},    // Just above CGNAT
+
+		// Public IPv4
+		{"8.8.8.8", false},
+		{"1.1.1.1", false},
+		{"203.0.113.1", false},
+
+		// IPv6
+		{"::1", true},           // Loopback
+		{"fc00::1", true},       // Unique Local
+		{"fd00::1", true},       // Unique Local
+		{"fe80::1", true},       // Link-local
+		{"2001:db8::1", false},  // Documentation (but public range)
+		{"2607:f8b0::1", false}, // Public
+
+		// Invalid
+		{"not-an-ip", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.ip, func(t *testing.T) {
+			result := isPrivateIP(tt.ip)
+			if result != tt.isPrivate {
+				t.Errorf("isPrivateIP(%s) = %v, expected %v", tt.ip, result, tt.isPrivate)
 			}
 		})
 	}

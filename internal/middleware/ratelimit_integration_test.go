@@ -214,31 +214,59 @@ func TestRateLimitingIntegration(t *testing.T) {
 		}
 	})
 
-	// Test 5: X-Forwarded-For header should be respected for IP extraction
+	// Test 5: X-Forwarded-For header handling with TrustProxy enabled
 	t.Run("XForwardedForHandling", func(t *testing.T) {
+		// Create a separate middleware with TrustProxy enabled
+		trustProxyConfig := RateLimitConfig{
+			Enabled: true,
+			Anonymous: struct {
+				WindowSeconds int `json:"windowSeconds"`
+				MaxRequests   int `json:"maxRequests"`
+			}{
+				WindowSeconds: 60,
+				MaxRequests:   2,
+			},
+			Authenticated: struct {
+				WindowSeconds int `json:"windowSeconds"`
+				MaxRequests   int `json:"maxRequests"`
+			}{
+				WindowSeconds: 60,
+				MaxRequests:   5,
+			},
+			CleanupIntervalSeconds: 300,
+			TrustProxy:             true, // Enable proxy trust for this test
+		}
+
+		trustProxyMiddleware := NewRateLimitMiddleware(RateLimitMiddlewareConfig{
+			Config: trustProxyConfig,
+		})
+		defer trustProxyMiddleware.Stop()
+
+		xffHandler := trustProxyMiddleware.Wrap(testHandler)
+
 		clientIP := "203.0.113.1"
 
 		// Make requests with X-Forwarded-For header
 		for i := 0; i < 2; i++ {
 			req := httptest.NewRequest("GET", "/health", nil)
-			req.RemoteAddr = "10.0.0.1:12345" // Proxy IP
+			req.RemoteAddr = "10.0.0.1:12345" // Proxy IP (private, will be skipped)
 			req.Header.Set("X-Forwarded-For", fmt.Sprintf("%s, 10.0.0.1", clientIP))
 			w := httptest.NewRecorder()
 
-			healthHandler.ServeHTTP(w, req)
+			xffHandler.ServeHTTP(w, req)
 
 			if w.Code != http.StatusOK {
 				t.Errorf("X-Forwarded-For request %d should succeed, got %d", i+1, w.Code)
 			}
 		}
 
-		// Third request should be rate limited (same client IP)
+		// Third request should be rate limited (same client IP extracted from XFF)
 		req := httptest.NewRequest("GET", "/health", nil)
 		req.RemoteAddr = "10.0.0.2:12346" // Different proxy IP
 		req.Header.Set("X-Forwarded-For", fmt.Sprintf("%s, 10.0.0.2", clientIP))
 		w := httptest.NewRecorder()
 
-		healthHandler.ServeHTTP(w, req)
+		xffHandler.ServeHTTP(w, req)
 
 		if w.Code != http.StatusTooManyRequests {
 			t.Errorf("Third X-Forwarded-For request should be rate limited, got %d", w.Code)
