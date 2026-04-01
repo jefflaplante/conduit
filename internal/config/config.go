@@ -19,6 +19,7 @@ type Config struct {
 	DataDir        string               `json:"data_dir,omitempty"`
 	SecretsFile    string               `json:"secrets_file,omitempty"`
 	AllowedOrigins []string             `json:"allowed_origins,omitempty"` // WebSocket allowed origins (empty = same-origin + localhost only)
+	WebSocket      WebSocketConfig      `json:"websocket,omitempty"`
 	Database       DatabaseConfig       `json:"database"`
 	Search         SearchDatabaseConfig `json:"search,omitempty"`
 	AI             AIConfig             `json:"ai"`
@@ -70,6 +71,29 @@ type SSHServerConfig struct {
 	ListenAddr         string `json:"listen_addr,omitempty"`
 	HostKeyPath        string `json:"host_key_path,omitempty"`
 	AuthorizedKeysPath string `json:"authorized_keys_path,omitempty"`
+}
+
+// WebSocketConfig holds configuration for WebSocket connections
+type WebSocketConfig struct {
+	// MaxMessageSize is the maximum size in bytes of incoming WebSocket messages.
+	// Messages exceeding this limit will be rejected with a close error.
+	// Default: 1048576 (1MB). Set to 0 to use default.
+	MaxMessageSize int64 `json:"max_message_size,omitempty"`
+}
+
+// DefaultWebSocketConfig returns sensible defaults for WebSocket configuration
+func DefaultWebSocketConfig() WebSocketConfig {
+	return WebSocketConfig{
+		MaxMessageSize: 1048576, // 1MB default
+	}
+}
+
+// GetMaxMessageSize returns the configured max message size, or the default if not set
+func (c *WebSocketConfig) GetMaxMessageSize() int64 {
+	if c.MaxMessageSize <= 0 {
+		return 1048576 // 1MB default
+	}
+	return c.MaxMessageSize
 }
 
 // DebugConfig contains debugging and logging settings
@@ -379,7 +403,8 @@ type RateLimitTierConfig struct {
 // Default returns a default configuration
 func Default() *Config {
 	return &Config{
-		Port: 18789,
+		Port:      18789,
+		WebSocket: DefaultWebSocketConfig(),
 		Database: DatabaseConfig{
 			Path: "gateway.db",
 		},
