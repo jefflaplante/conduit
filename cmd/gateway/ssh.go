@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"conduit/internal/config"
 	internalssh "conduit/internal/ssh"
 	"conduit/internal/tui"
 
@@ -62,13 +63,28 @@ must be running separately. The gateway port is read from --config automatically
 			return fmt.Errorf("no gateway token available; use --gateway-token or run 'conduit tui' first to save a token")
 		}
 
-		// Load timezone from config if available
+		// Load timezone and shell security from config if available
 		var location *time.Location
+		var shellSecurity tui.ShellSecurityConfig
 		if gatewayCfg, err := loadGatewayConfigForTUI(cfgFile); err == nil {
 			location = gatewayCfg.GetLocation()
+
+			// Build shell security config from gateway config (SSH mode)
+			shellCfg := &gatewayCfg.TUI.ShellEscape
+			shellSecurity = tui.ShellSecurityConfig{
+				Enabled:          shellCfg.IsShellEscapeEnabled(true), // true = SSH
+				CommandAllowlist: shellCfg.CommandAllowlist,
+				CommandBlocklist: shellCfg.GetEffectiveBlocklist(),
+			}
+		} else {
+			// Default shell security for SSH: disabled (safe default)
+			shellSecurity = tui.ShellSecurityConfig{
+				Enabled:          false,
+				CommandBlocklist: config.DefaultShellBlocklist(),
+			}
 		}
 
-		config := internalssh.SSHConfig{
+		sshConfig := internalssh.SSHConfig{
 			ListenAddr:         sshListen,
 			HostKeyPath:        sshHostKey,
 			AuthorizedKeysPath: sshAuthorizedKeys,
@@ -76,9 +92,10 @@ must be running separately. The gateway port is read from --config automatically
 			GatewayToken:       effectiveToken,
 			AssistantName:      assistantName,
 			Location:           location,
+			ShellSecurity:      shellSecurity,
 		}
 
-		server, err := internalssh.NewServer(config)
+		server, err := internalssh.NewServer(sshConfig)
 		if err != nil {
 			return err
 		}
@@ -97,7 +114,7 @@ must be running separately. The gateway port is read from --config automatically
 			server.Close()
 		}()
 
-		log.Printf("SSH server listening on %s", config.ListenAddr)
+		log.Printf("SSH server listening on %s", sshConfig.ListenAddr)
 		if err := server.ListenAndServe(); err != nil {
 			select {
 			case <-ctx.Done():

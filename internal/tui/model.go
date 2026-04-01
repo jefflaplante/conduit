@@ -16,6 +16,16 @@ import (
 	"conduit/pkg/protocol"
 )
 
+// ShellSecurityConfig holds shell escape security settings for the TUI
+type ShellSecurityConfig struct {
+	// Enabled controls whether shell escape is available
+	Enabled bool
+	// CommandAllowlist, if non-empty, restricts shell commands to only those matching these prefixes
+	CommandAllowlist []string
+	// CommandBlocklist blocks commands matching these prefixes
+	CommandBlocklist []string
+}
+
 // ModelConfig holds the configuration for creating a new TUI model
 type ModelConfig struct {
 	Client        GatewayClient
@@ -28,6 +38,8 @@ type ModelConfig struct {
 	// renderer from wishbubbletea.MakeRenderer so colors work correctly. If nil,
 	// the default renderer (local terminal) is used.
 	Renderer *lipgloss.Renderer
+	// ShellSecurity configures the shell escape (! prefix) feature
+	ShellSecurity ShellSecurityConfig
 }
 
 // SessionState tracks the state of a single session tab
@@ -676,6 +688,18 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool) {
 		if strings.HasPrefix(text, "!") {
 			cmdLine := strings.TrimSpace(strings.TrimPrefix(text, "!"))
 			if cmdLine != "" {
+				// Check if shell escape is enabled
+				if !m.config.ShellSecurity.Enabled {
+					s.Chat.AddMessage("system", "Shell escape is disabled")
+					return nil, true
+				}
+
+				// Check command against security rules
+				if err := m.validateShellCommand(cmdLine); err != nil {
+					s.Chat.AddMessage("system", "Command blocked: "+err.Error())
+					return nil, true
+				}
+
 				s.Chat.AddMessage("system", "$ "+cmdLine)
 				return executeShellCmd(sessionKey, cmdLine), true
 			}
@@ -890,6 +914,37 @@ func updateToolList(tools []ToolActivityInfo, info ToolActivityInfo) []ToolActiv
 		tools = tools[len(tools)-10:]
 	}
 	return tools
+}
+
+// validateShellCommand checks if a command is allowed based on the security config
+func (m *Model) validateShellCommand(cmdLine string) error {
+	security := &m.config.ShellSecurity
+
+	// Normalize command for matching (lowercase, trimmed)
+	cmdLower := strings.ToLower(strings.TrimSpace(cmdLine))
+
+	// Check allowlist first (if set, only allowed commands can run)
+	if len(security.CommandAllowlist) > 0 {
+		allowed := false
+		for _, prefix := range security.CommandAllowlist {
+			if strings.HasPrefix(cmdLower, strings.ToLower(prefix)) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("command not in allowlist")
+		}
+	}
+
+	// Check blocklist (always applied if present)
+	for _, prefix := range security.CommandBlocklist {
+		if strings.HasPrefix(cmdLower, strings.ToLower(prefix)) {
+			return fmt.Errorf("command matches blocklist pattern: %s", prefix)
+		}
+	}
+
+	return nil
 }
 
 // executeShellCmd returns a tea.Cmd that executes a shell command and sends the result back

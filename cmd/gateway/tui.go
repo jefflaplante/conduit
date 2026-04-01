@@ -41,6 +41,7 @@ Key bindings:
 		effectiveURL := tuiURL
 		effectiveDBPath := dbPath
 		assistantName := ""
+		var shellSecurity tui.ShellSecurityConfig
 
 		urlExplicit := cmd.Flags().Changed("url")
 
@@ -49,6 +50,11 @@ Key bindings:
 			if err != nil {
 				if !urlExplicit {
 					log.Printf("Warning: could not read gateway config %s: %v (using defaults)", cfgFile, err)
+				}
+				// Default shell security for local TUI: enabled with default blocklist
+				shellSecurity = tui.ShellSecurityConfig{
+					Enabled:          true,
+					CommandBlocklist: config.DefaultShellBlocklist(),
 				}
 			} else {
 				// Derive WebSocket URL from gateway port if --url wasn't explicitly set
@@ -64,6 +70,20 @@ Key bindings:
 
 				// Use agent name from config for the assistant label
 				assistantName = gatewayCfg.Agent.Name
+
+				// Build shell security config from gateway config
+				shellCfg := &gatewayCfg.TUI.ShellEscape
+				shellSecurity = tui.ShellSecurityConfig{
+					Enabled:          shellCfg.IsShellEscapeEnabled(false), // false = not SSH
+					CommandAllowlist: shellCfg.CommandAllowlist,
+					CommandBlocklist: shellCfg.GetEffectiveBlocklist(),
+				}
+			}
+		} else {
+			// No config loaded, use defaults for local TUI
+			shellSecurity = tui.ShellSecurityConfig{
+				Enabled:          true,
+				CommandBlocklist: config.DefaultShellBlocklist(),
 			}
 		}
 
@@ -74,6 +94,7 @@ Key bindings:
 		if assistantName != "" {
 			tuiConfig.AssistantName = assistantName
 		}
+		tuiConfig.ShellSecurity = shellSecurity
 		return tui.Run(tuiConfig)
 	},
 }

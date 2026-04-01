@@ -28,6 +28,8 @@ type SSHConfig struct {
 	// ClientFactory, if set, creates an in-process GatewayClient for the given
 	// SSH user instead of connecting back via WebSocket.
 	ClientFactory func(sshUser string) tui.GatewayClient
+	// ShellSecurity configures the shell escape (! prefix) feature for SSH sessions
+	ShellSecurity tui.ShellSecurityConfig
 }
 
 // NewServer creates a Wish SSH server that serves the TUI
@@ -108,6 +110,7 @@ func sshBubbleTeaHandler(sess charmssh.Session, config SSHConfig) (tea.Model, []
 		AssistantName: config.AssistantName,
 		Location:      config.Location,
 		Renderer:      renderer,
+		ShellSecurity: config.ShellSecurity,
 	})
 
 	// Set SSH-specific status bar info
