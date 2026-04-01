@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -46,6 +47,27 @@ import (
 	charmssh "github.com/charmbracelet/ssh"
 )
 
+// HTTP server security limits
+const (
+	// MaxHeaderBytes limits HTTP request header size (1 MB).
+	serverMaxHeaderBytes = 1 << 20 // 1 MB
+
+	// ReadTimeout limits the time to read the entire request including body.
+	serverReadTimeout = 30 * time.Second
+
+	// WriteTimeout limits the time to write the response.
+	serverWriteTimeout = 60 * time.Second
+
+	// IdleTimeout limits the time an idle keep-alive connection stays open.
+	serverIdleTimeout = 120 * time.Second
+
+	// MaxRequestBodySize limits POST/PUT request body size (10 MB).
+	MaxRequestBodySize int64 = 10 << 20 // 10 MB
+
+	// MaxWebSocketConnections limits concurrent WebSocket connections.
+	MaxWebSocketConnections int32 = 1000
+)
+
 // Gateway represents the core Conduit gateway
 type Gateway struct {
 	config           *config.Config
@@ -74,10 +96,11 @@ type Gateway struct {
 	eventStore           monitoring.EventStore
 
 	// WebSocket handling
-	upgrader websocket.Upgrader
-	clients  map[string]*Client
-	clientMu sync.RWMutex
-	ctx      context.Context // gateway lifecycle context (for WebSocket handlers)
+	upgrader    websocket.Upgrader
+	clients     map[string]*Client
+	clientMu    sync.RWMutex
+	wsConnCount atomic.Int32 // active WebSocket connection count
+	ctx         context.Context // gateway lifecycle context (for WebSocket handlers)
 
 	// Active request tracking for /stop
 	activeRequests   map[string]context.CancelFunc // sessionKey -> cancel function
@@ -799,20 +822,29 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// Protected API endpoints - wrapped with auth middleware and rate limiting
 	// Order: auth middleware first (sets context), then rate limiting (uses context), then handler
+	// POST endpoints also get request body size limiting to prevent OOM attacks.
 	mux.Handle("/debug/prompt", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleDebugPrompt))))
 	mux.Handle("/api/channels/status", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleChannelStatus))))
-	mux.Handle("/api/test/message", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleTestMessage))))
+	mux.Handle("/api/test/message", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
+		limitRequestBody(http.HandlerFunc(g.handleTestMessage), MaxRequestBodySize))))
 
 	// Vector API endpoints (registered unconditionally; handlers return 503 when disabled)
 	vectorAPI := &VectorAPI{vectorService: g.vectorService}
-	mux.Handle("/api/vector/search", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(vectorAPI.handleSearch))))
-	mux.Handle("/api/vector/index", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(vectorAPI.handleIndex))))
-	mux.Handle("/api/vector/delete", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(vectorAPI.handleDelete))))
+	mux.Handle("/api/vector/search", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
+		limitRequestBody(http.HandlerFunc(vectorAPI.handleSearch), MaxRequestBodySize))))
+	mux.Handle("/api/vector/index", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
+		limitRequestBody(http.HandlerFunc(vectorAPI.handleIndex), MaxRequestBodySize))))
+	mux.Handle("/api/vector/delete", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
+		limitRequestBody(http.HandlerFunc(vectorAPI.handleDelete), MaxRequestBodySize))))
 	mux.Handle("/api/vector/status", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(vectorAPI.handleStatus))))
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", g.config.Port),
-		Handler: mux,
+		Addr:           fmt.Sprintf(":%d", g.config.Port),
+		Handler:        mux,
+		MaxHeaderBytes: serverMaxHeaderBytes,
+		ReadTimeout:    serverReadTimeout,
+		WriteTimeout:   serverWriteTimeout,
+		IdleTimeout:    serverIdleTimeout,
 	}
 
 	// Start channel manager
@@ -1072,6 +1104,13 @@ func checkOrigin(allowedOrigins []string) func(r *http.Request) bool {
 
 // handleWebSocket handles WebSocket connections with authentication
 func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Check WebSocket connection limit before doing any work
+	if g.wsConnCount.Load() >= MaxWebSocketConnections {
+		http.Error(w, "Too many WebSocket connections", http.StatusServiceUnavailable)
+		log.Printf("[WebSocket] Connection rejected: limit reached (%d/%d)", g.wsConnCount.Load(), MaxWebSocketConnections)
+		return
+	}
+
 	// Authenticate the WebSocket upgrade request
 	authResult := g.wsAuthenticator.Authenticate(r)
 	if !authResult.Authenticated {
@@ -1087,8 +1126,18 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Atomically increment and check the connection count.
+	// Re-check after increment to handle races between the Load() above and now.
+	if count := g.wsConnCount.Add(1); count > MaxWebSocketConnections {
+		g.wsConnCount.Add(-1)
+		http.Error(w, "Too many WebSocket connections", http.StatusServiceUnavailable)
+		log.Printf("[WebSocket] Connection rejected (race): limit reached (%d/%d)", count-1, MaxWebSocketConnections)
+		return
+	}
+
 	conn, err := g.upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
+		g.wsConnCount.Add(-1) // Decrement on upgrade failure
 		log.Printf("WebSocket upgrade error: %v", err)
 		return
 	}
@@ -1182,6 +1231,9 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 		delete(g.clients, client.ID)
 		clientCount := len(g.clients)
 		g.clientMu.Unlock()
+
+		// Decrement active WebSocket connection count
+		g.wsConnCount.Add(-1)
 
 		// Update metrics
 		if g.metricsCollector != nil {
@@ -1637,6 +1689,17 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 	}
 }
 
+// limitRequestBody wraps a handler to enforce a maximum request body size.
+// Requests that exceed the limit will receive a 413 Payload Too Large error.
+func limitRequestBody(next http.Handler, maxBytes int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // handleTestMessage provides a test endpoint for sending messages without Telegram
 func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1667,20 +1730,22 @@ func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 	// Get or create session
 	session, err := g.sessions.GetOrCreateSession(req.UserID, "test")
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Error creating session: %v", err), http.StatusInternalServerError)
+		log.Printf("[TestMessage] Error creating session: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	// Add user message to session
 	_, err = g.sessions.AddMessage(session.Key, "user", req.Message, nil)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Error saving user message: %v", err), http.StatusInternalServerError)
+		log.Printf("[TestMessage] Error saving user message: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	// Generate AI response
 	if g.ai == nil {
-		http.Error(w, "AI router not available", http.StatusServiceUnavailable)
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -1690,7 +1755,8 @@ func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 	providerOverride := session.Context["provider"]
 	convResponse, err := g.ai.GenerateResponseWithTools(ctx, session, req.Message, providerOverride, modelOverride)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Error generating AI response: %v", err), http.StatusInternalServerError)
+		log.Printf("[TestMessage] Error generating AI response: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 

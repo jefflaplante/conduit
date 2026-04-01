@@ -10,6 +10,8 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	"github.com/google/uuid"
+
+	"conduit/internal/ratelimit"
 )
 
 // Pairing constants
@@ -48,6 +50,17 @@ Welcome to Conduit! You can now send messages and interact with the assistant.
 	PairingErrorMessage = `❌ <b>Pairing Error</b>
 
 There was an error during the pairing process. Please try again later or contact your administrator.`
+
+	PairingRateLimitMessage = `⏳ <b>Too Many Attempts</b>
+
+Please wait before requesting another pairing code. Try again in a moment.`
+
+	// PairingRateLimit is the max pairing attempts per window per user
+	PairingRateLimit = 3
+	// PairingRateWindow is the sliding window duration for pairing rate limiting
+	PairingRateWindow = 1 * time.Minute
+	// PairingRateCleanupInterval is how often stale rate limit entries are cleaned up
+	PairingRateCleanupInterval = 5 * time.Minute
 )
 
 // PairingRecord represents a pairing code record in the database
@@ -61,13 +74,23 @@ type PairingRecord struct {
 
 // PairingManager handles all pairing operations
 type PairingManager struct {
-	db *sql.DB
+	db          *sql.DB
+	rateLimiter *ratelimit.SlidingWindow
 }
 
 // NewPairingManager creates a new pairing manager
 func NewPairingManager(db *sql.DB) *PairingManager {
 	return &PairingManager{
-		db: db,
+		db:          db,
+		rateLimiter: ratelimit.NewSlidingWindow(PairingRateWindow, PairingRateLimit, PairingRateCleanupInterval),
+	}
+}
+
+// Stop cleans up resources used by the PairingManager
+func (p *PairingManager) Stop() {
+	if p.rateLimiter != nil {
+		p.rateLimiter.Stop()
+		p.rateLimiter = nil
 	}
 }
 
@@ -313,6 +336,21 @@ func (p *PairingManager) HandlePairingForUser(ctx context.Context, telegramBot *
 
 	if isPaired {
 		return true, nil // User is already paired, allow message processing
+	}
+
+	// Rate limit pairing attempts for unpaired users
+	allowed, _, _, _ := p.rateLimiter.Allow(userID)
+	if !allowed {
+		log.Printf("[Pairing] Rate limited pairing attempt for user %s", userID)
+		params := &bot.SendMessageParams{
+			ChatID:    chatID,
+			Text:      PairingRateLimitMessage,
+			ParseMode: models.ParseModeHTML,
+		}
+		if _, err := telegramBot.SendMessage(ctx, params); err != nil {
+			log.Printf("[Pairing] Error sending rate limit message to user %s: %v", userID, err)
+		}
+		return false, nil
 	}
 
 	// User is not paired, check if they have an active pairing code

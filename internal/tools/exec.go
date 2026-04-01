@@ -3,11 +3,48 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
+	"time"
 
 	"conduit/internal/tools/types"
 )
+
+// DefaultCommandDenylist contains patterns that should be blocked by default
+// when no custom denylist is configured. These patterns match obviously
+// dangerous commands that could cause system damage.
+var DefaultCommandDenylist = []string{
+	"rm -rf /",
+	"rm -rf /*",
+	"rm -rf ~",
+	"rm -rf ~/*",
+	"rm -rf $HOME",
+	"shutdown",
+	"reboot",
+	"poweroff",
+	"halt",
+	"init 0",
+	"init 6",
+	"mkfs",
+	"mkfs.",
+	"dd if=/dev/zero",
+	"dd if=/dev/random",
+	"dd if=/dev/urandom",
+	":(){ :|:& };:",
+	"> /dev/sda",
+	"chmod -R 777 /",
+	"chown -R",
+	"mv /* ",
+	"|sh",
+	"|bash",
+	"| sh",
+	"| bash",
+	"> /etc/passwd",
+	"> /etc/shadow",
+	"mkswap /dev/sda",
+	"fdisk",
+}
 
 // ExecTool implements command execution functionality
 type ExecTool struct {
@@ -37,6 +74,32 @@ func (t *ExecTool) Parameters() map[string]interface{} {
 		},
 		"required": []string{"command"},
 	}
+}
+
+// getEffectiveDenylist returns the configured denylist or the default if none configured.
+func (t *ExecTool) getEffectiveDenylist() []string {
+	if len(t.registry.sandboxCfg.CommandDenylist) > 0 {
+		return t.registry.sandboxCfg.CommandDenylist
+	}
+	return DefaultCommandDenylist
+}
+
+// checkCommandDenylist checks the command against all denylist patterns.
+// Returns the matched pattern if denied, or empty string if allowed.
+func (t *ExecTool) checkCommandDenylist(command string) string {
+	normalized := strings.ToLower(strings.TrimSpace(command))
+	// Collapse multiple spaces for more robust matching
+	for strings.Contains(normalized, "  ") {
+		normalized = strings.ReplaceAll(normalized, "  ", " ")
+	}
+
+	for _, pattern := range t.getEffectiveDenylist() {
+		lowerPattern := strings.ToLower(pattern)
+		if strings.Contains(normalized, lowerPattern) {
+			return pattern
+		}
+	}
+	return ""
 }
 
 func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
@@ -85,20 +148,49 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 			}), nil
 	}
 
+	// Check command against denylist before execution
+	if matched := t.checkCommandDenylist(command); matched != "" {
+		log.Printf("[Exec] DENIED command=%q matched_pattern=%q cwd=%q", command, matched, cwd)
+		return types.NewErrorResult("command_denied",
+			fmt.Sprintf("Command blocked by security denylist (matched pattern: %q)", matched)).
+			WithParameter("command", command).
+			WithContext(map[string]interface{}{
+				"matched_pattern":   matched,
+				"working_directory": cwd,
+			}).
+			WithSuggestions([]string{
+				"This command matches a dangerous pattern and has been blocked",
+				"Use a safer alternative command",
+				"Contact the administrator if you believe this is a false positive",
+			}), nil
+	}
+
+	// Audit log: command execution start
+	startTime := time.Now()
+	log.Printf("[Exec] START command=%q cwd=%q", command, cwd)
+
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = cwd
 
 	output, err := cmd.CombinedOutput()
+
+	// Audit log: command execution complete
+	duration := time.Since(startTime)
+	exitCode := 0
 	if err != nil {
+		exitCode = getExitCode(err)
+		log.Printf("[Exec] DONE command=%q cwd=%q exit_code=%d duration=%s error=%q",
+			command, cwd, exitCode, duration, err.Error())
+
 		// Enhanced error categorization with detailed context
 		errorType := "command_failed"
 		suggestions := []string{"Check command syntax", "Verify the command exists"}
 
 		if exitError, ok := err.(*exec.ExitError); ok {
-			exitCode := exitError.ExitCode()
+			ec := exitError.ExitCode()
 			errorType = "command_failed"
 
-			switch exitCode {
+			switch ec {
 			case 1:
 				suggestions = []string{
 					"Command executed but returned error status",
@@ -119,7 +211,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 				}
 			default:
 				suggestions = []string{
-					fmt.Sprintf("Command exited with code %d", exitCode),
+					fmt.Sprintf("Command exited with code %d", ec),
 					"Check command output for error details",
 					"Review command syntax and arguments",
 				}
@@ -158,6 +250,8 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 
 		return result, nil
 	}
+
+	log.Printf("[Exec] DONE command=%q cwd=%q exit_code=0 duration=%s", command, cwd, duration)
 
 	return &types.ToolResult{
 		Success: true,

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 )
 
@@ -16,7 +17,8 @@ func (g *Gateway) handleDebugPrompt(w http.ResponseWriter, r *http.Request) {
 
 	result, err := g.GetSystemPromptDebug(r.Context(), sessionKey)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[Debug] Failed to get system prompt debug: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 

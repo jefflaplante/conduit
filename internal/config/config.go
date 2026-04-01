@@ -366,8 +366,9 @@ type ToolsConfig struct {
 
 // SandboxConfig contains sandboxing settings for tool execution
 type SandboxConfig struct {
-	WorkspaceDir string   `json:"workspace_dir"`
-	AllowedPaths []string `json:"allowed_paths"`
+	WorkspaceDir    string   `json:"workspace_dir"`
+	AllowedPaths    []string `json:"allowed_paths"`
+	CommandDenylist []string `json:"command_denylist,omitempty"`
 }
 
 // ChannelConfig contains settings for channel adapters

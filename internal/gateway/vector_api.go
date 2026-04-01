@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	vecgoservice "conduit/internal/vecgo"
@@ -30,7 +31,7 @@ func (v *VectorAPI) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Limit int    `json:"limit,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Query == "" {
@@ -43,7 +44,8 @@ func (v *VectorAPI) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	results, err := v.vectorService.Search(r.Context(), req.Query, req.Limit)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "search failed: "+err.Error())
+		log.Printf("[VectorAPI] Search failed: %v", err)
+		writeJSONError(w, http.StatusInternalServerError, "search failed")
 		return
 	}
 
@@ -71,7 +73,7 @@ func (v *VectorAPI) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Metadata map[string]string `json:"metadata,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.ID == "" {
@@ -84,7 +86,8 @@ func (v *VectorAPI) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := v.vectorService.Index(r.Context(), req.ID, req.Content, req.Metadata); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "index failed: "+err.Error())
+		log.Printf("[VectorAPI] Index failed: %v", err)
+		writeJSONError(w, http.StatusInternalServerError, "index failed")
 		return
 	}
 
@@ -110,7 +113,7 @@ func (v *VectorAPI) handleDelete(w http.ResponseWriter, r *http.Request) {
 		ID string `json:"id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.ID == "" {
@@ -119,7 +122,8 @@ func (v *VectorAPI) handleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := v.vectorService.Remove(r.Context(), req.ID); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "delete failed: "+err.Error())
+		log.Printf("[VectorAPI] Delete failed: %v", err)
+		writeJSONError(w, http.StatusInternalServerError, "delete failed")
 		return
 	}
 
