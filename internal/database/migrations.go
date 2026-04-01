@@ -185,6 +185,16 @@ func GetMigrations() []Migration {
 				END;
 			`,
 		},
+		{
+			Version: 6,
+			Name:    "add_token_hash_version",
+			SQL: `
+				-- Add hash_version column to auth_tokens.
+				-- Existing tokens are plain SHA256 (version 1).
+				-- New tokens use HMAC-SHA256 (version 2).
+				ALTER TABLE auth_tokens ADD COLUMN hash_version INTEGER NOT NULL DEFAULT 1;
+			`,
+		},
 	}
 }
 

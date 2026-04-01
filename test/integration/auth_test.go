@@ -27,7 +27,7 @@ func TestEndToEndAuthenticationFlow(t *testing.T) {
 	}
 	defer db.Close()
 
-	authStorage := auth.NewTokenStorage(db.DB())
+	authStorage := auth.NewTokenStorage(db.DB(), "test-secret")
 
 	// Step 2: Create a token via CLI-like method
 	t.Run("CreateToken", func(t *testing.T) {
@@ -466,7 +466,7 @@ func TestConcurrentAuthentication(t *testing.T) {
 	}
 	defer db.Close()
 
-	authStorage := auth.NewTokenStorage(db.DB())
+	authStorage := auth.NewTokenStorage(db.DB(), "test-secret")
 
 	// Create one test token that we'll use for all concurrent requests
 	resp, err := authStorage.CreateToken(auth.CreateTokenRequest{
@@ -533,7 +533,7 @@ func TestTokenExpiration(t *testing.T) {
 	}
 	defer db.Close()
 
-	authStorage := auth.NewTokenStorage(db.DB())
+	authStorage := auth.NewTokenStorage(db.DB(), "test-secret")
 
 	// Create a token that expires immediately
 	expiresAt := time.Now().Add(-1 * time.Second)
@@ -584,7 +584,7 @@ func BenchmarkAuthenticationValidation(b *testing.B) {
 	}
 	defer db.Close()
 
-	authStorage := auth.NewTokenStorage(db.DB())
+	authStorage := auth.NewTokenStorage(db.DB(), "test-secret")
 
 	// Create a test token
 	resp, err := authStorage.CreateToken(auth.CreateTokenRequest{
@@ -614,7 +614,7 @@ func BenchmarkRateLimitingPerformance(b *testing.B) {
 	}
 	defer db.Close()
 
-	authStorage := auth.NewTokenStorage(db.DB())
+	authStorage := auth.NewTokenStorage(db.DB(), "test-secret")
 
 	// Create test token
 	resp, err := authStorage.CreateToken(auth.CreateTokenRequest{

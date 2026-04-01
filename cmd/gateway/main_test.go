@@ -89,7 +89,7 @@ func testCreateAuthToken(t *testing.T, cfg *config.Config) {
 	}
 	defer store.Close()
 
-	authStorage := auth.NewTokenStorage(store.DB())
+	authStorage := auth.NewTokenStorage(store.DB(), "test-secret")
 
 	// Create a test token
 	tokenReq := auth.CreateTokenRequest{

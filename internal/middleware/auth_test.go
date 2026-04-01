@@ -38,6 +38,7 @@ func setupTestDB(t *testing.T) (*sql.DB, func()) {
 			token_id TEXT PRIMARY KEY,
 			client_name TEXT NOT NULL,
 			hashed_token TEXT UNIQUE NOT NULL,
+			hash_version INTEGER NOT NULL DEFAULT 1,
 			created_at DATETIME NOT NULL,
 			expires_at DATETIME,
 			last_used_at DATETIME,
@@ -78,7 +79,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 	token := createTestToken(t, storage, "test-client", nil)
 
 	// Create middleware
@@ -117,7 +118,7 @@ func TestAuthMiddleware_MissingToken(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 
 	middleware := NewAuthMiddleware(storage, AuthMiddlewareConfig{})
 	handler := middleware.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +154,7 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 
 	middleware := NewAuthMiddleware(storage, AuthMiddlewareConfig{})
 	handler := middleware.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +185,7 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 
 	// Create token that expired in the past
 	pastTime := time.Now().Add(-1 * time.Hour)
@@ -210,7 +211,7 @@ func TestAuthMiddleware_SkipPaths(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 
 	middleware := NewAuthMiddleware(storage, AuthMiddlewareConfig{
 		SkipPaths: []string{"/health", "/public"},
@@ -271,7 +272,7 @@ func TestAuthMiddleware_OnAuthError(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 
 	var capturedError AuthError
 	var capturedRequest *http.Request
@@ -302,7 +303,7 @@ func TestAuthMiddleware_APIKeyHeader(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 	token := createTestToken(t, storage, "api-client", nil)
 
 	middleware := NewAuthMiddleware(storage, AuthMiddlewareConfig{})
@@ -333,7 +334,7 @@ func TestAuthMiddleware_QueryParam(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 	token := createTestToken(t, storage, "query-client", nil)
 
 	middleware := NewAuthMiddleware(storage, AuthMiddlewareConfig{})
@@ -398,7 +399,7 @@ func TestRequireAuth(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 	token := createTestToken(t, storage, "test-client", nil)
 
 	handler := RequireAuth(storage, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -433,7 +434,7 @@ func TestRequireAuthFunc(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 	token := createTestToken(t, storage, "test-client", nil)
 
 	handler := RequireAuthFunc(storage, func(w http.ResponseWriter, r *http.Request) {
@@ -455,7 +456,7 @@ func TestAuthMiddleware_NoInformationLeakage(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 
 	middleware := NewAuthMiddleware(storage, AuthMiddlewareConfig{})
 	handler := middleware.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -518,7 +519,7 @@ func TestAuthMiddleware_MalformedBearerToken(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 
 	middleware := NewAuthMiddleware(storage, AuthMiddlewareConfig{})
 	handler := middleware.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -539,7 +540,7 @@ func TestAuthMiddleware_SecurityHeaders(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	storage := auth.NewTokenStorage(db)
+	storage := auth.NewTokenStorage(db, "test-secret")
 
 	middleware := NewAuthMiddleware(storage, AuthMiddlewareConfig{})
 	handler := middleware.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))

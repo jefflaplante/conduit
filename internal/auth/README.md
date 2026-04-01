@@ -52,7 +52,7 @@ if err := database.ConfigureDatabase(db); err != nil {
 }
 
 // Create token storage
-storage := auth.NewTokenStorage(db)
+storage := auth.NewTokenStorage(db, cfg.Auth.TokenSecret)
 ```
 
 ### Creating Authentication Tokens

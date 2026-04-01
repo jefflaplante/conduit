@@ -32,7 +32,7 @@ func TestNewTokenStorage(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, "test-secret-key-for-hmac-hashing")
 	if storage == nil {
 		t.Error("Expected NewTokenStorage to return a non-nil storage")
 	}
@@ -46,7 +46,7 @@ func TestCreateToken(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, "test-secret-key-for-hmac-hashing")
 
 	tests := []struct {
 		name      string
@@ -139,7 +139,7 @@ func TestValidateToken(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, "test-secret-key-for-hmac-hashing")
 
 	// Create a valid token
 	validResp, err := storage.CreateToken(CreateTokenRequest{
@@ -231,7 +231,7 @@ func TestGetTokenInfo(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, "test-secret-key-for-hmac-hashing")
 
 	// Create a test token
 	resp, err := storage.CreateToken(CreateTokenRequest{
@@ -274,7 +274,7 @@ func TestListTokens(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, "test-secret-key-for-hmac-hashing")
 
 	// Create test tokens
 	_, err := storage.CreateToken(CreateTokenRequest{ClientName: "client1"})
@@ -360,7 +360,7 @@ func TestRevokeToken(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, "test-secret-key-for-hmac-hashing")
 
 	// Create a test token
 	resp, err := storage.CreateToken(CreateTokenRequest{ClientName: "test-client"})
@@ -393,7 +393,7 @@ func TestDeleteToken(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, "test-secret-key-for-hmac-hashing")
 
 	// Create a test token
 	resp, err := storage.CreateToken(CreateTokenRequest{ClientName: "test-client"})
@@ -422,7 +422,7 @@ func TestUpdateTokenMetadata(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, "test-secret-key-for-hmac-hashing")
 
 	// Create a test token
 	resp, err := storage.CreateToken(CreateTokenRequest{
@@ -473,7 +473,7 @@ func TestCleanupExpiredTokens(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, "test-secret-key-for-hmac-hashing")
 
 	// Create tokens with different expiration times
 	_, err := storage.CreateToken(CreateTokenRequest{
@@ -532,7 +532,7 @@ func TestDatabaseConstraints(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	storage := NewTokenStorage(db)
+	storage := NewTokenStorage(db, "test-secret-key-for-hmac-hashing")
 
 	// Create a token
 	resp1, err := storage.CreateToken(CreateTokenRequest{ClientName: "test-client"})
@@ -559,6 +559,184 @@ func TestDatabaseConstraints(t *testing.T) {
 
 	if err == nil {
 		t.Error("Expected error due to unique constraint violation, but got none")
+	}
+}
+
+// TestV1TokenBackwardsCompatibility verifies that tokens hashed with plain SHA256
+// (v1) can still be validated, and are automatically re-hashed to HMAC-SHA256 (v2).
+func TestV1TokenBackwardsCompatibility(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	secret := "test-secret-for-compat"
+	storage := NewTokenStorage(db, secret)
+
+	// Manually insert a v1 token (plain SHA256, hash_version=1)
+	rawToken := "conduit_test_legacy_token_value"
+	plainHash := hashTokenPlain(rawToken)
+
+	_, err := db.Exec(`
+		INSERT INTO auth_tokens
+		(token_id, client_name, hashed_token, hash_version, created_at, is_active, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, "legacy-token-id", "legacy-client", plainHash, HashVersionPlainSHA256,
+		time.Now(), true, "{}")
+	if err != nil {
+		t.Fatalf("Failed to insert legacy v1 token: %v", err)
+	}
+
+	// Validate the v1 token - should succeed via fallback
+	info, err := storage.ValidateToken(rawToken)
+	if err != nil {
+		t.Fatalf("Expected v1 token to validate successfully, got: %v", err)
+	}
+	if info.ClientName != "legacy-client" {
+		t.Errorf("Expected client name 'legacy-client', got '%s'", info.ClientName)
+	}
+
+	// Verify the token was re-hashed to v2
+	var hashVersion int
+	var storedHash string
+	err = db.QueryRow("SELECT hash_version, hashed_token FROM auth_tokens WHERE token_id = ?",
+		"legacy-token-id").Scan(&hashVersion, &storedHash)
+	if err != nil {
+		t.Fatalf("Failed to query re-hashed token: %v", err)
+	}
+	if hashVersion != HashVersionHMACSHA256 {
+		t.Errorf("Expected hash_version %d after re-hash, got %d", HashVersionHMACSHA256, hashVersion)
+	}
+
+	// Validate again - should now succeed via the HMAC path (v2)
+	info2, err := storage.ValidateToken(rawToken)
+	if err != nil {
+		t.Fatalf("Expected re-hashed v2 token to validate, got: %v", err)
+	}
+	if info2.ClientName != "legacy-client" {
+		t.Errorf("Expected client name 'legacy-client', got '%s'", info2.ClientName)
+	}
+}
+
+// TestHMACTokenCreation verifies that new tokens are created with hash_version=2
+func TestHMACTokenCreation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	storage := NewTokenStorage(db, "test-hmac-secret")
+
+	resp, err := storage.CreateToken(CreateTokenRequest{ClientName: "hmac-client"})
+	if err != nil {
+		t.Fatalf("Failed to create token: %v", err)
+	}
+
+	// Verify hash_version is 2
+	var hashVersion int
+	err = db.QueryRow("SELECT hash_version FROM auth_tokens WHERE token_id = ?",
+		resp.TokenInfo.TokenID).Scan(&hashVersion)
+	if err != nil {
+		t.Fatalf("Failed to query hash_version: %v", err)
+	}
+	if hashVersion != HashVersionHMACSHA256 {
+		t.Errorf("Expected hash_version %d for new token, got %d", HashVersionHMACSHA256, hashVersion)
+	}
+
+	// Validate the token
+	info, err := storage.ValidateToken(resp.Token)
+	if err != nil {
+		t.Fatalf("Failed to validate HMAC token: %v", err)
+	}
+	if info.ClientName != "hmac-client" {
+		t.Errorf("Expected 'hmac-client', got '%s'", info.ClientName)
+	}
+}
+
+// TestDifferentSecretsInvalidate verifies that tokens hashed with one secret
+// cannot be validated with a different secret (unless they are v1 plain hashes).
+func TestDifferentSecretsInvalidate(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Create a token with secret A
+	storageA := NewTokenStorage(db, "secret-A")
+	resp, err := storageA.CreateToken(CreateTokenRequest{ClientName: "test-client"})
+	if err != nil {
+		t.Fatalf("Failed to create token: %v", err)
+	}
+
+	// Try to validate with secret B - should fail (v2 HMAC won't match, no v1 fallback exists)
+	storageB := NewTokenStorage(db, "secret-B")
+	_, err = storageB.ValidateToken(resp.Token)
+	if err == nil {
+		t.Error("Expected validation to fail with different secret, but it succeeded")
+	}
+}
+
+func TestRevokeTokenCallback(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	storage := NewTokenStorage(db, "test-secret")
+
+	// Create a test token
+	resp, err := storage.CreateToken(CreateTokenRequest{ClientName: "test-client"})
+	if err != nil {
+		t.Fatalf("Failed to create test token: %v", err)
+	}
+
+	// Register revocation callback
+	var calledWith string
+	storage.OnRevoke(func(tokenID string) {
+		calledWith = tokenID
+	})
+
+	// Revoke the token
+	if err := storage.RevokeToken(resp.TokenInfo.TokenID); err != nil {
+		t.Fatalf("Failed to revoke token: %v", err)
+	}
+
+	// Verify callback was called with the correct token ID
+	if calledWith != resp.TokenInfo.TokenID {
+		t.Errorf("Expected callback with token ID %q, got %q", resp.TokenInfo.TokenID, calledWith)
+	}
+}
+
+func TestRevokeTokenCallbackNotCalledOnError(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	storage := NewTokenStorage(db, "test-secret")
+
+	// Register revocation callback
+	called := false
+	storage.OnRevoke(func(tokenID string) {
+		called = true
+	})
+
+	// Revoke a non-existent token (should error)
+	err := storage.RevokeToken("non-existent-id")
+	if err == nil {
+		t.Fatal("Expected error when revoking non-existent token")
+	}
+
+	// Verify callback was NOT called
+	if called {
+		t.Error("Callback should not be called when revocation fails")
+	}
+}
+
+func TestRevokeTokenWithoutCallback(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	storage := NewTokenStorage(db, "test-secret")
+
+	// Create and revoke without registering a callback (should not panic)
+	resp, err := storage.CreateToken(CreateTokenRequest{ClientName: "test-client"})
+	if err != nil {
+		t.Fatalf("Failed to create test token: %v", err)
+	}
+
+	if err := storage.RevokeToken(resp.TokenInfo.TokenID); err != nil {
+		t.Fatalf("Revoke without callback should not error: %v", err)
 	}
 }
 

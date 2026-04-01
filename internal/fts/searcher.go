@@ -222,14 +222,26 @@ func sortByRank(results []SearchResult) {
 }
 
 // fts5Operators are FTS5 query operators that should not be treated as search terms.
+// This includes both standard boolean operators and advanced FTS5 syntax that could
+// be abused for query manipulation.
 var fts5Operators = map[string]bool{
 	"and": true, "or": true, "not": true, "near": true,
 }
+
+// maxQueryTerms limits the number of terms in a single FTS5 query to prevent
+// resource exhaustion from extremely long inputs.
+const maxQueryTerms = 50
+
+// maxTermLength limits individual term length to prevent abuse with extremely long tokens.
+const maxTermLength = 200
 
 // buildFTSQuery converts a user query string into an FTS5 MATCH expression.
 // Terms are joined with OR for broad matching. Special FTS5 characters are escaped.
 // Prevents injection by stripping operators and quoting terms that need it.
 func buildFTSQuery(query string) string {
+	// Strip null bytes and other control characters from the entire query first
+	query = stripControlChars(query)
+
 	words := strings.Fields(strings.ToLower(query))
 	if len(words) == 0 {
 		return ""
@@ -237,8 +249,19 @@ func buildFTSQuery(query string) string {
 
 	var terms []string
 	for _, w := range words {
+		// Enforce max term length to prevent abuse
+		if len(w) > maxTermLength {
+			w = w[:maxTermLength]
+		}
+
 		// Skip FTS5 operators to prevent query manipulation
 		if fts5Operators[w] {
+			continue
+		}
+
+		// Block advanced FTS5 operator patterns before cleaning.
+		// NEAR/N patterns like "NEAR/3" bypass the simple operator check.
+		if isBlockedPattern(w) {
 			continue
 		}
 
@@ -248,12 +271,23 @@ func buildFTSQuery(query string) string {
 			continue
 		}
 
+		// Re-check for operators after cleaning, since stripping special chars
+		// may reveal a hidden operator (e.g., "\"AND\"" becomes "and")
+		if fts5Operators[cleaned] {
+			continue
+		}
+
 		// If term still contains any risky characters after cleaning, quote it
 		if needsQuoting(cleaned) {
 			cleaned = `"` + cleaned + `"`
 		}
 
 		terms = append(terms, cleaned)
+
+		// Enforce max query terms
+		if len(terms) >= maxQueryTerms {
+			break
+		}
 	}
 
 	if len(terms) == 0 {
@@ -261,6 +295,43 @@ func buildFTSQuery(query string) string {
 	}
 
 	return strings.Join(terms, " OR ")
+}
+
+// stripControlChars removes null bytes and other ASCII control characters
+// (except common whitespace like space, tab, newline) from input.
+func stripControlChars(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, ch := range s {
+		if ch < 32 && ch != '\t' && ch != '\n' && ch != '\r' {
+			continue // strip null bytes and other control chars
+		}
+		b.WriteRune(ch)
+	}
+	return b.String()
+}
+
+// isBlockedPattern checks if a word matches advanced FTS5 syntax patterns
+// that should never appear in user search queries.
+func isBlockedPattern(word string) bool {
+	// Block NEAR/N syntax (e.g., "near/3", "near/10")
+	if strings.HasPrefix(word, "near/") {
+		return true
+	}
+
+	// Block column filter syntax (e.g., "title:", "content:")
+	// These contain colons which cleanFTSTerm strips, but check explicitly
+	// for the pattern before cleaning to ensure defense in depth.
+	if strings.Contains(word, ":") {
+		return true
+	}
+
+	// Block start-of-column marker
+	if strings.HasPrefix(word, "^") {
+		return true
+	}
+
+	return false
 }
 
 // cleanFTSTerm removes characters that have special meaning in FTS5 queries.

@@ -135,6 +135,7 @@ type Client struct {
 	Role       string // "client" or "node"
 	UserID     string // user identity for session scoping
 	SessionKey string // active session key for this client
+	TokenID    string // auth token ID used for this connection (for revocation)
 	Conn       *websocket.Conn
 	Send       chan []byte
 }
@@ -323,7 +324,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	}
 
 	// Initialize authentication system using the same database
-	authStorage := auth.NewTokenStorage(sessionStore.DB())
+	authStorage := auth.NewTokenStorage(sessionStore.DB(), cfg.Auth.TokenSecret)
 
 	// Build auth skip paths based on diagnostics config
 	// By default, require auth for /metrics, /diagnostics, /prometheus
@@ -426,6 +427,10 @@ func New(cfg *config.Config) (*Gateway, error) {
 			Subprotocols: []string{"conduit-auth"},
 		},
 	}
+
+	// Register token revocation handler to close WebSocket connections
+	// using a revoked token.
+	authStorage.OnRevoke(gw.handleTokenRevocation)
 
 	// Initialize channel manager and register factories
 	gw.channelManager = channels.NewManager()
@@ -1143,11 +1148,12 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		ID:     fmt.Sprintf("client_%d", time.Now().UnixNano()),
-		Role:   authResult.AuthInfo.ClientName, // Store authenticated client name
-		UserID: authResult.AuthInfo.ClientName, // Default user identity from auth
-		Conn:   conn,
-		Send:   make(chan []byte, 256),
+		ID:      fmt.Sprintf("client_%d", time.Now().UnixNano()),
+		Role:    authResult.AuthInfo.ClientName, // Store authenticated client name
+		UserID:  authResult.AuthInfo.ClientName, // Default user identity from auth
+		TokenID: authResult.AuthInfo.TokenID,    // Track token for revocation
+		Conn:    conn,
+		Send:    make(chan []byte, 256),
 	}
 
 	g.clientMu.Lock()
@@ -1191,6 +1197,31 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// after spawning these goroutines.
 	go g.handleClientWrite(client)
 	go g.handleClientRead(g.ctx, client)
+}
+
+// handleTokenRevocation closes all WebSocket connections authenticated with the
+// given token. This is called by TokenStorage.OnRevoke as a best-effort
+// operation -- errors from already-closing connections are silently ignored.
+func (g *Gateway) handleTokenRevocation(tokenID string) {
+	g.clientMu.RLock()
+	var targets []*Client
+	for _, c := range g.clients {
+		if c.TokenID == tokenID {
+			targets = append(targets, c)
+		}
+	}
+	g.clientMu.RUnlock()
+
+	for _, c := range targets {
+		log.Printf("[Auth] Closing connection %s: token %s revoked", c.ID, tokenID)
+		closeMsg := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "token revoked")
+		_ = c.Conn.WriteControl(websocket.CloseMessage, closeMsg, time.Now().Add(time.Second))
+		_ = c.Conn.Close()
+	}
+
+	if len(targets) > 0 {
+		log.Printf("[Auth] Closed %d connection(s) for revoked token %s", len(targets), tokenID)
+	}
 }
 
 // handleChannelStatus provides channel status information
