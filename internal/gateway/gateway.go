@@ -302,9 +302,21 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Initialize authentication system using the same database
 	authStorage := auth.NewTokenStorage(sessionStore.DB())
 
-	// Create auth middleware (skip health monitoring endpoints)
+	// Build auth skip paths based on diagnostics config
+	// By default, require auth for /metrics, /diagnostics, /prometheus
+	// /health is configurable for load balancer compatibility
+	var authSkipPaths []string
+	if cfg.Diagnostics.IsHealthPublic() {
+		authSkipPaths = append(authSkipPaths, "/health")
+	}
+	if !cfg.Diagnostics.RequireAuth {
+		// Legacy behavior: all diagnostic endpoints are public
+		authSkipPaths = append(authSkipPaths, "/metrics", "/diagnostics", "/prometheus")
+	}
+
+	// Create auth middleware
 	authMiddleware := middleware.NewAuthMiddleware(authStorage, middleware.AuthMiddlewareConfig{
-		SkipPaths: []string{"/health", "/metrics", "/diagnostics", "/prometheus"},
+		SkipPaths: authSkipPaths,
 		OnAuthError: func(r *http.Request, err middleware.AuthError) {
 			log.Printf("[Auth] Authentication failed: %s %s (code: %d)",
 				r.Method, r.URL.Path, err.Code)
@@ -774,11 +786,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Start HTTP server for WebSocket connections
 	mux := http.NewServeMux()
 
-	// Public health endpoints (no auth required, but rate limited)
-	mux.Handle("/health", g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleHealthEnhanced)))
-	mux.Handle("/metrics", g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleMetrics)))
-	mux.Handle("/diagnostics", g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleDiagnostics)))
-	mux.Handle("/prometheus", g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handlePrometheusMetrics)))
+	// Diagnostic endpoints - auth requirement controlled by diagnostics config
+	// Auth middleware skip paths are configured at gateway initialization based on config.
+	// Default: /health is public (for load balancers), others require auth.
+	mux.Handle("/health", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleHealthEnhanced))))
+	mux.Handle("/metrics", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleMetrics))))
+	mux.Handle("/diagnostics", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleDiagnostics))))
+	mux.Handle("/prometheus", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handlePrometheusMetrics))))
 
 	// WebSocket endpoint with custom authentication and rate limiting
 	mux.Handle("/ws", g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleWebSocket)))

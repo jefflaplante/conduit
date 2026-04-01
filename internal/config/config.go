@@ -30,6 +30,7 @@ type Config struct {
 	Channels       []ChannelConfig      `json:"channels"`
 	Debug          DebugConfig          `json:"debug,omitempty"`
 	RateLimiting   RateLimitingConfig   `json:"rateLimiting,omitempty"`
+	Diagnostics    DiagnosticsConfig    `json:"diagnostics,omitempty"`
 	Heartbeat      HeartbeatConfig      `json:"heartbeat,omitempty"`
 	AgentHeartbeat AgentHeartbeatConfig `json:"agent_heartbeat,omitempty"`
 	SSH            SSHServerConfig      `json:"ssh,omitempty"`
@@ -403,6 +404,36 @@ type RateLimitTierConfig struct {
 	MaxRequests   int `json:"maxRequests"`
 }
 
+// DiagnosticsConfig contains settings for diagnostic endpoints security
+type DiagnosticsConfig struct {
+	// RequireAuth controls whether diagnostic endpoints require authentication.
+	// When true (default), /metrics, /diagnostics, /prometheus require auth.
+	// The /health endpoint has its own HealthPublic setting.
+	RequireAuth bool `json:"require_auth"`
+
+	// HealthPublic controls whether /health is accessible without authentication.
+	// Default: true (public) for load balancer compatibility.
+	// Set to false to require auth for /health as well.
+	HealthPublic *bool `json:"health_public,omitempty"`
+}
+
+// IsHealthPublic returns whether the /health endpoint should be public.
+// Defaults to true for load balancer compatibility.
+func (d *DiagnosticsConfig) IsHealthPublic() bool {
+	if d.HealthPublic == nil {
+		return true
+	}
+	return *d.HealthPublic
+}
+
+// DefaultDiagnosticsConfig returns secure defaults for diagnostics config
+func DefaultDiagnosticsConfig() DiagnosticsConfig {
+	return DiagnosticsConfig{
+		RequireAuth:  true, // Require auth for /metrics, /diagnostics, /prometheus
+		HealthPublic: nil,  // nil means default to true (public /health)
+	}
+}
+
 // SkillsConfig is imported from skills package
 
 // Default returns a default configuration
@@ -476,6 +507,7 @@ func Default() *Config {
 			},
 			CleanupIntervalSeconds: 300, // Clean up expired buckets every 5 minutes
 		},
+		Diagnostics:    DefaultDiagnosticsConfig(),
 		Heartbeat:      DefaultHeartbeatConfig(),
 		AgentHeartbeat: DefaultAgentHeartbeatConfig(),
 		RemoteSSH:      DefaultRemoteSSHConfig(),
