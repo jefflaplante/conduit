@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -486,6 +489,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebar.SkillCount = msg.SkillCount
 
 	// Error messages
+	case ShellResultMsg:
+		if s := m.sessionByKey(msg.SessionKey); s != nil {
+			if msg.Err != nil {
+				s.Chat.AddMessage("system", fmt.Sprintf("Error: %v\n%s", msg.Err, msg.Output))
+			} else if msg.Output != "" {
+				s.Chat.AddMessage("system", strings.TrimRight(msg.Output, "\n"))
+			} else {
+				s.Chat.AddMessage("system", "(no output)")
+			}
+		}
+
 	case ErrorMsg:
 		s, tabIdx := m.resolveTab(msg.RequestID, msg.SessionKey)
 		if s != nil {
@@ -658,6 +672,16 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 		sessionKey := s.Key
 
+		// Handle shell escape (! prefix)
+		if strings.HasPrefix(text, "!") {
+			cmdLine := strings.TrimSpace(strings.TrimPrefix(text, "!"))
+			if cmdLine != "" {
+				s.Chat.AddMessage("system", "$ "+cmdLine)
+				return executeShellCmd(sessionKey, cmdLine), true
+			}
+			return nil, true
+		}
+
 		// Check if it's a slash command
 		if strings.HasPrefix(text, "/") {
 			// /help and /commands are handled locally
@@ -670,7 +694,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool) {
 						"/model [alias] - View/switch model\n"+
 						"/context - Show context window usage\n"+
 						"/stop - Stop current operation\n"+
-						"/quit, /exit - Exit TUI\n\n"+
+						"/quit, /exit - Exit TUI\n"+
+						"! <cmd> - Execute shell command\n\n"+
 						"Ctrl+T: New tab | Ctrl+W: Close tab\n"+
 						"Alt+Left/Right: Switch tabs\n"+
 						"Alt+Enter: Insert new line\n"+
@@ -865,4 +890,23 @@ func updateToolList(tools []ToolActivityInfo, info ToolActivityInfo) []ToolActiv
 		tools = tools[len(tools)-10:]
 	}
 	return tools
+}
+
+// executeShellCmd returns a tea.Cmd that executes a shell command and sends the result back
+func executeShellCmd(sessionKey, cmdLine string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, "sh", "-c", cmdLine)
+		cmd.Dir, _ = os.Getwd()
+
+		output, err := cmd.CombinedOutput()
+
+		return ShellResultMsg{
+			SessionKey: sessionKey,
+			Output:     string(output),
+			Err:        err,
+		}
+	}
 }
