@@ -137,7 +137,7 @@ func (g *Gateway) handleHelpCommand(msg *protocol.IncomingMessage) {
 /reset - Clear conversation history
 /status - Show session info
 /help - Show this message
-/model - View/switch model
+/model - View/switch model (use /model reset to clear override)
 /provider - View/switch provider
 /context - Show context window usage
 /stop - Stop current operation
@@ -355,6 +355,26 @@ func (g *Gateway) handleModelCommand(msg *protocol.IncomingMessage, text string,
 
 	// Model switch requested
 	requested := strings.ToLower(parts[1])
+
+	// Handle reset/default to clear the override
+	if requested == "reset" || requested == "default" {
+		// Clear model override by setting to empty string
+		if err := g.sessions.SetSessionContext(session.Key, "model", ""); err != nil {
+			g.sendCommandResponse(msg, fmt.Sprintf("Failed to reset model: %v", err))
+			return
+		}
+		if session.Context == nil {
+			session.Context = make(map[string]string)
+		}
+		session.Context["model"] = ""
+
+		// Also clear the provider override
+		_ = g.sessions.SetSessionContext(session.Key, "provider", "")
+		session.Context["provider"] = ""
+
+		g.sendCommandResponse(msg, "Model reset to default (sonnet)")
+		return
+	}
 
 	// setModelAndResolveProvider stores the model in session context,
 	// auto-resolves the provider, and returns the resolved provider name.
