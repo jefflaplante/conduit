@@ -34,6 +34,7 @@ type Config struct {
 	Heartbeat      HeartbeatConfig      `json:"heartbeat,omitempty"`
 	AgentHeartbeat AgentHeartbeatConfig `json:"agent_heartbeat,omitempty"`
 	SSH            SSHServerConfig      `json:"ssh,omitempty"`
+	TUI            TUIConfig            `json:"tui,omitempty"`
 	Vector         VectorConfig         `json:"vector,omitempty"`
 	RemoteSSH      RemoteSSHConfig      `json:"remote_ssh,omitempty"`
 	MQTT           MQTTConfig           `json:"mqtt,omitempty"`
@@ -95,6 +96,83 @@ func (c *WebSocketConfig) GetMaxMessageSize() int64 {
 		return 1048576 // 1MB default
 	}
 	return c.MaxMessageSize
+}
+
+// TUIConfig holds configuration for the TUI shell escape feature
+type TUIConfig struct {
+	ShellEscape ShellEscapeConfig `json:"shell_escape,omitempty"`
+}
+
+// ShellEscapeConfig controls the shell escape (! prefix) feature in the TUI
+type ShellEscapeConfig struct {
+	// Enabled controls whether shell escape is available (default: true for local TUI, false for SSH)
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// AllowSSH controls whether shell escape is allowed over SSH connections (default: false)
+	AllowSSH bool `json:"allow_ssh,omitempty"`
+
+	// CommandAllowlist, if non-empty, restricts shell commands to only those matching these prefixes.
+	// Example: ["git ", "ls", "cat "] allows git commands, ls, and cat.
+	CommandAllowlist []string `json:"command_allowlist,omitempty"`
+
+	// CommandBlocklist blocks commands matching these prefixes. Applied after allowlist.
+	// Default includes dangerous commands like "rm -rf", "sudo", "su ", etc.
+	CommandBlocklist []string `json:"command_blocklist,omitempty"`
+
+	// UseDefaultBlocklist includes the default blocklist of dangerous commands (default: true)
+	UseDefaultBlocklist *bool `json:"use_default_blocklist,omitempty"`
+}
+
+// DefaultShellBlocklist returns the default list of blocked command prefixes
+func DefaultShellBlocklist() []string {
+	return []string{
+		"rm -rf /",
+		"rm -rf ~",
+		"rm -rf .",
+		"sudo ",
+		"su ",
+		"chmod 777",
+		"dd if=",
+		"mkfs",
+		"> /dev/",
+		":(){ :|:& };:", // fork bomb
+		"curl | sh",
+		"curl | bash",
+		"wget | sh",
+		"wget | bash",
+	}
+}
+
+// IsShellEscapeEnabled returns whether shell escape is enabled, with defaults based on context
+func (c *ShellEscapeConfig) IsShellEscapeEnabled(isSSH bool) bool {
+	// SSH has shell escape disabled by default unless explicitly allowed
+	if isSSH {
+		return c.AllowSSH
+	}
+
+	// Local TUI has shell escape enabled by default
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// ShouldUseDefaultBlocklist returns whether to use the default blocklist
+func (c *ShellEscapeConfig) ShouldUseDefaultBlocklist() bool {
+	if c.UseDefaultBlocklist == nil {
+		return true
+	}
+	return *c.UseDefaultBlocklist
+}
+
+// GetEffectiveBlocklist returns the combined blocklist (default + custom)
+func (c *ShellEscapeConfig) GetEffectiveBlocklist() []string {
+	var result []string
+	if c.ShouldUseDefaultBlocklist() {
+		result = append(result, DefaultShellBlocklist()...)
+	}
+	result = append(result, c.CommandBlocklist...)
+	return result
 }
 
 // DebugConfig contains debugging and logging settings

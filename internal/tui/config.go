@@ -16,12 +16,13 @@ var DataDirConfig string
 
 // TUIConfig holds configuration for the TUI client
 type TUIConfig struct {
-	GatewayURL    string `json:"gateway_url"`
-	Token         string `json:"token"`
-	ClientName    string `json:"client_name,omitempty"`
-	DatabasePath  string `json:"database_path,omitempty"`
-	UserID        string `json:"user_id,omitempty"`
-	AssistantName string `json:"assistant_name,omitempty"`
+	GatewayURL    string              `json:"gateway_url"`
+	Token         string              `json:"token"`
+	ClientName    string              `json:"client_name,omitempty"`
+	DatabasePath  string              `json:"database_path,omitempty"`
+	UserID        string              `json:"user_id,omitempty"`
+	AssistantName string              `json:"assistant_name,omitempty"`
+	ShellSecurity ShellSecurityConfig `json:"-"` // Not persisted, set at runtime
 }
 
 // configDir returns the conduit data directory for TUI config.

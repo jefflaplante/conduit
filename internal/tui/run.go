@@ -17,6 +17,7 @@ func Run(config *TUIConfig) error {
 		UserID:        config.UserID,
 		GatewayURL:    config.GatewayURL,
 		AssistantName: config.AssistantName,
+		ShellSecurity: config.ShellSecurity,
 	})
 
 	// Set gateway URL in status bar

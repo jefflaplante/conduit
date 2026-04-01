@@ -897,6 +897,14 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// Start SSH server if configured
 	if g.config.SSH.Enabled {
+		// Build shell security config from gateway config (SSH mode)
+		shellCfg := &g.config.TUI.ShellEscape
+		shellSecurity := tui.ShellSecurityConfig{
+			Enabled:          shellCfg.IsShellEscapeEnabled(true), // true = SSH
+			CommandAllowlist: shellCfg.CommandAllowlist,
+			CommandBlocklist: shellCfg.GetEffectiveBlocklist(),
+		}
+
 		sshConfig := internalssh.SSHConfig{
 			ListenAddr:         g.config.SSH.ListenAddr,
 			HostKeyPath:        g.config.SSH.HostKeyPath,
@@ -904,6 +912,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 			GatewayURL:         fmt.Sprintf("ws://localhost:%d/ws", g.config.Port),
 			AssistantName:      g.config.Agent.Name,
 			Location:           g.config.GetLocation(),
+			ShellSecurity:      shellSecurity,
 			ClientFactory: func(sshUser string) tui.GatewayClient {
 				toolCount := len(g.tools.GetAvailableTools())
 				var skillCount int
