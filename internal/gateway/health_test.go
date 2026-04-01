@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"conduit/internal/auth"
 	"conduit/internal/config"
 	"conduit/internal/middleware"
 	"conduit/internal/monitoring"
@@ -571,4 +572,213 @@ func TestRateLimitingOnHealthEndpoints(t *testing.T) {
 
 	// Cleanup
 	rateLimitMiddleware.Stop()
+}
+
+func TestDiagnosticEndpointsAuthRequirement(t *testing.T) {
+	// Test that diagnostic endpoints require auth by default (except /health)
+	// This tests the new conduit-330 security requirement
+
+	tests := []struct {
+		name           string
+		endpoint       string
+		requireAuth    bool   // diagnostics.require_auth setting
+		healthPublic   *bool  // diagnostics.health_public setting
+		expectStatus   int    // Expected status without auth token
+		withAuth       bool   // Whether to include auth token
+		expectWithAuth int    // Expected status with auth token
+	}{
+		// Default config: require_auth=true, health_public=true (default)
+		{
+			name:           "/health is public by default",
+			endpoint:       "/health",
+			requireAuth:    true,
+			healthPublic:   nil, // default (true)
+			expectStatus:   http.StatusOK,
+			withAuth:       false,
+			expectWithAuth: http.StatusOK,
+		},
+		{
+			name:           "/metrics requires auth by default",
+			endpoint:       "/metrics",
+			requireAuth:    true,
+			healthPublic:   nil,
+			expectStatus:   http.StatusUnauthorized,
+			withAuth:       true,
+			expectWithAuth: http.StatusOK,
+		},
+		{
+			name:           "/diagnostics requires auth by default",
+			endpoint:       "/diagnostics",
+			requireAuth:    true,
+			healthPublic:   nil,
+			expectStatus:   http.StatusUnauthorized,
+			withAuth:       true,
+			expectWithAuth: http.StatusOK,
+		},
+		{
+			name:           "/prometheus requires auth by default",
+			endpoint:       "/prometheus",
+			requireAuth:    true,
+			healthPublic:   nil,
+			expectStatus:   http.StatusUnauthorized,
+			withAuth:       true,
+			expectWithAuth: http.StatusOK,
+		},
+		// health_public=false makes /health also require auth
+		{
+			name:           "/health requires auth when health_public=false",
+			endpoint:       "/health",
+			requireAuth:    true,
+			healthPublic:   boolPtr(false),
+			expectStatus:   http.StatusUnauthorized,
+			withAuth:       true,
+			expectWithAuth: http.StatusOK,
+		},
+		// require_auth=false makes all diagnostic endpoints public (legacy behavior)
+		{
+			name:           "/metrics is public when require_auth=false",
+			endpoint:       "/metrics",
+			requireAuth:    false,
+			healthPublic:   nil,
+			expectStatus:   http.StatusOK,
+			withAuth:       false,
+			expectWithAuth: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a test gateway with the specific config
+			gw, testToken := createTestGatewayWithDiagnosticsConfig(t, tt.requireAuth, tt.healthPublic)
+
+			// Create test server with proper middleware chain
+			mux := http.NewServeMux()
+			mux.Handle("/health", gw.authMiddleware.Wrap(gw.rateLimitMiddleware.Wrap(http.HandlerFunc(gw.handleHealthEnhanced))))
+			mux.Handle("/metrics", gw.authMiddleware.Wrap(gw.rateLimitMiddleware.Wrap(http.HandlerFunc(gw.handleMetrics))))
+			mux.Handle("/diagnostics", gw.authMiddleware.Wrap(gw.rateLimitMiddleware.Wrap(http.HandlerFunc(gw.handleDiagnostics))))
+			mux.Handle("/prometheus", gw.authMiddleware.Wrap(gw.rateLimitMiddleware.Wrap(http.HandlerFunc(gw.handlePrometheusMetrics))))
+
+			server := httptest.NewServer(mux)
+			defer server.Close()
+
+			// Test without auth
+			req, err := http.NewRequest("GET", server.URL+tt.endpoint, nil)
+			if err != nil {
+				t.Fatalf("Failed to create request: %v", err)
+			}
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("Failed to make request: %v", err)
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode != tt.expectStatus {
+				t.Errorf("Without auth: expected status %d, got %d", tt.expectStatus, resp.StatusCode)
+			}
+
+			// Test with auth if needed
+			if tt.withAuth {
+				req, err := http.NewRequest("GET", server.URL+tt.endpoint, nil)
+				if err != nil {
+					t.Fatalf("Failed to create request: %v", err)
+				}
+				req.Header.Set("Authorization", "Bearer "+testToken)
+
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatalf("Failed to make request: %v", err)
+				}
+				resp.Body.Close()
+
+				if resp.StatusCode != tt.expectWithAuth {
+					t.Errorf("With auth: expected status %d, got %d", tt.expectWithAuth, resp.StatusCode)
+				}
+			}
+		})
+	}
+}
+
+// createTestGatewayWithDiagnosticsConfig creates a test gateway with specific diagnostics config
+// Returns the gateway and a valid test token
+func createTestGatewayWithDiagnosticsConfig(t *testing.T, requireAuth bool, healthPublic *bool) (*Gateway, string) {
+	// Create a test config
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Path: ":memory:",
+		},
+		RateLimiting: config.RateLimitingConfig{
+			Enabled: false,
+		},
+		Diagnostics: config.DiagnosticsConfig{
+			RequireAuth:  requireAuth,
+			HealthPublic: healthPublic,
+		},
+	}
+
+	// Create session store
+	sessionStore, err := sessions.NewStore(cfg.Database.Path)
+	if err != nil {
+		t.Fatalf("Failed to create session store: %v", err)
+	}
+
+	// Create auth storage and a test token
+	authStorage := auth.NewTokenStorage(sessionStore.DB())
+	tokenResp, err := authStorage.CreateToken(auth.CreateTokenRequest{
+		ClientName: "test-client",
+	})
+	if err != nil {
+		t.Fatalf("Failed to create test token: %v", err)
+	}
+
+	// Build auth skip paths based on config (same logic as gateway.go)
+	var authSkipPaths []string
+	if cfg.Diagnostics.IsHealthPublic() {
+		authSkipPaths = append(authSkipPaths, "/health")
+	}
+	if !cfg.Diagnostics.RequireAuth {
+		authSkipPaths = append(authSkipPaths, "/metrics", "/diagnostics", "/prometheus")
+	}
+
+	// Create auth middleware with the computed skip paths
+	authMiddleware := middleware.NewAuthMiddleware(authStorage, middleware.AuthMiddlewareConfig{
+		SkipPaths: authSkipPaths,
+	})
+
+	// Create gateway metrics
+	gatewayMetrics := monitoring.NewGatewayMetrics()
+	gatewayMetrics.SetVersion("0.2.0")
+
+	// Create metrics collector
+	metricsCollector := monitoring.NewMetricsCollector(monitoring.CollectorDependencies{
+		SessionStore:   sessionStore,
+		GatewayMetrics: gatewayMetrics,
+	})
+
+	// Create event store
+	eventStore := monitoring.NewMemoryEventStore(100)
+
+	// Create rate limit middleware (disabled)
+	rateLimitMiddleware := middleware.NewRateLimitMiddleware(middleware.RateLimitMiddlewareConfig{
+		Config: middleware.RateLimitConfig{
+			Enabled: false,
+		},
+	})
+
+	gw := &Gateway{
+		config:              cfg,
+		sessions:            sessionStore,
+		gatewayMetrics:      gatewayMetrics,
+		metricsCollector:    metricsCollector,
+		eventStore:          eventStore,
+		rateLimitMiddleware: rateLimitMiddleware,
+		authMiddleware:      authMiddleware,
+	}
+
+	return gw, tokenResp.Token
+}
+
+// boolPtr returns a pointer to a bool value
+func boolPtr(b bool) *bool {
+	return &b
 }
