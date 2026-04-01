@@ -1169,6 +1169,10 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 		log.Printf("Client disconnected: %s", client.ID)
 	}()
 
+	// Set message size limit to prevent DoS via large messages
+	maxMessageSize := g.config.WebSocket.GetMaxMessageSize()
+	client.Conn.SetReadLimit(maxMessageSize)
+
 	for {
 		_, message, err := client.Conn.ReadMessage()
 		if err != nil {
