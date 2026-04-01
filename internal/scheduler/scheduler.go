@@ -436,21 +436,31 @@ func (s *Scheduler) removeSystemCrontab(job *Job) error {
 // readSystemCrontab reads the current user's crontab
 func (s *Scheduler) readSystemCrontab() ([]string, error) {
 	cmd := exec.Command("crontab", "-l")
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// No crontab for user is okay
-		if strings.Contains(err.Error(), "no crontab") {
+		// No crontab for user is okay — the message may appear in stderr
+		// (captured via CombinedOutput) or in the error string itself.
+		combined := string(output) + " " + err.Error()
+		if strings.Contains(strings.ToLower(combined), "no crontab") {
 			return []string{}, nil
 		}
-		return nil, err
+		// Also treat a generic exit status 1 with no stdout as "no crontab"
+		// since some crontab implementations don't emit a descriptive message.
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 && len(strings.TrimSpace(string(output))) == 0 {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("failed to read crontab: %w (output: %s)", err, strings.TrimSpace(string(output)))
 	}
 
 	lines := strings.Split(string(output), "\n")
 	var entries []string
 	for _, line := range lines {
-		if line != "" {
-			entries = append(entries, line)
+		trimmed := strings.TrimSpace(line)
+		// Skip empty lines and stderr noise from CombinedOutput
+		if trimmed == "" || strings.HasPrefix(strings.ToLower(trimmed), "crontab:") {
+			continue
 		}
+		entries = append(entries, line)
 	}
 	return entries, nil
 }
