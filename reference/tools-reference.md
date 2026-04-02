@@ -379,3 +379,15 @@ type Tool interface {
 ```
 
 Register in `internal/tools/registry.go` within `registerAllTools()`.
+
+## Upcoming Tools
+
+The following integrations have config and auth infrastructure in place. Full tool implementations are planned:
+
+| Integration | Config | Client | Tool Status |
+|-------------|--------|--------|-------------|
+| **Kubernetes** | `kubernetes` | client-go | Config ready, tool pending |
+| **PagerDuty** | `pagerduty` | REST v2 | Config + client ready, tool pending |
+| **Datadog** | `datadog` | REST v1/v2 | Config + client ready, tool pending |
+
+See [Configuration Reference](configuration.md) for setup details.

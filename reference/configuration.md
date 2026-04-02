@@ -200,10 +200,71 @@ Supported provider types:
 - `openai` - GPT models
 
 Model aliases (for `/model` command):
-- `haiku` - claude-3-haiku-20240307
-- `sonnet` - claude-3-5-sonnet-20241022
-- `opus` - claude-3-opus-20240229
-- `opus46` - claude-opus-4-6
+- `haiku` - claude-haiku-4-5-20251001
+- `sonnet` - claude-sonnet-4-6
+- `opus` - claude-opus-4-6
+
+### Smart Routing
+
+Automatic model selection based on task complexity. When enabled, Conduit analyzes each request and routes to the most appropriate model tier.
+
+```json
+{
+  "ai": {
+    "smart_routing": {
+      "enabled": true,
+      "track_usage": true,
+      "cost_budget_daily": 10.0,
+      "pricing_overrides": {
+        "claude-opus-4-6": {
+          "input_per_m_token": 15.0,
+          "output_per_m_token": 75.0
+        }
+      }
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable smart routing |
+| `track_usage` | bool | `false` | Track usage metrics |
+| `cost_budget_daily` | float | `0` | Daily cost budget (0 = unlimited) |
+| `pricing_overrides` | map | `{}` | Override default model pricing |
+
+**Model Tiers:**
+- **Haiku** — Simple queries, greetings, straightforward tasks
+- **Sonnet** — Standard complexity, 2-3 tool calls, moderate reasoning
+- **Opus** — Complex multi-step tasks, 5+ tool calls, deep analysis
+
+Use `/smartroute` command to toggle per-session or check status.
+
+### Context Compaction
+
+Automatic summarization of long sessions when context usage exceeds a threshold.
+
+```json
+{
+  "ai": {
+    "compaction": {
+      "enabled": true,
+      "threshold": 0.70,
+      "model": "claude-haiku-4-5-20251001",
+      "recent_messages_to_keep": 10
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable auto-compaction |
+| `threshold` | float | `0.70` | Context usage ratio that triggers compaction |
+| `model` | string | `"claude-haiku-4-5-20251001"` | Model for summarization |
+| `recent_messages_to_keep` | int | `10` | Messages to preserve verbatim |
+
+When triggered, older messages are summarized and replaced with a compact summary, preserving key decisions, context, and recent exchanges. Use `/compact` to trigger manually.
 
 ### Agent Email
 
@@ -480,6 +541,100 @@ Optional MQTT event ingest for IoT/home automation. See [MQTT Integration](mqtt.
 | `buffer_max_topics` | int | `500` | Max tracked topics |
 | `publish_allowed` | bool | `false` | Allow AI to publish messages |
 
+### Kubernetes
+
+Multi-cluster Kubernetes configuration for the K8s tool. Kubeconfig paths support environment variable expansion.
+
+```json
+{
+  "kubernetes": {
+    "enabled": true,
+    "clusters": [
+      {
+        "name": "production",
+        "kubeconfig_path": "${HOME}/.kube/config",
+        "context": "prod-cluster",
+        "default_namespace": "default",
+        "allowed_namespaces": ["default", "app", "monitoring"],
+        "safety_level": "read"
+      },
+      {
+        "name": "staging",
+        "kubeconfig_path": "${HOME}/.kube/staging.yaml",
+        "context": "staging-cluster",
+        "safety_level": "modify"
+      }
+    ],
+    "defaults": {
+      "namespace": "default",
+      "safety_level": "read"
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable Kubernetes integration |
+| `clusters` | array | `[]` | Cluster configurations |
+| `defaults.namespace` | string | `"default"` | Default namespace |
+| `defaults.safety_level` | string | `"read"` | Default safety level |
+
+**Safety Levels:**
+- `read` — get, describe, logs, top (auto-approved)
+- `modify` — scale, rollout restart, label, annotate, cordon (requires confirmation)
+- `dangerous` — delete, edit, apply, create, drain (requires explicit approval)
+
+### PagerDuty
+
+PagerDuty REST API v2 integration for incident management.
+
+```json
+{
+  "pagerduty": {
+    "enabled": true,
+    "api_token": "${PAGERDUTY_API_TOKEN}",
+    "default_service_id": "PXXXXXX",
+    "default_escalation_policy_id": "PXXXXXX",
+    "base_url": "https://api.pagerduty.com",
+    "rate_limit_rps": 5.0
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable PagerDuty integration |
+| `api_token` | string | required | API token (supports `${ENV_VAR}`) |
+| `default_service_id` | string | `""` | Default service for new incidents |
+| `default_escalation_policy_id` | string | `""` | Default escalation policy |
+| `base_url` | string | `"https://api.pagerduty.com"` | API base URL |
+| `rate_limit_rps` | float | `5.0` | Requests per second limit |
+
+### Datadog
+
+Datadog API integration for metrics, logs, and monitors.
+
+```json
+{
+  "datadog": {
+    "enabled": true,
+    "api_key": "${DD_API_KEY}",
+    "app_key": "${DD_APP_KEY}",
+    "site": "datadoghq.com",
+    "rate_limit_rps": 5.0
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable Datadog integration |
+| `api_key` | string | required | API key (supports `${ENV_VAR}`) |
+| `app_key` | string | required | Application key (supports `${ENV_VAR}`) |
+| `site` | string | `"datadoghq.com"` | Datadog site (e.g., `us5.datadoghq.com`, `datadoghq.eu`) |
+| `rate_limit_rps` | float | `5.0` | Requests per second limit |
+
 ### Debug
 
 ```json
@@ -505,6 +660,9 @@ Common environment variables:
 | `BRAVE_API_KEY` | Brave Search API key |
 | `MQTT_USERNAME` | MQTT broker username |
 | `MQTT_PASSWORD` | MQTT broker password |
+| `PAGERDUTY_API_TOKEN` | PagerDuty REST API token |
+| `DD_API_KEY` | Datadog API key |
+| `DD_APP_KEY` | Datadog application key |
 | `CONDUIT_CONFIG` | Config file path |
 | `CONDUIT_DATABASE` | Database file path |
 

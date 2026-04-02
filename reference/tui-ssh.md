@@ -49,7 +49,13 @@ All commands work the same as in Telegram:
 | `/reset` | Clear conversation history for the current session |
 | `/status` | Show session info (key, message count, model) |
 | `/model` | View current model and available aliases |
-| `/model <alias>` | Switch model (haiku, sonnet, opus, opus46, default) |
+| `/model <alias>` | Switch model (haiku, sonnet, opus, default) |
+| `/provider` | View/switch AI provider |
+| `/context` | Show context window usage |
+| `/smartroute` | Show smart routing status |
+| `/smartroute on\|off` | Enable/disable smart routing for this session |
+| `/smartroute budget <amount>` | Set session cost budget |
+| `/compact` | Manually trigger context compaction |
 | `/stop` | Cancel the current AI operation |
 | `/quit` | Exit the TUI |
 
