@@ -9,56 +9,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"conduit/internal/tools/types"
 )
 
-// ValidationResult represents the result of parameter validation.
-type ValidationResult struct {
-	Valid       bool             `json:"valid"`
-	Errors      []ParameterError `json:"errors,omitempty"`
-	Suggestions []string         `json:"suggestions,omitempty"`
-}
-
-// ParameterError provides detailed information about a validation failure.
-type ParameterError struct {
-	Parameter       string      `json:"parameter"`
-	Message         string      `json:"message"`
-	ProvidedValue   interface{} `json:"provided_value"`
-	ExpectedFormat  string      `json:"expected_format,omitempty"`
-	Examples        []string    `json:"examples,omitempty"`
-	AvailableValues []string    `json:"available_values,omitempty"`
-}
-
-// Error implements the error interface for ParameterError.
-func (e ParameterError) Error() string {
-	var parts []string
-	parts = append(parts, fmt.Sprintf("Parameter '%s': %s", e.Parameter, e.Message))
-
-	if e.ProvidedValue != nil {
-		parts = append(parts, fmt.Sprintf("Provided: '%v'", e.ProvidedValue))
-	}
-
-	if e.ExpectedFormat != "" {
-		parts = append(parts, fmt.Sprintf("Expected format: %s", e.ExpectedFormat))
-	}
-
-	if len(e.Examples) > 0 {
-		parts = append(parts, fmt.Sprintf("Examples: %s", strings.Join(e.Examples, ", ")))
-	}
-
-	if len(e.AvailableValues) > 0 {
-		if len(e.AvailableValues) <= 5 {
-			parts = append(parts, fmt.Sprintf("Available values: %s", strings.Join(e.AvailableValues, ", ")))
-		} else {
-			first5 := e.AvailableValues[:5]
-			parts = append(parts, fmt.Sprintf("Available values: %s... (%d total)", strings.Join(first5, ", "), len(e.AvailableValues)))
-		}
-	}
-
-	return strings.Join(parts, ". ")
-}
-
 // ValidatorFunc is a function that validates a parameter value.
-type ValidatorFunc func(ctx context.Context, value interface{}, options ValidatorOptions) *ParameterError
+type ValidatorFunc func(ctx context.Context, value interface{}, options ValidatorOptions) *types.ValidationError
 
 // ValidatorOptions provides context for validation.
 type ValidatorOptions struct {
@@ -99,8 +55,8 @@ func (v *Validator) SetSystemState(state SystemState) {
 }
 
 // ValidateParameters validates a map of parameters against their validation rules.
-func (v *Validator) ValidateParameters(ctx context.Context, args map[string]interface{}, rules map[string][]ValidatorFunc) *ValidationResult {
-	result := &ValidationResult{Valid: true}
+func (v *Validator) ValidateParameters(ctx context.Context, args map[string]interface{}, rules map[string][]ValidatorFunc) *types.ValidationResult {
+	result := &types.ValidationResult{Valid: true}
 
 	for param, validators := range rules {
 		value := args[param]
@@ -127,7 +83,7 @@ func (v *Validator) ValidateParameters(ctx context.Context, args map[string]inte
 }
 
 // generateSuggestions creates helpful suggestions based on validation errors.
-func (v *Validator) generateSuggestions(errors []ParameterError) []string {
+func (v *Validator) generateSuggestions(errors []types.ValidationError) []string {
 	var suggestions []string
 
 	for _, err := range errors {
@@ -150,19 +106,21 @@ func (v *Validator) generateSuggestions(errors []ParameterError) []string {
 
 // Required validates that a parameter is present and not empty.
 func Required() ValidatorFunc {
-	return func(ctx context.Context, value interface{}, options ValidatorOptions) *ParameterError {
+	return func(ctx context.Context, value interface{}, options ValidatorOptions) *types.ValidationError {
 		if value == nil {
-			return &ParameterError{
+			return &types.ValidationError{
 				Parameter: options.Parameter,
 				Message:   "is required",
+				ErrorType: "missing",
 			}
 		}
 
 		if str, ok := value.(string); ok && strings.TrimSpace(str) == "" {
-			return &ParameterError{
+			return &types.ValidationError{
 				Parameter:     options.Parameter,
 				Message:       "cannot be empty",
 				ProvidedValue: value,
+				ErrorType:     "missing",
 			}
 		}
 
@@ -172,13 +130,14 @@ func Required() ValidatorFunc {
 
 // StringFormat validates string format (email, URL, etc.).
 func StringFormat(format string) ValidatorFunc {
-	return func(ctx context.Context, value interface{}, options ValidatorOptions) *ParameterError {
+	return func(ctx context.Context, value interface{}, options ValidatorOptions) *types.ValidationError {
 		str, ok := value.(string)
 		if !ok {
-			return &ParameterError{
+			return &types.ValidationError{
 				Parameter:     options.Parameter,
 				Message:       "must be a string",
 				ProvidedValue: value,
+				ErrorType:     "invalid_format",
 			}
 		}
 
@@ -197,13 +156,14 @@ func StringFormat(format string) ValidatorFunc {
 
 // ChannelTarget validates that a target channel exists and is available.
 func ChannelTarget() ValidatorFunc {
-	return func(ctx context.Context, value interface{}, options ValidatorOptions) *ParameterError {
+	return func(ctx context.Context, value interface{}, options ValidatorOptions) *types.ValidationError {
 		target, ok := value.(string)
 		if !ok {
-			return &ParameterError{
+			return &types.ValidationError{
 				Parameter:     options.Parameter,
 				Message:       "must be a string",
 				ProvidedValue: value,
+				ErrorType:     "invalid_format",
 			}
 		}
 
@@ -214,11 +174,12 @@ func ChannelTarget() ValidatorFunc {
 		// Get available channels from system state
 		availableChannels := options.SystemState.AvailableChannels
 		if len(availableChannels) == 0 {
-			return &ParameterError{
+			return &types.ValidationError{
 				Parameter:     options.Parameter,
 				Message:       "no channels available",
 				ProvidedValue: target,
-				Examples:      []string{"Check channel configuration"},
+				Examples:      []interface{}{"Check channel configuration"},
+				ErrorType:     "service_unavailable",
 			}
 		}
 
@@ -230,12 +191,13 @@ func ChannelTarget() ValidatorFunc {
 			channelIds = append(channelIds, channel.ID)
 			if channel.ID == target {
 				if channel.Status == "offline" {
-					return &ParameterError{
+					return &types.ValidationError{
 						Parameter:       options.Parameter,
 						Message:         fmt.Sprintf("channel '%s' is offline", target),
 						ProvidedValue:   target,
 						AvailableValues: getOnlineChannelIds(availableChannels),
-						Examples:        []string{"Try an online channel", "Use action 'status' to check availability"},
+						Examples:        []interface{}{"Try an online channel", "Use action 'status' to check availability"},
+						ErrorType:       "service_unavailable",
 					}
 				}
 				return nil // Valid and online
@@ -249,25 +211,27 @@ func ChannelTarget() ValidatorFunc {
 		onlineChannels := getOnlineChannelIds(availableChannels)
 		allChannels := append(onlineChannels, offlineChannels...)
 
-		return &ParameterError{
+		return &types.ValidationError{
 			Parameter:       options.Parameter,
 			Message:         fmt.Sprintf("channel '%s' not found", target),
 			ProvidedValue:   target,
 			AvailableValues: allChannels,
-			Examples:        []string{"Use action 'status' to list available channels"},
+			Examples:        []interface{}{"Use action 'status' to list available channels"},
+			ErrorType:       "resource_not_found",
 		}
 	}
 }
 
 // FilePathSandbox validates that a file path is within sandbox restrictions.
 func FilePathSandbox() ValidatorFunc {
-	return func(ctx context.Context, value interface{}, options ValidatorOptions) *ParameterError {
+	return func(ctx context.Context, value interface{}, options ValidatorOptions) *types.ValidationError {
 		path, ok := value.(string)
 		if !ok {
-			return &ParameterError{
+			return &types.ValidationError{
 				Parameter:     options.Parameter,
 				Message:       "must be a string",
 				ProvidedValue: value,
+				ErrorType:     "invalid_format",
 			}
 		}
 
@@ -281,13 +245,14 @@ func FilePathSandbox() ValidatorFunc {
 
 // OneOf validates that a value is one of the allowed options.
 func OneOf(allowedValues []string) ValidatorFunc {
-	return func(ctx context.Context, value interface{}, options ValidatorOptions) *ParameterError {
+	return func(ctx context.Context, value interface{}, options ValidatorOptions) *types.ValidationError {
 		str, ok := value.(string)
 		if !ok {
-			return &ParameterError{
+			return &types.ValidationError{
 				Parameter:     options.Parameter,
 				Message:       "must be a string",
 				ProvidedValue: value,
+				ErrorType:     "invalid_format",
 			}
 		}
 
@@ -297,64 +262,66 @@ func OneOf(allowedValues []string) ValidatorFunc {
 			}
 		}
 
-		return &ParameterError{
+		return &types.ValidationError{
 			Parameter:       options.Parameter,
 			Message:         fmt.Sprintf("'%s' is not a valid option", str),
 			ProvidedValue:   str,
 			AvailableValues: allowedValues,
+			ErrorType:       "invalid_value",
 		}
 	}
 }
 
 // Helper functions
 
-func validateEmail(email, parameter string) *ParameterError {
+func validateEmail(email, parameter string) *types.ValidationError {
 	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 	if !emailRegex.MatchString(email) {
-		return &ParameterError{
-			Parameter:      parameter,
-			Message:        "invalid email format",
-			ProvidedValue:  email,
-			ExpectedFormat: "user@domain.com",
-			Examples:       []string{"user@example.com", "john.doe@company.org"},
+		return &types.ValidationError{
+			Parameter:     parameter,
+			Message:       "invalid email format",
+			ProvidedValue: email,
+			Examples:      []interface{}{"user@example.com", "john.doe@company.org"},
+			ErrorType:     "invalid_format",
 		}
 	}
 	return nil
 }
 
-func validateURL(urlStr, parameter string) *ParameterError {
+func validateURL(urlStr, parameter string) *types.ValidationError {
 	if _, err := url.Parse(urlStr); err != nil {
-		return &ParameterError{
-			Parameter:      parameter,
-			Message:        "invalid URL format",
-			ProvidedValue:  urlStr,
-			ExpectedFormat: "http://example.com or https://example.com",
-			Examples:       []string{"https://example.com", "http://localhost:8080"},
+		return &types.ValidationError{
+			Parameter:     parameter,
+			Message:       "invalid URL format",
+			ProvidedValue: urlStr,
+			Examples:      []interface{}{"https://example.com", "http://localhost:8080"},
+			ErrorType:     "invalid_format",
 		}
 	}
 
 	if !strings.HasPrefix(urlStr, "http://") && !strings.HasPrefix(urlStr, "https://") {
-		return &ParameterError{
-			Parameter:      parameter,
-			Message:        "URL must include protocol",
-			ProvidedValue:  urlStr,
-			ExpectedFormat: "http://... or https://...",
-			Examples:       []string{fmt.Sprintf("https://%s", urlStr)},
+		return &types.ValidationError{
+			Parameter:     parameter,
+			Message:       "URL must include protocol",
+			ProvidedValue: urlStr,
+			Examples:      []interface{}{fmt.Sprintf("https://%s", urlStr)},
+			ErrorType:     "invalid_format",
 		}
 	}
 
 	return nil
 }
 
-func validateFilePath(path, parameter string, allowedPaths []string) *ParameterError {
+func validateFilePath(path, parameter string, allowedPaths []string) *types.ValidationError {
 	// Resolve absolute path
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return &ParameterError{
+		return &types.ValidationError{
 			Parameter:     parameter,
 			Message:       "invalid path format",
 			ProvidedValue: path,
-			Examples:      []string{"./file.txt", "/absolute/path", "relative/path"},
+			Examples:      []interface{}{"./file.txt", "/absolute/path", "relative/path"},
+			ErrorType:     "invalid_format",
 		}
 	}
 
@@ -368,23 +335,25 @@ func validateFilePath(path, parameter string, allowedPaths []string) *ParameterE
 	}
 
 	if !allowed {
-		return &ParameterError{
+		return &types.ValidationError{
 			Parameter:       parameter,
 			Message:         fmt.Sprintf("path '%s' not allowed in sandbox", path),
 			ProvidedValue:   path,
 			AvailableValues: allowedPaths,
-			Examples:        []string{"Use relative paths from workspace", "Check sandbox configuration"},
+			Examples:        []interface{}{"Use relative paths from workspace", "Check sandbox configuration"},
+			ErrorType:       "permission_denied",
 		}
 	}
 
 	// Check if parent directory exists for write operations
 	dir := filepath.Dir(absPath)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return &ParameterError{
+		return &types.ValidationError{
 			Parameter:     parameter,
 			Message:       fmt.Sprintf("parent directory does not exist: %s", dir),
 			ProvidedValue: path,
-			Examples:      []string{"Create parent directory first", "Use existing directory path"},
+			Examples:      []interface{}{"Create parent directory first", "Use existing directory path"},
+			ErrorType:     "resource_not_found",
 		}
 	}
 
