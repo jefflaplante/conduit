@@ -64,6 +64,7 @@ func NewSecurityEngine(cfg SecurityConfig) *SecurityEngine {
 			"events":     true,
 			"clusters":   true,
 			"namespaces": true,
+			"watch":      true,
 		},
 		modifyOps: map[string]bool{
 			"scale":    true,

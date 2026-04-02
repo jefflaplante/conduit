@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"conduit/internal/config"
 	"conduit/internal/tools/types"
@@ -13,10 +14,12 @@ import (
 
 // K8sTool provides Kubernetes cluster management via the tool interface.
 type K8sTool struct {
-	services *types.ToolServices
-	config   *config.KubernetesConfig
-	security *SecurityEngine
-	clients  *ClientManager
+	services      *types.ToolServices
+	config        *config.KubernetesConfig
+	security      *SecurityEngine
+	clients       *ClientManager
+	podExecutor   *PodExecutor
+	portForwarder *PortForwarder
 }
 
 // NewK8sTool creates a new Kubernetes tool with the given services and configuration.
@@ -42,10 +45,12 @@ func NewK8sTool(services *types.ToolServices, cfg *config.KubernetesConfig) (*K8
 	clients := NewClientManager(clusters)
 
 	return &K8sTool{
-		services: services,
-		config:   cfg,
-		security: security,
-		clients:  clients,
+		services:      services,
+		config:        cfg,
+		security:      security,
+		clients:       clients,
+		podExecutor:   NewPodExecutor(),
+		portForwarder: NewPortForwarder(10),
 	}, nil
 }
 
@@ -64,7 +69,11 @@ func (t *K8sTool) Description() string {
 - clusters: List configured clusters and connection status
 - namespaces: List namespaces in a cluster
 - events: List events in a namespace
-- exec: Execute a command in a pod container (future)
+- watch: Watch for resource changes over a bounded time window
+- exec: Execute a command in a pod container
+- portforward_create: Forward a local port to a pod port
+- portforward_close: Close an active port forward
+- portforward_list: List active port forwards
 - top: Show resource usage metrics (future)`
 }
 
@@ -76,7 +85,7 @@ func (t *K8sTool) Parameters() map[string]interface{} {
 			"action": map[string]interface{}{
 				"type":        "string",
 				"description": "The Kubernetes operation to perform",
-				"enum":        []string{"get", "describe", "logs", "exec", "scale", "rollout", "delete", "top", "clusters", "namespaces", "events"},
+				"enum":        []string{"get", "describe", "logs", "exec", "scale", "rollout", "delete", "watch", "top", "clusters", "namespaces", "events", "portforward_create", "portforward_close", "portforward_list"},
 			},
 			"cluster": map[string]interface{}{
 				"type":        "string",
@@ -122,6 +131,22 @@ func (t *K8sTool) Parameters() map[string]interface{} {
 				"type":        "string",
 				"description": "Sub-action for rollout: restart, status, or history",
 			},
+			"timeout": map[string]interface{}{
+				"type":        "integer",
+				"description": "Watch timeout in seconds (default 30, max 120)",
+			},
+			"local_port": map[string]interface{}{
+				"type":        "integer",
+				"description": "Local port for port forwarding (0 for auto-assign)",
+			},
+			"remote_port": map[string]interface{}{
+				"type":        "integer",
+				"description": "Remote pod port to forward to",
+			},
+			"forward_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Port forward ID for close operation",
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -156,11 +181,16 @@ func (t *K8sTool) Execute(ctx context.Context, args map[string]interface{}) (*ty
 		return t.executeNamespaces(ctx, args)
 	case "events":
 		return t.executeEvents(ctx, args)
+	case "watch":
+		return t.executeWatch(ctx, args)
 	case "exec":
-		return &types.ToolResult{
-			Success: false,
-			Error:   "exec not yet implemented -- coming in a future phase",
-		}, nil
+		return t.executeExec(ctx, args)
+	case "portforward_create":
+		return t.executePortForwardCreate(ctx, args)
+	case "portforward_close":
+		return t.executePortForwardClose(args)
+	case "portforward_list":
+		return t.executePortForwardList()
 	case "top":
 		return &types.ToolResult{
 			Success: false,
@@ -493,6 +523,199 @@ func (t *K8sTool) executeEvents(ctx context.Context, args map[string]interface{}
 		Success: true,
 		Content: fmt.Sprintf("Found %d events in namespace %s on cluster %s", len(events), namespace, clusterName),
 		Data:    map[string]interface{}{"events": items, "count": len(events)},
+	}, nil
+}
+
+func (t *K8sTool) executeWatch(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	clusterName, clusterCfg, err := t.resolveCluster(args)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: err.Error()}, nil
+	}
+
+	resource := getStringArg(args, "resource", "")
+	if resource == "" {
+		return &types.ToolResult{Success: false, Error: "resource parameter is required for watch"}, nil
+	}
+
+	namespace := t.resolveNamespace(args, clusterCfg)
+	labelSelector := getStringArg(args, "label_selector", "")
+	timeoutSec := getIntArg(args, "timeout", 30)
+	if timeoutSec <= 0 {
+		timeoutSec = 30
+	}
+	if timeoutSec > 120 {
+		timeoutSec = 120
+	}
+
+	// Watch is a read operation — same security tier as "get".
+	if secErr := t.checkSecurity("get", resource, namespace, clusterCfg); secErr != nil {
+		return secErr, nil
+	}
+
+	client, err := t.clients.GetClient(clusterName)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+	}
+
+	result, err := WatchResources(ctx, client, resource, namespace, labelSelector, time.Duration(timeoutSec)*time.Second)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("watch failed: %v", err)}, nil
+	}
+
+	data, _ := json.Marshal(result)
+	var resultMap map[string]interface{}
+	json.Unmarshal(data, &resultMap)
+
+	return &types.ToolResult{
+		Success: true,
+		Content: fmt.Sprintf("Watch completed: %d event(s) in %s on cluster %s (completed=%t)",
+			len(result.Events), result.Duration, clusterName, result.Completed),
+		Data: resultMap,
+	}, nil
+}
+
+func (t *K8sTool) executeExec(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	clusterName, clusterCfg, err := t.resolveCluster(args)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: err.Error()}, nil
+	}
+
+	pod := getStringArg(args, "name", "")
+	if pod == "" {
+		return &types.ToolResult{Success: false, Error: "name parameter (pod name) is required for exec"}, nil
+	}
+
+	command := getStringArg(args, "command", "")
+	if command == "" {
+		return &types.ToolResult{Success: false, Error: "command parameter is required for exec"}, nil
+	}
+
+	namespace := t.resolveNamespace(args, clusterCfg)
+	container := getStringArg(args, "container", "")
+
+	if secErr := t.checkSecurity("exec", "pods", namespace, clusterCfg); secErr != nil {
+		return secErr, nil
+	}
+
+	client, err := t.clients.GetClient(clusterName)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+	}
+
+	timeout := time.Duration(getIntArg(args, "timeout", 0)) * time.Second
+
+	result, err := t.podExecutor.Execute(ctx, client, pod, namespace, container, command, timeout)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("exec failed: %v", err)}, nil
+	}
+
+	content := result.Stdout
+	if result.TimedOut {
+		content = fmt.Sprintf("[timed out]\n%s", content)
+	}
+	if result.Stderr != "" {
+		content += fmt.Sprintf("\n--- stderr ---\n%s", result.Stderr)
+	}
+
+	data, _ := json.Marshal(result)
+	var dataMap map[string]interface{}
+	json.Unmarshal(data, &dataMap)
+
+	return &types.ToolResult{
+		Success: result.ExitCode == 0 && !result.TimedOut,
+		Content: content,
+		Data:    dataMap,
+	}, nil
+}
+
+// ---------- Port forward actions ----------
+
+func (t *K8sTool) executePortForwardCreate(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	pod := getStringArg(args, "name", "")
+	if pod == "" {
+		return &types.ToolResult{Success: false, Error: "name parameter is required for portforward_create (pod name)"}, nil
+	}
+
+	remotePort := getIntArg(args, "remote_port", 0)
+	if remotePort == 0 {
+		return &types.ToolResult{Success: false, Error: "remote_port parameter is required for portforward_create"}, nil
+	}
+
+	localPort := getIntArg(args, "local_port", 0)
+
+	// Validate ports early before resolving cluster.
+	if err := validatePorts(localPort, remotePort); err != nil {
+		return &types.ToolResult{Success: false, Error: err.Error()}, nil
+	}
+
+	clusterName, clusterCfg, err := t.resolveCluster(args)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: err.Error()}, nil
+	}
+
+	namespace := t.resolveNamespace(args, clusterCfg)
+
+	client, err := t.clients.GetClient(clusterName)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+	}
+
+	fwd, err := t.portForwarder.Create(client, pod, namespace, localPort, remotePort, clusterName)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to create port forward: %v", err)}, nil
+	}
+
+	return &types.ToolResult{
+		Success: true,
+		Content: fmt.Sprintf("Port forward created: 127.0.0.1:%d -> %s:%d (pod %s in %s/%s)",
+			fwd.LocalPort, pod, remotePort, pod, clusterName, namespace),
+		Data: map[string]interface{}{
+			"id":          fwd.ID,
+			"local_port":  fwd.LocalPort,
+			"remote_port": fwd.RemotePort,
+			"pod":         fwd.Pod,
+			"namespace":   fwd.Namespace,
+			"cluster":     fwd.Cluster,
+		},
+	}, nil
+}
+
+func (t *K8sTool) executePortForwardClose(args map[string]interface{}) (*types.ToolResult, error) {
+	id := getStringArg(args, "forward_id", "")
+	if id == "" {
+		return &types.ToolResult{Success: false, Error: "forward_id parameter is required for portforward_close"}, nil
+	}
+
+	if err := t.portForwarder.Close(id); err != nil {
+		return &types.ToolResult{Success: false, Error: err.Error()}, nil
+	}
+
+	return &types.ToolResult{
+		Success: true,
+		Content: fmt.Sprintf("Port forward %s closed", id),
+	}, nil
+}
+
+func (t *K8sTool) executePortForwardList() (*types.ToolResult, error) {
+	forwards := t.portForwarder.List()
+
+	items := make([]interface{}, len(forwards))
+	for i, fwd := range forwards {
+		items[i] = map[string]interface{}{
+			"id":          fwd.ID,
+			"cluster":     fwd.Cluster,
+			"pod":         fwd.Pod,
+			"namespace":   fwd.Namespace,
+			"local_port":  fwd.LocalPort,
+			"remote_port": fwd.RemotePort,
+			"created_at":  fwd.CreatedAt.Format(time.RFC3339),
+		}
+	}
+
+	return &types.ToolResult{
+		Success: true,
+		Content: fmt.Sprintf("%d active port forward(s)", len(forwards)),
+		Data:    map[string]interface{}{"forwards": items, "count": len(forwards)},
 	}, nil
 }
 
