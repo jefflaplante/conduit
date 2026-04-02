@@ -1,8 +1,6 @@
 module conduit
 
-go 1.24.2
-
-toolchain go1.24.13
+go 1.25.0
 
 replace github.com/jefflaplante/vecgo => ./vecgo
 
@@ -16,11 +14,11 @@ require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/go-telegram/bot v1.8.0
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jefflaplante/vecgo v0.0.0-00010101000000-000000000000
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.44.0
 	golang.org/x/time v0.11.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -70,6 +68,10 @@ require (
 	golang.org/x/sync v0.18.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
+	k8s.io/api v0.35.3 // indirect
+	k8s.io/apimachinery v0.35.3 // indirect
+	k8s.io/client-go v0.35.3 // indirect
+	k8s.io/metrics v0.35.3 // indirect
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
