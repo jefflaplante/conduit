@@ -12,8 +12,10 @@ import (
 	"conduit/internal/skills"
 	"conduit/internal/tools/communication"
 	"conduit/internal/tools/core"
+	datadogTool "conduit/internal/tools/datadog"
 	k8s "conduit/internal/tools/k8s"
 	mqttTool "conduit/internal/tools/mqtt"
+	pagerdutyTool "conduit/internal/tools/pagerduty"
 	"conduit/internal/tools/scheduling"
 	"conduit/internal/tools/schema"
 	"conduit/internal/tools/ssh"
@@ -202,6 +204,34 @@ func (r *Registry) registerAllTools() {
 			log.Printf("Failed to create Kubernetes tool: %v", err)
 		} else {
 			allTools = append(allTools, k8sTool)
+		}
+	}
+
+	// PagerDuty tool (optional - requires configuration)
+	if r.services.ConfigMgr != nil && r.services.ConfigMgr.PagerDuty.Enabled {
+		pdTool, err := pagerdutyTool.NewPagerDutyTool(r.services, &r.services.ConfigMgr.PagerDuty)
+		if err != nil {
+			log.Printf("Failed to create PagerDuty tool: %v", err)
+		} else {
+			allTools = append(allTools, pdTool)
+		}
+	}
+
+	// Datadog tool (optional - requires configuration)
+	if r.services.ConfigMgr != nil && r.services.ConfigMgr.Datadog.Enabled {
+		ddTool, err := datadogTool.NewDatadogTool(r.services, &r.services.ConfigMgr.Datadog)
+		if err != nil {
+			log.Printf("Failed to create Datadog tool: %v", err)
+		} else {
+			allTools = append(allTools, ddTool)
+		}
+
+		// Datadog Monitor tool (separate tool for monitor management)
+		monitorTool, err := datadogTool.NewMonitorTool(r.services, &r.services.ConfigMgr.Datadog)
+		if err != nil {
+			log.Printf("Failed to create Datadog Monitor tool: %v", err)
+		} else {
+			allTools = append(allTools, monitorTool)
 		}
 	}
 

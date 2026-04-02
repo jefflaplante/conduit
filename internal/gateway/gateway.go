@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,6 +25,7 @@ import (
 	"conduit/internal/config"
 	"conduit/internal/fts"
 	"conduit/internal/heartbeat"
+	"conduit/internal/logging"
 	"conduit/internal/middleware"
 	"conduit/internal/monitoring"
 	"conduit/internal/mqtt"
@@ -71,6 +72,7 @@ const (
 // Gateway represents the core Conduit gateway
 type Gateway struct {
 	config           *config.Config
+	logger           *slog.Logger
 	sessions         *sessions.Store
 	ai               *ai.Router
 	agentSystem      *agent.ConduitAgentWithIntegration
@@ -161,6 +163,11 @@ func (a *channelStatusAdapter) GetStatus() map[string]interface{} {
 
 // New creates a new Gateway instance
 func New(cfg *config.Config) (*Gateway, error) {
+	// Initialize structured logger
+	logger := logging.New(cfg.Logging.GetLevel(), cfg.Logging.GetFormat())
+	logging.SetDefault(logger)
+	logger = logger.With("component", "gateway")
+
 	// Initialize session store
 	sessionStore, err := sessions.NewStore(cfg.Database.Path)
 	if err != nil {
@@ -170,16 +177,16 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Initialize workspace context if configured
 	var workspaceContext *workspace.WorkspaceContext
 	if cfg.Workspace.ContextDir != "" {
-		log.Printf("Initializing workspace context from: %s", cfg.Workspace.ContextDir)
+		logger.Info("initializing workspace context", "path", cfg.Workspace.ContextDir)
 		workspaceContext = workspace.NewWorkspaceContext(cfg.Workspace.ContextDir)
 	} else {
-		log.Println("WARNING: No workspace context directory configured")
+		logger.Warn("no workspace context directory configured")
 	}
 
 	// Initialize skills manager if configured
 	var skillsManager *skills.Manager
 	if cfg.Skills.Enabled {
-		log.Println("Initializing skills manager...")
+		logger.Info("initializing skills manager")
 		skillsManager = skills.NewManager(cfg.Skills)
 
 		// Initialize skills manager
@@ -187,7 +194,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		defer cancel()
 
 		if err := skillsManager.Initialize(ctx); err != nil {
-			log.Printf("WARNING: Failed to initialize skills manager: %v", err)
+			logger.Warn("failed to initialize skills manager", "error", err)
 			// Continue without skills rather than failing completely
 			skillsManager = nil
 		} else {
@@ -195,10 +202,10 @@ func New(cfg *config.Config) (*Gateway, error) {
 			if availableSkills, err := skillsManager.GetAvailableSkills(ctx); err == nil {
 				skillCount = len(availableSkills)
 			}
-			log.Printf("Skills manager initialized with %d skills", skillCount)
+			logger.Info("skills manager initialized", "skill_count", skillCount)
 		}
 	} else {
-		log.Println("Skills system disabled in configuration")
+		logger.Debug("skills system disabled in configuration")
 	}
 
 	// Initialize tools registry (tools will be registered after SetServices)
@@ -242,9 +249,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 	defer cancel()
 
 	if err := agentSystem.Initialize(ctx); err != nil {
-		log.Printf("WARNING: Failed to initialize agent system: %v", err)
+		logger.Warn("failed to initialize agent system", "error", err)
 	} else {
-		log.Println("Agent system initialized successfully")
+		logger.Info("agent system initialized")
 	}
 
 	// Create tool execution engine with configurable chain limit
@@ -280,11 +287,11 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Wire up token-aware history config
 	aiRouter.SetHistoryConfig(&cfg.Agent.History)
 
-	log.Println("Tool execution engine wired up")
+	logger.Debug("tool execution engine wired up")
 
 	// Initialize summary manager for AI-powered workspace summarization (small-context models)
 	if cfg.Workspace.Summary.Enabled && workspaceContext != nil {
-		log.Println("Initializing workspace summary manager...")
+		logger.Info("initializing workspace summary manager")
 		summaryExecutor := workspace.NewSummaryExecutor(
 			newSummaryAIRouterAdapter(aiRouter),
 			cfg.Workspace.Summary.Model,
@@ -320,16 +327,19 @@ func New(cfg *config.Config) (*Gateway, error) {
 			summaryConfig,
 		)
 		agentSystem.SetSummaryManager(summaryManager)
-		log.Printf("Workspace summary manager initialized (model: %s, ratio: %.0f%%)",
-			summaryConfig.Model, summaryConfig.TargetRatio*100)
+		logger.Info("workspace summary manager initialized",
+			"model", summaryConfig.Model,
+			"target_ratio_percent", summaryConfig.TargetRatio*100)
 	}
 
 	// Initialize context compaction engine if enabled
 	var compactionEngine *ai.CompactionEngine
 	if cfg.AI.Compaction != nil && cfg.AI.Compaction.Enabled {
 		compactionEngine = ai.NewCompactionEngine(aiRouter, sessionStore, *cfg.AI.Compaction)
-		log.Printf("Context compaction enabled (threshold: %.0f%%, model: %s, keep: %d messages)",
-			cfg.AI.Compaction.Threshold*100, cfg.AI.Compaction.Model, cfg.AI.Compaction.RecentMessagesToKeep)
+		logger.Info("context compaction enabled",
+			"threshold_percent", cfg.AI.Compaction.Threshold*100,
+			"model", cfg.AI.Compaction.Model,
+			"keep_messages", cfg.AI.Compaction.RecentMessagesToKeep)
 	}
 
 	// Initialize authentication system using the same database
@@ -351,8 +361,10 @@ func New(cfg *config.Config) (*Gateway, error) {
 	authMiddleware := middleware.NewAuthMiddleware(authStorage, middleware.AuthMiddlewareConfig{
 		SkipPaths: authSkipPaths,
 		OnAuthError: func(r *http.Request, err middleware.AuthError) {
-			log.Printf("[Auth] Authentication failed: %s %s (code: %d)",
-				r.Method, r.URL.Path, err.Code)
+			logging.Warn(r.Context(), "authentication failed",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"code", err.Code)
 		},
 	})
 
@@ -380,8 +392,15 @@ func New(cfg *config.Config) (*Gateway, error) {
 			CleanupIntervalSeconds: cfg.RateLimiting.CleanupIntervalSeconds,
 		},
 		OnRateLimitExceeded: func(r *http.Request, identifier string, isAnonymous bool) {
-			log.Printf("[Gateway] Rate limit exceeded: %s %s (identifier: %s, type: %s)",
-				r.Method, r.URL.Path, identifier, map[bool]string{true: "anonymous_ip", false: "authenticated_client"}[isAnonymous])
+			clientType := "authenticated_client"
+			if isAnonymous {
+				clientType = "anonymous_ip"
+			}
+			logging.Warn(r.Context(), "rate limit exceeded",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"identifier", identifier,
+				"client_type", clientType)
 		},
 	})
 
@@ -406,13 +425,14 @@ func New(cfg *config.Config) (*Gateway, error) {
 			Collector:  metricsCollector,
 			EventStore: eventStore,
 		})
-		log.Printf("Heartbeat service configured: %d second interval", cfg.Heartbeat.IntervalSeconds)
+		logger.Info("heartbeat service configured", "interval_seconds", cfg.Heartbeat.IntervalSeconds)
 	} else {
-		log.Println("Heartbeat service disabled in configuration")
+		logger.Debug("heartbeat service disabled in configuration")
 	}
 
 	gw := &Gateway{
 		config:              cfg,
+		logger:              logger,
 		sessions:            sessionStore,
 		ai:                  aiRouter,
 		agentSystem:         agentSystem,
@@ -464,7 +484,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		searchDBPath := cfg.Search.Path // Empty means derive from gateway.db path
 		sdb, err := searchdb.NewSearchDB(searchDBPath, cfg.Database.Path, sessionStore.DB())
 		if err != nil {
-			log.Printf("WARNING: Failed to initialize search database: %v (falling back to gateway.db)", err)
+			logger.Warn("failed to initialize search database, falling back to gateway.db", "error", err)
 			// Fall back to using gateway.db for FTS (backward compatibility)
 			ftsIndexer = fts.NewIndexer(sessionStore.DB(), ftsWorkspaceDir)
 			ftsSearcher = fts.NewSearcher(sessionStore.DB())
@@ -495,22 +515,22 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 			// Sync messages from gateway.db to search.db
 			if err := gw.messageSyncer.FullSync(indexCtx); err != nil {
-				log.Printf("WARNING: Initial message sync failed: %v", err)
+				logger.Warn("initial message sync failed", "error", err)
 			}
 
 			// Index beads
 			if err := gw.beadsIndexer.IndexBeads(indexCtx); err != nil {
-				log.Printf("WARNING: Initial beads indexing failed: %v", err)
+				logger.Warn("initial beads indexing failed", "error", err)
 			}
 
 			indexCancel()
-			log.Printf("Search database initialized at %s", sdb.Path())
+			logger.Info("search database initialized", "path", sdb.Path())
 		}
 	} else {
 		// Search disabled - use gateway.db (backward compatibility)
 		ftsIndexer = fts.NewIndexer(sessionStore.DB(), ftsWorkspaceDir)
 		ftsSearcher = fts.NewSearcher(sessionStore.DB())
-		log.Println("Search database disabled, using gateway.db for FTS")
+		logger.Debug("search database disabled, using gateway.db for FTS")
 	}
 
 	gw.ftsIndexer = ftsIndexer
@@ -519,7 +539,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Run initial workspace indexing
 	indexCtx, indexCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := ftsIndexer.IndexWorkspace(indexCtx); err != nil {
-		log.Printf("WARNING: Initial FTS5 workspace indexing failed: %v", err)
+		logger.Warn("initial FTS5 workspace indexing failed", "error", err)
 	}
 	indexCancel()
 
@@ -544,9 +564,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 					cfg.Vector.OpenAI.Model,
 					cfg.Vector.EmbedDims,
 				)
-				log.Printf("Using OpenAI embeddings (model: %s)", vecCfg.Embedder.Name())
+				logger.Info("using OpenAI embeddings", "model", vecCfg.Embedder.Name())
 			} else {
-				log.Printf("WARNING: OpenAI embeddings configured but no API key; falling back to TF-IDF")
+				logger.Warn("OpenAI embeddings configured but no API key, falling back to TF-IDF")
 			}
 		default:
 			// TF-IDF is the default, no action needed (vecgo service handles it)
@@ -554,18 +574,18 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 		vectorSvc, vecErr := vecgoservice.NewService(vecCfg)
 		if vecErr != nil {
-			log.Printf("WARNING: Failed to initialize vector search: %v (continuing without)", vecErr)
+			logger.Warn("failed to initialize vector search, continuing without", "error", vecErr)
 		} else {
 			gw.vectorService = vectorSvc
 			indexWorkspaceForVector(ftsWorkspaceDir, vectorSvc)
-			log.Printf("Vector search initialized at %s", vectorDBPath)
+			logger.Info("vector search initialized", "path", vectorDBPath)
 		}
 	}
 
 	// Initialize optional MQTT event ingest service
 	if cfg.MQTT.Enabled {
 		gw.mqttService = mqtt.NewService(cfg.MQTT)
-		log.Printf("MQTT service configured for %s (%d topics)", cfg.MQTT.BrokerURL, len(cfg.MQTT.Topics))
+		logger.Info("MQTT service configured", "broker", cfg.MQTT.BrokerURL, "topic_count", len(cfg.MQTT.Topics))
 	}
 
 	// Create schema builder with discovery providers for enhanced tool schemas
@@ -618,29 +638,24 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// NOTE: initializeAgentHeartbeat is called AFTER scheduler.Start() in the Run() method
 	// so that existing jobs are loaded from cron_jobs.json before the heartbeat job is added.
 
-	log.Printf("Gateway initialized with:")
-	log.Printf("  - Agent: %s (%s personality)", agentCfg.Name, agentCfg.Personality)
-	log.Printf("  - Workspace: %v", workspaceContext != nil)
-	log.Printf("  - Skills: %v", skillsManager != nil && skillsManager.IsEnabled())
-	log.Printf("  - Tools: %d available", len(aiTools))
-	log.Printf("  - Scheduler: enabled")
-	log.Printf("  - Auth: enabled (middleware + WebSocket authenticator)")
-	log.Printf("  - Vector Search: %v", gw.vectorService != nil)
-	log.Printf("  - MQTT: %v", gw.mqttService != nil)
-	log.Printf("  - Compaction: %v", gw.compactionEngine != nil)
+	logger.Info("gateway initialized",
+		"agent_name", agentCfg.Name,
+		"agent_personality", agentCfg.Personality,
+		"workspace_enabled", workspaceContext != nil,
+		"skills_enabled", skillsManager != nil && skillsManager.IsEnabled(),
+		"tool_count", len(aiTools),
+		"vector_search_enabled", gw.vectorService != nil,
+		"mqtt_enabled", gw.mqttService != nil,
+		"compaction_enabled", gw.compactionEngine != nil,
+		"rate_limiting_enabled", cfg.RateLimiting.Enabled,
+		"model_alias_count", len(cfg.AI.ModelAliases))
+
 	if cfg.RateLimiting.Enabled {
-		log.Printf("  - Rate Limiting: enabled (anonymous: %d req/%ds, authenticated: %d req/%ds)",
-			cfg.RateLimiting.Anonymous.MaxRequests, cfg.RateLimiting.Anonymous.WindowSeconds,
-			cfg.RateLimiting.Authenticated.MaxRequests, cfg.RateLimiting.Authenticated.WindowSeconds)
-	} else {
-		log.Printf("  - Rate Limiting: disabled")
-	}
-	if len(cfg.AI.ModelAliases) > 0 {
-		log.Printf("  - Model Aliases: %d configured", len(cfg.AI.ModelAliases))
-	} else {
-		log.Println("  - Model Aliases: using defaults (not configured)")
-		log.Println("    To customize, add \"model_aliases\" to the \"ai\" section of your config.json:")
-		log.Println("    \"model_aliases\": { \"haiku\": \"claude-haiku-4-5-20251001\", \"sonnet\": \"claude-sonnet-4-20250514\", \"opus\": \"claude-opus-4-6\", \"default\": \"\" }")
+		logger.Debug("rate limiting configuration",
+			"anonymous_max_requests", cfg.RateLimiting.Anonymous.MaxRequests,
+			"anonymous_window_seconds", cfg.RateLimiting.Anonymous.WindowSeconds,
+			"authenticated_max_requests", cfg.RateLimiting.Authenticated.MaxRequests,
+			"authenticated_window_seconds", cfg.RateLimiting.Authenticated.WindowSeconds)
 	}
 
 	return gw, nil
@@ -648,11 +663,11 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 // executeScheduledJob is called when a Go cron job fires
 func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) error {
-	log.Printf("[Scheduler] Executing job: %s - %s", job.ID, job.Command)
+	g.logger.Info("executing scheduled job", "job_id", job.ID, "command", job.Command)
 
 	// Check if this is a heartbeat job
 	if heartbeat.IsHeartbeatJob(job) {
-		log.Printf("[Scheduler] Routing to heartbeat execution framework")
+		g.logger.Debug("routing to heartbeat execution framework", "job_id", job.ID)
 		return g.heartbeatIntegration.ExecuteHeartbeat(ctx, job)
 	}
 
@@ -693,7 +708,7 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 
 		// Check for silent response patterns - don't send these to the target
 		if responseContent == "" || channels.IsSilentResponse(responseContent) {
-			log.Printf("[Scheduler] Job %s completed with silent response, not sending to target", job.ID)
+			g.logger.Debug("job completed with silent response, not sending to target", "job_id", job.ID)
 			return nil
 		}
 
@@ -720,11 +735,11 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 		}
 
 		if err := g.channelManager.SendMessage(outgoingMsg); err != nil {
-			log.Printf("[Scheduler] Failed to send job output to %s: %v", job.Target, err)
+			g.logger.Error("failed to send job output", "job_id", job.ID, "target", job.Target, "error", err)
 		}
 	}
 
-	log.Printf("[Scheduler] Job %s completed, response: %d chars", job.ID, len(response.GetContent()))
+	g.logger.Info("job completed", "job_id", job.ID, "response_chars", len(response.GetContent()))
 	return nil
 }
 
@@ -810,7 +825,7 @@ func (g *Gateway) createInternalToken(clientName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	log.Printf("Created internal token for %s (id: %s)", clientName, resp.TokenInfo.TokenID)
+	g.logger.Debug("created internal token", "client_name", clientName, "token_id", resp.TokenInfo.TokenID)
 	return resp.Token, nil
 }
 
@@ -872,8 +887,8 @@ func (g *Gateway) Start(ctx context.Context) error {
 	schedulerReady := false
 	if g.scheduler != nil {
 		if err := g.scheduler.Start(); err != nil {
-			log.Printf("WARNING: Failed to start scheduler: %v", err)
-			log.Printf("WARNING: Skipping heartbeat initialization to avoid wiping cron_jobs.json")
+			g.logger.Warn("failed to start scheduler", "error", err)
+			g.logger.Warn("skipping heartbeat initialization to avoid wiping cron_jobs.json")
 		} else {
 			schedulerReady = true
 		}
@@ -883,14 +898,14 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// existing jobs are loaded from disk before we check for duplicates and potentially save)
 	if schedulerReady {
 		if err := g.initializeAgentHeartbeat(g.config); err != nil {
-			log.Printf("WARNING: Failed to initialize agent heartbeat: %v", err)
+			g.logger.Warn("failed to initialize agent heartbeat", "error", err)
 		}
 	}
 
 	// Start heartbeat service
 	if g.heartbeatService != nil {
 		if err := g.heartbeatService.Start(ctx); err != nil {
-			log.Printf("WARNING: Failed to start heartbeat service: %v", err)
+			g.logger.Warn("failed to start heartbeat service", "error", err)
 		}
 	}
 
@@ -913,20 +928,20 @@ func (g *Gateway) Start(ctx context.Context) error {
 				case <-ticker.C:
 					// Re-index workspace documents
 					if err := g.ftsIndexer.IndexWorkspace(ctx); err != nil {
-						log.Printf("FTS5 periodic re-index failed: %v", err)
+						g.logger.Warn("FTS5 periodic re-index failed", "error", err)
 					}
 
 					// Re-index beads if available
 					if g.beadsIndexer != nil {
 						if err := g.beadsIndexer.IndexBeads(ctx); err != nil {
-							log.Printf("Beads periodic re-index failed: %v", err)
+							g.logger.Warn("beads periodic re-index failed", "error", err)
 						}
 					}
 
 					// Run incremental message sync as safety net
 					if g.messageSyncer != nil {
 						if err := g.messageSyncer.IncrementalSync(ctx); err != nil {
-							log.Printf("Message incremental sync failed: %v", err)
+							g.logger.Warn("message incremental sync failed", "error", err)
 						}
 					}
 				}
@@ -937,9 +952,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Start MQTT service if configured
 	if g.mqttService != nil {
 		if err := g.mqttService.Start(ctx); err != nil {
-			log.Printf("WARNING: Failed to start MQTT service: %v", err)
+			g.logger.Warn("failed to start MQTT service", "error", err)
 		} else {
-			log.Printf("MQTT service started")
+			g.logger.Info("MQTT service started")
 		}
 	}
 
@@ -988,16 +1003,16 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 		sshServer, err := internalssh.NewServer(sshConfig)
 		if err != nil {
-			log.Printf("WARNING: Failed to create SSH server: %v", err)
+			g.logger.Warn("failed to create SSH server", "error", err)
 		} else {
 			g.sshServer = sshServer
 			go func() {
-				log.Printf("SSH server listening on %s (direct mode)", sshConfig.ListenAddr)
+				g.logger.Info("SSH server listening", "address", sshConfig.ListenAddr, "mode", "direct")
 				if err := sshServer.ListenAndServe(); err != nil {
 					select {
 					case <-ctx.Done():
 					default:
-						log.Printf("SSH server error: %v", err)
+						g.logger.Error("SSH server error", "error", err)
 					}
 				}
 			}()
@@ -1010,37 +1025,37 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Start server in goroutine
 	go func() {
 		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			log.Printf("HTTP server error: %v", err)
+			g.logger.Error("HTTP server error", "error", err)
 		}
 	}()
 
-	log.Printf("Gateway started on port %d", g.config.Port)
+	g.logger.Info("gateway started", "port", g.config.Port)
 
 	// Wait for context cancellation
 	<-ctx.Done()
 
 	// Graceful shutdown
-	log.Println("Shutting down gateway...")
+	g.logger.Info("shutting down gateway")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Server shutdown error: %v", err)
+		g.logger.Error("server shutdown error", "error", err)
 	}
 
 	g.stopChannels()
 
 	// Stop SSH server
 	if g.sshServer != nil {
-		log.Println("Stopping SSH server...")
+		g.logger.Debug("stopping SSH server")
 		g.sshServer.Close()
 	}
 
 	// Stop heartbeat service
 	if g.heartbeatService != nil {
 		if err := g.heartbeatService.Stop(); err != nil {
-			log.Printf("Error stopping heartbeat service: %v", err)
+			g.logger.Error("error stopping heartbeat service", "error", err)
 		}
 	}
 
@@ -1067,7 +1082,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Close vector search service
 	if g.vectorService != nil {
 		if err := g.vectorService.Close(); err != nil {
-			log.Printf("Error closing vector service: %v", err)
+			g.logger.Error("error closing vector service", "error", err)
 		}
 	}
 
@@ -1095,7 +1110,9 @@ func checkOrigin(allowedOrigins []string) func(r *http.Request) bool {
 					return true
 				}
 			}
-			log.Printf("WebSocket origin rejected: %s (not in allowed origins)", origin)
+			logging.Warn(r.Context(), "WebSocket origin rejected",
+				"origin", origin,
+				"reason", "not in allowed origins")
 			return false
 		}
 
@@ -1113,7 +1130,9 @@ func checkOrigin(allowedOrigins []string) func(r *http.Request) bool {
 			}
 		}
 
-		log.Printf("WebSocket origin rejected: %s (no allowed origins configured, only localhost permitted)", origin)
+		logging.Warn(r.Context(), "WebSocket origin rejected",
+			"origin", origin,
+			"reason", "only localhost permitted")
 		return false
 	}
 }
@@ -1123,7 +1142,9 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Check WebSocket connection limit before doing any work
 	if g.wsConnCount.Load() >= MaxWebSocketConnections {
 		http.Error(w, "Too many WebSocket connections", http.StatusServiceUnavailable)
-		log.Printf("[WebSocket] Connection rejected: limit reached (%d/%d)", g.wsConnCount.Load(), MaxWebSocketConnections)
+		g.logger.Warn("WebSocket connection rejected: limit reached",
+			"current", g.wsConnCount.Load(),
+			"max", MaxWebSocketConnections)
 		return
 	}
 
@@ -1147,14 +1168,16 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if count := g.wsConnCount.Add(1); count > MaxWebSocketConnections {
 		g.wsConnCount.Add(-1)
 		http.Error(w, "Too many WebSocket connections", http.StatusServiceUnavailable)
-		log.Printf("[WebSocket] Connection rejected (race): limit reached (%d/%d)", count-1, MaxWebSocketConnections)
+		g.logger.Warn("WebSocket connection rejected (race): limit reached",
+			"current", count-1,
+			"max", MaxWebSocketConnections)
 		return
 	}
 
 	conn, err := g.upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
 		g.wsConnCount.Add(-1) // Decrement on upgrade failure
-		log.Printf("WebSocket upgrade error: %v", err)
+		g.logger.Error("WebSocket upgrade error", "error", err)
 		return
 	}
 
@@ -1177,7 +1200,7 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		g.metricsCollector.UpdateWebSocketConnections(clientCount)
 	}
 
-	log.Printf("Client connected: %s (auth: %s)", client.ID, authResult.AuthInfo.ClientName)
+	g.logger.Info("client connected", "client_id", client.ID, "auth", authResult.AuthInfo.ClientName)
 
 	// Send enriched gateway info to client
 	toolCount := len(g.tools.GetAvailableTools())
@@ -1224,14 +1247,18 @@ func (g *Gateway) handleTokenRevocation(tokenID string) {
 	g.clientMu.RUnlock()
 
 	for _, c := range targets {
-		log.Printf("[Auth] Closing connection %s: token %s revoked", c.ID, tokenID)
+		g.logger.Debug("closing connection for revoked token",
+			"client_id", c.ID,
+			"token_id", tokenID)
 		closeMsg := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "token revoked")
 		_ = c.Conn.WriteControl(websocket.CloseMessage, closeMsg, time.Now().Add(time.Second))
 		_ = c.Conn.Close()
 	}
 
 	if len(targets) > 0 {
-		log.Printf("[Auth] Closed %d connection(s) for revoked token %s", len(targets), tokenID)
+		g.logger.Info("closed connections for revoked token",
+			"connection_count", len(targets),
+			"token_id", tokenID)
 	}
 }
 
@@ -1283,7 +1310,7 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 		}
 
 		client.Conn.Close()
-		log.Printf("Client disconnected: %s", client.ID)
+		g.logger.Debug("client disconnected", "client_id", client.ID)
 	}()
 
 	// Set message size limit to prevent DoS via large messages
@@ -1294,16 +1321,16 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 		_, message, err := client.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				log.Printf("Client %s closed connection normally", client.ID)
+				g.logger.Debug("client closed connection normally", "client_id", client.ID)
 			} else {
-				log.Printf("WebSocket read error from %s: %v", client.ID, err)
+				g.logger.Warn("WebSocket read error", "client_id", client.ID, "error", err)
 			}
 			break
 		}
 
 		parsed, err := protocol.ParseMessage(message)
 		if err != nil {
-			log.Printf("Failed to parse message from %s: %v", client.ID, err)
+			g.logger.Warn("failed to parse message", "client_id", client.ID, "error", err)
 			continue
 		}
 
@@ -1324,7 +1351,7 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 				Status: "ok",
 			})
 		default:
-			log.Printf("Unhandled message type from %s: %T", client.ID, msg)
+			g.logger.Debug("unhandled message type", "client_id", client.ID, "type", fmt.Sprintf("%T", msg))
 		}
 	}
 }
@@ -1346,7 +1373,7 @@ func (g *Gateway) handleClientWrite(client *Client) {
 			}
 
 			if err := client.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Printf("WebSocket write error: %v", err)
+				g.logger.Warn("WebSocket write error", "error", err)
 				return
 			}
 		case <-g.ctx.Done():
@@ -1379,20 +1406,20 @@ func (g *Gateway) startChannels(ctx context.Context) error {
 		return fmt.Errorf("failed to start channel manager: %w", err)
 	}
 
-	log.Println("Channel manager started")
+	g.logger.Info("channel manager started")
 	return nil
 }
 
 // stopChannels stops the channel manager
 func (g *Gateway) stopChannels() {
 	if err := g.channelManager.Stop(); err != nil {
-		log.Printf("Error stopping channel manager: %v", err)
+		g.logger.Error("error stopping channel manager", "error", err)
 	}
 }
 
 // processMessages handles the main message processing loop
 func (g *Gateway) processMessages(ctx context.Context) {
-	log.Println("Starting message processor...")
+	g.logger.Debug("starting message processor")
 
 	for {
 		select {
@@ -1407,7 +1434,14 @@ func (g *Gateway) processMessages(ctx context.Context) {
 
 // handleIncomingMessage processes a single incoming message
 func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.IncomingMessage) {
-	log.Printf("Processing message from %s (%d chars)", msg.ChannelID, len(msg.Text))
+	// Add request ID to context for correlation
+	ctx = logging.WithRequestID(ctx, "")
+	reqID := logging.RequestIDFromContext(ctx)
+
+	g.logger.Debug("processing message",
+		"channel_id", msg.ChannelID,
+		"text_length", len(msg.Text),
+		"request_id", reqID)
 
 	// Track activity in metrics collector
 	if g.metricsCollector != nil {
@@ -1417,7 +1451,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 	// Get or create session
 	session, err := g.sessions.GetOrCreateSession(msg.UserID, msg.ChannelID)
 	if err != nil {
-		log.Printf("Error getting session: %v", err)
+		logging.Error(ctx, "error getting session", "error", err)
 		return
 	}
 
@@ -1429,7 +1463,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 	// Add user message to session
 	_, err = g.sessions.AddMessage(session.Key, "user", msg.Text, msg.Metadata)
 	if err != nil {
-		log.Printf("Error saving user message: %v", err)
+		logging.Error(ctx, "error saving user message", "error", err)
 		return
 	}
 
@@ -1487,7 +1521,10 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 			if event.EventType == "thinking" {
 				g.channelManager.SendTypingIndicator(msg.ChannelID, msg.UserID)
 			}
-			log.Printf("[ToolEvent] channel=%s event=%s tool=%s", msg.ChannelID, event.EventType, event.ToolName)
+			logging.Debug(reqCtx, "tool event",
+				"channel", msg.ChannelID,
+				"event", event.EventType,
+				"tool", event.ToolName)
 		})
 
 		// Get model and provider overrides from session context
@@ -1510,7 +1547,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 			// Send placeholder message
 			placeholderMsgID, sendErr := streamingAdapter.SendMessageWithID(chatID, "...")
 			if sendErr != nil {
-				log.Printf("[Streaming] Failed to send placeholder: %v", sendErr)
+				logging.Warn(reqCtx, "streaming: failed to send placeholder", "error", sendErr)
 				supportsStreaming = false // Fall back to non-streaming
 			} else {
 				close(typingDone) // Stop typing indicator since we have a message now
@@ -1539,7 +1576,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 						displayText := channels.StripTrailingSilentTokens(currentText)
 						if displayText != "" {
 							if editErr := streamingAdapter.EditMessageText(chatID, placeholderMsgID, displayText); editErr != nil {
-								log.Printf("[Streaming] Edit failed: %v", editErr)
+								logging.Warn(reqCtx, "streaming: edit failed", "error", editErr)
 							}
 						}
 						lastEditTime = time.Now()
@@ -1556,10 +1593,10 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 
 					// Check for silent response patterns in final content
 					if channels.IsSilentResponse(finalContent) {
-						log.Printf("[Streaming] Silent response pattern detected, deleting placeholder")
+						logging.Debug(reqCtx, "streaming: silent response pattern detected, deleting placeholder")
 						// Delete the placeholder message since we don't want to show this
 						if deleteErr := streamingAdapter.DeleteMessage(chatID, placeholderMsgID); deleteErr != nil {
-							log.Printf("[Streaming] Failed to delete placeholder: %v", deleteErr)
+							logging.Warn(reqCtx, "streaming: failed to delete placeholder", "error", deleteErr)
 						}
 						streamingUsed = true
 					} else if finalContent != "" {
@@ -1567,8 +1604,9 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 						finalContent = channels.SanitizeOutgoingText(finalContent)
 						// If tool execution happened, the final content might be different from streamed text
 						if streamedLength > 0 && finalContent != textBuilder.String() {
-							log.Printf("[Streaming] Tool execution detected: streamed=%d chars, final=%d chars",
-								streamedLength, len(finalContent))
+							logging.Debug(reqCtx, "streaming: tool execution detected",
+								"streamed_chars", streamedLength,
+								"final_chars", len(finalContent))
 						}
 						if finalContent != "" {
 							streamingAdapter.EditMessageText(chatID, placeholderMsgID, finalContent)
@@ -1579,13 +1617,13 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 						streamedText := textBuilder.String()
 						// Also check streamed text for silent patterns
 						if channels.IsSilentResponse(streamedText) {
-							log.Printf("[Streaming] Silent response in streamed text, deleting placeholder")
+							logging.Debug(reqCtx, "streaming: silent response in streamed text, deleting placeholder")
 							if deleteErr := streamingAdapter.DeleteMessage(chatID, placeholderMsgID); deleteErr != nil {
-								log.Printf("[Streaming] Failed to delete placeholder: %v", deleteErr)
+								logging.Warn(reqCtx, "streaming: failed to delete placeholder", "error", deleteErr)
 							}
 						} else {
 							streamedText = channels.SanitizeOutgoingText(streamedText)
-							log.Printf("[Streaming] Using streamed text only: %d chars", streamedLength)
+							logging.Debug(reqCtx, "streaming: using streamed text only", "chars", streamedLength)
 							if streamedText != "" {
 								streamingAdapter.EditMessageText(chatID, placeholderMsgID, streamedText)
 							}
@@ -1623,11 +1661,11 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 
 			// Check if this was a cancellation (from /stop)
 			if reqCtx.Err() == context.Canceled {
-				log.Printf("Request cancelled for session: %s", session.Key)
+				logging.Debug(reqCtx, "request cancelled for session", "session_key", session.Key)
 				return // Silent return, /stop already sent a message
 			}
 
-			log.Printf("Error generating AI response: %v", err)
+			logging.Error(reqCtx, "error generating AI response", "error", err)
 
 			// Send error message back to user
 			errorMsg := &protocol.OutgoingMessage{
@@ -1671,9 +1709,10 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		// Check for silent response tokens (NO_REPLY, HEARTBEAT_OK)
 		if responseContent == "" || channels.IsSilentResponse(responseContent) {
 			if responseContent == "" {
-				log.Printf("Warning: Empty response content, not sending to channel")
+				logging.Warn(ctx, "empty response content, not sending to channel")
 			} else {
-				log.Printf("Silent response detected in channel message (%d chars), suppressing", len(responseContent))
+				logging.Debug(ctx, "silent response detected in channel message, suppressing",
+					"response_chars", len(responseContent))
 			}
 			return
 		}
@@ -1681,12 +1720,13 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		// Add AI response to session
 		_, err = g.sessions.AddMessage(session.Key, "assistant", responseContent, nil)
 		if err != nil {
-			log.Printf("Error saving AI message: %v", err)
+			logging.Error(ctx, "error saving AI message", "error", err)
 		}
 
 		// Skip sending if streaming already edited the message
 		if streamingUsed {
-			log.Printf("[Streaming] Response delivered via message editing (%d chars)", len(responseContent))
+			logging.Debug(ctx, "streaming: response delivered via message editing",
+				"response_chars", len(responseContent))
 			return
 		}
 
@@ -1711,7 +1751,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		}
 
 		if err := g.channelManager.SendMessage(outgoingMsg); err != nil {
-			log.Printf("Error sending response: %v", err)
+			logging.Error(ctx, "error sending response", "error", err)
 		}
 	} else {
 		// Echo back if no AI available (for testing)
@@ -1772,7 +1812,7 @@ func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 	// Get or create session
 	session, err := g.sessions.GetOrCreateSession(req.UserID, "test")
 	if err != nil {
-		log.Printf("[TestMessage] Error creating session: %v", err)
+		g.logger.Error("test message: error creating session", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -1780,7 +1820,7 @@ func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 	// Add user message to session
 	_, err = g.sessions.AddMessage(session.Key, "user", req.Message, nil)
 	if err != nil {
-		log.Printf("[TestMessage] Error saving user message: %v", err)
+		g.logger.Error("test message: error saving user message", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -1797,7 +1837,7 @@ func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 	providerOverride := session.Context["provider"]
 	convResponse, err := g.ai.GenerateResponseWithTools(ctx, session, req.Message, providerOverride, modelOverride)
 	if err != nil {
-		log.Printf("[TestMessage] Error generating AI response: %v", err)
+		g.logger.Error("test message: error generating AI response", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -1805,7 +1845,7 @@ func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 	// Add AI response to session
 	_, err = g.sessions.AddMessage(session.Key, "assistant", convResponse.GetContent(), nil)
 	if err != nil {
-		log.Printf("Error saving AI message: %v", err)
+		g.logger.Error("error saving AI message", "error", err)
 	}
 
 	// Return response
@@ -1845,6 +1885,7 @@ func indexWorkspaceForVector(workspaceDir string, svc *vecgoservice.Service) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	logger := logging.Default()
 	var indexed int
 	err := filepath.Walk(workspaceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -1855,7 +1896,7 @@ func indexWorkspaceForVector(workspaceDir string, svc *vecgoservice.Service) {
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			log.Printf("vecgo: skip %s: %v", path, readErr)
+			logger.Debug("vecgo: skip file", "path", path, "error", readErr)
 			return nil
 		}
 		relPath, _ := filepath.Rel(workspaceDir, path)
@@ -1868,20 +1909,20 @@ func indexWorkspaceForVector(workspaceDir string, svc *vecgoservice.Service) {
 			"title":  strings.TrimSuffix(info.Name(), ".md"),
 		}
 		if indexErr := svc.Index(ctx, relPath, string(data), meta); indexErr != nil {
-			log.Printf("vecgo: index %s: %v", relPath, indexErr)
+			logger.Warn("vecgo: index failed", "path", relPath, "error", indexErr)
 			return nil
 		}
 		indexed++
 		return nil
 	})
 	if err != nil {
-		log.Printf("WARNING: Vector workspace indexing walk error: %v", err)
+		logger.Warn("vector workspace indexing walk error", "error", err)
 	}
 	if indexed > 0 {
 		if saveErr := svc.Save(ctx); saveErr != nil {
-			log.Printf("WARNING: Vector index save failed: %v", saveErr)
+			logger.Warn("vector index save failed", "error", saveErr)
 		}
-		log.Printf("Vector search: indexed %d workspace files", indexed)
+		logger.Info("vector search indexed workspace files", "file_count", indexed)
 	}
 }
 

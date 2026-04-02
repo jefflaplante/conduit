@@ -11,6 +11,7 @@ import (
 
 	"conduit/internal/auth"
 	"conduit/internal/config"
+	"conduit/internal/logging"
 	"conduit/internal/middleware"
 	"conduit/internal/monitoring"
 	"conduit/internal/sessions"
@@ -49,10 +50,14 @@ func createTestGatewayWithAuth(t *testing.T) (*Gateway, *auth.TokenStorage) {
 		Config: middleware.RateLimitConfig{Enabled: false},
 	})
 
-	authStorage := auth.NewTokenStorage(sessionStore.DB())
+	authStorage := auth.NewTokenStorage(sessionStore.DB(), "test-secret-key")
+
+	// Create a test logger
+	testLogger := logging.New("info", "text")
 
 	gw := &Gateway{
 		config:              cfg,
+		logger:              testLogger,
 		sessions:            sessionStore,
 		gatewayMetrics:      gatewayMetrics,
 		metricsCollector:    metricsCollector,
