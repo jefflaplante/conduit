@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -165,7 +166,7 @@ func (t *K8sTool) Parameters() map[string]interface{} {
 
 // Execute dispatches the requested action and returns a tool result.
 func (t *K8sTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	action := getStringArg(args, "action", "")
+	action := toolargs.GetString(args, "action", "")
 	if action == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -233,14 +234,14 @@ func (t *K8sTool) executeGet(ctx context.Context, args map[string]interface{}) (
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	resource := getStringArg(args, "resource", "")
+	resource := toolargs.GetString(args, "resource", "")
 	if resource == "" {
 		return &types.ToolResult{Success: false, Error: "resource parameter is required for get"}, nil
 	}
 
-	name := getStringArg(args, "name", "")
+	name := toolargs.GetString(args, "name", "")
 	namespace := t.resolveNamespace(args, clusterCfg)
-	labelSelector := getStringArg(args, "label_selector", "")
+	labelSelector := toolargs.GetString(args, "label_selector", "")
 
 	if err := t.checkSecurity("get", resource, namespace, clusterCfg); err != nil {
 		return err, nil
@@ -287,8 +288,8 @@ func (t *K8sTool) executeDescribe(ctx context.Context, args map[string]interface
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	resource := getStringArg(args, "resource", "")
-	name := getStringArg(args, "name", "")
+	resource := toolargs.GetString(args, "resource", "")
+	name := toolargs.GetString(args, "name", "")
 	if resource == "" || name == "" {
 		return &types.ToolResult{Success: false, Error: "resource and name parameters are required for describe"}, nil
 	}
@@ -320,15 +321,15 @@ func (t *K8sTool) executeLogs(ctx context.Context, args map[string]interface{}) 
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	name := getStringArg(args, "name", "")
+	name := toolargs.GetString(args, "name", "")
 	if name == "" {
 		return &types.ToolResult{Success: false, Error: "name parameter is required for logs"}, nil
 	}
 
 	namespace := t.resolveNamespace(args, clusterCfg)
-	container := getStringArg(args, "container", "")
-	tailLines := int64(getIntArg(args, "tail_lines", 100))
-	since := int64(getIntArg(args, "since", 0))
+	container := toolargs.GetString(args, "container", "")
+	tailLines := int64(toolargs.GetInt(args, "tail_lines", 100))
+	since := int64(toolargs.GetInt(args, "since", 0))
 
 	if err := t.checkSecurity("logs", "pods", namespace, clusterCfg); err != nil {
 		return err, nil
@@ -356,13 +357,13 @@ func (t *K8sTool) executeScale(ctx context.Context, args map[string]interface{})
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	resource := getStringArg(args, "resource", "")
-	name := getStringArg(args, "name", "")
+	resource := toolargs.GetString(args, "resource", "")
+	name := toolargs.GetString(args, "name", "")
 	if resource == "" || name == "" {
 		return &types.ToolResult{Success: false, Error: "resource and name parameters are required for scale"}, nil
 	}
 
-	replicas := getIntArg(args, "replicas", -1)
+	replicas := toolargs.GetInt(args, "replicas", -1)
 	if replicas < 0 {
 		return &types.ToolResult{Success: false, Error: "replicas parameter is required for scale (must be >= 0)"}, nil
 	}
@@ -393,9 +394,9 @@ func (t *K8sTool) executeRollout(ctx context.Context, args map[string]interface{
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	resource := getStringArg(args, "resource", "")
-	name := getStringArg(args, "name", "")
-	subaction := getStringArg(args, "subaction", "")
+	resource := toolargs.GetString(args, "resource", "")
+	name := toolargs.GetString(args, "name", "")
+	subaction := toolargs.GetString(args, "subaction", "")
 	if resource == "" || name == "" || subaction == "" {
 		return &types.ToolResult{Success: false, Error: "resource, name, and subaction parameters are required for rollout"}, nil
 	}
@@ -444,8 +445,8 @@ func (t *K8sTool) executeDelete(ctx context.Context, args map[string]interface{}
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	resource := getStringArg(args, "resource", "")
-	name := getStringArg(args, "name", "")
+	resource := toolargs.GetString(args, "resource", "")
+	name := toolargs.GetString(args, "name", "")
 	if resource == "" || name == "" {
 		return &types.ToolResult{Success: false, Error: "resource and name parameters are required for delete"}, nil
 	}
@@ -505,7 +506,7 @@ func (t *K8sTool) executeEvents(ctx context.Context, args map[string]interface{}
 	}
 
 	namespace := t.resolveNamespace(args, clusterCfg)
-	name := getStringArg(args, "name", "")
+	name := toolargs.GetString(args, "name", "")
 
 	client, err := t.clients.GetClient(clusterName)
 	if err != nil {
@@ -540,14 +541,14 @@ func (t *K8sTool) executeWatch(ctx context.Context, args map[string]interface{})
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	resource := getStringArg(args, "resource", "")
+	resource := toolargs.GetString(args, "resource", "")
 	if resource == "" {
 		return &types.ToolResult{Success: false, Error: "resource parameter is required for watch"}, nil
 	}
 
 	namespace := t.resolveNamespace(args, clusterCfg)
-	labelSelector := getStringArg(args, "label_selector", "")
-	timeoutSec := getIntArg(args, "timeout", 30)
+	labelSelector := toolargs.GetString(args, "label_selector", "")
+	timeoutSec := toolargs.GetInt(args, "timeout", 30)
 	if timeoutSec <= 0 {
 		timeoutSec = 30
 	}
@@ -588,18 +589,18 @@ func (t *K8sTool) executeExec(ctx context.Context, args map[string]interface{}) 
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	pod := getStringArg(args, "name", "")
+	pod := toolargs.GetString(args, "name", "")
 	if pod == "" {
 		return &types.ToolResult{Success: false, Error: "name parameter (pod name) is required for exec"}, nil
 	}
 
-	command := getStringArg(args, "command", "")
+	command := toolargs.GetString(args, "command", "")
 	if command == "" {
 		return &types.ToolResult{Success: false, Error: "command parameter is required for exec"}, nil
 	}
 
 	namespace := t.resolveNamespace(args, clusterCfg)
-	container := getStringArg(args, "container", "")
+	container := toolargs.GetString(args, "container", "")
 
 	if secErr := t.checkSecurity("exec", "pods", namespace, clusterCfg); secErr != nil {
 		return secErr, nil
@@ -610,7 +611,7 @@ func (t *K8sTool) executeExec(ctx context.Context, args map[string]interface{}) 
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
 	}
 
-	timeout := time.Duration(getIntArg(args, "timeout", 0)) * time.Second
+	timeout := time.Duration(toolargs.GetInt(args, "timeout", 0)) * time.Second
 
 	result, err := t.podExecutor.Execute(ctx, client, pod, namespace, container, command, timeout)
 	if err != nil {
@@ -639,17 +640,17 @@ func (t *K8sTool) executeExec(ctx context.Context, args map[string]interface{}) 
 // ---------- Port forward actions ----------
 
 func (t *K8sTool) executePortForwardCreate(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	pod := getStringArg(args, "name", "")
+	pod := toolargs.GetString(args, "name", "")
 	if pod == "" {
 		return &types.ToolResult{Success: false, Error: "name parameter is required for portforward_create (pod name)"}, nil
 	}
 
-	remotePort := getIntArg(args, "remote_port", 0)
+	remotePort := toolargs.GetInt(args, "remote_port", 0)
 	if remotePort == 0 {
 		return &types.ToolResult{Success: false, Error: "remote_port parameter is required for portforward_create"}, nil
 	}
 
-	localPort := getIntArg(args, "local_port", 0)
+	localPort := toolargs.GetInt(args, "local_port", 0)
 
 	// Validate ports early before resolving cluster.
 	if err := validatePorts(localPort, remotePort); err != nil {
@@ -689,7 +690,7 @@ func (t *K8sTool) executePortForwardCreate(ctx context.Context, args map[string]
 }
 
 func (t *K8sTool) executePortForwardClose(args map[string]interface{}) (*types.ToolResult, error) {
-	id := getStringArg(args, "forward_id", "")
+	id := toolargs.GetString(args, "forward_id", "")
 	if id == "" {
 		return &types.ToolResult{Success: false, Error: "forward_id parameter is required for portforward_close"}, nil
 	}
@@ -769,7 +770,7 @@ func (t *K8sTool) checkSecurity(action, resource, namespace string, clusterCfg *
 // resolveCluster determines which cluster to target. If only one cluster is
 // configured, it is used automatically. Otherwise the cluster param is required.
 func (t *K8sTool) resolveCluster(args map[string]interface{}) (string, *config.KubernetesCluster, error) {
-	clusterName := getStringArg(args, "cluster", "")
+	clusterName := toolargs.GetString(args, "cluster", "")
 
 	if clusterName == "" {
 		if len(t.config.Clusters) == 1 {
@@ -795,7 +796,7 @@ func (t *K8sTool) resolveCluster(args map[string]interface{}) (string, *config.K
 
 // resolveNamespace determines the target namespace from args, cluster config, or defaults.
 func (t *K8sTool) resolveNamespace(args map[string]interface{}, cluster *config.KubernetesCluster) string {
-	ns := getStringArg(args, "namespace", "")
+	ns := toolargs.GetString(args, "namespace", "")
 	if ns != "" {
 		return ns
 	}
@@ -808,25 +809,3 @@ func (t *K8sTool) resolveNamespace(args map[string]interface{}, cluster *config.
 	return "default"
 }
 
-func getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if v, ok := args[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return defaultVal
-}
-
-func getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if v, ok := args[key]; ok {
-		switch n := v.(type) {
-		case float64:
-			return int(n)
-		case int:
-			return n
-		case int64:
-			return int(n)
-		}
-	}
-	return defaultVal
-}

@@ -3,11 +3,11 @@ package datadog
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"conduit/internal/config"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -207,7 +207,7 @@ func (t *DatadogTool) GetActionDocs() map[string]types.ActionDoc {
 
 // Execute dispatches the requested action and returns a tool result.
 func (t *DatadogTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	action := getStringArg(args, "action", "")
+	action := toolargs.GetString(args, "action", "")
 	if action == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -243,65 +243,22 @@ func (t *DatadogTool) Execute(ctx context.Context, args map[string]interface{}) 
 	}
 }
 
-// --- Helper functions ---
-
-func getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if v, ok := args[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return defaultVal
-}
-
-func getInt64Arg(args map[string]interface{}, key string, defaultVal int64) int64 {
-	if v, ok := args[key]; ok {
-		switch n := v.(type) {
-		case float64:
-			return int64(n)
-		case int:
-			return int64(n)
-		case int64:
-			return n
-		}
-	}
-	return defaultVal
-}
-
-func getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if v, ok := args[key]; ok {
-		switch n := v.(type) {
-		case float64:
-			return int(n)
-		case int:
-			return n
-		case int64:
-			return int(n)
-		case json.Number:
-			if i, err := n.Int64(); err == nil {
-				return int(i)
-			}
-		}
-	}
-	return defaultVal
-}
-
 // ---------- Logs action handlers ----------
 
 // executeSearchLogs handles the search_logs action.
 func (t *DatadogTool) executeSearchLogs(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
 	params := SearchLogsParams{
-		Query:   getStringArg(args, "query", ""),
-		Limit:   getIntArg(args, "limit", 100),
-		Service: getStringArg(args, "service", ""),
-		Host:    getStringArg(args, "host", ""),
-		Status:  getStringArg(args, "status", ""),
-		Cursor:  getStringArg(args, "cursor", ""),
+		Query:   toolargs.GetString(args, "query", ""),
+		Limit:   toolargs.GetInt(args, "limit", 100),
+		Service: toolargs.GetString(args, "service", ""),
+		Host:    toolargs.GetString(args, "host", ""),
+		Status:  toolargs.GetString(args, "status", ""),
+		Cursor:  toolargs.GetString(args, "cursor", ""),
 	}
 
 	// Parse time range
-	fromStr := getStringArg(args, "from", "")
-	toStr := getStringArg(args, "to", "")
+	fromStr := toolargs.GetString(args, "from", "")
+	toStr := toolargs.GetString(args, "to", "")
 
 	if fromStr != "" {
 		from, err := parseTime(fromStr)
@@ -385,7 +342,7 @@ func (t *DatadogTool) executeSearchLogs(ctx context.Context, args map[string]int
 
 // executeGetLog handles the get_log action.
 func (t *DatadogTool) executeGetLog(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	logID := getStringArg(args, "log_id", "")
+	logID := toolargs.GetString(args, "log_id", "")
 	if logID == "" {
 		return &types.ToolResult{
 			Success: false,

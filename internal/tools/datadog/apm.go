@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -440,7 +441,7 @@ func formatDuration(d time.Duration) string {
 
 // executeSearchTraces handles the search_traces action.
 func (t *DatadogTool) executeSearchTraces(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	service := getStringArg(args, "service", "")
+	service := toolargs.GetString(args, "service", "")
 	if service == "" {
 		return types.NewErrorResult("missing_parameter", "service is required for search_traces action").
 			WithParameter("service", nil).
@@ -452,17 +453,17 @@ func (t *DatadogTool) executeSearchTraces(ctx context.Context, args map[string]i
 
 	params := SearchTracesParams{
 		Service:     service,
-		Operation:   getStringArg(args, "operation", ""),
-		Resource:    getStringArg(args, "resource", ""),
-		MinDuration: getStringArg(args, "min_duration", ""),
-		Status:      getStringArg(args, "status", ""),
-		Limit:       getIntArg(args, "limit", 20),
-		Cursor:      getStringArg(args, "cursor", ""),
+		Operation:   toolargs.GetString(args, "operation", ""),
+		Resource:    toolargs.GetString(args, "resource", ""),
+		MinDuration: toolargs.GetString(args, "min_duration", ""),
+		Status:      toolargs.GetString(args, "status", ""),
+		Limit:       toolargs.GetInt(args, "limit", 20),
+		Cursor:      toolargs.GetString(args, "cursor", ""),
 	}
 
 	// Parse time range
-	fromStr := getStringArg(args, "from", "")
-	toStr := getStringArg(args, "to", "")
+	fromStr := toolargs.GetString(args, "from", "")
+	toStr := toolargs.GetString(args, "to", "")
 
 	if fromStr != "" {
 		from, err := parseTime(fromStr)
@@ -547,7 +548,7 @@ func (t *DatadogTool) executeSearchTraces(ctx context.Context, args map[string]i
 
 // executeGetTrace handles the get_trace action.
 func (t *DatadogTool) executeGetTrace(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	traceID := getStringArg(args, "trace_id", "")
+	traceID := toolargs.GetString(args, "trace_id", "")
 	if traceID == "" {
 		return types.NewErrorResult("missing_parameter", "trace_id is required for get_trace action").
 			WithParameter("trace_id", nil).

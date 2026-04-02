@@ -8,10 +8,13 @@ import (
 	"testing"
 
 	"conduit/internal/config"
+	toolargs "conduit/internal/tools/args"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var _ = toolargs.GetString // silence unused import during transition
 
 func TestNewMonitorTool(t *testing.T) {
 	cfg := &config.DatadogConfig{
@@ -532,19 +535,19 @@ func TestHelperFunctions(t *testing.T) {
 		"bool_val":   true,
 	}
 
-	assert.Equal(t, "test", getStringArg(args, "string_val", "default"))
-	assert.Equal(t, "default", getStringArg(args, "missing", "default"))
+	assert.Equal(t, "test", toolargs.GetString(args, "string_val", "default"))
+	assert.Equal(t, "default", toolargs.GetString(args, "missing", "default"))
 
-	assert.Equal(t, 42, getIntArg(args, "int_val", 0))
-	assert.Equal(t, 123, getIntArg(args, "float_val", 0))
-	assert.Equal(t, 999, getIntArg(args, "int64_val", 0))
-	assert.Equal(t, 0, getIntArg(args, "missing", 0))
+	assert.Equal(t, 42, toolargs.GetInt(args, "int_val", 0))
+	assert.Equal(t, 123, toolargs.GetInt(args, "float_val", 0))
+	assert.Equal(t, 999, toolargs.GetInt(args, "int64_val", 0))
+	assert.Equal(t, 0, toolargs.GetInt(args, "missing", 0))
 
-	assert.Equal(t, int64(123), getInt64Arg(args, "float_val", 0))
-	assert.Equal(t, int64(999), getInt64Arg(args, "int64_val", 0))
+	assert.Equal(t, int64(123), toolargs.GetInt64(args, "float_val", 0))
+	assert.Equal(t, int64(999), toolargs.GetInt64(args, "int64_val", 0))
 
-	assert.True(t, getBoolArg(args, "bool_val", false))
-	assert.False(t, getBoolArg(args, "missing", false))
+	assert.True(t, toolargs.GetBool(args, "bool_val", false))
+	assert.False(t, toolargs.GetBool(args, "missing", false))
 }
 
 // ---------- Test helpers ----------

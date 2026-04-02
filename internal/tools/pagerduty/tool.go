@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"conduit/internal/config"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -176,7 +177,7 @@ func (t *PagerDutyTool) GetActionDocs() map[string]types.ActionDoc {
 
 // Execute dispatches the requested action and returns a tool result.
 func (t *PagerDutyTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	action := getStringArg(args, "action", "")
+	action := toolargs.GetString(args, "action", "")
 	if action == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -194,7 +195,7 @@ func (t *PagerDutyTool) Execute(ctx context.Context, args map[string]interface{}
 	}
 
 	if tier == TierDangerous {
-		confirmed := getBoolArg(args, "confirmed", false)
+		confirmed := toolargs.GetBool(args, "confirmed", false)
 		if !confirmed {
 			return &types.ToolResult{
 				Success: false,
@@ -234,36 +235,3 @@ func ClassifyAction(action string) SecurityTier {
 	return TierDangerous // Unknown actions are dangerous by default
 }
 
-// --- Argument helpers ---
-
-func getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if v, ok := args[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return defaultVal
-}
-
-func getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if v, ok := args[key]; ok {
-		switch n := v.(type) {
-		case float64:
-			return int(n)
-		case int:
-			return n
-		case int64:
-			return int(n)
-		}
-	}
-	return defaultVal
-}
-
-func getBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
-	if v, ok := args[key]; ok {
-		if b, ok := v.(bool); ok {
-			return b
-		}
-	}
-	return defaultVal
-}

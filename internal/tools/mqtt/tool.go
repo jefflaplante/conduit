@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -139,7 +140,7 @@ func (t *MQTTTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 		}, nil
 	}
 
-	action := getStr(args, "action")
+	action := toolargs.GetString(args, "action", "")
 	switch action {
 	case "devices":
 		return t.devices(args)
@@ -179,7 +180,7 @@ func (t *MQTTTool) status() (*types.ToolResult, error) {
 }
 
 func (t *MQTTTool) devices(args map[string]interface{}) (*types.ToolResult, error) {
-	namePattern := getStr(args, "name_pattern")
+	namePattern := toolargs.GetString(args, "name_pattern", "")
 
 	// Get zigbee2mqtt devices
 	allDevices := t.services.MQTTService.Devices()
@@ -293,8 +294,8 @@ func (t *MQTTTool) topics() (*types.ToolResult, error) {
 }
 
 func (t *MQTTTool) recent(args map[string]interface{}) (*types.ToolResult, error) {
-	limit := clampLimit(getInt(args, "limit", 20))
-	pattern := getStr(args, "topic_pattern")
+	limit := clampLimit(toolargs.GetInt(args, "limit", 20))
+	pattern := toolargs.GetString(args, "topic_pattern", "")
 
 	var events []types.MQTTEvent
 	if pattern != "" {
@@ -307,34 +308,34 @@ func (t *MQTTTool) recent(args map[string]interface{}) (*types.ToolResult, error
 }
 
 func (t *MQTTTool) history(args map[string]interface{}) (*types.ToolResult, error) {
-	topic := getStr(args, "topic")
+	topic := toolargs.GetString(args, "topic", "")
 	if topic == "" {
 		return types.NewErrorResult("missing_parameter", "topic is required for history action").
 			WithParameter("topic", nil).
 			WithExamples([]string{"zigbee2mqtt/Living Room Sensor", "zigbee2mqtt/Front Door Contact"}), nil
 	}
-	limit := clampLimit(getInt(args, "limit", 20))
+	limit := clampLimit(toolargs.GetInt(args, "limit", 20))
 	events := t.services.MQTTService.RecentForTopic(topic, limit)
 	return eventsResult(events, fmt.Sprintf("events for %s", topic)), nil
 }
 
 func (t *MQTTTool) publish(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	topic := getStr(args, "topic")
+	topic := toolargs.GetString(args, "topic", "")
 	if topic == "" {
 		return types.NewErrorResult("missing_parameter", "topic is required for publish").
 			WithParameter("topic", nil), nil
 	}
-	payloadStr := getStr(args, "payload")
+	payloadStr := toolargs.GetString(args, "payload", "")
 	if payloadStr == "" {
 		return types.NewErrorResult("missing_parameter", "payload is required for publish").
 			WithParameter("payload", nil), nil
 	}
 
-	qos := byte(getInt(args, "qos", 0))
+	qos := byte(toolargs.GetInt(args, "qos", 0))
 	if qos > 2 {
 		qos = 0
 	}
-	retained := getBool(args, "retained")
+	retained := toolargs.GetBool(args, "retained", false)
 
 	result, err := t.services.MQTTService.Publish(ctx, topic, []byte(payloadStr), qos, retained)
 	if err != nil {
@@ -415,40 +416,6 @@ func clampLimit(n int) int {
 		return 100
 	}
 	return n
-}
-
-func getStr(args map[string]interface{}, key string) string {
-	if v, ok := args[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
-}
-
-func getInt(args map[string]interface{}, key string, defaultVal int) int {
-	if v, ok := args[key]; ok {
-		switch n := v.(type) {
-		case float64:
-			return int(n)
-		case int:
-			return n
-		case json.Number:
-			if i, err := n.Int64(); err == nil {
-				return int(i)
-			}
-		}
-	}
-	return defaultVal
-}
-
-func getBool(args map[string]interface{}, key string) bool {
-	if v, ok := args[key]; ok {
-		if b, ok := v.(bool); ok {
-			return b
-		}
-	}
-	return false
 }
 
 func matchGlobInsensitive(pattern, name string) (bool, error) {

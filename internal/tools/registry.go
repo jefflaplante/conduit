@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"conduit/internal/config"
@@ -623,48 +622,6 @@ func (r *Registry) isPathAllowed(path string) bool {
 	}
 
 	return false
-}
-
-// Helper functions for argument parsing
-func getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := args[key].(float64); ok {
-		return int(val)
-	}
-	if val, ok := args[key].(int); ok {
-		return val
-	}
-	if val, ok := args[key].(string); ok {
-		if parsed, err := strconv.Atoi(val); err == nil {
-			return parsed
-		}
-	}
-	return defaultVal
-}
-
-func getFloatArg(args map[string]interface{}, key string, defaultVal float64) float64 {
-	if val, ok := args[key].(float64); ok {
-		return val
-	}
-	if val, ok := args[key].(string); ok {
-		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
-			return parsed
-		}
-	}
-	return defaultVal
-}
-
-func getBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
-	if val, ok := args[key].(bool); ok {
-		return val
-	}
-	return defaultVal
 }
 
 // registryToolExecutor adapts the Registry to implement sreTool.ToolExecutor.
