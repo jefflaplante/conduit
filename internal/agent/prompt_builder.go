@@ -354,24 +354,21 @@ func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions
 func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session *sessions.Session, isOAuth, isCron bool, params *SectionParams) []promptSection {
 
 	// Define all sections with priorities.
-	// P1=critical (never dropped), P2=core value, P3=enhances behavior, P4=cosmetic/optional.
+	// P1=critical (never dropped), P2=grounding data and reference, P3=behavioral rules, P4=cosmetic/optional.
 	// Within each priority, declaration order is preserved by stable sort.
+	// Ordering principle: data/context before instructions (per Anthropic prompt engineering guidelines).
 	raw := []promptSection{
-		// P1 — Critical: identity, runtime, safety (never dropped)
+		// P1 — Critical: identity and runtime facts (never dropped)
 		{name: "Identity", priority: 1, build: func() string { return pb.buildIdentitySection(isOAuth) }},
 		{name: "Runtime", priority: 1, build: func() string {
 			return buildRuntimeSection(params, pb.buildRuntimeInfo(session))
 		}},
-		{name: "Safety", priority: 1, build: func() string { return buildSafetySection(params.IsMinimal) }},
 
-		// P2 — Core value: grounding data first, then tools and behavior
+		// P2 — Grounding data: project context, memory, tool availability (reference)
 		{name: "Project Context", priority: 2, build: func() string { return pb.buildWorkspaceContextSection(ctx, session) }},
 		{name: "Memory Recall", priority: 2, build: func() string { return buildMemorySection(params) }},
 		{name: "Memory Persistence", priority: 2, build: func() string { return buildMemoryPersistenceSection(params) }},
 		{name: "Tooling", priority: 2, build: func() string { return pb.buildToolingSection() }},
-		{name: "Tool Integrity", priority: 2, build: func() string { return pb.buildToolCallStyleSection() }},
-		{name: "Tool Strategy", priority: 2, build: func() string { return buildToolStrategySection(params.IsMinimal) }},
-		{name: "Error Recovery", priority: 2, build: func() string { return buildErrorRecoverySection(params.IsMinimal) }},
 		{name: "Heartbeats", priority: 2, build: func() string { return buildHeartbeatsSection(params) }},
 		{name: "Messaging", priority: 2, build: func() string { return buildMessagingSection(params) }},
 		{name: "Email", priority: 2, build: func() string { return pb.buildEmailSection() }},
@@ -383,7 +380,11 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		}},
 		{name: "Workspace", priority: 2, build: func() string { return pb.buildWorkspaceSection() }},
 
-		// P3 — Enhances behavior: skills, docs, aliases, tags
+		// P3 — Behavioral rules: how to use tools, error handling, safety
+		{name: "Tool Strategy", priority: 3, build: func() string { return buildToolStrategySection(params.IsMinimal) }},
+		{name: "Tool Integrity", priority: 3, build: func() string { return pb.buildToolCallStyleSection() }},
+		{name: "Error Recovery", priority: 3, build: func() string { return buildErrorRecoverySection(params.IsMinimal) }},
+		{name: "Safety", priority: 3, build: func() string { return buildSafetySection(params.IsMinimal) }},
 		{name: "Skills", priority: 3, build: func() string {
 			if pb.capabilities.SkillsIntegration && pb.skillsManager != nil {
 				return pb.buildSkillsSection(ctx, session)
@@ -475,9 +476,8 @@ func joinSectionsWithCache(sections []promptSection, included []bool, dropped ..
 var defaultOperatingPrinciples = []string{
 	"Think before acting. Understand what is being asked before executing.",
 	"Ask before destroying. Confirm deletions, restarts, or irreversible changes.",
-	"Verify before claiming success. Check that actions had their intended effect.",
-	"Understand blast radius. Know what systems, users, or data an action affects.",
 	"Verify before claiming. (See Tool Integrity for fabrication rules.)",
+	"Understand blast radius. Know what systems, users, or data an action affects.",
 	"Write down what you learn. Memory resets between sessions; files persist.",
 }
 
@@ -496,7 +496,8 @@ func (pb *PromptBuilder) buildIdentitySection(isOAuth bool) string {
 		builder.WriteString(identity)
 		builder.WriteString(" You are running inside Conduit.\n")
 	} else {
-		builder.WriteString("You are a sardonic, competent personal assistant and home automation agent running inside Conduit.\n")
+		// Default role statement: sardonic assistant + home automation agent
+		builder.WriteString("You are a sardonic, competent personal assistant and home automation agent. You are running inside Conduit.\n")
 	}
 
 	// Add operating principles
@@ -536,10 +537,10 @@ func (pb *PromptBuilder) buildToolingSection() string {
 // buildToolCallStyleSection creates tool integrity and style guidelines
 func (pb *PromptBuilder) buildToolCallStyleSection() string {
 	return `## Tool Integrity
-**Never fabricate tool results.** Always call the tool before reporting its results.
-- If a user asks about device state, system status, file contents, or any verifiable fact: call the tool. Do not answer from memory or assumption.
-- Always confirm tool execution succeeded before claiming an action was completed. Receipts or it didn't happen.
-- If you catch yourself about to describe a tool's output without having called it: stop, call the tool, then respond with real data.
+**Never fabricate tool results.**
+- Always call the tool before reporting its results.
+- Always confirm tool execution succeeded before claiming an action was completed.
+- Always include proof — log lines, tool output, return values. Receipts or it didn't happen.
 - If you cannot call a tool, say so explicitly rather than approximating.
 
 **Narration style:** For routine tool calls, call the tool without announcing it first — but ALWAYS actually call it. "Silent" means no narration, not no tool call. Narrate when it helps: multi-step work, complex problems, sensitive actions, or when the user explicitly asks. Keep narration brief.`
@@ -732,19 +733,13 @@ func (pb *PromptBuilder) buildRuntimeInfo(session *sessions.Session) map[string]
 
 	info["node"] = runtime.Version()
 
-	// Get model from session context, or use default
-	model := config.DefaultModelAliases()["default"]
+	// Get model from session context, or fall back to config default.
+	model := ""
 	if session != nil && session.Context != nil && session.Context["model"] != "" {
 		model = session.Context["model"]
 	}
 	if model == "" {
-		// Fall back to config default aliases rather than hardcoding a model string.
-		aliases := config.DefaultModelAliases()
-		if defaultModel, ok := aliases["default"]; ok && defaultModel != "" {
-			model = defaultModel
-		} else {
-			model = "claude-sonnet-4-6" // last resort
-		}
+		model = config.DefaultModelAliases()["default"]
 	}
 	info["model"] = model
 

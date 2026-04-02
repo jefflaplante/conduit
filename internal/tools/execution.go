@@ -90,16 +90,47 @@ func thinkingMessage(depth int) string {
 // DefaultMaxToolResultChars is the default max characters for tool result content.
 const DefaultMaxToolResultChars = 8192
 
+// TruncationConfig controls smart truncation behavior for tool results.
+type TruncationConfig struct {
+	MaxChars         int      // Maximum characters for tool result (0 = use DefaultMaxToolResultChars)
+	HeadLines        int      // Number of lines to preserve from the start (default 20)
+	TailLines        int      // Number of lines to preserve from the end (default 20)
+	PreservePatterns []string // Patterns to preserve (case-insensitive matching)
+}
+
+// DefaultTruncationConfig returns the default truncation configuration.
+func DefaultTruncationConfig() TruncationConfig {
+	return TruncationConfig{
+		MaxChars:  DefaultMaxToolResultChars,
+		HeadLines: 20,
+		TailLines: 20,
+		PreservePatterns: []string{
+			"error", "Error", "ERROR",
+			"fail", "Fail", "FAIL",
+			"exception", "Exception", "EXCEPTION",
+			"denied", "Denied", "DENIED",
+			"timeout", "Timeout", "TIMEOUT",
+			"panic", "Panic", "PANIC",
+			"fatal", "Fatal", "FATAL",
+			"warning", "Warning", "WARNING",
+		},
+	}
+}
+
 // ExecutionEngine handles tool execution, chaining, and middleware
 type ExecutionEngine struct {
 	registry          ToolRegistry
 	middleware        []Middleware
 	maxParallel       int
 	timeout           time.Duration
-	maxChains         int // Prevent infinite tool chains
-	maxResultChars    int // Max chars for tool result content (0 = use default)
+	maxChains         int                  // Prevent infinite tool chains
+	maxResultChars    int                  // Max chars for tool result content (0 = use default)
+	truncationConfig  TruncationConfig     // Smart truncation configuration
 	debugBuffer       *debuglog.RingBuffer // In-memory ring buffer for debug entries (nil-safe)
 	verboseLogging    bool                 // When true, log full args to journal
+	refocusInterval   int                  // Inject goal reminder every N tool calls (0 = disabled, default 10)
+	patternTracker    *PatternTracker      // Detects circular tool call patterns
+	failureTracker    *FailureTracker      // Tracks consecutive tool failures for pivot prompts
 }
 
 // Middleware interface for tool execution pipeline
@@ -135,12 +166,16 @@ func NewExecutionEngine(registry ToolRegistry, maxParallel int, timeout time.Dur
 	}
 
 	return &ExecutionEngine{
-		registry:       registry,
-		middleware:     []Middleware{},
-		maxParallel:   maxParallel,
-		timeout:       timeout,
-		maxChains:     maxChains,
-		maxResultChars: DefaultMaxToolResultChars,
+		registry:         registry,
+		middleware:       []Middleware{},
+		maxParallel:      maxParallel,
+		timeout:          timeout,
+		maxChains:        maxChains,
+		maxResultChars:   DefaultMaxToolResultChars,
+		truncationConfig: DefaultTruncationConfig(),
+		refocusInterval:  10, // Default: remind of goal every 10 tool calls
+		patternTracker:   NewPatternTracker(10),
+		failureTracker:   NewFailureTracker(3),
 	}
 }
 
@@ -158,6 +193,21 @@ func (e *ExecutionEngine) SetVerboseLogging(v bool) {
 func (e *ExecutionEngine) SetMaxResultChars(maxChars int) {
 	if maxChars > 0 {
 		e.maxResultChars = maxChars
+	}
+}
+
+// SetRefocusInterval configures how often (every N tool calls) a goal reminder is injected.
+// Set to 0 to disable refocusing. Default is 10.
+func (e *ExecutionEngine) SetRefocusInterval(n int) {
+	e.refocusInterval = n
+}
+
+// SetTruncationConfig configures smart truncation behavior for tool results.
+func (e *ExecutionEngine) SetTruncationConfig(cfg TruncationConfig) {
+	e.truncationConfig = cfg
+	// Also update maxResultChars if MaxChars is specified in config
+	if cfg.MaxChars > 0 {
+		e.maxResultChars = cfg.MaxChars
 	}
 }
 
@@ -252,6 +302,10 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 		if e.debugBuffer != nil {
 			e.debugBuffer.Add(debuglog.ToolError(call.Name, execResult.Duration, err.Error()))
 		}
+		// Track consecutive failures for pivot detection
+		if e.failureTracker != nil {
+			e.failureTracker.RecordFailure(call.Name)
+		}
 		// Create a user-friendly error result
 		if execResult.Result == nil {
 			execResult.Result = &ToolResult{
@@ -293,6 +347,14 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 				Result:    resultStr,
 				Duration:  execResult.Duration,
 			})
+		}
+		// Record successful call for pattern detection
+		if e.patternTracker != nil {
+			e.patternTracker.RecordCall(call.Name)
+		}
+		// Reset consecutive failure count on success
+		if e.failureTracker != nil {
+			e.failureTracker.RecordSuccess(call.Name)
 		}
 	}
 
@@ -375,6 +437,19 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		}, nil
 	}
 
+	// Mid-chain goal refocusing: inject a reminder of the original goal at intervals
+	var refocusMessage string
+	if e.refocusInterval > 0 && depth > 0 && depth%e.refocusInterval == 0 {
+		originalGoal := e.extractOriginalGoal(initialReq.Messages)
+		if originalGoal != "" {
+			refocusMessage = fmt.Sprintf(
+				"Reminder: Your original goal was: %s. Stay focused on completing this.",
+				originalGoal,
+			)
+			log.Printf("[ExecutionEngine] Injecting goal refocus at depth %d: %s", depth, originalGoal)
+		}
+	}
+
 	// Start conversation history with initial request/response.
 	// Use an explicit copy to avoid mutating the caller's slice when spare capacity exists.
 	msgs := make([]ai.ChatMessage, len(initialReq.Messages))
@@ -403,6 +478,30 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		})
 	}
 
+	// Inject goal refocus reminder if applicable
+	if refocusMessage != "" {
+		conversationHistory = append(conversationHistory, ai.ChatMessage{
+			Role:    "system",
+			Content: refocusMessage,
+		})
+	}
+
+	// Check for consecutive tool failures and suggest pivoting if threshold reached
+	if e.failureTracker != nil {
+		failedTools := e.failureTracker.GetFailedTools()
+		for _, toolName := range failedTools {
+			pivotMsg := fmt.Sprintf(
+				"Multiple failures detected with '%s'. Consider a different approach or tool.",
+				toolName,
+			)
+			log.Printf("[ExecutionEngine] Injecting pivot suggestion for tool: %s", toolName)
+			conversationHistory = append(conversationHistory, ai.ChatMessage{
+				Role:    "system",
+				Content: pivotMsg,
+			})
+		}
+	}
+
 	// Get final AI response with tool results
 	finalReq := &ai.GenerateRequest{
 		Messages:  conversationHistory,
@@ -420,6 +519,18 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 
 	// Check for additional tool calls (tool chaining)
 	if len(finalResp.ToolCalls) > 0 {
+		// Check for circular tool call patterns before recursing
+		if e.patternTracker != nil {
+			if detected, pattern := e.patternTracker.DetectCircular(); detected {
+				log.Printf("[ExecutionEngine] Circular pattern detected: %s", pattern)
+				// Inject warning into conversation to help LLM break the cycle
+				warningMsg := InjectWarning(pattern)
+				finalReq.Messages = append(finalReq.Messages, ai.ChatMessage{
+					Role:    "system",
+					Content: warningMsg,
+				})
+			}
+		}
 		// Recursive tool calling with depth tracking
 		return e.handleToolCallFlowRecursive(ctx, provider, finalReq, finalResp, depth+1)
 	}
@@ -478,21 +589,103 @@ func (e *ExecutionEngine) formatToolResultForAI(result *ExecutionResult) string 
 		}
 	}
 
-	// Truncate oversized results to protect context window
+	// Smart truncation to protect context window while preserving important content
 	maxChars := e.maxResultChars
 	if maxChars <= 0 {
 		maxChars = DefaultMaxToolResultChars
 	}
 	if len(content) > maxChars {
-		// Keep first 80% and last 20% of budget for useful context
+		content = e.smartTruncate(content, maxChars)
+	}
+
+	return content
+}
+
+// smartTruncate performs intelligent truncation preserving head, tail, and error lines.
+func (e *ExecutionEngine) smartTruncate(content string, maxChars int) string {
+	lines := strings.Split(content, "\n")
+	totalLines := len(lines)
+
+	cfg := e.truncationConfig
+	headLines := cfg.HeadLines
+	tailLines := cfg.TailLines
+	if headLines <= 0 {
+		headLines = 20
+	}
+	if tailLines <= 0 {
+		tailLines = 20
+	}
+
+	// If content is small enough by line count, fall back to char-based truncation
+	if totalLines <= headLines+tailLines {
+		// Simple char truncation: keep first 80% and last 20%
 		headSize := maxChars * 4 / 5
 		tailSize := maxChars / 5
-		content = content[:headSize] +
+		return content[:headSize] +
 			fmt.Sprintf("\n\n...(truncated, showing %d of %d chars)...\n\n", maxChars, len(content)) +
 			content[len(content)-tailSize:]
 	}
 
-	return content
+	// Collect head lines
+	head := lines[:headLines]
+
+	// Collect tail lines
+	tail := lines[totalLines-tailLines:]
+
+	// Find important lines in the middle section
+	middleStart := headLines
+	middleEnd := totalLines - tailLines
+	var preservedMiddle []string
+
+	for i := middleStart; i < middleEnd; i++ {
+		if e.lineContainsPattern(lines[i]) {
+			preservedMiddle = append(preservedMiddle, lines[i])
+		}
+	}
+
+	// Calculate truncated line count
+	truncatedCount := (middleEnd - middleStart) - len(preservedMiddle)
+
+	// Build result
+	var result strings.Builder
+	result.WriteString(strings.Join(head, "\n"))
+
+	if len(preservedMiddle) > 0 || truncatedCount > 0 {
+		result.WriteString(fmt.Sprintf("\n\n[...truncated %d lines, preserved %d lines with errors/warnings...]\n\n",
+			truncatedCount, len(preservedMiddle)))
+
+		if len(preservedMiddle) > 0 {
+			result.WriteString(strings.Join(preservedMiddle, "\n"))
+			result.WriteString("\n\n[...end of preserved section...]\n\n")
+		}
+	} else {
+		result.WriteString("\n")
+	}
+
+	result.WriteString(strings.Join(tail, "\n"))
+
+	// Final char limit check
+	finalContent := result.String()
+	if len(finalContent) > maxChars {
+		// Truncate preserved middle if still too long
+		headSize := maxChars * 4 / 5
+		tailSize := maxChars / 5
+		return finalContent[:headSize] +
+			fmt.Sprintf("\n\n...(final truncation, showing %d of %d chars)...\n\n", maxChars, len(finalContent)) +
+			finalContent[len(finalContent)-tailSize:]
+	}
+
+	return finalContent
+}
+
+// lineContainsPattern checks if a line contains any of the configured preserve patterns.
+func (e *ExecutionEngine) lineContainsPattern(line string) bool {
+	for _, pattern := range e.truncationConfig.PreservePatterns {
+		if strings.Contains(line, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 // combineUsage combines usage statistics from multiple AI calls
@@ -512,6 +705,25 @@ func (e *ExecutionEngine) combineUsage(usage1, usage2 *ai.Usage) *ai.Usage {
 		CompletionTokens: usage1.CompletionTokens + usage2.CompletionTokens,
 		TotalTokens:      usage1.TotalTokens + usage2.TotalTokens,
 	}
+}
+
+// extractOriginalGoal finds the original user goal from the message history.
+// It looks for the last user message in the conversation, which typically
+// contains the original request that initiated the tool chain.
+func (e *ExecutionEngine) extractOriginalGoal(messages []ai.ChatMessage) string {
+	// Search backwards to find the most recent user message
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" && messages[i].Content != "" {
+			goal := messages[i].Content
+			// Truncate long goals to keep the reminder concise
+			const maxGoalLen = 200
+			if len(goal) > maxGoalLen {
+				goal = goal[:maxGoalLen] + "..."
+			}
+			return goal
+		}
+	}
+	return ""
 }
 
 // Built-in middleware implementations
