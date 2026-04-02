@@ -12,6 +12,7 @@ import (
 	"conduit/internal/skills"
 	"conduit/internal/tools/communication"
 	"conduit/internal/tools/core"
+	k8s "conduit/internal/tools/k8s"
 	mqttTool "conduit/internal/tools/mqtt"
 	"conduit/internal/tools/scheduling"
 	"conduit/internal/tools/schema"
@@ -191,6 +192,16 @@ func (r *Registry) registerAllTools() {
 			log.Printf("Failed to create SSH tool: %v", err)
 		} else {
 			allTools = append(allTools, sshTool)
+		}
+	}
+
+	// Kubernetes tool (optional - requires configuration)
+	if r.services.ConfigMgr != nil && r.services.ConfigMgr.Kubernetes.Enabled {
+		k8sTool, err := k8s.NewK8sTool(r.services, &r.services.ConfigMgr.Kubernetes)
+		if err != nil {
+			log.Printf("Failed to create Kubernetes tool: %v", err)
+		} else {
+			allTools = append(allTools, k8sTool)
 		}
 	}
 
