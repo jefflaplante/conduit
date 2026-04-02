@@ -20,12 +20,12 @@ type PortForwarder struct {
 
 // activeForward tracks a single port-forward session.
 type activeForward struct {
-	ID         string    `json:"id"`
-	Cluster    string    `json:"cluster"`
-	Pod        string    `json:"pod"`
-	Namespace  string    `json:"namespace"`
-	LocalPort  int       `json:"local_port"`
-	RemotePort int       `json:"remote_port"`
+	ID         string `json:"id"`
+	Cluster    string `json:"cluster"`
+	Pod        string `json:"pod"`
+	Namespace  string `json:"namespace"`
+	LocalPort  int    `json:"local_port"`
+	RemotePort int    `json:"remote_port"`
 	stopChan   chan struct{}
 	readyChan  chan struct{}
 	errChan    chan error

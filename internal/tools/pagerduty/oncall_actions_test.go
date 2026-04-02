@@ -235,12 +235,12 @@ func TestOnCallActions_ExecuteListSchedules_Empty(t *testing.T) {
 func TestOnCallActions_ExecuteGetSchedule(t *testing.T) {
 	response := scheduleResponse{
 		Schedule: Schedule{
-			ID:          "SCHED1",
-			Name:        "Primary",
-			Description: "Main rotation",
-			TimeZone:    "UTC",
-			HTMLURL:     "https://pd.example.com/schedules/SCHED1",
-			Users:       []UserRef{{ID: "U1", Summary: "Alice"}},
+			ID:             "SCHED1",
+			Name:           "Primary",
+			Description:    "Main rotation",
+			TimeZone:       "UTC",
+			HTMLURL:        "https://pd.example.com/schedules/SCHED1",
+			Users:          []UserRef{{ID: "U1", Summary: "Alice"}},
 			ScheduleLayers: []ScheduleLayer{{ID: "L1", Name: "Layer 1"}},
 		},
 	}

@@ -47,8 +47,8 @@ type AgentAction struct {
 
 // IdentityConfig configures the agent identity based on auth type
 type IdentityConfig struct {
-	OAuthIdentity       string   `json:"oauth_identity"`        // Identity when using OAuth (Claude Code)
-	APIKeyIdentity      string   `json:"api_key_identity"`      // Identity when using API key
+	OAuthIdentity       string   `json:"oauth_identity"`                 // Identity when using OAuth (Claude Code)
+	APIKeyIdentity      string   `json:"api_key_identity"`               // Identity when using API key
 	OperatingPrinciples []string `json:"operating_principles,omitempty"` // Override default operating principles
 }
 

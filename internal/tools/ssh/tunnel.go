@@ -15,20 +15,20 @@ import (
 
 // Tunnel represents an active SSH port forwarding tunnel
 type Tunnel struct {
-	ID           string
-	LocalPort    int
-	RemoteHost   string
-	RemotePort   int
-	CreatedAt    time.Time
-	client       *SSHClient
-	listener     net.Listener
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	bytesIn      atomic.Int64
-	bytesOut     atomic.Int64
-	activeConns  atomic.Int32
-	closed       atomic.Bool
+	ID          string
+	LocalPort   int
+	RemoteHost  string
+	RemotePort  int
+	CreatedAt   time.Time
+	client      *SSHClient
+	listener    net.Listener
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	bytesIn     atomic.Int64
+	bytesOut    atomic.Int64
+	activeConns atomic.Int32
+	closed      atomic.Bool
 }
 
 // TunnelInfo contains information about a tunnel for external reporting

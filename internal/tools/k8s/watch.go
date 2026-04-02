@@ -16,7 +16,7 @@ const maxWatchEvents = 100
 
 // WatchEvent represents a single resource change observed during a watch.
 type WatchEvent struct {
-	Type      string    `json:"type"`      // ADDED, MODIFIED, DELETED
+	Type      string    `json:"type"` // ADDED, MODIFIED, DELETED
 	Resource  string    `json:"resource"`
 	Name      string    `json:"name"`
 	Namespace string    `json:"namespace"`

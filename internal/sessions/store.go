@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"conduit/internal/database"
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
-	"conduit/internal/database"
 )
 
 // MessageAddedCallback is called when a message is added to a session.

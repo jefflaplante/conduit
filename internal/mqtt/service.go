@@ -10,12 +10,12 @@ import (
 
 // ServiceStatus reports the current state of the MQTT service.
 type ServiceStatus struct {
-	Connected       bool     `json:"connected"`
-	BrokerURL       string   `json:"broker_url"`
+	Connected        bool     `json:"connected"`
+	BrokerURL        string   `json:"broker_url"`
 	SubscribedTopics []string `json:"subscribed_topics"`
-	ActiveTopics    int      `json:"active_topics"`
-	TotalEvents     int64    `json:"total_events"`
-	PublishAllowed  bool     `json:"publish_allowed"`
+	ActiveTopics     int      `json:"active_topics"`
+	TotalEvents      int64    `json:"total_events"`
+	PublishAllowed   bool     `json:"publish_allowed"`
 }
 
 // Service owns the MQTT client and event buffer, providing the query API.

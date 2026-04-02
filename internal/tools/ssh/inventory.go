@@ -19,22 +19,22 @@ import (
 
 // InventorySource represents a source of inventory data
 type InventorySource struct {
-	Type string    // "file", "dynamic"
-	Path string    // File path or script path
+	Type       string // "file", "dynamic"
+	Path       string // File path or script path
 	LastLoaded time.Time
 	Error      error
 }
 
 // InventoryManager manages SSH host inventories from multiple sources
 type InventoryManager struct {
-	mu            sync.RWMutex
-	configHosts   []config.SSHHostConfig // Hosts from config (take precedence)
-	inventoryHosts []config.SSHHostConfig // Hosts from inventory sources
-	sources       []InventorySource
-	hostsByGroup  map[string][]string    // Group name -> host names
-	autoRefresh   bool
+	mu              sync.RWMutex
+	configHosts     []config.SSHHostConfig // Hosts from config (take precedence)
+	inventoryHosts  []config.SSHHostConfig // Hosts from inventory sources
+	sources         []InventorySource
+	hostsByGroup    map[string][]string // Group name -> host names
+	autoRefresh     bool
 	refreshInterval time.Duration
-	stopChan      chan struct{}
+	stopChan        chan struct{}
 }
 
 // NewInventoryManager creates a new inventory manager with config hosts

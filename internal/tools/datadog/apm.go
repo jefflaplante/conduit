@@ -22,29 +22,29 @@ const MaxSpansDisplay = 50
 
 // Span represents a single span within a trace.
 type Span struct {
-	TraceID   string            `json:"trace_id"`
-	SpanID    string            `json:"span_id"`
-	ParentID  string            `json:"parent_id,omitempty"`
-	Service   string            `json:"service"`
-	Name      string            `json:"name"` // operation name
-	Resource  string            `json:"resource"`
-	Type      string            `json:"type,omitempty"`
-	Start     time.Time         `json:"start"`
-	Duration  time.Duration     `json:"duration"`
-	Error     int               `json:"error"`
-	Meta      map[string]string `json:"meta,omitempty"`
-	Metrics   map[string]float64 `json:"metrics,omitempty"`
+	TraceID  string             `json:"trace_id"`
+	SpanID   string             `json:"span_id"`
+	ParentID string             `json:"parent_id,omitempty"`
+	Service  string             `json:"service"`
+	Name     string             `json:"name"` // operation name
+	Resource string             `json:"resource"`
+	Type     string             `json:"type,omitempty"`
+	Start    time.Time          `json:"start"`
+	Duration time.Duration      `json:"duration"`
+	Error    int                `json:"error"`
+	Meta     map[string]string  `json:"meta,omitempty"`
+	Metrics  map[string]float64 `json:"metrics,omitempty"`
 }
 
 // Trace represents a distributed trace with all its spans.
 type Trace struct {
-	TraceID   string    `json:"trace_id"`
-	RootSpan  *Span     `json:"root_span,omitempty"`
-	Spans     []Span    `json:"spans"`
-	Services  []string  `json:"services"`
+	TraceID   string        `json:"trace_id"`
+	RootSpan  *Span         `json:"root_span,omitempty"`
+	Spans     []Span        `json:"spans"`
+	Services  []string      `json:"services"`
 	Duration  time.Duration `json:"duration"`
-	StartTime time.Time `json:"start_time"`
-	HasError  bool      `json:"has_error"`
+	StartTime time.Time     `json:"start_time"`
+	HasError  bool          `json:"has_error"`
 }
 
 // TraceSearchResult contains the results of a trace search.
@@ -499,15 +499,15 @@ func (t *DatadogTool) executeSearchTraces(ctx context.Context, args map[string]i
 	var errorCount, slowCount int
 	for i, tr := range result.Traces {
 		tracesData[i] = map[string]interface{}{
-			"trace_id":   tr.TraceID,
-			"service":    tr.Service,
-			"operation":  tr.Operation,
-			"resource":   tr.Resource,
-			"duration":   formatDuration(tr.Duration),
+			"trace_id":    tr.TraceID,
+			"service":     tr.Service,
+			"operation":   tr.Operation,
+			"resource":    tr.Resource,
+			"duration":    formatDuration(tr.Duration),
 			"duration_ns": tr.Duration.Nanoseconds(),
-			"status":     tr.Status,
-			"timestamp":  tr.Timestamp.Format(time.RFC3339),
-			"span_count": tr.SpanCount,
+			"status":      tr.Status,
+			"timestamp":   tr.Timestamp.Format(time.RFC3339),
+			"span_count":  tr.SpanCount,
 		}
 		if tr.Status == "error" {
 			errorCount++

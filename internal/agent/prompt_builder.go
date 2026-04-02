@@ -27,11 +27,11 @@ const (
 
 // promptSection pairs a builder function with its priority for budget-based inclusion.
 type promptSection struct {
-	name     string       // human-readable name for compact-mode notice
-	priority int          // 1=critical, 4=nice-to-have
+	name     string // human-readable name for compact-mode notice
+	priority int    // 1=critical, 4=nice-to-have
 	build    func() string
-	cached   string       // cached result of build() to avoid double-building
-	built    bool         // whether cached has been populated
+	cached   string // cached result of build() to avoid double-building
+	built    bool   // whether cached has been populated
 }
 
 // PromptSectionInfo describes a single section of the system prompt for debug inspection.

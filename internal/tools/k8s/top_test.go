@@ -20,7 +20,7 @@ func TestFormatCPU(t *testing.T) {
 	}{
 		{"zero", resource.MustParse("0"), "0m"},
 		{"millicores", resource.MustParse("250m"), "250m"},
-		{"one_core", resource.MustParse("1"), "1.00"},    // >= 1000m shows as cores
+		{"one_core", resource.MustParse("1"), "1.00"}, // >= 1000m shows as cores
 		{"fractional_cores", resource.MustParse("1500m"), "1.50"},
 		{"multiple_cores", resource.MustParse("4"), "4.00"},
 	}

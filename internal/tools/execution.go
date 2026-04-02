@@ -119,18 +119,18 @@ func DefaultTruncationConfig() TruncationConfig {
 
 // ExecutionEngine handles tool execution, chaining, and middleware
 type ExecutionEngine struct {
-	registry          ToolRegistry
-	middleware        []Middleware
-	maxParallel       int
-	timeout           time.Duration
-	maxChains         int                  // Prevent infinite tool chains
-	maxResultChars    int                  // Max chars for tool result content (0 = use default)
-	truncationConfig  TruncationConfig     // Smart truncation configuration
-	debugBuffer       *debuglog.RingBuffer // In-memory ring buffer for debug entries (nil-safe)
-	verboseLogging    bool                 // When true, log full args to journal
-	refocusInterval   int                  // Inject goal reminder every N tool calls (0 = disabled, default 10)
-	patternTracker    *PatternTracker      // Detects circular tool call patterns
-	failureTracker    *FailureTracker      // Tracks consecutive tool failures for pivot prompts
+	registry         ToolRegistry
+	middleware       []Middleware
+	maxParallel      int
+	timeout          time.Duration
+	maxChains        int                  // Prevent infinite tool chains
+	maxResultChars   int                  // Max chars for tool result content (0 = use default)
+	truncationConfig TruncationConfig     // Smart truncation configuration
+	debugBuffer      *debuglog.RingBuffer // In-memory ring buffer for debug entries (nil-safe)
+	verboseLogging   bool                 // When true, log full args to journal
+	refocusInterval  int                  // Inject goal reminder every N tool calls (0 = disabled, default 10)
+	patternTracker   *PatternTracker      // Detects circular tool call patterns
+	failureTracker   *FailureTracker      // Tracks consecutive tool failures for pivot prompts
 }
 
 // Middleware interface for tool execution pipeline

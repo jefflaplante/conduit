@@ -587,11 +587,11 @@ func TestDiagnosticEndpointsAuthRequirement(t *testing.T) {
 	tests := []struct {
 		name           string
 		endpoint       string
-		requireAuth    bool   // diagnostics.require_auth setting
-		healthPublic   *bool  // diagnostics.health_public setting
-		expectStatus   int    // Expected status without auth token
-		withAuth       bool   // Whether to include auth token
-		expectWithAuth int    // Expected status with auth token
+		requireAuth    bool  // diagnostics.require_auth setting
+		healthPublic   *bool // diagnostics.health_public setting
+		expectStatus   int   // Expected status without auth token
+		withAuth       bool  // Whether to include auth token
+		expectWithAuth int   // Expected status with auth token
 	}{
 		// Default config: require_auth=true, health_public=true (default)
 		{
@@ -798,9 +798,9 @@ type mockFailingCollector struct {
 	dbErr error
 }
 
-func (m *mockFailingCollector) IsIdle(d time.Duration) bool                            { return false }
-func (m *mockFailingCollector) MarkActivity()                                          {}
-func (m *mockFailingCollector) GetLastActivityTime() time.Time                         { return time.Now() }
+func (m *mockFailingCollector) IsIdle(d time.Duration) bool    { return false }
+func (m *mockFailingCollector) MarkActivity()                  {}
+func (m *mockFailingCollector) GetLastActivityTime() time.Time { return time.Now() }
 func (m *mockFailingCollector) CollectMetrics(_ context.Context) (*monitoring.GatewayMetrics, error) {
 	return monitoring.NewGatewayMetrics(), nil
 }
@@ -810,8 +810,8 @@ func (m *mockFailingCollector) DetectStuckSessions(_ context.Context, _ time.Dur
 func (m *mockFailingCollector) ValidateDatabase(_ context.Context) error { return m.dbErr }
 func (m *mockFailingCollector) UpdateWebSocketConnections(count int)     {}
 func (m *mockFailingCollector) UpdateActiveRequests(count int)           {}
-func (m *mockFailingCollector) UpdateQueueDepth(depth int)              {}
-func (m *mockFailingCollector) UpdateHeartbeatJobs(total, enabled int)  {}
+func (m *mockFailingCollector) UpdateQueueDepth(depth int)               {}
+func (m *mockFailingCollector) UpdateHeartbeatJobs(total, enabled int)   {}
 func (m *mockFailingCollector) GetHeartbeatMetrics() monitoring.HeartbeatMetrics {
 	return monitoring.HeartbeatMetrics{}
 }

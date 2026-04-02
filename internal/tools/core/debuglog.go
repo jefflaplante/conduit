@@ -171,7 +171,7 @@ func (t *DebugLogTool) clear() (*types.ToolResult, error) {
 		Success: true,
 		Content: fmt.Sprintf("Debug log cleared. %d entries removed.", count),
 		Data: map[string]interface{}{
-			"cleared": count,
+			"cleared":   count,
 			"timestamp": time.Now(),
 		},
 	}, nil

@@ -41,7 +41,7 @@ type Job struct {
 	Target    string                 `json:"target,omitempty"` // Channel/session to send output
 	Enabled   bool                   `json:"enabled"`
 	OneShot   bool                   `json:"oneshot,omitempty"`
-	Skills    []string               `json:"skills,omitempty"`    // Skill names to load (empty = all)
+	Skills    []string               `json:"skills,omitempty"` // Skill names to load (empty = all)
 	CreatedAt time.Time              `json:"created_at"`
 	LastRun   *time.Time             `json:"last_run,omitempty"`
 	NextRun   *time.Time             `json:"next_run,omitempty"`
@@ -55,17 +55,17 @@ type Job struct {
 
 // Scheduler manages both Go cron and system crontab jobs
 type Scheduler struct {
-	cron          *cron.Cron
-	jobs          map[string]*Job
-	jobsFile      string
-	executor      JobExecutor
-	mu            sync.RWMutex
-	ctx           context.Context
-	cancel        context.CancelFunc
-	crontagMarker string   // Marker to identify our entries in system crontab
-	jobsLoaded    bool     // True after successful loadJobs; prevents saveJobs from wiping unloaded data
-	lastContentHash [32]byte   // SHA-256 of last known jobs file content
-	lastWriteTime   time.Time  // Timestamp of our own saveJobs() calls
+	cron            *cron.Cron
+	jobs            map[string]*Job
+	jobsFile        string
+	executor        JobExecutor
+	mu              sync.RWMutex
+	ctx             context.Context
+	cancel          context.CancelFunc
+	crontagMarker   string    // Marker to identify our entries in system crontab
+	jobsLoaded      bool      // True after successful loadJobs; prevents saveJobs from wiping unloaded data
+	lastContentHash [32]byte  // SHA-256 of last known jobs file content
+	lastWriteTime   time.Time // Timestamp of our own saveJobs() calls
 }
 
 // New creates a new scheduler

@@ -5,16 +5,16 @@ import "fmt"
 // MQTTConfig holds configuration for the optional MQTT event ingest service.
 type MQTTConfig struct {
 	Enabled         bool           `json:"enabled"`
-	BrokerURL       string         `json:"broker_url"`                        // "tcp://192.168.1.10:1883"
-	ClientID        string         `json:"client_id,omitempty"`               // default: "conduit"
-	Username        string         `json:"username,omitempty"`                // ${MQTT_USERNAME}
-	Password        string         `json:"password,omitempty"`                // ${MQTT_PASSWORD}
-	Topics          []string       `json:"topics"`                            // ["zigbee2mqtt/#"]
-	QoS             int            `json:"qos,omitempty"`                     // 0-2, default 0
-	BufferMaxAge    int            `json:"buffer_max_age_seconds,omitempty"`  // default 3600
-	BufferMaxEvents int            `json:"buffer_max_events,omitempty"`       // per topic, default 1000
-	BufferMaxTopics int            `json:"buffer_max_topics,omitempty"`       // default 500
-	PublishAllowed  bool           `json:"publish_allowed,omitempty"`         // default false (safety)
+	BrokerURL       string         `json:"broker_url"`                       // "tcp://192.168.1.10:1883"
+	ClientID        string         `json:"client_id,omitempty"`              // default: "conduit"
+	Username        string         `json:"username,omitempty"`               // ${MQTT_USERNAME}
+	Password        string         `json:"password,omitempty"`               // ${MQTT_PASSWORD}
+	Topics          []string       `json:"topics"`                           // ["zigbee2mqtt/#"]
+	QoS             int            `json:"qos,omitempty"`                    // 0-2, default 0
+	BufferMaxAge    int            `json:"buffer_max_age_seconds,omitempty"` // default 3600
+	BufferMaxEvents int            `json:"buffer_max_events,omitempty"`      // per topic, default 1000
+	BufferMaxTopics int            `json:"buffer_max_topics,omitempty"`      // default 500
+	PublishAllowed  bool           `json:"publish_allowed,omitempty"`        // default false (safety)
 	TLS             *MQTTTLSConfig `json:"tls,omitempty"`
 }
 

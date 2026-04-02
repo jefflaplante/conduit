@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"conduit/internal/database"
+	_ "modernc.org/sqlite"
 )
 
 // setupTestDB creates a temporary database for testing

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"conduit/internal/sessions"
+	_ "modernc.org/sqlite"
 )
 
 // mockSessionStore implements SessionStoreInterface for testing

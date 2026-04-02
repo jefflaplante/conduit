@@ -12,19 +12,19 @@ import (
 
 // Schedule represents a PagerDuty schedule.
 type Schedule struct {
-	ID               string           `json:"id"`
-	Type             string           `json:"type"`
-	Summary          string           `json:"summary"`
-	Self             string           `json:"self,omitempty"`
-	HTMLURL          string           `json:"html_url,omitempty"`
-	Name             string           `json:"name"`
-	TimeZone         string           `json:"time_zone,omitempty"`
-	Description      string           `json:"description,omitempty"`
-	EscalationPolicies []PolicyRef    `json:"escalation_policies,omitempty"`
-	Users            []UserRef        `json:"users,omitempty"`
-	Teams            []TeamRef        `json:"teams,omitempty"`
-	ScheduleLayers   []ScheduleLayer  `json:"schedule_layers,omitempty"`
-	FinalSchedule    *FinalSchedule   `json:"final_schedule,omitempty"`
+	ID                 string          `json:"id"`
+	Type               string          `json:"type"`
+	Summary            string          `json:"summary"`
+	Self               string          `json:"self,omitempty"`
+	HTMLURL            string          `json:"html_url,omitempty"`
+	Name               string          `json:"name"`
+	TimeZone           string          `json:"time_zone,omitempty"`
+	Description        string          `json:"description,omitempty"`
+	EscalationPolicies []PolicyRef     `json:"escalation_policies,omitempty"`
+	Users              []UserRef       `json:"users,omitempty"`
+	Teams              []TeamRef       `json:"teams,omitempty"`
+	ScheduleLayers     []ScheduleLayer `json:"schedule_layers,omitempty"`
+	FinalSchedule      *FinalSchedule  `json:"final_schedule,omitempty"`
 }
 
 // TeamRef is a reference to a team.
@@ -49,9 +49,9 @@ type ScheduleLayer struct {
 
 // FinalSchedule contains the rendered schedule with all layers merged.
 type FinalSchedule struct {
-	Name                 string               `json:"name,omitempty"`
-	RenderedScheduleEntries []RenderedEntry   `json:"rendered_schedule_entries,omitempty"`
-	RenderedCoveragePercentage float64        `json:"rendered_coverage_percentage,omitempty"`
+	Name                       string          `json:"name,omitempty"`
+	RenderedScheduleEntries    []RenderedEntry `json:"rendered_schedule_entries,omitempty"`
+	RenderedCoveragePercentage float64         `json:"rendered_coverage_percentage,omitempty"`
 }
 
 // RenderedEntry is a time period with assigned user in a schedule.
@@ -167,25 +167,25 @@ func (c *Client) GetSchedule(ctx context.Context, scheduleID string, opts GetSch
 
 // EscalationPolicy represents a PagerDuty escalation policy.
 type EscalationPolicy struct {
-	ID               string             `json:"id"`
-	Type             string             `json:"type"`
-	Summary          string             `json:"summary"`
-	Self             string             `json:"self,omitempty"`
-	HTMLURL          string             `json:"html_url,omitempty"`
-	Name             string             `json:"name"`
-	Description      string             `json:"description,omitempty"`
-	NumLoops         int                `json:"num_loops,omitempty"`
-	OnCallHandoffNotifications string  `json:"on_call_handoff_notifications,omitempty"`
-	EscalationRules  []EscalationRule   `json:"escalation_rules,omitempty"`
-	Services         []ServiceRef       `json:"services,omitempty"`
-	Teams            []TeamRef          `json:"teams,omitempty"`
+	ID                         string           `json:"id"`
+	Type                       string           `json:"type"`
+	Summary                    string           `json:"summary"`
+	Self                       string           `json:"self,omitempty"`
+	HTMLURL                    string           `json:"html_url,omitempty"`
+	Name                       string           `json:"name"`
+	Description                string           `json:"description,omitempty"`
+	NumLoops                   int              `json:"num_loops,omitempty"`
+	OnCallHandoffNotifications string           `json:"on_call_handoff_notifications,omitempty"`
+	EscalationRules            []EscalationRule `json:"escalation_rules,omitempty"`
+	Services                   []ServiceRef     `json:"services,omitempty"`
+	Teams                      []TeamRef        `json:"teams,omitempty"`
 }
 
 // EscalationRule defines a rule in an escalation policy.
 type EscalationRule struct {
-	ID                       string      `json:"id,omitempty"`
-	EscalationDelayInMinutes int         `json:"escalation_delay_in_minutes"`
-	Targets                  []Target    `json:"targets,omitempty"`
+	ID                       string   `json:"id,omitempty"`
+	EscalationDelayInMinutes int      `json:"escalation_delay_in_minutes"`
+	Targets                  []Target `json:"targets,omitempty"`
 }
 
 // Target is a target (user, schedule, or group) in an escalation rule.
@@ -303,14 +303,14 @@ func (c *Client) GetEscalationPolicy(ctx context.Context, policyID string, opts 
 
 // ScheduleSummary provides a user-friendly summary of schedule information.
 type ScheduleSummary struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	TimeZone    string   `json:"time_zone,omitempty"`
-	UserCount   int      `json:"user_count"`
-	LayerCount  int      `json:"layer_count"`
-	PolicyCount int      `json:"policy_count"`
-	HTMLURL     string   `json:"html_url,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	TimeZone    string `json:"time_zone,omitempty"`
+	UserCount   int    `json:"user_count"`
+	LayerCount  int    `json:"layer_count"`
+	PolicyCount int    `json:"policy_count"`
+	HTMLURL     string `json:"html_url,omitempty"`
 }
 
 // ToSummary converts a Schedule to a user-friendly summary.
@@ -338,14 +338,14 @@ func SchedulesToSummaries(schedules []Schedule) []ScheduleSummary {
 
 // EscalationPolicySummary provides a user-friendly summary of policy information.
 type EscalationPolicySummary struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Description  string   `json:"description,omitempty"`
-	NumLoops     int      `json:"num_loops"`
-	RuleCount    int      `json:"rule_count"`
-	ServiceCount int      `json:"service_count"`
-	TeamCount    int      `json:"team_count"`
-	HTMLURL      string   `json:"html_url,omitempty"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
+	NumLoops     int    `json:"num_loops"`
+	RuleCount    int    `json:"rule_count"`
+	ServiceCount int    `json:"service_count"`
+	TeamCount    int    `json:"team_count"`
+	HTMLURL      string `json:"html_url,omitempty"`
 }
 
 // ToSummary converts an EscalationPolicy to a user-friendly summary.

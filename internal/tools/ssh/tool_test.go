@@ -11,7 +11,7 @@ import (
 
 // mockClient implements the Client interface for testing
 type mockClient struct {
-	executeFunc     func(ctx context.Context, host, command string, timeout time.Duration) (*ExecutionResult, error)
+	executeFunc       func(ctx context.Context, host, command string, timeout time.Duration) (*ExecutionResult, error)
 	getPoolStatusFunc func() *PoolStatus
 }
 

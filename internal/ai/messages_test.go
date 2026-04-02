@@ -46,11 +46,11 @@ func TestTrimRequestToFitContext_TrimsOldestHistory(t *testing.T) {
 	req := &GenerateRequest{
 		Messages: []ChatMessage{
 			{Role: "system", Content: "system prompt"},
-			{Role: "user", Content: bigContent},       // oldest history — should be dropped
-			{Role: "assistant", Content: bigContent},   // old history — should be dropped
-			{Role: "user", Content: bigContent},        // newer — might be kept
-			{Role: "assistant", Content: bigContent},   // newer — might be kept
-			{Role: "user", Content: "current question"},// current message — always kept
+			{Role: "user", Content: bigContent},         // oldest history — should be dropped
+			{Role: "assistant", Content: bigContent},    // old history — should be dropped
+			{Role: "user", Content: bigContent},         // newer — might be kept
+			{Role: "assistant", Content: bigContent},    // newer — might be kept
+			{Role: "user", Content: "current question"}, // current message — always kept
 		},
 		Model:     "codellama", // 16384 context
 		MaxTokens: 4000,
