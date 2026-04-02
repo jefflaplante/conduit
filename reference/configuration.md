@@ -581,9 +581,11 @@ Multi-cluster Kubernetes configuration for the K8s tool. Kubeconfig paths suppor
 | `defaults.safety_level` | string | `"read"` | Default safety level |
 
 **Safety Levels:**
-- `read` — get, describe, logs, top (auto-approved)
-- `modify` — scale, rollout restart, label, annotate, cordon (requires confirmation)
-- `dangerous` — delete, edit, apply, create, drain (requires explicit approval)
+- `read` — get, list, describe, logs, watch, events, top, clusters, namespaces (auto-approved)
+- `modify` — scale, rollout, label, annotate, cordon, uncordon (recommended confirmation)
+- `dangerous` — delete, apply, create, edit, drain, exec, patch (requires approval)
+
+See [Kubernetes Integration](kubernetes.md) for full tool documentation.
 
 ### PagerDuty
 

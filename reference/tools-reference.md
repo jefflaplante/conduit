@@ -365,6 +365,61 @@ Query MQTT device data and optionally publish messages. Requires `mqtt.enabled: 
 
 Publish is gated by `mqtt.publish_allowed` config (default `false`).
 
+## Infrastructure / SRE
+
+### Kubernetes
+
+Multi-cluster Kubernetes management with security tiers. Requires `kubernetes.enabled: true` in config. See [Kubernetes Integration](kubernetes.md) for full documentation.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | Yes | Operation to perform (see below) |
+| `cluster` | string | Auto | Target cluster (auto-selected if only one) |
+| `resource` | string | Conditional | Resource kind (pods, deploy, svc, etc.) |
+| `name` | string | Conditional | Resource name |
+| `namespace` | string | No | Target namespace |
+| `label_selector` | string | No | Label filter for get/watch |
+| `container` | string | No | Container for logs/exec |
+| `command` | string | Conditional | Command for exec |
+| `tail_lines` | int | No | Log lines (default 100) |
+| `replicas` | int | Conditional | Replica count for scale |
+| `subaction` | string | Conditional | For rollout: restart/status/history |
+| `timeout` | int | No | Watch timeout seconds (default 30) |
+| `local_port` | int | Conditional | Local port for forwarding |
+| `remote_port` | int | Conditional | Remote port for forwarding |
+| `forward_id` | string | Conditional | Port forward ID for close |
+
+**Actions:**
+
+| Action | Tier | Description |
+|--------|------|-------------|
+| `get` | read | Get/list resources |
+| `describe` | read | Detailed resource description |
+| `logs` | read | Pod container logs |
+| `events` | read | Cluster events |
+| `watch` | read | Watch resource changes |
+| `clusters` | read | List configured clusters |
+| `namespaces` | read | List namespaces |
+| `scale` | modify | Scale deployment/statefulset |
+| `rollout` | modify | Rollout operations |
+| `delete` | dangerous | Delete resources |
+| `exec` | dangerous | Execute in pod |
+| `portforward_create` | read | Create port forward |
+| `portforward_close` | read | Close port forward |
+| `portforward_list` | read | List port forwards |
+
+```json
+{"action": "get", "resource": "pods", "namespace": "app"}
+{"action": "describe", "resource": "deploy", "name": "nginx"}
+{"action": "logs", "name": "web-abc123", "tail_lines": 50}
+{"action": "scale", "resource": "deploy", "name": "nginx", "replicas": 3}
+{"action": "exec", "name": "web-abc123", "command": "ls -la"}
+{"action": "watch", "resource": "pods", "timeout": 60}
+{"action": "portforward_create", "name": "postgres-0", "local_port": 5433, "remote_port": 5432}
+```
+
+**Security Model:** Operations are classified into read/modify/dangerous tiers. Each cluster has a `safety_level` that caps allowed operations. Namespace restrictions enforced via `allowed_namespaces`. Secret values always redacted.
+
 ## Adding Custom Tools
 
 Implement the `Tool` interface:
@@ -386,7 +441,6 @@ The following integrations have config and auth infrastructure in place. Full to
 
 | Integration | Config | Client | Tool Status |
 |-------------|--------|--------|-------------|
-| **Kubernetes** | `kubernetes` | client-go | Config ready, tool pending |
 | **PagerDuty** | `pagerduty` | REST v2 | Config + client ready, tool pending |
 | **Datadog** | `datadog` | REST v1/v2 | Config + client ready, tool pending |
 
