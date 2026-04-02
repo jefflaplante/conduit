@@ -76,6 +76,8 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **Gateway Architecture** — Channel manager with unified lifecycle management
 - **Session Management** — SQLite-based persistent session storage
 - **AI Provider Routing** — Anthropic and OpenAI with automatic fallback
+- **Smart Routing** — Automatic model selection based on task complexity (haiku/sonnet/opus)
+- **Context Compaction** — Automatic summarization of long sessions to free context space
 - **Tool Registry** — 18 built-in tools with sandbox execution
 
 ### Access Methods
@@ -99,6 +101,11 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **[MQTT Integration](reference/mqtt.md)** — Subscribe to MQTT topics (zigbee2mqtt, Home Assistant) for real-time device data
 - **Event Buffering** — In-memory per-topic ring buffers with age-based pruning
 - **Heartbeat Monitoring** — Natural language rules in HEARTBEAT.md to check sensors and alert on anomalies
+
+### SRE Integrations (Config & Auth)
+- **Kubernetes** — Multi-cluster kubeconfig support with safety levels (read/modify/dangerous)
+- **PagerDuty** — REST API v2 client with rate limiting for incident management
+- **Datadog** — Metrics/logs/monitors API client with DD-API-KEY/DD-APPLICATION-KEY auth
 
 ## Providers
 
