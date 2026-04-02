@@ -17,6 +17,7 @@ type DatadogTool struct {
 	config     *config.DatadogConfig
 	client     *Client
 	logsClient *LogsClient
+	apmClient  *APMClient
 }
 
 // NewDatadogTool creates a new Datadog tool with the given services and configuration.
@@ -27,12 +28,14 @@ func NewDatadogTool(services *types.ToolServices, cfg *config.DatadogConfig) (*D
 
 	client := NewClient(*cfg)
 	logsClient := NewLogsClient(client)
+	apmClient := NewAPMClient(client)
 
 	return &DatadogTool{
 		services:   services,
 		config:     cfg,
 		client:     client,
 		logsClient: logsClient,
+		apmClient:  apmClient,
 	}, nil
 }
 
@@ -41,7 +44,7 @@ func (t *DatadogTool) Name() string { return "Datadog" }
 
 // Description returns a human-readable description of the tool's capabilities.
 func (t *DatadogTool) Description() string {
-	return `Datadog observability tool for metrics and logs. All actions are read-only.
+	return `Datadog observability tool for metrics, logs, and APM traces. All actions are read-only.
 
 METRICS ACTIONS:
 - query_metrics: Query time series data using Datadog metric query syntax
@@ -53,11 +56,15 @@ LOG ACTIONS:
 - get_log: Get a single log entry by ID
 - list_indexes: List available log indexes
 
+APM TRACE ACTIONS:
+- search_traces: Search traces with filters (service required, operation, duration, status)
+- get_trace: Get full trace with all spans by trace ID
+
 Examples:
 - Query metrics: action=query_metrics, query="avg:system.cpu.user{*}", from=-3600
 - Search logs: action=search_logs, query="error timeout", service="api", from="-1h"
-- Get log by ID: action=get_log, log_id="abc123"
-- List log indexes: action=list_indexes`
+- Search traces: action=search_traces, service="api", min_duration="1s", status="error"
+- Get trace: action=get_trace, trace_id="abc123def456"`
 }
 
 // Parameters returns the JSON schema for the tool's parameters.
@@ -68,7 +75,7 @@ func (t *DatadogTool) Parameters() map[string]interface{} {
 			"action": map[string]interface{}{
 				"type":        "string",
 				"description": "The Datadog operation to perform",
-				"enum":        []string{"query_metrics", "list_metrics", "get_metric_metadata", "search_logs", "get_log", "list_indexes"},
+				"enum":        []string{"query_metrics", "list_metrics", "get_metric_metadata", "search_logs", "get_log", "list_indexes", "search_traces", "get_trace"},
 			},
 			// Metrics parameters
 			"query": map[string]interface{}{
@@ -77,11 +84,11 @@ func (t *DatadogTool) Parameters() map[string]interface{} {
 			},
 			"from": map[string]interface{}{
 				"type":        "string",
-				"description": "Start time. For metrics: Unix timestamp or negative offset in seconds (e.g., -3600). For logs: RFC3339 or relative like '-1h', '-15m'.",
+				"description": "Start time. For metrics: Unix timestamp or negative offset in seconds (e.g., -3600). For logs/traces: RFC3339 or relative like '-1h', '-15m'.",
 			},
 			"to": map[string]interface{}{
 				"type":        "string",
-				"description": "End time. For metrics: Unix timestamp or 0 for now. For logs: RFC3339 format (defaults to now).",
+				"description": "End time. For metrics: Unix timestamp or 0 for now. For logs/traces: RFC3339 format (defaults to now).",
 			},
 			"metric": map[string]interface{}{
 				"type":        "string",
@@ -94,11 +101,11 @@ func (t *DatadogTool) Parameters() map[string]interface{} {
 			// Logs parameters
 			"limit": map[string]interface{}{
 				"type":        "integer",
-				"description": "Maximum number of logs to return (default 100, max 1000)",
+				"description": "Maximum number of results to return (logs: default 100, max 1000; traces: default 20, max 100)",
 			},
 			"service": map[string]interface{}{
 				"type":        "string",
-				"description": "Filter logs by service name",
+				"description": "Filter by service name (required for search_traces, optional for search_logs)",
 			},
 			"host": map[string]interface{}{
 				"type":        "string",
@@ -106,8 +113,7 @@ func (t *DatadogTool) Parameters() map[string]interface{} {
 			},
 			"status": map[string]interface{}{
 				"type":        "string",
-				"description": "Filter logs by status",
-				"enum":        []string{"info", "warn", "error", "debug"},
+				"description": "Filter by status. For logs: info/warn/error/debug. For traces: ok/error.",
 			},
 			"cursor": map[string]interface{}{
 				"type":        "string",
@@ -121,6 +127,23 @@ func (t *DatadogTool) Parameters() map[string]interface{} {
 				"type":        "array",
 				"items":       map[string]interface{}{"type": "string"},
 				"description": "Specific log indexes to search (optional)",
+			},
+			// APM parameters
+			"operation": map[string]interface{}{
+				"type":        "string",
+				"description": "Filter traces by operation/span name (e.g., 'http.request', 'db.query')",
+			},
+			"resource": map[string]interface{}{
+				"type":        "string",
+				"description": "Filter traces by resource name (e.g., '/api/checkout', 'SELECT * FROM users')",
+			},
+			"min_duration": map[string]interface{}{
+				"type":        "string",
+				"description": "Minimum trace duration for search_traces (e.g., '1s', '500ms', '100'). Numeric values are treated as milliseconds.",
+			},
+			"trace_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Trace ID for get_trace action (hexadecimal string)",
 			},
 		},
 		"required": []string{"action"},
@@ -166,6 +189,19 @@ func (t *DatadogTool) GetActionDocs() map[string]types.ActionDoc {
 			OptionalParams: []string{},
 			Returns:        "List of log indexes with retention and rate limit info",
 		},
+		// APM trace actions
+		"search_traces": {
+			Description:    "Search APM traces with filters. Enables queries like 'show me slow requests to /api/checkout in the last hour'.",
+			RequiredParams: []string{"service"},
+			OptionalParams: []string{"operation", "resource", "from", "to", "min_duration", "status", "limit", "cursor"},
+			Returns:        "List of traces with trace_id, service, operation, duration, status, timestamp, resource",
+		},
+		"get_trace": {
+			Description:    "Get full trace with all spans. Shows trace timeline with span timing, services, operations, and errors.",
+			RequiredParams: []string{"trace_id"},
+			OptionalParams: []string{},
+			Returns:        "Full trace with all spans including timing, service, operation, errors. Large traces (>50 spans) are summarized.",
+		},
 	}
 }
 
@@ -194,11 +230,16 @@ func (t *DatadogTool) Execute(ctx context.Context, args map[string]interface{}) 
 		return t.executeGetLog(ctx, args)
 	case "list_indexes":
 		return t.executeListIndexes(ctx)
+	// APM trace actions
+	case "search_traces":
+		return t.executeSearchTraces(ctx, args)
+	case "get_trace":
+		return t.executeGetTrace(ctx, args)
 	default:
 		return types.NewErrorResult("invalid_action",
 			fmt.Sprintf("Unknown action: %s", action)).
 			WithParameter("action", action).
-			WithAvailableValues([]string{"query_metrics", "list_metrics", "get_metric_metadata", "search_logs", "get_log", "list_indexes"}), nil
+			WithAvailableValues([]string{"query_metrics", "list_metrics", "get_metric_metadata", "search_logs", "get_log", "list_indexes", "search_traces", "get_trace"}), nil
 	}
 }
 

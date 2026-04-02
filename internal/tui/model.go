@@ -500,9 +500,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebar.ToolCount = msg.ToolCount
 		m.sidebar.SkillCount = msg.SkillCount
 
-	// Error messages
+	// Shell result messages
 	case ShellResultMsg:
 		if s := m.sessionByKey(msg.SessionKey); s != nil {
+			// Clear running command state
+			s.Shell.RunningCmd = nil
+			s.Shell.RunningCancel = nil
 			if msg.Err != nil {
 				s.Chat.AddMessage("system", fmt.Sprintf("Error: %v\n%s", msg.Err, msg.Output))
 			} else if msg.Output != "" {
@@ -512,6 +515,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case ShellCommandCancelledMsg:
+		if s := m.sessionByKey(msg.SessionKey); s != nil {
+			s.Chat.AddMessage("system", "^C")
+		}
+
+	case BackgroundJobStartedMsg:
+		if s := m.sessionByKey(msg.SessionKey); s != nil {
+			s.Chat.AddMessage("system", fmt.Sprintf("[%d] %s", msg.JobID, truncateCommand(msg.Command, 60)))
+			// Start watching for job completion
+			if s.Shell.Jobs != nil {
+				cmds = append(cmds, watchBackgroundJobs(msg.SessionKey, s.Shell.Jobs))
+			}
+		}
+
+	case BackgroundJobCompletedMsg:
+		if s := m.sessionByKey(msg.SessionKey); s != nil {
+			statusStr := msg.Status.String()
+			s.Chat.AddMessage("system", fmt.Sprintf("[%d] %s", msg.JobID, statusStr))
+			if msg.Output != "" {
+				s.Chat.AddMessage("system", strings.TrimRight(msg.Output, "\n"))
+			}
+			if msg.Error != nil {
+				s.Chat.AddMessage("system", fmt.Sprintf("Error: %v", msg.Error))
+			}
+			// Continue watching for more job completions
+			if s.Shell.Jobs != nil {
+				cmds = append(cmds, watchBackgroundJobs(msg.SessionKey, s.Shell.Jobs))
+			}
+		}
+
+	// Error messages
 	case ErrorMsg:
 		s, tabIdx := m.resolveTab(msg.RequestID, msg.SessionKey)
 		if s != nil {
@@ -555,6 +589,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 	switch key {
 	case "ctrl+c":
+		// First, try to cancel any running shell command
+		if s := m.activeSession(); s != nil {
+			if s.Shell.CancelRunningCommand() {
+				s.Chat.AddMessage("system", "^C")
+				return nil, true
+			}
+		}
+		// No running command, quit the TUI
 		m.quitting = true
 		if m.client != nil {
 			m.client.Close()
@@ -703,6 +745,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 				// Handle cd command specially (shell builtin that needs state tracking)
 				if isCd, args := IsCdCommand(cmdLine); isCd {
+					// Expand variables in args
+					args = s.Shell.ExpandVariables(args)
 					newState, errMsg := s.Shell.HandleCdCommand(args)
 					if errMsg != "" {
 						s.Chat.AddMessage("system", s.Shell.FormatPrompt(true)+cmdLine+"\n"+errMsg)
@@ -718,9 +762,70 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool) {
 					return nil, true
 				}
 
+				// Handle export command
+				if isExport, varName, value, showOnly := IsExportCommand(cmdLine); isExport {
+					newState, output := s.Shell.HandleExportCommand(varName, value, showOnly)
+					s.Chat.AddMessage("system", s.Shell.FormatPrompt(true)+cmdLine)
+					if output != "" {
+						s.Chat.AddMessage("system", output)
+					}
+					s.Shell = newState
+					return nil, true
+				}
+
+				// Handle unset command
+				if isUnset, varName := IsUnsetCommand(cmdLine); isUnset {
+					newState, output := s.Shell.HandleUnsetCommand(varName)
+					s.Chat.AddMessage("system", s.Shell.FormatPrompt(true)+cmdLine)
+					if output != "" {
+						s.Chat.AddMessage("system", output)
+					}
+					s.Shell = newState
+					return nil, true
+				}
+
+				// Handle jobs command (show background jobs)
+				if IsJobsCommand(cmdLine) {
+					s.Chat.AddMessage("system", s.Shell.FormatPrompt(true)+cmdLine)
+					s.Chat.AddMessage("system", s.Shell.FormatJobsList())
+					return nil, true
+				}
+
+				// Handle kill %N command (cancel background job)
+				if isKill, jobID := IsKillCommand(cmdLine); isKill {
+					s.Chat.AddMessage("system", s.Shell.FormatPrompt(true)+cmdLine)
+					if jobID == 0 {
+						s.Chat.AddMessage("system", "Usage: kill %N (where N is the job number)")
+						return nil, true
+					}
+					if s.Shell.Jobs == nil {
+						s.Chat.AddMessage("system", "No jobs")
+						return nil, true
+					}
+					if err := s.Shell.Jobs.CancelJob(jobID); err != nil {
+						s.Chat.AddMessage("system", err.Error())
+					} else {
+						s.Chat.AddMessage("system", fmt.Sprintf("[%d] cancelled", jobID))
+					}
+					return nil, true
+				}
+
+				// Check if this is a background command (ends with &)
+				if isBg, bgCmd := IsBackgroundCommand(cmdLine); isBg {
+					expandedCmd := s.Shell.ExpandVariables(bgCmd)
+					s.Chat.AddMessage("system", s.Shell.FormatPrompt(true)+cmdLine)
+					if s.Shell.Jobs == nil {
+						s.Shell.Jobs = NewJobManager()
+					}
+					return executeBackgroundCmd(sessionKey, expandedCmd, s.Shell.CurrentDir, s.Shell.Jobs), true
+				}
+
+				// Expand variables in command before execution
+				expandedCmd := s.Shell.ExpandVariables(cmdLine)
+
 				// Regular command - show prompt with current directory and execute
 				s.Chat.AddMessage("system", s.Shell.FormatPrompt(true)+cmdLine)
-				return executeShellCmdWithDir(sessionKey, cmdLine, s.Shell.CurrentDir), true
+				return executeShellCmdWithEnv(sessionKey, expandedCmd, s.Shell.CurrentDir, s.Shell.EnvVars), true
 			}
 			return nil, true
 		}
@@ -737,14 +842,25 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool) {
 						"/model [alias] - View/switch model\n"+
 						"/context - Show context window usage\n"+
 						"/stop - Stop current operation\n"+
-						"/quit, /exit - Exit TUI\n"+
+						"/quit, /exit - Exit TUI\n\n"+
+						"Shell Escape (! prefix):\n"+
 						"! <cmd> - Execute shell command (tracks cwd)\n"+
-						"! cd <dir> - Change working directory\n\n"+
+						"! <cmd> & - Run command in background\n"+
+						"! cd <dir> - Change working directory\n"+
+						"! export VAR=value - Set environment variable\n"+
+						"! export [VAR] - Show env var(s)\n"+
+						"! unset VAR - Remove environment variable\n"+
+						"! jobs - List background jobs\n"+
+						"! kill %N - Cancel background job N\n\n"+
+						"Variable expansion: $VAR or ${VAR} in commands\n"+
+						"Output auto-truncates at 100 lines\n"+
+						"Commands timeout after 5 minutes\n\n"+
 						"Ctrl+T: New tab | Ctrl+W: Close tab\n"+
 						"Alt+Left/Right: Switch tabs\n"+
 						"Alt+Enter: Insert new line\n"+
 						"Tab: Toggle sidebar | Shift+Tab: Cycle sidebar\n"+
-						"PgUp/PgDn: Scroll chat | Ctrl+C: Quit")
+						"PgUp/PgDn: Scroll chat\n"+
+						"Ctrl+C: Cancel running command or quit")
 				return nil, true
 			}
 			// Send command to gateway
