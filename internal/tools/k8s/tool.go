@@ -74,7 +74,9 @@ func (t *K8sTool) Description() string {
 - portforward_create: Forward a local port to a pod port
 - portforward_close: Close an active port forward
 - portforward_list: List active port forwards
-- top: Show resource usage metrics (future)`
+- top: Show resource usage metrics (requires metrics-server)
+  - resource=pods: CPU/memory per pod (params: namespace, sort_by, limit)
+  - resource=nodes: CPU/memory per node (params: sort_by, limit)`
 }
 
 // Parameters returns the JSON schema for the tool's parameters.
@@ -147,6 +149,15 @@ func (t *K8sTool) Parameters() map[string]interface{} {
 				"type":        "string",
 				"description": "Port forward ID for close operation",
 			},
+			"sort_by": map[string]interface{}{
+				"type":        "string",
+				"description": "Sort field for top action: 'cpu' (default) or 'memory'",
+				"enum":        []string{"cpu", "memory"},
+			},
+			"limit": map[string]interface{}{
+				"type":        "integer",
+				"description": "Maximum number of results for top action (default 10, max 100)",
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -192,10 +203,7 @@ func (t *K8sTool) Execute(ctx context.Context, args map[string]interface{}) (*ty
 	case "portforward_list":
 		return t.executePortForwardList()
 	case "top":
-		return &types.ToolResult{
-			Success: false,
-			Error:   "top not yet implemented -- requires metrics API",
-		}, nil
+		return t.executeTop(ctx, args)
 	default:
 		return &types.ToolResult{
 			Success: false,

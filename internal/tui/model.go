@@ -1,10 +1,7 @@
 package tui
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -63,6 +60,8 @@ type SessionState struct {
 	LastRequestStart time.Time     // set on send, cleared on StreamEnd
 	LastResponseTime time.Duration // time from send to StreamEnd
 	State            string        // "idle", "processing", "tool: X", "error"
+	// Shell escape state
+	Shell ShellState
 }
 
 // Model is the root BubbleTea model
@@ -127,6 +126,7 @@ func NewModel(config ModelConfig) Model {
 		{
 			Label: "Chat 1",
 			Chat:  initialChat,
+			Shell: NewShellState(),
 		},
 	}
 
@@ -569,6 +569,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.sessions = append(m.sessions, SessionState{
 			Label: m.tabBar.Tabs[idx].Label,
 			Chat:  chat,
+			Shell: NewShellState(),
 		})
 		m.tabBar.ActiveIdx = idx
 		m.updateActiveSession()
@@ -700,8 +701,26 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool) {
 					return nil, true
 				}
 
-				s.Chat.AddMessage("system", "$ "+cmdLine)
-				return executeShellCmd(sessionKey, cmdLine), true
+				// Handle cd command specially (shell builtin that needs state tracking)
+				if isCd, args := IsCdCommand(cmdLine); isCd {
+					newState, errMsg := s.Shell.HandleCdCommand(args)
+					if errMsg != "" {
+						s.Chat.AddMessage("system", s.Shell.FormatPrompt(true)+cmdLine+"\n"+errMsg)
+					} else {
+						// Show the cd command with the old prompt, then show the new directory
+						s.Chat.AddMessage("system", s.Shell.FormatPrompt(true)+cmdLine)
+						s.Shell = newState
+						// If cd - was used, show the new directory
+						if args == "-" {
+							s.Chat.AddMessage("system", newState.CurrentDir)
+						}
+					}
+					return nil, true
+				}
+
+				// Regular command - show prompt with current directory and execute
+				s.Chat.AddMessage("system", s.Shell.FormatPrompt(true)+cmdLine)
+				return executeShellCmdWithDir(sessionKey, cmdLine, s.Shell.CurrentDir), true
 			}
 			return nil, true
 		}
@@ -719,7 +738,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool) {
 						"/context - Show context window usage\n"+
 						"/stop - Stop current operation\n"+
 						"/quit, /exit - Exit TUI\n"+
-						"! <cmd> - Execute shell command\n\n"+
+						"! <cmd> - Execute shell command (tracks cwd)\n"+
+						"! cd <dir> - Change working directory\n\n"+
 						"Ctrl+T: New tab | Ctrl+W: Close tab\n"+
 						"Alt+Left/Right: Switch tabs\n"+
 						"Alt+Enter: Insert new line\n"+
@@ -947,21 +967,3 @@ func (m *Model) validateShellCommand(cmdLine string) error {
 	return nil
 }
 
-// executeShellCmd returns a tea.Cmd that executes a shell command and sends the result back
-func executeShellCmd(sessionKey, cmdLine string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		cmd := exec.CommandContext(ctx, "sh", "-c", cmdLine)
-		cmd.Dir, _ = os.Getwd()
-
-		output, err := cmd.CombinedOutput()
-
-		return ShellResultMsg{
-			SessionKey: sessionKey,
-			Output:     string(output),
-			Err:        err,
-		}
-	}
-}

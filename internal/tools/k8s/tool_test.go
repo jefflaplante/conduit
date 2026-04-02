@@ -333,14 +333,15 @@ func TestK8sTool_Execute_Exec_RequiresParams(t *testing.T) {
 	assert.Contains(t, result.Error, "name parameter")
 }
 
-func TestK8sTool_Execute_Top_NotImplemented(t *testing.T) {
+func TestK8sTool_Execute_Top_NoRestConfig(t *testing.T) {
 	tool := setupTestTool(t)
+	// The fake client doesn't have a restConfig, so top will fail with a clear message
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"action": "top",
 	})
 	require.NoError(t, err)
 	assert.False(t, result.Success)
-	assert.Contains(t, result.Error, "not yet implemented")
+	assert.Contains(t, result.Error, "REST config")
 }
 
 func TestK8sTool_Execute_MissingAction(t *testing.T) {

@@ -42,6 +42,7 @@ type Config struct {
 	PagerDuty      PagerDutyConfig      `json:"pagerduty,omitempty"`
 	Datadog        DatadogConfig        `json:"datadog,omitempty"`
 	Auth           AuthTokenConfig      `json:"auth,omitempty"`
+	Logging        LoggingConfig        `json:"logging,omitempty"`
 }
 
 // AuthTokenConfig holds configuration for the token authentication system
@@ -50,6 +51,38 @@ type AuthTokenConfig struct {
 	// If empty, a random key is generated at startup (tokens won't survive restarts).
 	// Supports ${ENV_VAR} expansion.
 	TokenSecret string `json:"token_secret,omitempty"`
+}
+
+// LoggingConfig holds structured logging configuration
+type LoggingConfig struct {
+	// Level is the minimum log level: debug, info, warn, error (default: info)
+	Level string `json:"level,omitempty"`
+	// Format is the output format: text, json (default: text)
+	Format string `json:"format,omitempty"`
+}
+
+// DefaultLoggingConfig returns sensible defaults for logging
+func DefaultLoggingConfig() LoggingConfig {
+	return LoggingConfig{
+		Level:  "info",
+		Format: "text",
+	}
+}
+
+// GetLevel returns the configured level or default
+func (c *LoggingConfig) GetLevel() string {
+	if c.Level == "" {
+		return "info"
+	}
+	return c.Level
+}
+
+// GetFormat returns the configured format or default
+func (c *LoggingConfig) GetFormat() string {
+	if c.Format == "" {
+		return "text"
+	}
+	return c.Format
 }
 
 // VectorConfig holds configuration for the optional vector/semantic search service.
@@ -633,6 +666,7 @@ func Default() *Config {
 		Heartbeat:      DefaultHeartbeatConfig(),
 		AgentHeartbeat: DefaultAgentHeartbeatConfig(),
 		RemoteSSH:      DefaultRemoteSSHConfig(),
+		Logging:        DefaultLoggingConfig(),
 		Channels: []ChannelConfig{
 			{
 				Name:    "telegram",

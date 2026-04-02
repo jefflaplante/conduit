@@ -12,6 +12,7 @@ import (
 
 	"conduit/internal/auth"
 	"conduit/internal/config"
+	"conduit/internal/logging"
 	"conduit/internal/middleware"
 	"conduit/internal/monitoring"
 	"conduit/internal/sessions"
@@ -55,8 +56,12 @@ func createTestGateway(t *testing.T) *Gateway {
 		},
 	})
 
+	// Create a test logger
+	testLogger := logging.New("info", "text")
+
 	return &Gateway{
 		config:              cfg,
+		logger:              testLogger,
 		sessions:            sessionStore,
 		gatewayMetrics:      gatewayMetrics,
 		metricsCollector:    metricsCollector,
@@ -766,8 +771,12 @@ func createTestGatewayWithDiagnosticsConfig(t *testing.T, requireAuth bool, heal
 		},
 	})
 
+	// Create a test logger
+	testLogger := logging.New("info", "text")
+
 	gw := &Gateway{
 		config:              cfg,
+		logger:              testLogger,
 		sessions:            sessionStore,
 		gatewayMetrics:      gatewayMetrics,
 		metricsCollector:    metricsCollector,
