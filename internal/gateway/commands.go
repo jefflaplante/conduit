@@ -92,6 +92,18 @@ func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessa
 		return true
 	}
 
+	// Check for /smartroute command
+	if text == "/smartroute" || strings.HasPrefix(text, "/smartroute ") {
+		g.handleSmartRouteCommand(msg, text, session)
+		return true
+	}
+
+	// Check for /compact command
+	if text == "/compact" || strings.HasPrefix(text, "/compact ") {
+		g.handleCompactCommand(ctx, msg, session)
+		return true
+	}
+
 	return false
 }
 
@@ -132,7 +144,7 @@ func (g *Gateway) handleStatusCommand(msg *protocol.IncomingMessage, session *se
 
 // handleHelpCommand shows available commands
 func (g *Gateway) handleHelpCommand(msg *protocol.IncomingMessage) {
-	help := `📖 *Available Commands*
+	help := `*Available Commands*
 
 /reset - Clear conversation history
 /status - Show session info
@@ -140,8 +152,10 @@ func (g *Gateway) handleHelpCommand(msg *protocol.IncomingMessage) {
 /model - View/switch model (use /model reset to clear override)
 /provider - View/switch provider
 /context - Show context window usage
+/compact - Compact context by summarizing older messages
 /stop - Stop current operation
 /ring - Show debug ring buffer activity
+/smartroute [on|off|status|budget <amount>] - Smart routing controls
 
 _Conduit Go Gateway_`
 
@@ -225,6 +239,101 @@ func (g *Gateway) handleRingCommand(msg *protocol.IncomingMessage, text string) 
 
 		sb.WriteString("\n_Use /ring clear to reset_")
 		g.sendCommandResponse(msg, sb.String())
+	}
+}
+
+// handleCompactCommand manually triggers context compaction for the session
+func (g *Gateway) handleCompactCommand(ctx context.Context, msg *protocol.IncomingMessage, session *sessions.Session) {
+	if g.compactionEngine == nil {
+		g.sendCommandResponse(msg, "Context compaction is not configured. Enable it in the AI config.")
+		return
+	}
+
+	result, err := g.compactionEngine.Compact(ctx, session)
+	if err != nil {
+		g.sendCommandResponse(msg, fmt.Sprintf("Compaction failed: %v", err))
+		return
+	}
+
+	if result == nil {
+		g.sendCommandResponse(msg, "No compaction needed (not enough messages to compact).")
+		return
+	}
+
+	g.sendCommandResponse(msg, fmt.Sprintf("Compacted %d messages into summary + %d recent messages.", result.SummarizedCount, result.KeptCount))
+}
+
+// handleSmartRouteCommand handles smart routing configuration
+func (g *Gateway) handleSmartRouteCommand(msg *protocol.IncomingMessage, text string, session *sessions.Session) {
+	parts := strings.Fields(text)
+	subcommand := ""
+	if len(parts) > 1 {
+		subcommand = strings.ToLower(parts[1])
+	}
+
+	switch subcommand {
+	case "", "status":
+		// Show current state
+		enabled := "off (global)"
+		if g.config.AI.SmartRouting != nil && g.config.AI.SmartRouting.Enabled {
+			enabled = "on (global)"
+		}
+		if override := session.Context["smart_routing_enabled"]; override != "" {
+			if override == "true" {
+				enabled = "on (session)"
+			} else {
+				enabled = "off (session)"
+			}
+		}
+
+		model := session.Context["smart_routing_model"]
+		reason := session.Context["smart_routing_reason"]
+		complexity := session.Context["smart_routing_complexity"]
+		cost := session.Context["session_total_cost"]
+
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("🧠 *Smart Routing*: %s\n", enabled))
+		if model != "" {
+			sb.WriteString(fmt.Sprintf("*Last model:* %s\n", model))
+		}
+		if complexity != "" {
+			sb.WriteString(fmt.Sprintf("*Complexity score:* %s\n", complexity))
+		}
+		if reason != "" {
+			sb.WriteString(fmt.Sprintf("*Selection reason:* %s\n", reason))
+		}
+		if cost != "" {
+			sb.WriteString(fmt.Sprintf("*Session cost:* $%s\n", cost))
+		}
+		if g.config.AI.SmartRouting != nil && g.config.AI.SmartRouting.CostBudgetDaily > 0 {
+			sb.WriteString(fmt.Sprintf("*Daily budget:* $%.2f\n", g.config.AI.SmartRouting.CostBudgetDaily))
+		}
+		g.sendCommandResponse(msg, sb.String())
+
+	case "on":
+		_ = g.sessions.SetSessionContext(session.Key, "smart_routing_enabled", "true")
+		g.sendCommandResponse(msg, "✅ Smart routing enabled for this session.")
+
+	case "off":
+		_ = g.sessions.SetSessionContext(session.Key, "smart_routing_enabled", "false")
+		g.sendCommandResponse(msg, "⏸️ Smart routing disabled for this session. Using default model.")
+
+	case "budget":
+		if len(parts) < 3 {
+			g.sendCommandResponse(msg, "Usage: /smartroute budget <amount>")
+			return
+		}
+		amount := parts[2]
+		// Validate it's a number
+		if _, err := strconv.ParseFloat(amount, 64); err != nil {
+			g.sendCommandResponse(msg, fmt.Sprintf("❌ Invalid budget amount: %s", amount))
+			return
+		}
+		_ = g.sessions.SetSessionContext(session.Key, "smart_routing_budget", amount)
+		g.sendCommandResponse(msg, fmt.Sprintf("💰 Session budget set to $%s.", amount))
+
+	default:
+		g.sendCommandResponse(msg, "Usage: /smartroute [on|off|status|budget <amount>]")
 	}
 }
 

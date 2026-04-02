@@ -51,6 +51,7 @@ type Router struct {
 	complexityAnalyzer *ComplexityAnalyzer
 	smartRoutingCfg    *config.SmartRoutingConfig
 	contextEngine      ContextEngine
+	pricingResolver    *PricingResolver
 }
 
 // AgentProcessedResponse represents processed response from agent (to avoid circular imports)
@@ -258,6 +259,20 @@ func (r *Router) SetSmartRoutingConfig(cfg *config.SmartRoutingConfig) {
 // This is optional — smart routing works identically without a context engine.
 func (r *Router) SetContextEngine(engine ContextEngine) {
 	r.contextEngine = engine
+}
+
+// SetPricingResolver sets the pricing resolver for dynamic model pricing.
+func (r *Router) SetPricingResolver(pr *PricingResolver) {
+	r.pricingResolver = pr
+}
+
+// ResolvePricing returns pricing for a model using the configured resolver,
+// or falls back to the default pricing matrix if no resolver is set.
+func (r *Router) ResolvePricing(model string) ModelPricing {
+	if r.pricingResolver != nil {
+		return r.pricingResolver.PricingForModel(model)
+	}
+	return PricingForModel(model)
 }
 
 // IsSmartRoutingEnabled returns true if smart routing is configured and enabled.

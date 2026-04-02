@@ -184,7 +184,32 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		}
 	}
 
-	convResponse, err := g.ai.GenerateResponseStreaming(reqCtx, session, msg.Text, providerOverride, modelOverride, onDelta)
+	// Check if smart routing should be used
+	smartRoutingEnabled := g.config.AI.SmartRouting != nil && g.config.AI.SmartRouting.Enabled
+	if sessionSmartOverride := session.Context["smart_routing_enabled"]; sessionSmartOverride == "false" {
+		smartRoutingEnabled = false
+	} else if sessionSmartOverride == "true" {
+		smartRoutingEnabled = true
+	}
+
+	var convResponse ai.ConversationResponse
+
+	if smartRoutingEnabled && modelOverride == "" {
+		// Use smart routing: let the router select the optimal model
+		var routingResult *ai.SmartRoutingResult
+		convResponse, routingResult, err = g.ai.GenerateResponseSmartStreaming(reqCtx, session, msg.Text, providerOverride, onDelta)
+		if routingResult != nil {
+			// Store smart routing metadata in session context for debugging/visibility
+			_ = g.sessions.SetSessionContext(session.Key, "smart_routing_model", routingResult.SelectedModel)
+			_ = g.sessions.SetSessionContext(session.Key, "smart_routing_reason", routingResult.SelectionReason)
+			_ = g.sessions.SetSessionContext(session.Key, "smart_routing_complexity", fmt.Sprintf("%d", routingResult.Complexity.Score))
+			// Use the selected model for cost calculation
+			modelOverride = routingResult.SelectedModel
+		}
+	} else {
+		// Use direct streaming with explicit model (or default)
+		convResponse, err = g.ai.GenerateResponseStreaming(reqCtx, session, msg.Text, providerOverride, modelOverride, onDelta)
+	}
 	if err != nil {
 		// Check for cancellation from /stop
 		if reqCtx.Err() == context.Canceled {
@@ -249,6 +274,22 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 				batch[warning.Key] = "true"
 			}
 			_ = g.sessions.SetSessionContextBatch(session.Key, batch)
+
+			// Auto-compaction check (async, non-blocking)
+			// Determine actual model used for context window calculation
+			modelUsed := modelOverride
+			if modelUsed == "" {
+				modelUsed = "claude-sonnet-4-20250514" // default model
+			}
+			if g.compactionEngine != nil && g.compactionEngine.ShouldCompact(promptTokens, modelUsed) {
+				go func() {
+					compactCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+					defer cancel()
+					if _, err := g.compactionEngine.Compact(compactCtx, session); err != nil {
+						log.Printf("[Compaction] Auto-compact failed for session %s: %v", session.Key, err)
+					}
+				}()
+			}
 		}
 	}
 
@@ -380,7 +421,9 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			"/model [alias] - View/switch model\n" +
 			"/provider [name] - View/switch provider\n" +
 			"/context - Show context window usage\n" +
+			"/compact - Compact context by summarizing older messages\n" +
 			"/stop - Stop current operation\n" +
+			"/smartroute [on|off|status|budget <amount>] - Smart routing controls\n" +
 			"/quit - Exit TUI"
 		sendResponse(help)
 
@@ -541,6 +584,117 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 		} else {
 			sendResponse("No active operation to stop.")
 		}
+
+	case text == "/smartroute" || strings.HasPrefix(text, "/smartroute "):
+		if sessionKey == "" {
+			sendResponse("No active session.")
+			return
+		}
+
+		session, err := g.sessions.GetSession(sessionKey)
+		if err != nil {
+			sendResponse("Could not retrieve session.")
+			return
+		}
+
+		parts := strings.Fields(text)
+		subcommand := ""
+		if len(parts) > 1 {
+			subcommand = strings.ToLower(parts[1])
+		}
+
+		switch subcommand {
+		case "", "status":
+			enabled := "off (global)"
+			if g.config.AI.SmartRouting != nil && g.config.AI.SmartRouting.Enabled {
+				enabled = "on (global)"
+			}
+			if override := session.Context["smart_routing_enabled"]; override != "" {
+				if override == "true" {
+					enabled = "on (session)"
+				} else {
+					enabled = "off (session)"
+				}
+			}
+
+			model := session.Context["smart_routing_model"]
+			reason := session.Context["smart_routing_reason"]
+			complexity := session.Context["smart_routing_complexity"]
+			cost := session.Context["session_total_cost"]
+
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("Smart Routing: %s\n", enabled))
+			if model != "" {
+				sb.WriteString(fmt.Sprintf("Last model: %s\n", model))
+			}
+			if complexity != "" {
+				sb.WriteString(fmt.Sprintf("Complexity score: %s\n", complexity))
+			}
+			if reason != "" {
+				sb.WriteString(fmt.Sprintf("Selection reason: %s\n", reason))
+			}
+			if cost != "" {
+				sb.WriteString(fmt.Sprintf("Session cost: $%s\n", cost))
+			}
+			if g.config.AI.SmartRouting != nil && g.config.AI.SmartRouting.CostBudgetDaily > 0 {
+				sb.WriteString(fmt.Sprintf("Daily budget: $%.2f\n", g.config.AI.SmartRouting.CostBudgetDaily))
+			}
+			sendResponse(sb.String())
+
+		case "on":
+			_ = g.sessions.SetSessionContext(sessionKey, "smart_routing_enabled", "true")
+			sendResponse("Smart routing enabled for this session.")
+
+		case "off":
+			_ = g.sessions.SetSessionContext(sessionKey, "smart_routing_enabled", "false")
+			sendResponse("Smart routing disabled for this session. Using default model.")
+
+		case "budget":
+			if len(parts) < 3 {
+				sendResponse("Usage: /smartroute budget <amount>")
+				return
+			}
+			amount := parts[2]
+			if _, err := strconv.ParseFloat(amount, 64); err != nil {
+				sendResponse(fmt.Sprintf("Invalid budget amount: %s", amount))
+				return
+			}
+			_ = g.sessions.SetSessionContext(sessionKey, "smart_routing_budget", amount)
+			sendResponse(fmt.Sprintf("Session budget set to $%s.", amount))
+
+		default:
+			sendResponse("Usage: /smartroute [on|off|status|budget <amount>]")
+		}
+
+	case text == "/compact" || strings.HasPrefix(text, "/compact "):
+		if sessionKey == "" {
+			sendResponse("No active session.")
+			return
+		}
+
+		session, err := g.sessions.GetSession(sessionKey)
+		if err != nil {
+			sendResponse("Could not retrieve session.")
+			return
+		}
+
+		if g.compactionEngine == nil {
+			sendResponse("Context compaction is not configured. Enable it in the AI config.")
+			return
+		}
+
+		result, err := g.compactionEngine.Compact(ctx, session)
+		if err != nil {
+			sendResponse(fmt.Sprintf("Compaction failed: %v", err))
+			return
+		}
+
+		if result == nil {
+			sendResponse("No compaction needed (not enough messages to compact).")
+			return
+		}
+
+		sendResponse(fmt.Sprintf("Compacted %d messages into summary + %d recent messages.", result.SummarizedCount, result.KeptCount))
 
 	default:
 		sendResponse(fmt.Sprintf("Unknown command: %s\nType /help for available commands.", command))

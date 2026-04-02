@@ -443,6 +443,176 @@ func complexityLevelToTier(level ComplexityLevel) ModelTier {
 	}
 }
 
+// GenerateResponseSmartStreaming performs smart routing for model selection, then
+// streams the response. This is the streaming counterpart to GenerateResponseSmart.
+// It analyzes complexity, selects a model, and delegates to GenerateResponseStreaming.
+func (r *Router) GenerateResponseSmartStreaming(
+	ctx context.Context,
+	session *sessions.Session,
+	userMessage string,
+	providerName string,
+	onDelta StreamCallback,
+) (ConversationResponse, *SmartRoutingResult, error) {
+	totalStart := time.Now()
+
+	// If smart routing is not enabled, delegate to existing streaming method
+	if !r.IsSmartRoutingEnabled() {
+		resp, err := r.GenerateResponseStreaming(ctx, session, userMessage, providerName, "", onDelta)
+		return resp, nil, err
+	}
+
+	// Step 1: Analyze message complexity
+	analyzer := r.complexityAnalyzer
+	if analyzer == nil {
+		analyzer = NewComplexityAnalyzer()
+	}
+	msgComplexity := analyzer.AnalyzeMessage(userMessage)
+
+	// Incorporate tool availability into complexity estimate
+	var tools []Tool
+	if r.agentSystem != nil {
+		tools = r.agentSystem.GetToolDefinitions(nil)
+	}
+	toolComplexity := analyzer.AnalyzeToolDefinitions(tools)
+	combined := analyzer.CombineScores(msgComplexity, toolComplexity)
+
+	log.Printf("[SmartRouting] Streaming: complexity level=%s score=%d reasons=%v",
+		combined.Level, combined.Score, combined.Reasons)
+
+	// Step 2: Query context engine for historical routing context (optional)
+	var routingCtx *RoutingContext
+	var contextSuggestedTier ModelTier = -1
+	var contextInfluenced bool
+
+	if r.contextEngine != nil {
+		routingCtx = r.contextEngine.RetrieveContext(ctx, userMessage)
+		if routingCtx != nil && !routingCtx.IsEmpty() {
+			contextSuggestedTier = routingCtx.SuggestedTier()
+			log.Printf("[SmartRouting] Streaming: context engine returned %d similar requests, %d hints (source=%s, latency=%dms, suggested_tier=%s)",
+				len(routingCtx.SimilarRequests), len(routingCtx.Hints),
+				routingCtx.Source, routingCtx.SearchLatencyMs, contextSuggestedTier)
+
+			contextInfluenced = r.applyContextInfluence(&combined, routingCtx, contextSuggestedTier)
+		}
+	}
+
+	// Step 3: Estimate input tokens from session context + user message
+	estimatedTokens := r.estimateInputTokens(session, userMessage)
+
+	// Step 4: Select model via strategy
+	selectionCtx := &SelectionContext{
+		Complexity:           combined,
+		EstimatedInputTokens: estimatedTokens,
+		AvailableTools:       tools,
+		ProviderName:         providerName,
+	}
+	selection := r.modelSelector.SelectModel(selectionCtx)
+
+	log.Printf("[SmartRouting] Streaming: model selected: %s (tier=%s, reason=%s, context_influenced=%v)",
+		selection.Model, selection.Tier, selection.Reason, contextInfluenced)
+
+	// Step 5: Build result struct
+	result := &SmartRoutingResult{
+		SelectedModel:        selection.Model,
+		SelectionReason:      selection.Reason,
+		Tier:                 selection.Tier,
+		Complexity:           combined,
+		ContextInfluenced:    contextInfluenced,
+		ContextSuggestedTier: contextSuggestedTier,
+	}
+
+	// Populate context observability fields
+	if routingCtx != nil {
+		result.ContextSearchLatencyMs = routingCtx.SearchLatencyMs
+		result.ContextSource = routingCtx.Source
+	}
+
+	// Step 6: Execute with fallbacks (streaming version)
+	resp, err := r.executeStreamingWithFallbacks(ctx, session, userMessage, providerName, selection, onDelta, result)
+
+	result.TotalLatencyMs = time.Since(totalStart).Milliseconds()
+
+	if err != nil {
+		log.Printf("[SmartRouting] Streaming request failed after %d fallback(s): %v", result.FallbacksAttempted, err)
+		return nil, result, err
+	}
+
+	log.Printf("[SmartRouting] Streaming request succeeded: model=%s fallbacks=%d latency=%dms",
+		result.SelectedModel, result.FallbacksAttempted, result.TotalLatencyMs)
+
+	return resp, result, nil
+}
+
+// executeStreamingWithFallbacks attempts streaming with the selected model, falling
+// back to alternative models if the primary fails with a retryable error.
+func (r *Router) executeStreamingWithFallbacks(
+	ctx context.Context,
+	session *sessions.Session,
+	userMessage string,
+	providerName string,
+	primary SelectionResult,
+	onDelta StreamCallback,
+	result *SmartRoutingResult,
+) (ConversationResponse, error) {
+	// Attempt primary model with streaming
+	resp, err := r.GenerateResponseStreaming(ctx, session, userMessage, providerName, primary.Model, onDelta)
+	if err == nil {
+		return resp, nil
+	}
+
+	// Check if error is retryable
+	if !isRetryableError(err) {
+		log.Printf("[SmartRouting] Streaming: non-retryable error from %s: %v", primary.Model, err)
+		return nil, err
+	}
+
+	log.Printf("[SmartRouting] Streaming: retryable error from %s: %v, attempting fallbacks", primary.Model, err)
+
+	// If rate limited, handle with backoff before trying fallbacks
+	if isRateLimitError(err) {
+		r.handleRateLimit(primary.Model, err)
+	}
+
+	// Record error for the primary model
+	if r.usageTracker != nil {
+		r.usageTracker.RecordError(providerName, primary.Model)
+	}
+
+	// Build fallback chain
+	fallbacks := r.buildFallbackChain(primary)
+
+	for _, fallback := range fallbacks {
+		result.FallbacksAttempted++
+		log.Printf("[SmartRouting] Streaming: trying fallback model: %s (tier=%s)", fallback.Model, fallback.Tier)
+
+		resp, err = r.GenerateResponseStreaming(ctx, session, userMessage, providerName, fallback.Model, onDelta)
+		if err == nil {
+			result.SelectedModel = fallback.Model
+			result.SelectionReason = fmt.Sprintf("fallback from %s: %s", primary.Model, fallback.Reason)
+			result.Tier = fallback.Tier
+			return resp, nil
+		}
+
+		if !isRetryableError(err) {
+			log.Printf("[SmartRouting] Streaming: non-retryable error from fallback %s: %v", fallback.Model, err)
+			return nil, err
+		}
+
+		log.Printf("[SmartRouting] Streaming: fallback %s also failed: %v", fallback.Model, err)
+
+		if isRateLimitError(err) {
+			r.handleRateLimit(fallback.Model, err)
+		}
+
+		if r.usageTracker != nil {
+			r.usageTracker.RecordError(providerName, fallback.Model)
+		}
+	}
+
+	// All models exhausted
+	return nil, fmt.Errorf("all models exhausted after %d fallback(s): %w", result.FallbacksAttempted, err)
+}
+
 // estimateInputTokens provides a rough estimate of the number of input tokens
 // that will be sent in the request. This uses a simple heuristic of ~4 chars
 // per token (common for English text).
