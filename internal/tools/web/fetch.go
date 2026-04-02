@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 	"github.com/PuerkitoBio/goquery"
 )
@@ -81,8 +82,8 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 		}, nil
 	}
 
-	extractMode := t.getStringArg(args, "extractMode", "markdown")
-	maxChars := t.getIntArg(args, "maxChars", 50000)
+	extractMode := toolargs.GetString(args, "extractMode", "markdown")
+	maxChars := toolargs.GetInt(args, "maxChars", 50000)
 
 	// Validate URL
 	parsedURL, err := url.Parse(urlStr)
@@ -311,20 +312,3 @@ func (t *WebFetchTool) cleanContent(content string) string {
 	return content
 }
 
-// Helper methods
-func (t *WebFetchTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *WebFetchTool) getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := args[key].(float64); ok {
-		return int(val)
-	}
-	if val, ok := args[key].(int); ok {
-		return val
-	}
-	return defaultVal
-}

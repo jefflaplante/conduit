@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/schema"
 	"conduit/internal/tools/types"
 )
@@ -86,7 +87,7 @@ func (t *MessageTool) Parameters() map[string]interface{} {
 }
 
 func (t *MessageTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	action := t.getStringArg(args, "action", "send")
+	action := toolargs.GetString(args, "action", "send")
 
 	switch action {
 	case "send":
@@ -110,8 +111,8 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]interface{}) 
 }
 
 func (t *MessageTool) sendMessage(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	target := t.getStringArg(args, "target", "")
-	message := t.getStringArg(args, "message", "")
+	target := toolargs.GetString(args, "target", "")
+	message := toolargs.GetString(args, "message", "")
 
 	// Enhanced parameter validation with helpful error messages
 	if target == "" {
@@ -147,16 +148,16 @@ func (t *MessageTool) sendMessage(ctx context.Context, args map[string]interface
 
 	// Build options
 	options := make(map[string]interface{})
-	if silent := t.getBoolArg(args, "silent", false); silent {
+	if silent := toolargs.GetBool(args, "silent", false); silent {
 		options["silent"] = true
 	}
-	if asVoice := t.getBoolArg(args, "asVoice", false); asVoice {
+	if asVoice := toolargs.GetBool(args, "asVoice", false); asVoice {
 		options["asVoice"] = true
 	}
-	if replyTo := t.getStringArg(args, "replyTo", ""); replyTo != "" {
+	if replyTo := toolargs.GetString(args, "replyTo", ""); replyTo != "" {
 		options["replyTo"] = replyTo
 	}
-	if effectId := t.getStringArg(args, "effectId", ""); effectId != "" {
+	if effectId := toolargs.GetString(args, "effectId", ""); effectId != "" {
 		options["effectId"] = effectId
 	}
 
@@ -165,10 +166,10 @@ func (t *MessageTool) sendMessage(ctx context.Context, args map[string]interface
 
 	// Build metadata for the outgoing message
 	var metadata map[string]string
-	if imagePath := t.getStringArg(args, "imagePath", ""); imagePath != "" {
+	if imagePath := toolargs.GetString(args, "imagePath", ""); imagePath != "" {
 		metadata = map[string]string{"image_path": imagePath}
 	}
-	if replyTo := t.getStringArg(args, "replyTo", ""); replyTo != "" {
+	if replyTo := toolargs.GetString(args, "replyTo", ""); replyTo != "" {
 		if metadata == nil {
 			metadata = make(map[string]string)
 		}
@@ -248,7 +249,7 @@ func (t *MessageTool) sendMessage(ctx context.Context, args map[string]interface
 }
 
 func (t *MessageTool) broadcastMessage(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	message := t.getStringArg(args, "message", "")
+	message := toolargs.GetString(args, "message", "")
 	if message == "" {
 		return types.NewErrorResult("missing_parameter",
 			"Message parameter is required for broadcast action").
@@ -290,7 +291,7 @@ func (t *MessageTool) broadcastMessage(ctx context.Context, args map[string]inte
 
 	// Build options
 	options := make(map[string]interface{})
-	if silent := t.getBoolArg(args, "silent", false); silent {
+	if silent := toolargs.GetBool(args, "silent", false); silent {
 		options["silent"] = true
 	}
 
@@ -368,8 +369,8 @@ func (t *MessageTool) broadcastMessage(ctx context.Context, args map[string]inte
 }
 
 func (t *MessageTool) reactToMessage(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	messageId := t.getStringArg(args, "messageId", "")
-	emoji := t.getStringArg(args, "emoji", "")
+	messageId := toolargs.GetString(args, "messageId", "")
+	emoji := toolargs.GetString(args, "emoji", "")
 
 	if messageId == "" {
 		return &types.ToolResult{
@@ -393,7 +394,7 @@ func (t *MessageTool) reactToMessage(ctx context.Context, args map[string]interf
 }
 
 func (t *MessageTool) deleteMessage(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	messageId := t.getStringArg(args, "messageId", "")
+	messageId := toolargs.GetString(args, "messageId", "")
 
 	if messageId == "" {
 		return &types.ToolResult{
@@ -410,8 +411,8 @@ func (t *MessageTool) deleteMessage(ctx context.Context, args map[string]interfa
 }
 
 func (t *MessageTool) editMessage(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	messageId := t.getStringArg(args, "messageId", "")
-	message := t.getStringArg(args, "message", "")
+	messageId := toolargs.GetString(args, "messageId", "")
+	message := toolargs.GetString(args, "message", "")
 
 	if messageId == "" {
 		return &types.ToolResult{
@@ -507,21 +508,6 @@ func (t *MessageTool) formatChannelStatus(status map[string]interface{}) string 
 	return builder.String()
 }
 
-// Helper methods
-func (t *MessageTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *MessageTool) getBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
-	if val, ok := args[key].(bool); ok {
-		return val
-	}
-	return defaultVal
-}
-
 // isValidTarget checks if a target is valid against available channels
 func (t *MessageTool) isValidTarget(target string, channelStatus map[string]string) bool {
 	if channelStatus == nil {
@@ -553,7 +539,7 @@ func (t *MessageTool) ValidateParameters(ctx context.Context, args map[string]in
 	result := &types.ValidationResult{Valid: true}
 
 	// Validate action parameter
-	action := t.getStringArg(args, "action", "send")
+	action := toolargs.GetString(args, "action", "send")
 	validActions := []string{"send", "broadcast", "react", "delete", "edit", "status"}
 	actionValid := false
 	for _, validAction := range validActions {
@@ -599,8 +585,8 @@ func (t *MessageTool) ValidateParameters(ctx context.Context, args map[string]in
 
 // validateSendParameters validates parameters for send action
 func (t *MessageTool) validateSendParameters(ctx context.Context, args map[string]interface{}, result *types.ValidationResult) {
-	target := t.getStringArg(args, "target", "")
-	message := t.getStringArg(args, "message", "")
+	target := toolargs.GetString(args, "target", "")
+	message := toolargs.GetString(args, "message", "")
 
 	// Target validation
 	if target == "" {
@@ -646,7 +632,7 @@ func (t *MessageTool) validateSendParameters(ctx context.Context, args map[strin
 
 // validateBroadcastParameters validates parameters for broadcast action
 func (t *MessageTool) validateBroadcastParameters(ctx context.Context, args map[string]interface{}, result *types.ValidationResult) {
-	message := t.getStringArg(args, "message", "")
+	message := toolargs.GetString(args, "message", "")
 
 	// Message validation
 	if message == "" {
@@ -715,8 +701,8 @@ func (t *MessageTool) validateBroadcastParameters(ctx context.Context, args map[
 
 // validateReactParameters validates parameters for react action
 func (t *MessageTool) validateReactParameters(ctx context.Context, args map[string]interface{}, result *types.ValidationResult) {
-	messageId := t.getStringArg(args, "messageId", "")
-	emoji := t.getStringArg(args, "emoji", "")
+	messageId := toolargs.GetString(args, "messageId", "")
+	emoji := toolargs.GetString(args, "emoji", "")
 
 	if messageId == "" {
 		result.Valid = false
@@ -741,7 +727,7 @@ func (t *MessageTool) validateReactParameters(ctx context.Context, args map[stri
 
 // validateMessageIdParameters validates parameters for delete/edit actions
 func (t *MessageTool) validateMessageIdParameters(ctx context.Context, args map[string]interface{}, result *types.ValidationResult, action string) {
-	messageId := t.getStringArg(args, "messageId", "")
+	messageId := toolargs.GetString(args, "messageId", "")
 
 	if messageId == "" {
 		result.Valid = false
@@ -754,7 +740,7 @@ func (t *MessageTool) validateMessageIdParameters(ctx context.Context, args map[
 	}
 
 	if action == "edit" {
-		message := t.getStringArg(args, "message", "")
+		message := toolargs.GetString(args, "message", "")
 		if message == "" {
 			result.Valid = false
 			result.Errors = append(result.Errors, types.ValidationError{

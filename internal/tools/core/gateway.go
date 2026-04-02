@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -217,7 +218,7 @@ func (t *GatewayTool) getChannels(ctx context.Context) (*types.ToolResult, error
 }
 
 func (t *GatewayTool) enableChannel(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	channelId := t.getStringArg(args, "channelId", "")
+	channelId := toolargs.GetString(args, "channelId", "")
 	if channelId == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -245,7 +246,7 @@ func (t *GatewayTool) enableChannel(ctx context.Context, args map[string]interfa
 }
 
 func (t *GatewayTool) disableChannel(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	channelId := t.getStringArg(args, "channelId", "")
+	channelId := toolargs.GetString(args, "channelId", "")
 	if channelId == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -461,7 +462,7 @@ func (t *GatewayTool) formatMetrics(metrics map[string]interface{}) string {
 }
 
 func (t *GatewayTool) debugPrompt(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	sessionKey := t.getStringArg(args, "session", "")
+	sessionKey := toolargs.GetString(args, "session", "")
 	if sessionKey == "" {
 		sessionKey = types.RequestSessionKey(ctx)
 	}
@@ -555,9 +556,3 @@ func (t *GatewayTool) reloadSkills(ctx context.Context) (*types.ToolResult, erro
 	}, nil
 }
 
-func (t *GatewayTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
-}

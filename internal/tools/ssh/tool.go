@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -270,7 +271,7 @@ func (t *SSHTool) Execute(ctx context.Context, args map[string]interface{}) (*ty
 		}, nil
 	}
 
-	action := t.getStringArg(args, "action", "")
+	action := toolargs.GetString(args, "action", "")
 
 	switch action {
 	case "exec":
@@ -315,9 +316,9 @@ func (t *SSHTool) Execute(ctx context.Context, args map[string]interface{}) (*ty
 
 // executeCommand executes a command on a remote host
 func (t *SSHTool) executeCommand(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	host := t.getStringArg(args, "host", "")
-	command := t.getStringArg(args, "command", "")
-	timeout := t.getIntArg(args, "timeout", 30)
+	host := toolargs.GetString(args, "host", "")
+	command := toolargs.GetString(args, "command", "")
+	timeout := toolargs.GetInt(args, "timeout", 30)
 
 	// Validate required parameters
 	if host == "" {
@@ -484,10 +485,10 @@ func (t *SSHTool) executeCommand(ctx context.Context, args map[string]interface{
 
 // executeGroupCommand executes a command on a host group (fan-out execution)
 func (t *SSHTool) executeGroupCommand(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	groupName := t.getStringArg(args, "group", "")
-	command := t.getStringArg(args, "command", "")
-	timeout := t.getIntArg(args, "timeout", 30)
-	maxParallel := t.getIntArg(args, "max_parallel", 0)
+	groupName := toolargs.GetString(args, "group", "")
+	command := toolargs.GetString(args, "command", "")
+	timeout := toolargs.GetInt(args, "timeout", 30)
+	maxParallel := toolargs.GetInt(args, "max_parallel", 0)
 
 	// Validate required parameters
 	if groupName == "" {
@@ -797,7 +798,7 @@ func (t *SSHTool) getStatus(ctx context.Context, args map[string]interface{}) (*
 
 // sessionStart starts a new persistent session on a host
 func (t *SSHTool) sessionStart(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	host := t.getStringArg(args, "host", "")
+	host := toolargs.GetString(args, "host", "")
 
 	// Validate required parameters
 	if host == "" {
@@ -852,9 +853,9 @@ func (t *SSHTool) sessionStart(ctx context.Context, args map[string]interface{})
 
 // sessionSend sends a command to an existing persistent session
 func (t *SSHTool) sessionSend(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	sessionID := t.getStringArg(args, "session_id", "")
-	command := t.getStringArg(args, "command", "")
-	timeout := t.getIntArg(args, "timeout", 30)
+	sessionID := toolargs.GetString(args, "session_id", "")
+	command := toolargs.GetString(args, "command", "")
+	timeout := toolargs.GetInt(args, "timeout", 30)
 
 	// Validate required parameters
 	if sessionID == "" {
@@ -1005,7 +1006,7 @@ func (t *SSHTool) sessionSend(ctx context.Context, args map[string]interface{}) 
 
 // sessionClose closes a persistent session
 func (t *SSHTool) sessionClose(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	sessionID := t.getStringArg(args, "session_id", "")
+	sessionID := toolargs.GetString(args, "session_id", "")
 
 	// Validate required parameters
 	if sessionID == "" {
@@ -1109,10 +1110,10 @@ func (t *SSHTool) sessionList(ctx context.Context, args map[string]interface{}) 
 
 // createTunnel creates a new local port forwarding tunnel
 func (t *SSHTool) createTunnel(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	host := t.getStringArg(args, "host", "")
-	localPort := t.getIntArg(args, "local_port", 0)
-	remoteHost := t.getStringArg(args, "remote_host", "")
-	remotePort := t.getIntArg(args, "remote_port", 0)
+	host := toolargs.GetString(args, "host", "")
+	localPort := toolargs.GetInt(args, "local_port", 0)
+	remoteHost := toolargs.GetString(args, "remote_host", "")
+	remotePort := toolargs.GetInt(args, "remote_port", 0)
 
 	// Validate required parameters
 	if host == "" {
@@ -1216,7 +1217,7 @@ func (t *SSHTool) createTunnel(ctx context.Context, args map[string]interface{})
 
 // closeTunnel closes an active tunnel by ID
 func (t *SSHTool) closeTunnel(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	tunnelID := t.getStringArg(args, "tunnel_id", "")
+	tunnelID := toolargs.GetString(args, "tunnel_id", "")
 
 	if tunnelID == "" {
 		// List available tunnels to help the user
@@ -1310,9 +1311,9 @@ func (t *SSHTool) listTunnels(ctx context.Context, args map[string]interface{}) 
 
 // scpUpload uploads a local file to a remote host via SCP
 func (t *SSHTool) scpUpload(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	host := t.getStringArg(args, "host", "")
-	localPath := t.getStringArg(args, "local_path", "")
-	remotePath := t.getStringArg(args, "remote_path", "")
+	host := toolargs.GetString(args, "host", "")
+	localPath := toolargs.GetString(args, "local_path", "")
+	remotePath := toolargs.GetString(args, "remote_path", "")
 
 	// Validate required parameters
 	if host == "" {
@@ -1430,9 +1431,9 @@ func (t *SSHTool) scpUpload(ctx context.Context, args map[string]interface{}) (*
 
 // scpDownload downloads a file from a remote host to a local path via SCP
 func (t *SSHTool) scpDownload(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	host := t.getStringArg(args, "host", "")
-	remotePath := t.getStringArg(args, "remote_path", "")
-	localPath := t.getStringArg(args, "local_path", "")
+	host := toolargs.GetString(args, "host", "")
+	remotePath := toolargs.GetString(args, "remote_path", "")
+	localPath := toolargs.GetString(args, "local_path", "")
 
 	// Validate required parameters
 	if host == "" {
@@ -1547,24 +1548,6 @@ func (t *SSHTool) getHostNames() []string {
 	return names
 }
 
-// Helper methods for argument parsing
-func (t *SSHTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *SSHTool) getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := args[key].(float64); ok {
-		return int(val)
-	}
-	if val, ok := args[key].(int); ok {
-		return val
-	}
-	return defaultVal
-}
-
 // SSHClientProvider is an interface for clients that can provide underlying SSHClient instances
 type SSHClientProvider interface {
 	GetSSHClient(hostName string) (*SSHClient, error)
@@ -1636,7 +1619,7 @@ func (p *PoolClient) GetClient(hostName string) (*SSHClient, error) {
 func (t *SSHTool) ValidateParameters(ctx context.Context, args map[string]interface{}) *types.ValidationResult {
 	result := &types.ValidationResult{Valid: true}
 
-	action := t.getStringArg(args, "action", "")
+	action := toolargs.GetString(args, "action", "")
 
 	// Validate action
 	validActions := []string{"exec", "hosts", "status", "session_start", "session_send", "session_close", "session_list", "tunnel_create", "tunnel_close", "tunnel_list"}
@@ -1662,7 +1645,7 @@ func (t *SSHTool) ValidateParameters(ctx context.Context, args map[string]interf
 
 	// Validate exec-specific parameters
 	if action == "exec" || action == "session_start" {
-		host := t.getStringArg(args, "host", "")
+		host := toolargs.GetString(args, "host", "")
 
 		if host == "" {
 			result.Valid = false
@@ -1692,7 +1675,7 @@ func (t *SSHTool) ValidateParameters(ctx context.Context, args map[string]interf
 
 	// Validate command for exec and session_send
 	if action == "exec" || action == "session_send" {
-		command := t.getStringArg(args, "command", "")
+		command := toolargs.GetString(args, "command", "")
 		if command == "" {
 			result.Valid = false
 			result.Errors = append(result.Errors, types.ValidationError{
@@ -1706,7 +1689,7 @@ func (t *SSHTool) ValidateParameters(ctx context.Context, args map[string]interf
 
 	// Validate session_id for session_send and session_close
 	if action == "session_send" || action == "session_close" {
-		sessionID := t.getStringArg(args, "session_id", "")
+		sessionID := toolargs.GetString(args, "session_id", "")
 		if sessionID == "" {
 			sessions := t.sessionManager.ListSessions()
 			sessionIDs := make([]string, 0, len(sessions))
@@ -1744,9 +1727,9 @@ func (t *SSHTool) ValidateParameters(ctx context.Context, args map[string]interf
 
 	// Validate tunnel_create parameters
 	if action == "tunnel_create" {
-		host := t.getStringArg(args, "host", "")
-		remoteHost := t.getStringArg(args, "remote_host", "")
-		remotePort := t.getIntArg(args, "remote_port", 0)
+		host := toolargs.GetString(args, "host", "")
+		remoteHost := toolargs.GetString(args, "remote_host", "")
+		remotePort := toolargs.GetInt(args, "remote_port", 0)
 
 		if host == "" {
 			result.Valid = false
@@ -1795,7 +1778,7 @@ func (t *SSHTool) ValidateParameters(ctx context.Context, args map[string]interf
 
 	// Validate tunnel_close parameters
 	if action == "tunnel_close" {
-		tunnelID := t.getStringArg(args, "tunnel_id", "")
+		tunnelID := toolargs.GetString(args, "tunnel_id", "")
 		if tunnelID == "" {
 			tunnels := t.tunnelManager.ListTunnels()
 			tunnelIDs := make([]string, 0, len(tunnels))
@@ -1960,8 +1943,8 @@ func (t *SSHTool) GetUsageExamples() []types.ToolExample {
 
 // inventoryLoad loads an inventory file
 func (t *SSHTool) inventoryLoad(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	path := t.getStringArg(args, "path", "")
-	inventoryType := t.getStringArg(args, "type", "file") // "file" or "dynamic"
+	path := toolargs.GetString(args, "path", "")
+	inventoryType := toolargs.GetString(args, "type", "file") // "file" or "dynamic"
 
 	if path == "" {
 		return &types.ToolResult{
@@ -2004,7 +1987,7 @@ func (t *SSHTool) inventoryLoad(ctx context.Context, args map[string]interface{}
 
 // inventoryList lists hosts from inventory
 func (t *SSHTool) inventoryList(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	group := t.getStringArg(args, "group", "")
+	group := toolargs.GetString(args, "group", "")
 
 	var hosts []config.SSHHostConfig
 	if group != "" {

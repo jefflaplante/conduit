@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -104,11 +105,11 @@ func (t *ImageTool) Execute(ctx context.Context, args map[string]interface{}) (*
 		}, nil
 	}
 
-	prompt := t.getStringArg(args, "prompt", "Describe what you see in this image")
-	model := t.getStringArg(args, "model", "")
-	maxBytesMb := t.getFloatArg(args, "maxBytesMb", 5.0)
-	extractText := t.getBoolArg(args, "extractText", false)
-	detectObjects := t.getBoolArg(args, "detectObjects", false)
+	prompt := toolargs.GetString(args, "prompt", "Describe what you see in this image")
+	model := toolargs.GetString(args, "model", "")
+	maxBytesMb := toolargs.GetFloat64(args, "maxBytesMb", 5.0)
+	extractText := toolargs.GetBool(args, "extractText", false)
+	detectObjects := toolargs.GetBool(args, "detectObjects", false)
 
 	// Load image data
 	imageData, metadata, err := t.loadImageData(ctx, image, maxBytesMb)
@@ -368,29 +369,3 @@ func (t *ImageTool) formatAnalysisResult(result *ImageAnalysisResult, prompt str
 	return builder.String()
 }
 
-// Helper methods
-func (t *ImageTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *ImageTool) getFloatArg(args map[string]interface{}, key string, defaultVal float64) float64 {
-	if val, ok := args[key].(float64); ok {
-		return val
-	}
-	if val, ok := args[key].(int); ok {
-		return float64(val)
-	}
-	return defaultVal
-}
-
-func (t *ImageTool) getBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
-	if val, ok := args[key].(bool); ok {
-		return val
-	}
-	return defaultVal
-}
-
-// ToolResult is imported from the tools package

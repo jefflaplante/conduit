@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"conduit/internal/config"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -72,8 +73,8 @@ func (t *FactsTool) Parameters() map[string]interface{} {
 }
 
 func (t *FactsTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	category := t.getStringArg(args, "category", "")
-	maxFacts := t.getIntArg(args, "maxFacts", 50)
+	category := toolargs.GetString(args, "category", "")
+	maxFacts := toolargs.GetInt(args, "maxFacts", 50)
 
 	// Get memory file paths (same pattern as MemorySearchTool)
 	memoryPaths, err := t.getMemoryFilePaths()
@@ -306,20 +307,3 @@ func (t *FactsTool) formatFacts(facts []Fact) string {
 	return builder.String()
 }
 
-// Helper methods (same pattern as MemorySearchTool)
-func (t *FactsTool) getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := args[key].(float64); ok {
-		return int(val)
-	}
-	if val, ok := args[key].(int); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *FactsTool) getStringArg(args map[string]interface{}, key string, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
-}

@@ -14,6 +14,7 @@ import (
 
 	"conduit/internal/config"
 	"conduit/internal/fts"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -1281,10 +1282,10 @@ func TestContextTool_ImplementsToolInterface(t *testing.T) {
 	var _ types.Tool = tool
 }
 
-// --- Helper argument tests ---
+// --- Helper argument tests (now use toolargs package) ---
 
 func TestContextTool_getStringArg(t *testing.T) {
-	tool, _ := setupTestContextTool(t)
+	_, _ = setupTestContextTool(t) // Ensure tool can be created
 
 	tests := []struct {
 		name       string
@@ -1301,16 +1302,16 @@ func TestContextTool_getStringArg(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tool.getStringArg(tt.args, tt.key, tt.defaultVal)
+			got := toolargs.GetString(tt.args, tt.key, tt.defaultVal)
 			if got != tt.want {
-				t.Errorf("getStringArg() = %q, want %q", got, tt.want)
+				t.Errorf("GetString() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
 func TestContextTool_getBoolArg(t *testing.T) {
-	tool, _ := setupTestContextTool(t)
+	_, _ = setupTestContextTool(t) // Ensure tool can be created
 
 	tests := []struct {
 		name       string
@@ -1329,9 +1330,9 @@ func TestContextTool_getBoolArg(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tool.getBoolArg(tt.args, tt.key, tt.defaultVal)
+			got := toolargs.GetBool(tt.args, tt.key, tt.defaultVal)
 			if got != tt.want {
-				t.Errorf("getBoolArg() = %v, want %v", got, tt.want)
+				t.Errorf("GetBool() = %v, want %v", got, tt.want)
 			}
 		})
 	}

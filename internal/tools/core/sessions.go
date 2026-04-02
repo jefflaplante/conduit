@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"conduit/internal/sessions"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -46,8 +47,8 @@ func (t *SessionsListTool) Parameters() map[string]interface{} {
 }
 
 func (t *SessionsListTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	activeMinutes := t.getIntArg(args, "activeMinutes", 60)
-	limit := t.getIntArg(args, "limit", 20)
+	activeMinutes := toolargs.GetInt(args, "activeMinutes", 60)
+	limit := toolargs.GetInt(args, "limit", 20)
 
 	if t.services.SessionStore == nil {
 		return &types.ToolResult{
@@ -127,16 +128,6 @@ func (t *SessionsListTool) formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%d days", int(d.Hours()/24))
 }
 
-func (t *SessionsListTool) getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := args[key].(float64); ok {
-		return int(val)
-	}
-	if val, ok := args[key].(int); ok {
-		return val
-	}
-	return defaultVal
-}
-
 // SessionsSendTool sends messages to other sessions
 type SessionsSendTool struct {
 	services *types.ToolServices
@@ -184,8 +175,8 @@ func (t *SessionsSendTool) Execute(ctx context.Context, args map[string]interfac
 		}, nil
 	}
 
-	sessionKey := t.getStringArg(args, "sessionKey", "")
-	label := t.getStringArg(args, "label", "")
+	sessionKey := toolargs.GetString(args, "sessionKey", "")
+	label := toolargs.GetString(args, "label", "")
 
 	if sessionKey == "" && label == "" {
 		return &types.ToolResult{
@@ -224,13 +215,6 @@ func (t *SessionsSendTool) Execute(ctx context.Context, args map[string]interfac
 			"message":    message,
 		},
 	}, nil
-}
-
-func (t *SessionsSendTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
 }
 
 // SessionsSpawnTool spawns new sub-agent sessions
@@ -294,11 +278,11 @@ func (t *SessionsSpawnTool) Execute(ctx context.Context, args map[string]interfa
 		}, nil
 	}
 
-	agentId := t.getStringArg(args, "agentId", "")
-	model := t.getStringArg(args, "model", "")
-	label := t.getStringArg(args, "label", "")
-	timeoutSeconds := t.getIntArg(args, "timeoutSeconds", 300)
-	announce := t.getBoolArg(args, "announce", true) // Default: announce results
+	agentId := toolargs.GetString(args, "agentId", "")
+	model := toolargs.GetString(args, "model", "")
+	label := toolargs.GetString(args, "label", "")
+	timeoutSeconds := toolargs.GetInt(args, "timeoutSeconds", 300)
+	announce := toolargs.GetBool(args, "announce", true) // Default: announce results
 
 	if t.services.Gateway == nil {
 		return &types.ToolResult{
@@ -339,30 +323,6 @@ func (t *SessionsSpawnTool) Execute(ctx context.Context, args map[string]interfa
 	}, nil
 }
 
-func (t *SessionsSpawnTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *SessionsSpawnTool) getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := args[key].(float64); ok {
-		return int(val)
-	}
-	if val, ok := args[key].(int); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *SessionsSpawnTool) getBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
-	if val, ok := args[key].(bool); ok {
-		return val
-	}
-	return defaultVal
-}
-
 func truncateTask(task string, maxLen int) string {
 	if len(task) <= maxLen {
 		return task
@@ -400,7 +360,7 @@ func (t *SessionStatusTool) Parameters() map[string]interface{} {
 }
 
 func (t *SessionStatusTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	sessionKey := t.getStringArg(args, "sessionKey", "")
+	sessionKey := toolargs.GetString(args, "sessionKey", "")
 
 	if t.services.Gateway == nil {
 		return &types.ToolResult{
@@ -477,11 +437,4 @@ func (t *SessionStatusTool) formatSessionStatus(status map[string]interface{}) s
 	}
 
 	return builder.String()
-}
-
-func (t *SessionStatusTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
 }

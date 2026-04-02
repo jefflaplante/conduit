@@ -7,6 +7,7 @@ import (
 
 	"conduit/internal/config"
 	"conduit/internal/search"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -406,47 +407,47 @@ func TestWebSearchTool_GetAvailableProviders(t *testing.T) {
 }
 
 func TestWebSearchTool_ParameterHelpers(t *testing.T) {
-	tool := NewWebSearchTool(nil)
+	_ = NewWebSearchTool(nil) // Ensure tool can be created
 
-	// Test getStringArg
+	// Test toolargs.GetString
 	args := map[string]interface{}{
 		"string_key": "test_value",
 		"int_key":    123,
 		"nil_key":    nil,
 	}
 
-	if result := tool.getStringArg(args, "string_key", "default"); result != "test_value" {
+	if result := toolargs.GetString(args, "string_key", "default"); result != "test_value" {
 		t.Errorf("Expected 'test_value', got '%s'", result)
 	}
 
-	if result := tool.getStringArg(args, "missing_key", "default"); result != "default" {
+	if result := toolargs.GetString(args, "missing_key", "default"); result != "default" {
 		t.Errorf("Expected 'default', got '%s'", result)
 	}
 
-	if result := tool.getStringArg(args, "int_key", "default"); result != "default" {
+	if result := toolargs.GetString(args, "int_key", "default"); result != "default" {
 		t.Errorf("Expected 'default' for non-string value, got '%s'", result)
 	}
 
-	// Test getIntArg
+	// Test toolargs.GetInt
 	args2 := map[string]interface{}{
 		"float_key":  float64(5),
 		"int_key":    int(7),
 		"string_key": "not_a_number",
 	}
 
-	if result := tool.getIntArg(args2, "float_key", 0); result != 5 {
+	if result := toolargs.GetInt(args2, "float_key", 0); result != 5 {
 		t.Errorf("Expected 5, got %d", result)
 	}
 
-	if result := tool.getIntArg(args2, "int_key", 0); result != 7 {
+	if result := toolargs.GetInt(args2, "int_key", 0); result != 7 {
 		t.Errorf("Expected 7, got %d", result)
 	}
 
-	if result := tool.getIntArg(args2, "missing_key", 42); result != 42 {
+	if result := toolargs.GetInt(args2, "missing_key", 42); result != 42 {
 		t.Errorf("Expected 42, got %d", result)
 	}
 
-	if result := tool.getIntArg(args2, "string_key", 42); result != 42 {
+	if result := toolargs.GetInt(args2, "string_key", 42); result != 42 {
 		t.Errorf("Expected 42 for non-numeric value, got %d", result)
 	}
 }

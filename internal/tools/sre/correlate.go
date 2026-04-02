@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -33,7 +34,7 @@ type InvestigationSuggestion struct {
 
 // correlate performs cross-source correlation for a service.
 func (t *SRETool) correlate(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	service := getStringArg(args, "service", "")
+	service := toolargs.GetString(args, "service", "")
 	if service == "" {
 		return types.NewErrorResult("missing_parameter", "service is required for correlate action").
 			WithParameter("service", nil).
@@ -42,7 +43,7 @@ func (t *SRETool) correlate(ctx context.Context, args map[string]interface{}) (*
 			}), nil
 	}
 
-	timeRange := getStringArg(args, "time_range", "1h")
+	timeRange := toolargs.GetString(args, "time_range", "1h")
 
 	result := &CorrelationResult{
 		Service:      service,
@@ -337,8 +338,8 @@ func (t *SRETool) generateCorrelationSummary(result *CorrelationResult) string {
 
 // suggestInvestigation provides recommended next steps based on incident type.
 func (t *SRETool) suggestInvestigation(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	incidentID := getStringArg(args, "incident_id", "")
-	incidentType := getStringArg(args, "incident_type", "")
+	incidentID := toolargs.GetString(args, "incident_id", "")
+	incidentType := toolargs.GetString(args, "incident_type", "")
 
 	if incidentID == "" && incidentType == "" {
 		return types.NewErrorResult("missing_parameter", "Either incident_id or incident_type is required").
