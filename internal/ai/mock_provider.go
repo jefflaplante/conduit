@@ -139,3 +139,52 @@ func (m *MockProvider) LastCall() *MockCall {
 	}
 	return &m.calls[len(m.calls)-1]
 }
+
+// GenerateResponseStreaming implements StreamingProvider for testing.
+// It calls onDelta with the full content as a single delta, then returns the response.
+func (m *MockProvider) GenerateResponseStreaming(ctx context.Context, req *GenerateRequest, onDelta StreamCallback) (*GenerateResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Record the call
+	m.calls = append(m.calls, MockCall{Request: req})
+
+	// Return configured response or default
+	if m.respIndex < len(m.responses) {
+		resp := m.responses[m.respIndex]
+		m.respIndex++
+
+		if resp.Error != nil {
+			return nil, resp.Error
+		}
+
+		// Simulate streaming by sending content in chunks
+		if onDelta != nil && resp.Content != "" {
+			// Send content as single delta for simplicity
+			onDelta(resp.Content, false)
+			onDelta("", true) // Signal done
+		}
+
+		return &GenerateResponse{
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
+			Usage:     resp.Usage,
+		}, nil
+	}
+
+	// Default response when no responses configured
+	content := "Mock response"
+	if onDelta != nil {
+		onDelta(content, false)
+		onDelta("", true)
+	}
+
+	return &GenerateResponse{
+		Content: content,
+		Usage: Usage{
+			PromptTokens:     10,
+			CompletionTokens: 5,
+			TotalTokens:      15,
+		},
+	}, nil
+}

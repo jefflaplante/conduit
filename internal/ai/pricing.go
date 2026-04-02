@@ -1,5 +1,7 @@
 package ai
 
+import "conduit/internal/config"
+
 // ModelPricing holds per-token costs for a model.
 type ModelPricing struct {
 	InputPerMToken  float64 // Cost per million input tokens
@@ -45,6 +47,47 @@ func PricingForModel(model string) ModelPricing {
 // CalculateCost returns the estimated cost for a given model and token usage.
 func CalculateCost(model string, inputTokens, outputTokens int) float64 {
 	pricing := PricingForModel(model)
+	inputCost := float64(inputTokens) / 1_000_000.0 * pricing.InputPerMToken
+	outputCost := float64(outputTokens) / 1_000_000.0 * pricing.OutputPerMToken
+	return inputCost + outputCost
+}
+
+// PricingResolver resolves model pricing using config overrides before
+// falling back to the hardcoded default matrix.
+type PricingResolver struct {
+	overrides map[string]config.PricingOverride
+}
+
+// NewPricingResolver creates a resolver. Pass nil for no overrides.
+func NewPricingResolver(overrides map[string]config.PricingOverride) *PricingResolver {
+	return &PricingResolver{overrides: overrides}
+}
+
+// PricingForModel checks config overrides first (exact match, then prefix),
+// then falls back to the default pricing matrix.
+func (pr *PricingResolver) PricingForModel(model string) ModelPricing {
+	if model == "" {
+		return ModelPricing{}
+	}
+	if pr.overrides != nil {
+		// Exact match
+		if o, ok := pr.overrides[model]; ok {
+			return ModelPricing{InputPerMToken: o.InputPerMToken, OutputPerMToken: o.OutputPerMToken}
+		}
+		// Prefix match
+		for prefix, o := range pr.overrides {
+			if len(model) >= len(prefix) && model[:len(prefix)] == prefix {
+				return ModelPricing{InputPerMToken: o.InputPerMToken, OutputPerMToken: o.OutputPerMToken}
+			}
+		}
+	}
+	// Fall back to hardcoded defaults
+	return PricingForModel(model)
+}
+
+// CalculateCost returns the estimated cost using this resolver's pricing.
+func (pr *PricingResolver) CalculateCost(model string, inputTokens, outputTokens int) float64 {
+	pricing := pr.PricingForModel(model)
 	inputCost := float64(inputTokens) / 1_000_000.0 * pricing.InputPerMToken
 	outputCost := float64(outputTokens) / 1_000_000.0 * pricing.OutputPerMToken
 	return inputCost + outputCost

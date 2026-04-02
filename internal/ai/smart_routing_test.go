@@ -314,6 +314,198 @@ func TestGenerateResponseSmart_WithProgress(t *testing.T) {
 	_ = progressCalled
 }
 
+// --- Smart Streaming tests ---
+
+func TestGenerateResponseSmartStreaming_SimpleMessage(t *testing.T) {
+	router, mock := setupSmartRouter(t, 0)
+	mock.AddResponse("streamed answer", nil)
+
+	session := newTestSession()
+
+	var deltas []string
+	onDelta := func(delta string, done bool) {
+		if delta != "" {
+			deltas = append(deltas, delta)
+		}
+	}
+
+	resp, result, err := router.GenerateResponseSmartStreaming(context.Background(), session, "hi", "mock", onDelta)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if resp.GetContent() != "streamed answer" {
+		t.Errorf("Expected 'streamed answer', got '%s'", resp.GetContent())
+	}
+
+	if result == nil {
+		t.Fatal("Expected non-nil SmartRoutingResult")
+	}
+
+	// Simple message should select haiku tier
+	if result.Complexity.Level != ComplexitySimple {
+		t.Errorf("Expected simple complexity, got %s", result.Complexity.Level)
+	}
+
+	// Verify deltas were received (mock sends content as single delta)
+	if len(deltas) == 0 {
+		t.Error("Expected at least one delta callback")
+	}
+}
+
+func TestGenerateResponseSmartStreaming_DisabledFallsBack(t *testing.T) {
+	// When smart routing is not enabled, should use regular streaming
+	cfg := config.AIConfig{
+		DefaultProvider: "mock",
+		Providers:       []config.ProviderConfig{},
+	}
+	router, err := NewRouter(cfg, nil)
+	if err != nil {
+		t.Fatalf("Failed to create router: %v", err)
+	}
+
+	mock := NewMockProvider("mock")
+	mock.AddResponse("fallback response", nil)
+	router.RegisterProvider("mock", mock)
+
+	session := newTestSession()
+	onDelta := func(delta string, done bool) {}
+
+	resp, result, err := router.GenerateResponseSmartStreaming(context.Background(), session, "hello", "mock", onDelta)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Result should be nil when smart routing is disabled
+	if result != nil {
+		t.Error("Expected nil SmartRoutingResult when smart routing is disabled")
+	}
+
+	if resp.GetContent() != "fallback response" {
+		t.Errorf("Expected 'fallback response', got '%s'", resp.GetContent())
+	}
+}
+
+func TestGenerateResponseSmartStreaming_ComplexMessage(t *testing.T) {
+	router, mock := setupSmartRouter(t, 0)
+	mock.AddResponse("detailed analysis", nil)
+
+	session := newTestSession()
+
+	var deltaCalled bool
+	onDelta := func(delta string, done bool) {
+		deltaCalled = true
+	}
+
+	msg := "Please refactor the entire authentication module to use OAuth2 with PKCE flow. " +
+		"Analyze the existing codebase, implement the migration plan, and update all tests. " +
+		"This involves multiple files across the architecture."
+
+	resp, result, err := router.GenerateResponseSmartStreaming(context.Background(), session, msg, "mock", onDelta)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if resp.GetContent() != "detailed analysis" {
+		t.Errorf("Expected 'detailed analysis', got '%s'", resp.GetContent())
+	}
+
+	if result == nil {
+		t.Fatal("Expected non-nil SmartRoutingResult")
+	}
+
+	// Complex message should select opus tier
+	if result.Complexity.Level != ComplexityComplex {
+		t.Errorf("Expected complex complexity, got %s (score=%d)", result.Complexity.Level, result.Complexity.Score)
+	}
+
+	if result.SelectedModel != "claude-opus-4-6" {
+		t.Errorf("Expected opus model for complex task, got %s", result.SelectedModel)
+	}
+
+	if !deltaCalled {
+		t.Error("Expected delta callback to be called")
+	}
+}
+
+func TestGenerateResponseSmartStreaming_FallbackOnRateLimit(t *testing.T) {
+	router, mock := setupSmartRouter(t, 0)
+
+	// First call: rate limit error, second call: success (fallback model)
+	mock.SetResponses([]MockResponse{
+		{Error: &RateLimitError{StatusCode: 429, Message: "rate limited"}},
+		{Content: "fallback response", Usage: Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}},
+	})
+
+	session := newTestSession()
+	onDelta := func(delta string, done bool) {}
+
+	resp, result, err := router.GenerateResponseSmartStreaming(context.Background(), session, "hi", "mock", onDelta)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if resp.GetContent() != "fallback response" {
+		t.Errorf("Expected 'fallback response', got '%s'", resp.GetContent())
+	}
+
+	if result == nil {
+		t.Fatal("Expected non-nil SmartRoutingResult")
+	}
+
+	if result.FallbacksAttempted < 1 {
+		t.Errorf("Expected at least 1 fallback attempt, got %d", result.FallbacksAttempted)
+	}
+}
+
+func TestGenerateResponseSmartStreaming_AllModelsExhausted(t *testing.T) {
+	router, mock := setupSmartRouter(t, 0)
+
+	// All calls return rate limit errors
+	mock.SetResponses([]MockResponse{
+		{Error: &RateLimitError{StatusCode: 429, Message: "rate limited"}},
+		{Error: &RateLimitError{StatusCode: 429, Message: "rate limited"}},
+		{Error: &RateLimitError{StatusCode: 429, Message: "rate limited"}},
+	})
+
+	session := newTestSession()
+	onDelta := func(delta string, done bool) {}
+
+	_, result, err := router.GenerateResponseSmartStreaming(context.Background(), session, "hi", "mock", onDelta)
+	if err == nil {
+		t.Fatal("Expected error when all models exhausted")
+	}
+
+	if result.FallbacksAttempted == 0 {
+		t.Error("Expected fallback attempts when all models fail")
+	}
+
+	if result.TotalLatencyMs <= 0 {
+		t.Error("Expected positive total latency even on failure")
+	}
+}
+
+func TestGenerateResponseSmartStreaming_NilDeltaCallback(t *testing.T) {
+	// Test that nil delta callback doesn't cause panic
+	router, mock := setupSmartRouter(t, 0)
+	mock.AddResponse("response with nil callback", nil)
+
+	session := newTestSession()
+
+	resp, result, err := router.GenerateResponseSmartStreaming(context.Background(), session, "hi", "mock", nil)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if resp.GetContent() != "response with nil callback" {
+		t.Errorf("Expected 'response with nil callback', got '%s'", resp.GetContent())
+	}
+
+	if result == nil {
+		t.Fatal("Expected non-nil SmartRoutingResult")
+	}
+}
+
 func TestGenerateResponseSmart_ModelInResult(t *testing.T) {
 	router, mock := setupSmartRouter(t, 0)
 	mock.AddResponse("result check", nil)

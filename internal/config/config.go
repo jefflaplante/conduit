@@ -38,6 +38,9 @@ type Config struct {
 	Vector         VectorConfig         `json:"vector,omitempty"`
 	RemoteSSH      RemoteSSHConfig      `json:"remote_ssh,omitempty"`
 	MQTT           MQTTConfig           `json:"mqtt,omitempty"`
+	Kubernetes     KubernetesConfig     `json:"kubernetes,omitempty"`
+	PagerDuty      PagerDutyConfig      `json:"pagerduty,omitempty"`
+	Datadog        DatadogConfig        `json:"datadog,omitempty"`
 	Auth           AuthTokenConfig      `json:"auth,omitempty"`
 }
 
@@ -227,6 +230,37 @@ type AIConfig struct {
 	Providers       []ProviderConfig    `json:"providers"`
 	ModelAliases    map[string]string   `json:"model_aliases,omitempty"`
 	SmartRouting    *SmartRoutingConfig `json:"smart_routing,omitempty"`
+	Compaction      *CompactionConfig   `json:"compaction,omitempty"`
+}
+
+// CompactionConfig configures automatic context compaction for long sessions.
+// When the context window usage exceeds the threshold, older messages are
+// summarized and replaced with a compact summary to free up context space.
+type CompactionConfig struct {
+	// Enabled controls whether compaction is available.
+	Enabled bool `json:"enabled"`
+
+	// Threshold is the fraction of context window usage (0.0-1.0) that triggers
+	// compaction. Default: 0.70 (70% of context window).
+	Threshold float64 `json:"threshold,omitempty"`
+
+	// Model is the model used for generating summaries. Default: "claude-haiku-4-5-20251001"
+	// A smaller, faster model is preferred since summarization is a simpler task.
+	Model string `json:"model,omitempty"`
+
+	// RecentMessagesToKeep is the number of most recent messages to preserve
+	// without summarization. Default: 10 (approximately 5 user/assistant exchanges).
+	RecentMessagesToKeep int `json:"recent_messages_to_keep,omitempty"`
+}
+
+// DefaultCompactionConfig returns sensible defaults for context compaction.
+func DefaultCompactionConfig() CompactionConfig {
+	return CompactionConfig{
+		Enabled:              false,
+		Threshold:            0.70,
+		Model:                "claude-haiku-4-5-20251001",
+		RecentMessagesToKeep: 10,
+	}
 }
 
 // SmartRoutingConfig holds configuration for intelligent model routing.
@@ -727,6 +761,18 @@ func (c *Config) expandEnvVars() error {
 	c.MQTT.Username = os.ExpandEnv(c.MQTT.Username)
 	c.MQTT.Password = os.ExpandEnv(c.MQTT.Password)
 
+	// Expand Kubernetes configuration
+	for i := range c.Kubernetes.Clusters {
+		c.Kubernetes.Clusters[i].KubeconfigPath = os.ExpandEnv(c.Kubernetes.Clusters[i].KubeconfigPath)
+	}
+
+	// Expand PagerDuty configuration
+	c.PagerDuty.APIToken = os.ExpandEnv(c.PagerDuty.APIToken)
+
+	// Expand Datadog configuration
+	c.Datadog.APIKey = os.ExpandEnv(c.Datadog.APIKey)
+	c.Datadog.AppKey = os.ExpandEnv(c.Datadog.AppKey)
+
 	// Expand auth configuration
 	c.Auth.TokenSecret = os.ExpandEnv(c.Auth.TokenSecret)
 
@@ -778,6 +824,21 @@ func (c *Config) Validate() error {
 	// Validate MQTT configuration
 	if err := c.MQTT.Validate(); err != nil {
 		return fmt.Errorf("invalid MQTT configuration: %w", err)
+	}
+
+	// Validate Kubernetes configuration
+	if err := c.Kubernetes.Validate(); err != nil {
+		return fmt.Errorf("invalid kubernetes configuration: %w", err)
+	}
+
+	// Validate PagerDuty configuration
+	if err := c.PagerDuty.Validate(); err != nil {
+		return fmt.Errorf("invalid PagerDuty configuration: %w", err)
+	}
+
+	// Validate Datadog configuration
+	if err := c.Datadog.Validate(); err != nil {
+		return fmt.Errorf("invalid Datadog configuration: %w", err)
 	}
 
 	return nil

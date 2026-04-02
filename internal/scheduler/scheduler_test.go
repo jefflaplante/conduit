@@ -360,6 +360,112 @@ func TestReloadJobs_NoChanges(t *testing.T) {
 	}
 }
 
+func TestPersistence_AllMutationsPersist(t *testing.T) {
+	dir := t.TempDir()
+	jobsFile := filepath.Join(dir, "cron_jobs.json")
+
+	s := New(dir, nil)
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	// 1. AddJob persists
+	job := &Job{
+		ID: "persist-test", Name: "Persist", Schedule: "0 9 * * *",
+		Type: JobTypeGo, Command: "test-cmd", Enabled: true,
+	}
+	if err := s.AddJob(job); err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+
+	readJobs := func() []*Job {
+		t.Helper()
+		data, err := os.ReadFile(jobsFile)
+		if err != nil {
+			t.Fatalf("failed to read jobs file: %v", err)
+		}
+		var jobs []*Job
+		if err := json.Unmarshal(data, &jobs); err != nil {
+			t.Fatalf("failed to unmarshal jobs file: %v", err)
+		}
+		return jobs
+	}
+
+	findJob := func(jobs []*Job, id string) *Job {
+		t.Helper()
+		for _, j := range jobs {
+			if j.ID == id {
+				return j
+			}
+		}
+		return nil
+	}
+
+	jobs := readJobs()
+	if findJob(jobs, "persist-test") == nil {
+		t.Fatal("AddJob did not persist to disk")
+	}
+
+	// 2. DisableJob persists
+	if err := s.DisableJob("persist-test"); err != nil {
+		t.Fatalf("DisableJob failed: %v", err)
+	}
+	jobs = readJobs()
+	if j := findJob(jobs, "persist-test"); j == nil || j.Enabled {
+		t.Fatal("DisableJob did not persist enabled=false to disk")
+	}
+
+	// 3. EnableJob persists
+	if err := s.EnableJob("persist-test"); err != nil {
+		t.Fatalf("EnableJob failed: %v", err)
+	}
+	jobs = readJobs()
+	if j := findJob(jobs, "persist-test"); j == nil || !j.Enabled {
+		t.Fatal("EnableJob did not persist enabled=true to disk")
+	}
+
+	// 4. RemoveJob persists
+	if err := s.RemoveJob("persist-test"); err != nil {
+		t.Fatalf("RemoveJob failed: %v", err)
+	}
+	jobs = readJobs()
+	if findJob(jobs, "persist-test") != nil {
+		t.Fatal("RemoveJob did not persist removal to disk")
+	}
+
+	s.Stop()
+
+	// 5. Restart scheduler — verify jobs survive restart
+	s2 := New(dir, nil)
+	if err := s2.Start(); err != nil {
+		t.Fatalf("second Start failed: %v", err)
+	}
+	defer s2.Stop()
+
+	// Add a job via first scheduler instance, save, then reload
+	s3 := New(dir, nil)
+	if err := s3.Start(); err != nil {
+		t.Fatalf("third Start failed: %v", err)
+	}
+	if err := s3.AddJob(&Job{
+		ID: "survive-restart", Name: "Survive", Schedule: "0 10 * * *",
+		Type: JobTypeGo, Command: "survive-cmd", Enabled: true,
+	}); err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+	s3.Stop()
+
+	s4 := New(dir, nil)
+	if err := s4.Start(); err != nil {
+		t.Fatalf("fourth Start failed: %v", err)
+	}
+	defer s4.Stop()
+
+	if _, err := s4.GetJob("survive-restart"); err != nil {
+		t.Fatal("job did not survive scheduler restart")
+	}
+}
+
 func TestCheckAndReload_SelfWriteCooldown(t *testing.T) {
 	dir := t.TempDir()
 	jobsFile := filepath.Join(dir, "cron_jobs.json")

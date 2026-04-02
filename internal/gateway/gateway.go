@@ -79,6 +79,7 @@ type Gateway struct {
 	skillsManager    *skills.Manager
 	channelManager   *channels.Manager
 	scheduler        scheduler.SchedulerInterface
+	compactionEngine *ai.CompactionEngine
 
 	// Authentication
 	authStorage     *auth.TokenStorage
@@ -323,6 +324,14 @@ func New(cfg *config.Config) (*Gateway, error) {
 			summaryConfig.Model, summaryConfig.TargetRatio*100)
 	}
 
+	// Initialize context compaction engine if enabled
+	var compactionEngine *ai.CompactionEngine
+	if cfg.AI.Compaction != nil && cfg.AI.Compaction.Enabled {
+		compactionEngine = ai.NewCompactionEngine(aiRouter, sessionStore, *cfg.AI.Compaction)
+		log.Printf("Context compaction enabled (threshold: %.0f%%, model: %s, keep: %d messages)",
+			cfg.AI.Compaction.Threshold*100, cfg.AI.Compaction.Model, cfg.AI.Compaction.RecentMessagesToKeep)
+	}
+
 	// Initialize authentication system using the same database
 	authStorage := auth.NewTokenStorage(sessionStore.DB(), cfg.Auth.TokenSecret)
 
@@ -411,6 +420,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		workspaceContext:    workspaceContext,
 		skillsManager:       skillsManager,
 		channelManager:      nil, // Will be initialized below
+		compactionEngine:    compactionEngine,
 		authStorage:         authStorage,
 		authMiddleware:      authMiddleware,
 		wsAuthenticator:     wsAuthenticator,
@@ -617,6 +627,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	log.Printf("  - Auth: enabled (middleware + WebSocket authenticator)")
 	log.Printf("  - Vector Search: %v", gw.vectorService != nil)
 	log.Printf("  - MQTT: %v", gw.mqttService != nil)
+	log.Printf("  - Compaction: %v", gw.compactionEngine != nil)
 	if cfg.RateLimiting.Enabled {
 		log.Printf("  - Rate Limiting: enabled (anonymous: %d req/%ds, authenticated: %d req/%ds)",
 			cfg.RateLimiting.Anonymous.MaxRequests, cfg.RateLimiting.Anonymous.WindowSeconds,
