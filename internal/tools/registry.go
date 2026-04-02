@@ -18,6 +18,7 @@ import (
 	pagerdutyTool "conduit/internal/tools/pagerduty"
 	"conduit/internal/tools/scheduling"
 	"conduit/internal/tools/schema"
+	sreTool "conduit/internal/tools/sre"
 	"conduit/internal/tools/ssh"
 	"conduit/internal/tools/types"
 	"conduit/internal/tools/vision"
@@ -232,6 +233,20 @@ func (r *Registry) registerAllTools() {
 			log.Printf("Failed to create Datadog Monitor tool: %v", err)
 		} else {
 			allTools = append(allTools, monitorTool)
+		}
+	}
+
+	// SRE Incident Correlation tool (requires both PagerDuty and Datadog)
+	if r.services.ConfigMgr != nil &&
+		r.services.ConfigMgr.PagerDuty.Enabled &&
+		r.services.ConfigMgr.Datadog.Enabled {
+		// Create executor adapter that wraps the registry's ExecuteTool method
+		executor := &registryToolExecutor{registry: r}
+		sre, err := sreTool.NewSRETool(r.services, executor)
+		if err != nil {
+			log.Printf("Failed to create SRE tool: %v", err)
+		} else {
+			allTools = append(allTools, sre)
 		}
 	}
 
@@ -650,4 +665,15 @@ func getBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
 		return val
 	}
 	return defaultVal
+}
+
+// registryToolExecutor adapts the Registry to implement sreTool.ToolExecutor.
+// This allows the SRE tool to orchestrate calls to other registered tools.
+type registryToolExecutor struct {
+	registry *Registry
+}
+
+// ExecuteTool executes a tool by name through the registry.
+func (e *registryToolExecutor) ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (*types.ToolResult, error) {
+	return e.registry.ExecuteTool(ctx, name, args)
 }
