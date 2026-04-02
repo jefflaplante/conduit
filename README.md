@@ -37,7 +37,7 @@ A clean, high-performance rewrite of the Conduit gateway core in Go, with native
 │  │  • Authentication System    • Web Search Integration    │  │
 │  │  • Heartbeat Monitoring     • Alert Processing          │  │
 │  │  • SSH Server (Wish)        • TUI (BubbleTea)           │  │
-│  │  • MQTT Event Ingest        • IoT Device Awareness      │  │
+│  │  • MQTT Event Ingest        • Kubernetes (client-go)    │  │
 │  └─────────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────┘
 ```
@@ -102,10 +102,10 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **Event Buffering** — In-memory per-topic ring buffers with age-based pruning
 - **Heartbeat Monitoring** — Natural language rules in HEARTBEAT.md to check sensors and alert on anomalies
 
-### SRE Integrations (Config & Auth)
-- **Kubernetes** — Multi-cluster kubeconfig support with safety levels (read/modify/dangerous)
-- **PagerDuty** — REST API v2 client with rate limiting for incident management
-- **Datadog** — Metrics/logs/monitors API client with DD-API-KEY/DD-APPLICATION-KEY auth
+### SRE & Infrastructure
+- **[Kubernetes Tool](reference/kubernetes.md)** — Native client-go integration with multi-cluster support, security tiers, pod exec, port forwarding, resource watch
+- **PagerDuty** — REST API v2 client with rate limiting for incident management (config ready)
+- **Datadog** — Metrics/logs/monitors API client (config ready)
 
 ## Providers
 
@@ -200,6 +200,7 @@ Use `/model <alias>` to switch models. The provider auto-resolves based on the m
 | [API & Protocol](reference/api-protocol.md) | HTTP endpoints and WebSocket protocol |
 | [Skills System](reference/skills.md) | Creating and using skills |
 | [Authentication](reference/authentication.md) | Token and OAuth setup |
+| [Kubernetes](reference/kubernetes.md) | Multi-cluster K8s tool with security tiers |
 | [MQTT Integration](reference/mqtt.md) | MQTT event ingest for IoT/home automation |
 | [Security](reference/security.md) | Security considerations |
 
@@ -220,6 +221,9 @@ conduit/
 │   ├── gateway/           # Core gateway orchestration
 │   ├── ai/                # AI provider routing
 │   ├── tools/             # Tool registry and implementations
+│   │   ├── k8s/           # Kubernetes tool (client-go)
+│   │   ├── ssh/           # SSH remote execution tool
+│   │   └── mqtt/          # MQTT tool
 │   ├── channels/          # Channel adapters (Telegram, TUI)
 │   ├── mqtt/              # MQTT event ingest (zigbee2mqtt, HA)
 │   ├── sessions/          # SQLite session storage
