@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/schema"
 	"conduit/internal/tools/types"
 )
@@ -51,19 +52,19 @@ func (t *EditTool) Parameters() map[string]interface{} {
 }
 
 func (t *EditTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	path := t.getStringArg(args, "path", "")
+	path := toolargs.GetString(args, "path", "")
 	if path == "" {
-		path = t.getStringArg(args, "file_path", "") // Alternative param name
+		path = toolargs.GetString(args, "file_path", "") // Alternative param name
 	}
 
-	oldText := t.getStringArg(args, "old_string", "")
+	oldText := toolargs.GetString(args, "old_string", "")
 	if oldText == "" {
-		oldText = t.getStringArg(args, "oldText", "") // Alternative param name
+		oldText = toolargs.GetString(args, "oldText", "") // Alternative param name
 	}
 
-	newText := t.getStringArg(args, "new_string", "")
+	newText := toolargs.GetString(args, "new_string", "")
 	if newText == "" {
-		newText = t.getStringArg(args, "newText", "") // Alternative param name
+		newText = toolargs.GetString(args, "newText", "") // Alternative param name
 	}
 
 	// Validate required parameters with rich errors
@@ -446,13 +447,6 @@ func (t *EditTool) isPathAllowed(path string) bool {
 	}
 
 	return false
-}
-
-func (t *EditTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
 }
 
 // GetSchemaHints implements types.EnhancedSchemaProvider.

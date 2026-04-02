@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"conduit/internal/config"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -168,7 +169,7 @@ func (t *SRETool) GetActionDocs() map[string]types.ActionDoc {
 
 // Execute dispatches the requested action and returns a tool result.
 func (t *SRETool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	action := getStringArg(args, "action", "")
+	action := toolargs.GetString(args, "action", "")
 	if action == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -252,22 +253,3 @@ func (t *SRETool) status(ctx context.Context, args map[string]interface{}) (*typ
 	}, nil
 }
 
-// --- Argument helpers ---
-
-func getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if v, ok := args[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return defaultVal
-}
-
-func getBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
-	if v, ok := args[key]; ok {
-		if b, ok := v.(bool); ok {
-			return b
-		}
-	}
-	return defaultVal
-}

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 	"conduit/internal/version"
 )
@@ -123,8 +124,8 @@ func (t *ContextTool) Parameters() map[string]interface{} {
 }
 
 func (t *ContextTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	section := t.getStringArg(args, "section", "")
-	verbose := t.getBoolArg(args, "verbose", false)
+	section := toolargs.GetString(args, "section", "")
+	verbose := toolargs.GetBool(args, "verbose", false)
 
 	// Determine which sections to collect
 	sections := []string{"workspace", "project", "session", "gateway", "channels", "tools", "beads"}
@@ -1033,22 +1034,6 @@ func formatDuration(d time.Duration) string {
 	}
 	days := int(d.Hours()) / 24
 	return fmt.Sprintf("%dd", days)
-}
-
-// Helper methods for argument extraction
-
-func (t *ContextTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *ContextTool) getBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
-	if val, ok := args[key].(bool); ok {
-		return val
-	}
-	return defaultVal
 }
 
 // GetUsageExamples implements types.UsageExampleProvider.

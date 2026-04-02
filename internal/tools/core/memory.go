@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"conduit/internal/config"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -108,11 +109,11 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]interfac
 		}, nil
 	}
 
-	maxResults := t.getIntArg(args, "maxResults", 10)
-	minScore := t.getFloatArg(args, "minScore", 0.1)
-	searchSessions := t.getBoolArg(args, "searchSessions", true)
-	sessionLimit := t.getIntArg(args, "sessionLimit", 50)
-	searchMode := t.getStringArg(args, "searchMode", "auto")
+	maxResults := toolargs.GetInt(args, "maxResults", 10)
+	minScore := toolargs.GetFloat64(args, "minScore", 0.1)
+	searchSessions := toolargs.GetBool(args, "searchSessions", true)
+	sessionLimit := toolargs.GetInt(args, "sessionLimit", 50)
+	searchMode := toolargs.GetString(args, "searchMode", "auto")
 
 	// Resolve search mode
 	effectiveMode := t.resolveSearchMode(searchMode)
@@ -688,38 +689,6 @@ func (t *MemorySearchTool) formatSearchResults(results []MemoryResult, query str
 	return builder.String()
 }
 
-// Helper methods
-func (t *MemorySearchTool) getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := args[key].(float64); ok {
-		return int(val)
-	}
-	if val, ok := args[key].(int); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *MemorySearchTool) getFloatArg(args map[string]interface{}, key string, defaultVal float64) float64 {
-	if val, ok := args[key].(float64); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *MemorySearchTool) getBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
-	if val, ok := args[key].(bool); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *MemorySearchTool) getStringArg(args map[string]interface{}, key string, defaultVal string) string {
-	if val, ok := args[key].(string); ok && val != "" {
-		return val
-	}
-	return defaultVal
-}
-
 // MemoryGetTool retrieves specific snippets from memory files
 type MemoryGetTool struct {
 	services     *types.ToolServices
@@ -783,8 +752,8 @@ func (t *MemoryGetTool) Execute(ctx context.Context, args map[string]interface{}
 		}, nil
 	}
 
-	from := t.getIntArg(args, "from", 1)
-	lines := t.getIntArg(args, "lines", 0)
+	from := toolargs.GetInt(args, "from", 1)
+	lines := toolargs.GetInt(args, "lines", 0)
 
 	// Read the content
 	content, err := t.readMemorySnippet(path, from, lines)
@@ -844,16 +813,6 @@ func (t *MemoryGetTool) readMemorySnippet(path string, from, lines int) (string,
 
 	selectedLines := fileLines[startIdx:endIdx]
 	return strings.Join(selectedLines, "\n"), nil
-}
-
-func (t *MemoryGetTool) getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := args[key].(float64); ok {
-		return int(val)
-	}
-	if val, ok := args[key].(int); ok {
-		return val
-	}
-	return defaultVal
 }
 
 // GetUsageExamples implements types.UsageExampleProvider for MemorySearchTool.

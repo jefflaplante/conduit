@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -66,7 +67,7 @@ type TimelineEvent struct {
 
 // triageIncident performs comprehensive incident triage.
 func (t *SRETool) triageIncident(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	incidentID := getStringArg(args, "incident_id", "")
+	incidentID := toolargs.GetString(args, "incident_id", "")
 	if incidentID == "" {
 		return types.NewErrorResult("missing_parameter", "incident_id is required for triage_incident action").
 			WithParameter("incident_id", nil).
@@ -75,10 +76,10 @@ func (t *SRETool) triageIncident(ctx context.Context, args map[string]interface{
 			}), nil
 	}
 
-	includeK8s := getBoolArg(args, "include_k8s", t.k8sConfig != nil)
-	includeLogs := getBoolArg(args, "include_logs", true)
-	namespace := getStringArg(args, "namespace", "")
-	cluster := getStringArg(args, "cluster", "")
+	includeK8s := toolargs.GetBool(args, "include_k8s", t.k8sConfig != nil)
+	includeLogs := toolargs.GetBool(args, "include_logs", true)
+	namespace := toolargs.GetString(args, "namespace", "")
+	cluster := toolargs.GetString(args, "cluster", "")
 
 	result := &TriageResult{
 		IncidentID: incidentID,

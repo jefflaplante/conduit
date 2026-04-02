@@ -8,6 +8,7 @@ import (
 
 	"conduit/internal/chain"
 	"conduit/internal/config"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -68,7 +69,7 @@ func (t *ChainTool) Parameters() map[string]interface{} {
 }
 
 func (t *ChainTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	action := getStringParam(args, "action", "")
+	action := toolargs.GetString(args, "action", "")
 
 	switch action {
 	case "list":
@@ -135,7 +136,7 @@ func (t *ChainTool) listChains() (*types.ToolResult, error) {
 }
 
 func (t *ChainTool) showChain(args map[string]interface{}) (*types.ToolResult, error) {
-	name := getStringParam(args, "name", "")
+	name := toolargs.GetString(args, "name", "")
 	if name == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -163,7 +164,7 @@ func (t *ChainTool) showChain(args map[string]interface{}) (*types.ToolResult, e
 }
 
 func (t *ChainTool) validateChain(args map[string]interface{}) (*types.ToolResult, error) {
-	name := getStringParam(args, "name", "")
+	name := toolargs.GetString(args, "name", "")
 	if name == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -211,7 +212,7 @@ func (t *ChainTool) validateChain(args map[string]interface{}) (*types.ToolResul
 }
 
 func (t *ChainTool) runChain(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	name := getStringParam(args, "name", "")
+	name := toolargs.GetString(args, "name", "")
 	if name == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -337,13 +338,4 @@ func (v *validationToolExecutor) ExecuteTool(toolName string, params map[string]
 func (v *validationToolExecutor) ToolExists(toolName string) bool {
 	_, ok := v.tools[toolName]
 	return ok
-}
-
-// --- helpers ---
-
-func getStringParam(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
 }

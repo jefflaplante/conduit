@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -127,10 +128,10 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]interface{}
 		}, nil
 	}
 
-	count := t.getIntArg(args, "count", 10)
-	country := t.getStringArg(args, "country", "US")
-	freshness := t.getStringArg(args, "freshness", "")
-	searchLang := t.getStringArg(args, "search_lang", "")
+	count := toolargs.GetInt(args, "count", 10)
+	country := toolargs.GetString(args, "country", "US")
+	freshness := toolargs.GetString(args, "freshness", "")
+	searchLang := toolargs.GetString(args, "search_lang", "")
 
 	// Validate count
 	if count < 1 || count > 10 {
@@ -272,22 +273,3 @@ func (t *WebSearchTool) formatSearchResults(results []BraveSearchResult, query s
 	return builder.String()
 }
 
-// Helper methods
-func (t *WebSearchTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *WebSearchTool) getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := args[key].(float64); ok {
-		return int(val)
-	}
-	if val, ok := args[key].(int); ok {
-		return val
-	}
-	return defaultVal
-}
-
-// ToolResult is imported from the tools package

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/schema"
 	"conduit/internal/tools/types"
 )
@@ -85,10 +86,10 @@ func (t *TTSTool) Execute(ctx context.Context, args map[string]interface{}) (*ty
 		}, nil
 	}
 
-	voice := t.getStringArg(args, "voice", "en-US-AriaNeural")
-	rate := t.getStringArg(args, "rate", "+0%")
-	format := t.getStringArg(args, "format", "ogg")
-	channel := t.getStringArg(args, "channel", "")
+	voice := toolargs.GetString(args, "voice", "en-US-AriaNeural")
+	rate := toolargs.GetString(args, "rate", "+0%")
+	format := toolargs.GetString(args, "format", "ogg")
+	channel := toolargs.GetString(args, "channel", "")
 
 	// Optimize format for channel if specified
 	if channel != "" {
@@ -264,14 +265,6 @@ func (t *TTSTool) getAvailableVoices(ctx context.Context) ([]string, error) {
 	}
 
 	return voices, nil
-}
-
-// Helper methods
-func (t *TTSTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
 }
 
 // GetSchemaHints implements types.EnhancedSchemaProvider.

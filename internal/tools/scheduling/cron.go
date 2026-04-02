@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 
 	"github.com/google/uuid"
@@ -109,7 +110,7 @@ func (t *CronTool) Parameters() map[string]interface{} {
 }
 
 func (t *CronTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	action := t.getStringArg(args, "action", "")
+	action := toolargs.GetString(args, "action", "")
 
 	switch action {
 	case "schedule":
@@ -150,7 +151,7 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 		}, nil
 	}
 
-	command := t.getStringArg(args, "command", "")
+	command := toolargs.GetString(args, "command", "")
 	if command == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -159,17 +160,17 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 	}
 
 	var schedule string
-	oneshot := t.getBoolArg(args, "oneshot", false)
+	oneshot := toolargs.GetBool(args, "oneshot", false)
 
 	// Check if delayMinutes is provided (simple scheduling)
-	if delayMinutes := t.getIntArg(args, "delayMinutes", 0); delayMinutes > 0 {
+	if delayMinutes := toolargs.GetInt(args, "delayMinutes", 0); delayMinutes > 0 {
 		// Convert minutes to a cron schedule for the target time
 		targetTime := time.Now().Add(time.Duration(delayMinutes) * time.Minute)
 		schedule = fmt.Sprintf("%d %d %d %d *",
 			targetTime.Minute(), targetTime.Hour(), targetTime.Day(), int(targetTime.Month()))
 		oneshot = true // Delay-based schedules are always one-shot
 	} else {
-		schedule = t.getStringArg(args, "schedule", "")
+		schedule = toolargs.GetString(args, "schedule", "")
 		if schedule == "" {
 			return &types.ToolResult{
 				Success: false,
@@ -179,7 +180,7 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 	}
 
 	// Determine job type
-	jobType := t.getStringArg(args, "jobType", "go")
+	jobType := toolargs.GetString(args, "jobType", "go")
 	if jobType != "go" && jobType != "system" {
 		return &types.ToolResult{
 			Success: false,
@@ -202,20 +203,20 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 	// Create job
 	job := &types.SchedulerJob{
 		ID:       uuid.New().String()[:8],
-		Name:     t.getStringArg(args, "name", ""),
+		Name:     toolargs.GetString(args, "name", ""),
 		Schedule: schedule,
 		Type:     jobType,
 		Command:  command,
-		Model:    t.getStringArg(args, "model", ""),
-		Target:   t.getStringArg(args, "target", ""),
+		Model:    toolargs.GetString(args, "model", ""),
+		Target:   toolargs.GetString(args, "target", ""),
 		Enabled:  true,
 		OneShot:  oneshot,
 		Skills:   jobSkills,
 	}
 
 	// Default name for delay-based schedules
-	if job.Name == "" && t.getIntArg(args, "delayMinutes", 0) > 0 {
-		job.Name = fmt.Sprintf("Reminder in %d minutes", t.getIntArg(args, "delayMinutes", 0))
+	if job.Name == "" && toolargs.GetInt(args, "delayMinutes", 0) > 0 {
+		job.Name = fmt.Sprintf("Reminder in %d minutes", toolargs.GetInt(args, "delayMinutes", 0))
 	}
 
 	// For go jobs, ALWAYS use current chat as target (ignore any passed value)
@@ -320,7 +321,7 @@ func (t *CronTool) cancelJob(ctx context.Context, args map[string]interface{}) (
 		}, nil
 	}
 
-	jobId := t.getStringArg(args, "jobId", "")
+	jobId := toolargs.GetString(args, "jobId", "")
 	if jobId == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -350,7 +351,7 @@ func (t *CronTool) runJob(ctx context.Context, args map[string]interface{}) (*ty
 		}, nil
 	}
 
-	jobId := t.getStringArg(args, "jobId", "")
+	jobId := toolargs.GetString(args, "jobId", "")
 	if jobId == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -380,7 +381,7 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]interface{}) (
 		}, nil
 	}
 
-	jobId := t.getStringArg(args, "jobId", "")
+	jobId := toolargs.GetString(args, "jobId", "")
 	if jobId == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -410,7 +411,7 @@ func (t *CronTool) disableJob(ctx context.Context, args map[string]interface{}) 
 		}, nil
 	}
 
-	jobId := t.getStringArg(args, "jobId", "")
+	jobId := toolargs.GetString(args, "jobId", "")
 	if jobId == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -454,31 +455,6 @@ func (t *CronTool) getStatus(ctx context.Context, args map[string]interface{}) (
 		Content: content,
 		Data:    status,
 	}, nil
-}
-
-// Helper methods
-func (t *CronTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *CronTool) getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := args[key].(float64); ok {
-		return int(val)
-	}
-	if val, ok := args[key].(int); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *CronTool) getBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
-	if val, ok := args[key].(bool); ok {
-		return val
-	}
-	return defaultVal
 }
 
 func truncate(s string, maxLen int) string {

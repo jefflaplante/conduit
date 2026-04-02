@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"conduit/internal/search"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -224,11 +225,11 @@ func (t *WebSearchTool) extractSearchParameters(args map[string]interface{}) (*s
 
 	params := &search.SearchParameters{
 		Query:      query,
-		Count:      t.getIntArg(args, "count", 5),
-		Country:    t.getStringArg(args, "country", "US"),
-		Freshness:  t.getStringArg(args, "freshness", ""),
-		SearchLang: t.getStringArg(args, "search_lang", ""),
-		UILang:     t.getStringArg(args, "ui_lang", ""),
+		Count:      toolargs.GetInt(args, "count", 5),
+		Country:    toolargs.GetString(args, "country", "US"),
+		Freshness:  toolargs.GetString(args, "freshness", ""),
+		SearchLang: toolargs.GetString(args, "search_lang", ""),
+		UILang:     toolargs.GetString(args, "ui_lang", ""),
 	}
 
 	// Validate parameters
@@ -366,20 +367,3 @@ func (t *WebSearchTool) getAvailableProviders() []string {
 	return providers
 }
 
-// Helper methods for parameter extraction
-func (t *WebSearchTool) getStringArg(args map[string]interface{}, key, defaultVal string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func (t *WebSearchTool) getIntArg(args map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := args[key].(float64); ok {
-		return int(val)
-	}
-	if val, ok := args[key].(int); ok {
-		return val
-	}
-	return defaultVal
-}
