@@ -8,10 +8,13 @@ import (
 	"testing"
 
 	"conduit/internal/config"
+	toolargs "conduit/internal/tools/args"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var _ = toolargs.GetString // silence unused import during transition
 
 func setupTestTool(t *testing.T, handler http.HandlerFunc) *DatadogTool {
 	t.Helper()
@@ -408,10 +411,10 @@ func TestGetStringArg(t *testing.T) {
 		"empty": "",
 	}
 
-	assert.Equal(t, "value", getStringArg(args, "str", "default"))
-	assert.Equal(t, "default", getStringArg(args, "int", "default"))
-	assert.Equal(t, "", getStringArg(args, "empty", "default"))
-	assert.Equal(t, "default", getStringArg(args, "missing", "default"))
+	assert.Equal(t, "value", toolargs.GetString(args, "str", "default"))
+	assert.Equal(t, "default", toolargs.GetString(args, "int", "default"))
+	assert.Equal(t, "", toolargs.GetString(args, "empty", "default"))
+	assert.Equal(t, "default", toolargs.GetString(args, "missing", "default"))
 }
 
 func TestGetInt64Arg(t *testing.T) {
@@ -422,11 +425,11 @@ func TestGetInt64Arg(t *testing.T) {
 		"str":     "not a number",
 	}
 
-	assert.Equal(t, int64(123), getInt64Arg(args, "float64", 0))
-	assert.Equal(t, int64(42), getInt64Arg(args, "int", 0))
-	assert.Equal(t, int64(999), getInt64Arg(args, "int64", 0))
-	assert.Equal(t, int64(0), getInt64Arg(args, "str", 0))
-	assert.Equal(t, int64(-100), getInt64Arg(args, "missing", -100))
+	assert.Equal(t, int64(123), toolargs.GetInt64(args, "float64", 0))
+	assert.Equal(t, int64(42), toolargs.GetInt64(args, "int", 0))
+	assert.Equal(t, int64(999), toolargs.GetInt64(args, "int64", 0))
+	assert.Equal(t, int64(0), toolargs.GetInt64(args, "str", 0))
+	assert.Equal(t, int64(-100), toolargs.GetInt64(args, "missing", -100))
 }
 
 // ---------- Log action tests ----------
@@ -748,9 +751,9 @@ func TestGetIntArg(t *testing.T) {
 		"str":     "not a number",
 	}
 
-	assert.Equal(t, 123, getIntArg(args, "float64", 0))
-	assert.Equal(t, 42, getIntArg(args, "int", 0))
-	assert.Equal(t, 999, getIntArg(args, "int64", 0))
-	assert.Equal(t, 0, getIntArg(args, "str", 0))
-	assert.Equal(t, -100, getIntArg(args, "missing", -100))
+	assert.Equal(t, 123, toolargs.GetInt(args, "float64", 0))
+	assert.Equal(t, 42, toolargs.GetInt(args, "int", 0))
+	assert.Equal(t, 999, toolargs.GetInt(args, "int64", 0))
+	assert.Equal(t, 0, toolargs.GetInt(args, "str", 0))
+	assert.Equal(t, -100, toolargs.GetInt(args, "missing", -100))
 }

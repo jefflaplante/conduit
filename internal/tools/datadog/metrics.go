@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -66,7 +67,7 @@ type metricMetadataResponse struct {
 
 // executeQueryMetrics queries time series data from Datadog.
 func (t *DatadogTool) executeQueryMetrics(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	query := getStringArg(args, "query", "")
+	query := toolargs.GetString(args, "query", "")
 	if query == "" {
 		return types.NewErrorResult("missing_parameter", "query is required for query_metrics action").
 			WithParameter("query", nil).
@@ -79,8 +80,8 @@ func (t *DatadogTool) executeQueryMetrics(ctx context.Context, args map[string]i
 
 	// Parse time range
 	now := time.Now().Unix()
-	from := getInt64Arg(args, "from", -3600) // Default: 1 hour ago
-	to := getInt64Arg(args, "to", 0)         // Default: now
+	from := toolargs.GetInt64(args, "from", -3600) // Default: 1 hour ago
+	to := toolargs.GetInt64(args, "to", 0)         // Default: now
 
 	// Convert relative times to absolute
 	if from <= 0 {
@@ -223,7 +224,7 @@ func (t *DatadogTool) executeQueryMetrics(ctx context.Context, args map[string]i
 
 // executeListMetrics lists available metric names.
 func (t *DatadogTool) executeListMetrics(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	filter := getStringArg(args, "filter", "")
+	filter := toolargs.GetString(args, "filter", "")
 
 	// Build query parameters - list metrics from the last 24 hours
 	params := url.Values{}
@@ -303,7 +304,7 @@ func (t *DatadogTool) executeListMetrics(ctx context.Context, args map[string]in
 
 // executeGetMetricMetadata retrieves metadata for a specific metric.
 func (t *DatadogTool) executeGetMetricMetadata(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	metric := getStringArg(args, "metric", "")
+	metric := toolargs.GetString(args, "metric", "")
 	if metric == "" {
 		return types.NewErrorResult("missing_parameter", "metric name is required for get_metric_metadata action").
 			WithParameter("metric", nil).

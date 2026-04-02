@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -71,9 +72,9 @@ func (t *UniFiTool) Parameters() map[string]interface{} {
 }
 
 func (t *UniFiTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	action := getStringArg(args, "action", "")
-	camera := getStringArg(args, "camera", "")
-	system := getStringArg(args, "system", "protect")
+	action := toolargs.GetString(args, "action", "")
+	camera := toolargs.GetString(args, "camera", "")
+	system := toolargs.GetString(args, "system", "protect")
 
 	switch action {
 	case "snapshot":

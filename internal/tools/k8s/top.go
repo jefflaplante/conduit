@@ -12,6 +12,7 @@ import (
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -59,7 +60,7 @@ type TopResult struct {
 
 // executeTop handles the top action dispatch.
 func (t *K8sTool) executeTop(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	resource := getStringArg(args, "resource", "pods")
+	resource := toolargs.GetString(args, "resource", "pods")
 
 	switch normalizeKind(resource) {
 	case "pods":
@@ -82,8 +83,8 @@ func (t *K8sTool) executeTopPods(ctx context.Context, args map[string]interface{
 	}
 
 	namespace := t.resolveNamespace(args, clusterCfg)
-	sortBy := getStringArg(args, "sort_by", "cpu")
-	limit := getIntArg(args, "limit", defaultTopLimit)
+	sortBy := toolargs.GetString(args, "sort_by", "cpu")
+	limit := toolargs.GetInt(args, "limit", defaultTopLimit)
 	if limit <= 0 || limit > maxTopLimit {
 		limit = defaultTopLimit
 	}
@@ -190,8 +191,8 @@ func (t *K8sTool) executeTopNodes(ctx context.Context, args map[string]interface
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	sortBy := getStringArg(args, "sort_by", "cpu")
-	limit := getIntArg(args, "limit", defaultTopLimit)
+	sortBy := toolargs.GetString(args, "sort_by", "cpu")
+	limit := toolargs.GetInt(args, "limit", defaultTopLimit)
 	if limit <= 0 || limit > maxTopLimit {
 		limit = defaultTopLimit
 	}

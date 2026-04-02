@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -90,17 +91,17 @@ type UserRef struct {
 func (t *PagerDutyTool) listIncidents(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
 	params := url.Values{}
 
-	if status := getStringArg(args, "status", ""); status != "" {
+	if status := toolargs.GetString(args, "status", ""); status != "" {
 		params.Add("statuses[]", status)
 	}
-	if urgency := getStringArg(args, "urgency", ""); urgency != "" {
+	if urgency := toolargs.GetString(args, "urgency", ""); urgency != "" {
 		params.Add("urgencies[]", urgency)
 	}
-	if serviceID := getStringArg(args, "service_id", ""); serviceID != "" {
+	if serviceID := toolargs.GetString(args, "service_id", ""); serviceID != "" {
 		params.Add("service_ids[]", serviceID)
 	}
 
-	limit := getIntArg(args, "limit", 25)
+	limit := toolargs.GetInt(args, "limit", 25)
 	if limit <= 0 {
 		limit = 25
 	}
@@ -177,7 +178,7 @@ func (t *PagerDutyTool) listIncidents(ctx context.Context, args map[string]inter
 // --- Get Incident ---
 
 func (t *PagerDutyTool) getIncident(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	incidentID := getStringArg(args, "incident_id", "")
+	incidentID := toolargs.GetString(args, "incident_id", "")
 	if incidentID == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -269,7 +270,7 @@ func (t *PagerDutyTool) getIncident(ctx context.Context, args map[string]interfa
 // --- Acknowledge Incident ---
 
 func (t *PagerDutyTool) acknowledgeIncident(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	incidentID := getStringArg(args, "incident_id", "")
+	incidentID := toolargs.GetString(args, "incident_id", "")
 	if incidentID == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -283,7 +284,7 @@ func (t *PagerDutyTool) acknowledgeIncident(ctx context.Context, args map[string
 // --- Resolve Incident ---
 
 func (t *PagerDutyTool) resolveIncident(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	incidentID := getStringArg(args, "incident_id", "")
+	incidentID := toolargs.GetString(args, "incident_id", "")
 	if incidentID == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -360,7 +361,7 @@ func (t *PagerDutyTool) updateIncidentStatus(ctx context.Context, incidentID, st
 // --- Snooze Incident ---
 
 func (t *PagerDutyTool) snoozeIncident(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	incidentID := getStringArg(args, "incident_id", "")
+	incidentID := toolargs.GetString(args, "incident_id", "")
 	if incidentID == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -368,7 +369,7 @@ func (t *PagerDutyTool) snoozeIncident(ctx context.Context, args map[string]inte
 		}, nil
 	}
 
-	duration := getIntArg(args, "snooze_duration", 0)
+	duration := toolargs.GetInt(args, "snooze_duration", 0)
 	if duration <= 0 {
 		return &types.ToolResult{
 			Success: false,
@@ -429,7 +430,7 @@ func (t *PagerDutyTool) snoozeIncident(ctx context.Context, args map[string]inte
 // --- Add Note ---
 
 func (t *PagerDutyTool) addNote(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	incidentID := getStringArg(args, "incident_id", "")
+	incidentID := toolargs.GetString(args, "incident_id", "")
 	if incidentID == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -437,7 +438,7 @@ func (t *PagerDutyTool) addNote(ctx context.Context, args map[string]interface{}
 		}, nil
 	}
 
-	noteContent := getStringArg(args, "note", "")
+	noteContent := toolargs.GetString(args, "note", "")
 	if noteContent == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -509,7 +510,7 @@ func (t *PagerDutyTool) addNote(ctx context.Context, args map[string]interface{}
 // --- Trigger Incident ---
 
 func (t *PagerDutyTool) triggerIncident(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	title := getStringArg(args, "title", "")
+	title := toolargs.GetString(args, "title", "")
 	if title == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -517,7 +518,7 @@ func (t *PagerDutyTool) triggerIncident(ctx context.Context, args map[string]int
 		}, nil
 	}
 
-	serviceID := getStringArg(args, "service_id", "")
+	serviceID := toolargs.GetString(args, "service_id", "")
 	if serviceID == "" {
 		serviceID = t.config.DefaultServiceID
 	}
@@ -528,7 +529,7 @@ func (t *PagerDutyTool) triggerIncident(ctx context.Context, args map[string]int
 		}, nil
 	}
 
-	escalationPolicyID := getStringArg(args, "escalation_policy_id", "")
+	escalationPolicyID := toolargs.GetString(args, "escalation_policy_id", "")
 	if escalationPolicyID == "" {
 		escalationPolicyID = t.config.DefaultEscalationPolicyID
 	}
@@ -542,7 +543,7 @@ func (t *PagerDutyTool) triggerIncident(ctx context.Context, args map[string]int
 		},
 	}
 
-	if details := getStringArg(args, "details", ""); details != "" {
+	if details := toolargs.GetString(args, "details", ""); details != "" {
 		incident["body"] = map[string]interface{}{
 			"type":    "incident_body",
 			"details": details,

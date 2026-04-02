@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -124,7 +125,7 @@ func (t *GoogleWorkspaceTool) Execute(ctx context.Context, args map[string]inter
 			}), nil
 	}
 
-	action := getStringArg(args, "action", "")
+	action := toolargs.GetString(args, "action", "")
 
 	switch action {
 	case "email_search":
@@ -204,12 +205,12 @@ func (t *GoogleWorkspaceTool) runGws(ctx context.Context, args ...string) (map[s
 }
 
 func (t *GoogleWorkspaceTool) emailSearch(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	query := getStringArg(args, "query", "")
+	query := toolargs.GetString(args, "query", "")
 	if query == "" {
 		return types.NewErrorResult("missing_query", "query is required for email_search"), nil
 	}
 
-	limit := getIntArg(args, "limit", 10)
+	limit := toolargs.GetInt(args, "limit", 10)
 	userID := t.getUserID()
 
 	// gws gmail users messages list --params '{"userId":"me","q":"is:unread","maxResults":10}'
@@ -230,7 +231,7 @@ func (t *GoogleWorkspaceTool) emailSearch(ctx context.Context, args map[string]i
 }
 
 func (t *GoogleWorkspaceTool) emailRead(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	messageID := getStringArg(args, "message_id", "")
+	messageID := toolargs.GetString(args, "message_id", "")
 	if messageID == "" {
 		return types.NewErrorResult("missing_message_id", "message_id is required for email_read"), nil
 	}
@@ -255,9 +256,9 @@ func (t *GoogleWorkspaceTool) emailRead(ctx context.Context, args map[string]int
 }
 
 func (t *GoogleWorkspaceTool) emailSend(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	to := getStringArg(args, "to", "")
-	subject := getStringArg(args, "subject", "")
-	body := getStringArg(args, "body", "")
+	to := toolargs.GetString(args, "to", "")
+	subject := toolargs.GetString(args, "subject", "")
+	body := toolargs.GetString(args, "body", "")
 
 	if to == "" || subject == "" || body == "" {
 		return types.NewErrorResult("missing_args", "to, subject, and body are required for email_send"), nil
@@ -265,7 +266,7 @@ func (t *GoogleWorkspaceTool) emailSend(ctx context.Context, args map[string]int
 
 	// Determine from address
 	fromAddr := ""
-	fromAlias := getStringArg(args, "from_alias", "")
+	fromAlias := toolargs.GetString(args, "from_alias", "")
 	services := t.registry.GetServices()
 
 	if services != nil && services.ConfigMgr != nil {
@@ -295,10 +296,10 @@ func (t *GoogleWorkspaceTool) emailSend(ctx context.Context, args map[string]int
 		msg.WriteString(fmt.Sprintf("From: %s\r\n", fromAddr))
 	}
 	msg.WriteString(fmt.Sprintf("To: %s\r\n", to))
-	if cc := getStringArg(args, "cc", ""); cc != "" {
+	if cc := toolargs.GetString(args, "cc", ""); cc != "" {
 		msg.WriteString(fmt.Sprintf("Cc: %s\r\n", cc))
 	}
-	if bcc := getStringArg(args, "bcc", ""); bcc != "" {
+	if bcc := toolargs.GetString(args, "bcc", ""); bcc != "" {
 		msg.WriteString(fmt.Sprintf("Bcc: %s\r\n", bcc))
 	}
 	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
@@ -328,7 +329,7 @@ func (t *GoogleWorkspaceTool) emailSend(ctx context.Context, args map[string]int
 }
 
 func (t *GoogleWorkspaceTool) emailTrash(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	messageID := getStringArg(args, "message_id", "")
+	messageID := toolargs.GetString(args, "message_id", "")
 	if messageID == "" {
 		return types.NewErrorResult("missing_message_id", "message_id is required for email_trash"), nil
 	}
@@ -352,9 +353,9 @@ func (t *GoogleWorkspaceTool) emailTrash(ctx context.Context, args map[string]in
 }
 
 func (t *GoogleWorkspaceTool) calendarList(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	limit := getIntArg(args, "limit", 10)
-	days := getIntArg(args, "days", 7)
-	calendarID := getStringArg(args, "calendar_id", "primary")
+	limit := toolargs.GetInt(args, "limit", 10)
+	days := toolargs.GetInt(args, "days", 7)
+	calendarID := toolargs.GetString(args, "calendar_id", "primary")
 
 	// Calculate time range
 	now := time.Now()
@@ -382,15 +383,15 @@ func (t *GoogleWorkspaceTool) calendarList(ctx context.Context, args map[string]
 }
 
 func (t *GoogleWorkspaceTool) calendarCreate(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	title := getStringArg(args, "title", "")
-	start := getStringArg(args, "start", "")
-	end := getStringArg(args, "end", "")
+	title := toolargs.GetString(args, "title", "")
+	start := toolargs.GetString(args, "start", "")
+	end := toolargs.GetString(args, "end", "")
 
 	if title == "" || start == "" || end == "" {
 		return types.NewErrorResult("missing_args", "title, start, and end are required for calendar_create"), nil
 	}
 
-	calendarID := getStringArg(args, "calendar_id", "primary")
+	calendarID := toolargs.GetString(args, "calendar_id", "primary")
 
 	// gws calendar events insert --params '{"calendarId":"primary"}' --json '{"summary":"...","start":{"dateTime":"..."},"end":{"dateTime":"..."}}'
 	params := map[string]interface{}{"calendarId": calendarID}
@@ -401,10 +402,10 @@ func (t *GoogleWorkspaceTool) calendarCreate(ctx context.Context, args map[strin
 		"start":   map[string]string{"dateTime": start},
 		"end":     map[string]string{"dateTime": end},
 	}
-	if desc := getStringArg(args, "description", ""); desc != "" {
+	if desc := toolargs.GetString(args, "description", ""); desc != "" {
 		event["description"] = desc
 	}
-	if loc := getStringArg(args, "location", ""); loc != "" {
+	if loc := toolargs.GetString(args, "location", ""); loc != "" {
 		event["location"] = loc
 	}
 	eventJSON, _ := json.Marshal(event)
@@ -420,12 +421,12 @@ func (t *GoogleWorkspaceTool) calendarCreate(ctx context.Context, args map[strin
 }
 
 func (t *GoogleWorkspaceTool) calendarDelete(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	eventID := getStringArg(args, "event_id", "")
+	eventID := toolargs.GetString(args, "event_id", "")
 	if eventID == "" {
 		return types.NewErrorResult("missing_event_id", "event_id is required for calendar_delete"), nil
 	}
 
-	calendarID := getStringArg(args, "calendar_id", "primary")
+	calendarID := toolargs.GetString(args, "calendar_id", "primary")
 
 	// gws calendar events delete --params '{"calendarId":"primary","eventId":"xxx"}'
 	params := map[string]interface{}{

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
 
@@ -229,7 +230,7 @@ func (t *MonitorTool) GetActionDocs() map[string]types.ActionDoc {
 
 // Execute dispatches the requested action and returns a tool result.
 func (t *MonitorTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	action := getStringArg(args, "action", "")
+	action := toolargs.GetString(args, "action", "")
 	if action == "" {
 		return &types.ToolResult{
 			Success: false,
@@ -279,7 +280,7 @@ func checkConfirmation(action string, args map[string]interface{}) *types.ToolRe
 		return nil
 	}
 
-	confirmed := getBoolArg(args, "confirmed", false)
+	confirmed := toolargs.GetBool(args, "confirmed", false)
 	if !confirmed {
 		return &types.ToolResult{
 			Success: false,
@@ -301,7 +302,7 @@ func (t *MonitorTool) executeListMonitors(ctx context.Context, args map[string]i
 	params := url.Values{}
 
 	// Name filter (substring match via name parameter)
-	if name := getStringArg(args, "name", ""); name != "" {
+	if name := toolargs.GetString(args, "name", ""); name != "" {
 		params.Set("name", name)
 	}
 
@@ -345,7 +346,7 @@ func (t *MonitorTool) executeListMonitors(ctx context.Context, args map[string]i
 	}
 
 	// Filter by status if specified
-	statusFilter := getStringArg(args, "status", "")
+	statusFilter := toolargs.GetString(args, "status", "")
 	if statusFilter != "" {
 		filtered := make([]Monitor, 0)
 		for _, m := range monitors {
@@ -426,7 +427,7 @@ func (t *MonitorTool) executeListMonitors(ctx context.Context, args map[string]i
 }
 
 func (t *MonitorTool) executeGetMonitor(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	monitorID := getIntArg(args, "monitor_id", 0)
+	monitorID := toolargs.GetInt(args, "monitor_id", 0)
 	if monitorID == 0 {
 		return &types.ToolResult{Success: false, Error: "monitor_id parameter is required"}, nil
 	}
@@ -503,7 +504,7 @@ func (t *MonitorTool) executeGetMonitor(ctx context.Context, args map[string]int
 }
 
 func (t *MonitorTool) executeGetMonitorStatus(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	monitorID := getIntArg(args, "monitor_id", 0)
+	monitorID := toolargs.GetInt(args, "monitor_id", 0)
 	if monitorID == 0 {
 		return &types.ToolResult{Success: false, Error: "monitor_id parameter is required"}, nil
 	}
@@ -605,17 +606,17 @@ func (t *MonitorTool) executeMuteMonitor(ctx context.Context, args map[string]in
 		return result, nil
 	}
 
-	monitorID := getIntArg(args, "monitor_id", 0)
+	monitorID := toolargs.GetInt(args, "monitor_id", 0)
 	if monitorID == 0 {
 		return &types.ToolResult{Success: false, Error: "monitor_id parameter is required"}, nil
 	}
 
 	// Build mute options
 	muteOpts := MuteOptions{}
-	if scope := getStringArg(args, "scope", ""); scope != "" {
+	if scope := toolargs.GetString(args, "scope", ""); scope != "" {
 		muteOpts.Scope = scope
 	}
-	if end := getInt64Arg(args, "end", 0); end > 0 {
+	if end := toolargs.GetInt64(args, "end", 0); end > 0 {
 		muteOpts.End = &end
 	}
 
@@ -677,14 +678,14 @@ func (t *MonitorTool) executeUnmuteMonitor(ctx context.Context, args map[string]
 		return result, nil
 	}
 
-	monitorID := getIntArg(args, "monitor_id", 0)
+	monitorID := toolargs.GetInt(args, "monitor_id", 0)
 	if monitorID == 0 {
 		return &types.ToolResult{Success: false, Error: "monitor_id parameter is required"}, nil
 	}
 
 	// Build query params for scope if provided
 	path := fmt.Sprintf("api/v1/monitor/%d/unmute", monitorID)
-	if scope := getStringArg(args, "scope", ""); scope != "" {
+	if scope := toolargs.GetString(args, "scope", ""); scope != "" {
 		path += "?scope=" + url.QueryEscape(scope)
 	}
 
@@ -712,7 +713,7 @@ func (t *MonitorTool) executeUnmuteMonitor(ctx context.Context, args map[string]
 		"muted":      false,
 	}
 
-	if scope := getStringArg(args, "scope", ""); scope != "" {
+	if scope := toolargs.GetString(args, "scope", ""); scope != "" {
 		content += fmt.Sprintf(" (scope: %s)", scope)
 		data["scope"] = scope
 	}
@@ -761,11 +762,3 @@ func statePriority(state string) int {
 	}
 }
 
-func getBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
-	if v, ok := args[key]; ok {
-		if b, ok := v.(bool); ok {
-			return b
-		}
-	}
-	return defaultVal
-}
