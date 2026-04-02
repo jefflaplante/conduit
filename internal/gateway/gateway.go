@@ -102,7 +102,7 @@ type Gateway struct {
 	upgrader    websocket.Upgrader
 	clients     map[string]*Client
 	clientMu    sync.RWMutex
-	wsConnCount atomic.Int32 // active WebSocket connection count
+	wsConnCount atomic.Int32    // active WebSocket connection count
 	ctx         context.Context // gateway lifecycle context (for WebSocket handlers)
 
 	// Active request tracking for /stop
@@ -453,7 +453,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		activeRequests:      make(map[string]context.CancelFunc),
 		ringBuffer:          debugBuffer,
 		upgrader: websocket.Upgrader{
-			CheckOrigin: checkOrigin(cfg.AllowedOrigins),
+			CheckOrigin:  checkOrigin(cfg.AllowedOrigins),
 			Subprotocols: []string{"conduit-auth"},
 		},
 	}
@@ -506,7 +506,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 			gw.messageSyncer = searchdb.NewMessageSyncer(sdb.DB(), sessionStore.DB())
 			gw.asyncMsgSyncer = searchdb.NewAsyncMessageSyncer(gw.messageSyncer, 256)
 			sessionStore.SetMessageCallbacks(
-				gw.asyncMsgSyncer.MessageAddedCallback(),       // non-blocking
+				gw.asyncMsgSyncer.MessageAddedCallback(),  // non-blocking
 				gw.messageSyncer.SessionClearedCallback(), // session clear stays synchronous (rare)
 			)
 

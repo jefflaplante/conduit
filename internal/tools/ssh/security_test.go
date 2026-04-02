@@ -369,8 +369,8 @@ func TestSecurityEngine_ClassifyCommand_CommandPrefixes(t *testing.T) {
 	engine, _ := NewSecurityEngine(testSecurityConfig())
 
 	tests := []struct {
-		command string
-		wantCmd string
+		command  string
+		wantCmd  string
 		wantTier SecurityTier
 	}{
 		{"sudo ls", "ls", TierRead},
@@ -487,8 +487,8 @@ func TestSecurityEngine_ValidateCommandForHost(t *testing.T) {
 	engine, _ := NewSecurityEngine(testSecurityConfig())
 
 	tests := []struct {
-		command  string
-		hostTier string
+		command     string
+		hostTier    string
 		wantBlocked bool
 	}{
 		// Read command on read-tier host
@@ -524,7 +524,7 @@ func TestSecurityEngine_IsSafeForUnattendedExecution(t *testing.T) {
 	}{
 		{"ls -la", true},
 		{"cat /etc/hosts", true},
-		{"rm file.txt", false},  // dangerous tier
+		{"rm file.txt", false},    // dangerous tier
 		{"touch file.txt", false}, // modify tier (not read)
 		{"unknowncommand", false}, // unknown = dangerous
 	}
@@ -573,10 +573,10 @@ func TestSecurityEngine_QuotedPipes(t *testing.T) {
 		command   string
 		pipeCount int
 	}{
-		{"echo 'hello | world'", 1},          // pipe inside single quotes
-		{`echo "hello | world"`, 1},          // pipe inside double quotes
-		{"echo hello | grep hello", 2},       // real pipe
-		{"echo 'a | b' | grep a", 2},         // mix of quoted and real pipe
+		{"echo 'hello | world'", 1},    // pipe inside single quotes
+		{`echo "hello | world"`, 1},    // pipe inside double quotes
+		{"echo hello | grep hello", 2}, // real pipe
+		{"echo 'a | b' | grep a", 2},   // mix of quoted and real pipe
 	}
 
 	for _, tt := range tests {

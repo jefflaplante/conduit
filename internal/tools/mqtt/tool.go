@@ -20,7 +20,7 @@ func NewMQTTTool(services *types.ToolServices) *MQTTTool {
 	return &MQTTTool{services: services}
 }
 
-func (t *MQTTTool) Name() string        { return "MQTT" }
+func (t *MQTTTool) Name() string { return "MQTT" }
 func (t *MQTTTool) Description() string {
 	return `Query home automation sensors and control smart devices via MQTT (zigbee2mqtt, Home Assistant).
 
@@ -168,12 +168,12 @@ func (t *MQTTTool) status() (*types.ToolResult, error) {
 		Content: fmt.Sprintf("MQTT %s — %d active topics, %d total events",
 			connStr(s.Connected), s.ActiveTopics, s.TotalEvents),
 		Data: map[string]interface{}{
-			"connected":        s.Connected,
-			"broker_url":       s.BrokerURL,
+			"connected":         s.Connected,
+			"broker_url":        s.BrokerURL,
 			"subscribed_topics": s.SubscribedTopics,
-			"active_topics":    s.ActiveTopics,
-			"total_events":     s.TotalEvents,
-			"publish_allowed":  s.PublishAllowed,
+			"active_topics":     s.ActiveTopics,
+			"total_events":      s.TotalEvents,
+			"publish_allowed":   s.PublishAllowed,
 		},
 	}, nil
 }
@@ -242,7 +242,7 @@ func (t *MQTTTool) devices(args map[string]interface{}) (*types.ToolResult, erro
 		for _, prefix := range otherPrefixes {
 			msgs := t.services.MQTTService.RetainedByPrefix(prefix + "/")
 			retainedSources = append(retainedSources, map[string]interface{}{
-				"prefix":         prefix,
+				"prefix":          prefix,
 				"retained_topics": len(msgs),
 			})
 		}

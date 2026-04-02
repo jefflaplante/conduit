@@ -232,7 +232,7 @@ func TestBuildFTSQuery(t *testing.T) {
 		{"hello world", "hello OR world"},
 		{"", ""},
 		{"database", "database"},
-		{"foo:bar", ""},           // column filter syntax is now blocked
+		{"foo:bar", ""}, // column filter syntax is now blocked
 		{"test \"quoted\"", "test OR quoted"},
 	}
 

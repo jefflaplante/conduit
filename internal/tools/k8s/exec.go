@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	defaultMaxOutputBytes = 32 * 1024    // 32KB
+	defaultMaxOutputBytes = 32 * 1024 // 32KB
 	defaultExecTimeout    = 30 * time.Second
 )
 

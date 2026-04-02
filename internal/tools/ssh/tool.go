@@ -14,14 +14,14 @@ import (
 
 // ExecutionResult represents the result of an SSH command execution
 type ExecutionResult struct {
-	Host       string        `json:"host"`
-	Command    string        `json:"command"`
-	ExitCode   int           `json:"exit_code"`
-	Stdout     string        `json:"stdout"`
-	Stderr     string        `json:"stderr"`
-	Duration   time.Duration `json:"duration"`
-	Error      string        `json:"error,omitempty"`
-	TimedOut   bool          `json:"timed_out,omitempty"`
+	Host     string        `json:"host"`
+	Command  string        `json:"command"`
+	ExitCode int           `json:"exit_code"`
+	Stdout   string        `json:"stdout"`
+	Stderr   string        `json:"stderr"`
+	Duration time.Duration `json:"duration"`
+	Error    string        `json:"error,omitempty"`
+	TimedOut bool          `json:"timed_out,omitempty"`
 }
 
 // PoolStatus represents the status of the SSH connection pool
@@ -47,15 +47,15 @@ type Client interface {
 
 // SSHTool provides remote command execution via SSH with security controls
 type SSHTool struct {
-	services       *types.ToolServices
-	securityEngine *SecurityEngine
-	client         Client
-	config         *config.RemoteSSHConfig
-	sessionManager *SessionManager
-	tunnelManager  *TunnelManager
-	auditLogger    *AuditLogger
-	pool           *Pool           // Connection pool for fan-out execution
-	fanoutExecutor *FanoutExecutor // Fan-out executor for group commands
+	services         *types.ToolServices
+	securityEngine   *SecurityEngine
+	client           Client
+	config           *config.RemoteSSHConfig
+	sessionManager   *SessionManager
+	tunnelManager    *TunnelManager
+	auditLogger      *AuditLogger
+	pool             *Pool             // Connection pool for fan-out execution
+	fanoutExecutor   *FanoutExecutor   // Fan-out executor for group commands
 	inventoryManager *InventoryManager // Ansible inventory manager
 }
 
@@ -95,14 +95,14 @@ func NewSSHTool(services *types.ToolServices, cfg *config.RemoteSSHConfig) (*SSH
 	inventoryManager := NewInventoryManager(cfg.Hosts)
 
 	return &SSHTool{
-		services:       services,
-		securityEngine: securityEngine,
-		config:         cfg,
-		sessionManager: sessionManager,
-		tunnelManager:  NewTunnelManager(),
-		auditLogger:    auditLogger,
-		pool:           pool,
-		fanoutExecutor: fanoutExecutor,
+		services:         services,
+		securityEngine:   securityEngine,
+		config:           cfg,
+		sessionManager:   sessionManager,
+		tunnelManager:    NewTunnelManager(),
+		auditLogger:      auditLogger,
+		pool:             pool,
+		fanoutExecutor:   fanoutExecutor,
 		inventoryManager: inventoryManager,
 		// client will be set via SetClient when the real implementation is available
 	}, nil
@@ -359,10 +359,10 @@ func (t *SSHTool) executeCommand(ctx context.Context, args map[string]interface{
 			Success: false,
 			Error:   fmt.Sprintf("command blocked: %s", classification.Reason),
 			Data: map[string]interface{}{
-				"tier":        string(classification.Tier),
-				"reason":      classification.Reason,
-				"base_cmd":    classification.BaseCommand,
-				"warnings":    classification.Warnings,
+				"tier":         string(classification.Tier),
+				"reason":       classification.Reason,
+				"base_cmd":     classification.BaseCommand,
+				"warnings":     classification.Warnings,
 				"has_subshell": classification.HasSubshell,
 			},
 		}, nil
@@ -469,15 +469,15 @@ func (t *SSHTool) executeCommand(ctx context.Context, args map[string]interface{
 		Success: result.ExitCode == 0,
 		Content: content.String(),
 		Data: map[string]interface{}{
-			"host":       result.Host,
-			"command":    result.Command,
-			"exit_code":  result.ExitCode,
-			"stdout":     result.Stdout,
-			"stderr":     result.Stderr,
-			"duration":   result.Duration.String(),
-			"timed_out":  result.TimedOut,
-			"tier":       string(classification.Tier),
-			"base_cmd":   classification.BaseCommand,
+			"host":      result.Host,
+			"command":   result.Command,
+			"exit_code": result.ExitCode,
+			"stdout":    result.Stdout,
+			"stderr":    result.Stderr,
+			"duration":  result.Duration.String(),
+			"timed_out": result.TimedOut,
+			"tier":      string(classification.Tier),
+			"base_cmd":  classification.BaseCommand,
 		},
 	}, nil
 }
@@ -1048,10 +1048,10 @@ func (t *SSHTool) sessionClose(ctx context.Context, args map[string]interface{})
 		Content: fmt.Sprintf("Closed session %s (host: %s)\nCommands executed: %d\nSession duration: %v",
 			sessionID, sessionInfo.Host, sessionInfo.CommandCount, time.Since(sessionInfo.CreatedAt).Round(time.Second)),
 		Data: map[string]interface{}{
-			"session_id":     sessionID,
-			"host":           sessionInfo.Host,
-			"command_count":  sessionInfo.CommandCount,
-			"session_count":  t.sessionManager.SessionCount(),
+			"session_id":    sessionID,
+			"host":          sessionInfo.Host,
+			"command_count": sessionInfo.CommandCount,
+			"session_count": t.sessionManager.SessionCount(),
 		},
 	}, nil
 }
@@ -1696,10 +1696,10 @@ func (t *SSHTool) ValidateParameters(ctx context.Context, args map[string]interf
 		if command == "" {
 			result.Valid = false
 			result.Errors = append(result.Errors, types.ValidationError{
-				Parameter:   "command",
-				Message:     fmt.Sprintf("command is required for %s action", action),
-				Examples:    []interface{}{"ls -la", "df -h", "ps aux", "uptime"},
-				ErrorType:   "missing",
+				Parameter: "command",
+				Message:   fmt.Sprintf("command is required for %s action", action),
+				Examples:  []interface{}{"ls -la", "df -h", "ps aux", "uptime"},
+				ErrorType: "missing",
 			})
 		}
 	}
@@ -1962,33 +1962,33 @@ func (t *SSHTool) GetUsageExamples() []types.ToolExample {
 func (t *SSHTool) inventoryLoad(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
 	path := t.getStringArg(args, "path", "")
 	inventoryType := t.getStringArg(args, "type", "file") // "file" or "dynamic"
-	
+
 	if path == "" {
 		return &types.ToolResult{
 			Success: false,
 			Error:   "path parameter is required",
 		}, nil
 	}
-	
+
 	var err error
 	if inventoryType == "dynamic" {
 		err = t.inventoryManager.LoadDynamic(path)
 	} else {
 		err = t.inventoryManager.LoadFile(path)
 	}
-	
+
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("failed to load inventory: %v", err),
 		}, nil
 	}
-	
+
 	// Get stats
 	hosts := t.inventoryManager.GetHosts()
 	groups := t.inventoryManager.GetGroups()
 	sources := t.inventoryManager.GetSources()
-	
+
 	return &types.ToolResult{
 		Success: true,
 		Data: map[string]interface{}{
@@ -2005,14 +2005,14 @@ func (t *SSHTool) inventoryLoad(ctx context.Context, args map[string]interface{}
 // inventoryList lists hosts from inventory
 func (t *SSHTool) inventoryList(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
 	group := t.getStringArg(args, "group", "")
-	
+
 	var hosts []config.SSHHostConfig
 	if group != "" {
 		hosts = t.inventoryManager.GetHostsByGroup(group)
 	} else {
 		hosts = t.inventoryManager.GetHosts()
 	}
-	
+
 	// Format hosts for output
 	hostList := make([]map[string]interface{}, 0, len(hosts))
 	for _, host := range hosts {
@@ -2026,18 +2026,18 @@ func (t *SSHTool) inventoryList(ctx context.Context, args map[string]interface{}
 			"enabled":       host.IsHostEnabled(),
 		})
 	}
-	
+
 	result := map[string]interface{}{
 		"hosts": hostList,
 		"count": len(hosts),
 	}
-	
+
 	if group != "" {
 		result["group"] = group
 	} else {
 		result["groups"] = t.inventoryManager.GetGroups()
 	}
-	
+
 	return &types.ToolResult{
 		Success: true,
 		Data:    result,
@@ -2053,10 +2053,10 @@ func (t *SSHTool) inventoryRefresh(ctx context.Context, args map[string]interfac
 			Error:   fmt.Sprintf("refresh failed: %v", err),
 		}, nil
 	}
-	
+
 	hosts := t.inventoryManager.GetHosts()
 	sources := t.inventoryManager.GetSources()
-	
+
 	return &types.ToolResult{
 		Success: true,
 		Data: map[string]interface{}{

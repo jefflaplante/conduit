@@ -16,26 +16,26 @@ import (
 
 // metricsQueryResponse represents the Datadog V1 metrics query response.
 type metricsQueryResponse struct {
-	Status      string        `json:"status"`
-	Error       string        `json:"error,omitempty"`
-	FromDate    int64         `json:"from_date"`
-	ToDate      int64         `json:"to_date"`
-	Query       string        `json:"query"`
-	GroupBy     []string      `json:"group_by,omitempty"`
-	Series      []metricSeries `json:"series"`
-	Message     string        `json:"message,omitempty"`
+	Status   string         `json:"status"`
+	Error    string         `json:"error,omitempty"`
+	FromDate int64          `json:"from_date"`
+	ToDate   int64          `json:"to_date"`
+	Query    string         `json:"query"`
+	GroupBy  []string       `json:"group_by,omitempty"`
+	Series   []metricSeries `json:"series"`
+	Message  string         `json:"message,omitempty"`
 }
 
 // metricSeries represents a single time series in the query response.
 type metricSeries struct {
-	Metric      string          `json:"metric"`
-	DisplayName string          `json:"display_name,omitempty"`
-	Scope       string          `json:"scope"`
-	Unit        []unitInfo      `json:"unit,omitempty"`
-	Pointlist   [][]float64     `json:"pointlist"`
-	Expression  string          `json:"expression,omitempty"`
-	Aggr        string          `json:"aggr,omitempty"`
-	TagSet      []string        `json:"tag_set,omitempty"`
+	Metric      string      `json:"metric"`
+	DisplayName string      `json:"display_name,omitempty"`
+	Scope       string      `json:"scope"`
+	Unit        []unitInfo  `json:"unit,omitempty"`
+	Pointlist   [][]float64 `json:"pointlist"`
+	Expression  string      `json:"expression,omitempty"`
+	Aggr        string      `json:"aggr,omitempty"`
+	TagSet      []string    `json:"tag_set,omitempty"`
 }
 
 // unitInfo represents unit metadata for a metric.
@@ -80,7 +80,7 @@ func (t *DatadogTool) executeQueryMetrics(ctx context.Context, args map[string]i
 	// Parse time range
 	now := time.Now().Unix()
 	from := getInt64Arg(args, "from", -3600) // Default: 1 hour ago
-	to := getInt64Arg(args, "to", 0)          // Default: now
+	to := getInt64Arg(args, "to", 0)         // Default: now
 
 	// Convert relative times to absolute
 	if from <= 0 {

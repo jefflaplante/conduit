@@ -822,12 +822,12 @@ func TestExtractOriginalGoal(t *testing.T) {
 			expected: "",
 		},
 		{
-			name: "empty messages",
+			name:     "empty messages",
 			messages: []ai.ChatMessage{},
 			expected: "",
 		},
 		{
-			name:     "truncates long goals",
+			name: "truncates long goals",
 			messages: []ai.ChatMessage{
 				{Role: "user", Content: strings.Repeat("X", 250)},
 			},
@@ -844,4 +844,3 @@ func TestExtractOriginalGoal(t *testing.T) {
 		})
 	}
 }
-

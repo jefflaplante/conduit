@@ -846,7 +846,7 @@ func TestRemoteSSHConfig_GetEnabledHosts(t *testing.T) {
 	config := RemoteSSHConfig{
 		Hosts: []SSHHostConfig{
 			{Name: "host-1", Hostname: "192.168.1.1", Enabled: &enabled},
-			{Name: "host-2", Hostname: "192.168.1.2", Enabled: nil},    // defaults to enabled
+			{Name: "host-2", Hostname: "192.168.1.2", Enabled: nil}, // defaults to enabled
 			{Name: "host-3", Hostname: "192.168.1.3", Enabled: &disabled},
 		},
 	}

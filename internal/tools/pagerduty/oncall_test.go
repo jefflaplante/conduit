@@ -529,13 +529,13 @@ func TestClient_GetEscalationPolicy(t *testing.T) {
 
 func TestSchedule_ToSummary(t *testing.T) {
 	s := Schedule{
-		ID:          "SCHED123",
-		Name:        "Primary",
-		Description: "Main rotation",
-		TimeZone:    "UTC",
-		HTMLURL:     "https://example.pagerduty.com/schedules/SCHED123",
-		Users:       []UserRef{{ID: "U1"}, {ID: "U2"}, {ID: "U3"}},
-		ScheduleLayers: []ScheduleLayer{{ID: "L1"}, {ID: "L2"}},
+		ID:                 "SCHED123",
+		Name:               "Primary",
+		Description:        "Main rotation",
+		TimeZone:           "UTC",
+		HTMLURL:            "https://example.pagerduty.com/schedules/SCHED123",
+		Users:              []UserRef{{ID: "U1"}, {ID: "U2"}, {ID: "U3"}},
+		ScheduleLayers:     []ScheduleLayer{{ID: "L1"}, {ID: "L2"}},
 		EscalationPolicies: []PolicyRef{{ID: "P1"}},
 	}
 
@@ -560,14 +560,14 @@ func TestSchedule_ToSummary(t *testing.T) {
 
 func TestEscalationPolicy_ToSummary(t *testing.T) {
 	p := EscalationPolicy{
-		ID:          "POL123",
-		Name:        "Backend",
-		Description: "Backend team",
-		NumLoops:    2,
-		HTMLURL:     "https://example.pagerduty.com/escalation_policies/POL123",
+		ID:              "POL123",
+		Name:            "Backend",
+		Description:     "Backend team",
+		NumLoops:        2,
+		HTMLURL:         "https://example.pagerduty.com/escalation_policies/POL123",
 		EscalationRules: []EscalationRule{{ID: "R1"}, {ID: "R2"}, {ID: "R3"}},
-		Services:    []ServiceRef{{ID: "S1"}, {ID: "S2"}},
-		Teams:       []TeamRef{{ID: "T1"}},
+		Services:        []ServiceRef{{ID: "S1"}, {ID: "S2"}},
+		Teams:           []TeamRef{{ID: "T1"}},
 	}
 
 	summary := p.ToSummary()

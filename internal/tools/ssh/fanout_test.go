@@ -243,9 +243,9 @@ func TestFanoutResult_GenerateSummary(t *testing.T) {
 	executor := NewFanoutExecutor(pool, 2)
 
 	tests := []struct {
-		name       string
-		succeeded  []string
-		failed     []string
+		name          string
+		succeeded     []string
+		failed        []string
 		wantInSummary []string
 	}{
 		{

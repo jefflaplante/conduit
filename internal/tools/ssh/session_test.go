@@ -373,13 +373,13 @@ func TestParseBoundaryMarkers(t *testing.T) {
 	marker := "___TEST_BOUNDARY___"
 
 	tests := []struct {
-		name           string
-		output         string
-		startMarker    string
+		name            string
+		output          string
+		startMarker     string
 		endMarkerPrefix string
-		wantStdout     string
-		wantExitCode   int
-		wantFound      bool
+		wantStdout      string
+		wantExitCode    int
+		wantFound       bool
 	}{
 		{
 			name: "simple output",

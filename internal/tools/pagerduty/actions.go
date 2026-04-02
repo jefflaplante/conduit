@@ -17,20 +17,20 @@ import (
 
 // Incident represents a PagerDuty incident.
 type Incident struct {
-	ID             string          `json:"id"`
-	Type           string          `json:"type"`
-	Summary        string          `json:"summary"`
-	Title          string          `json:"title"`
-	Status         string          `json:"status"`
-	Urgency        string          `json:"urgency"`
-	HTMLURL        string          `json:"html_url"`
-	IncidentNumber int             `json:"incident_number"`
-	CreatedAt      time.Time       `json:"created_at"`
-	LastStatusAt   time.Time       `json:"last_status_change_at"`
-	Service        *ServiceRef     `json:"service,omitempty"`
-	Assignments    []Assignment    `json:"assignments,omitempty"`
+	ID               string        `json:"id"`
+	Type             string        `json:"type"`
+	Summary          string        `json:"summary"`
+	Title            string        `json:"title"`
+	Status           string        `json:"status"`
+	Urgency          string        `json:"urgency"`
+	HTMLURL          string        `json:"html_url"`
+	IncidentNumber   int           `json:"incident_number"`
+	CreatedAt        time.Time     `json:"created_at"`
+	LastStatusAt     time.Time     `json:"last_status_change_at"`
+	Service          *ServiceRef   `json:"service,omitempty"`
+	Assignments      []Assignment  `json:"assignments,omitempty"`
 	EscalationPolicy *PolicyRef    `json:"escalation_policy,omitempty"`
-	Body           *IncidentBody   `json:"body,omitempty"`
+	Body             *IncidentBody `json:"body,omitempty"`
 }
 
 // ServiceRef is a reference to a PagerDuty service.
@@ -51,7 +51,7 @@ type PolicyRef struct {
 
 // Assignment represents an incident assignment.
 type Assignment struct {
-	At       time.Time  `json:"at"`
+	At       time.Time   `json:"at"`
 	Assignee AssigneeRef `json:"assignee"`
 }
 

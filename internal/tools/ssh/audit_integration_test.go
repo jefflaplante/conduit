@@ -371,7 +371,7 @@ func TestAuditIntegration_Cleanup(t *testing.T) {
 
 // MockClient is a mock implementation of the Client interface for testing
 type MockClient struct {
-	ExecuteFunc      func(ctx context.Context, host, command string, timeout time.Duration) (*ExecutionResult, error)
+	ExecuteFunc       func(ctx context.Context, host, command string, timeout time.Duration) (*ExecutionResult, error)
 	GetPoolStatusFunc func() *PoolStatus
 	CloseFunc         func() error
 }

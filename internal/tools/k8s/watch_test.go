@@ -264,4 +264,3 @@ func TestK8sTool_Execute_Watch_MissingResource(t *testing.T) {
 	assert.False(t, result.Success)
 	assert.Contains(t, result.Error, "resource parameter is required")
 }
-

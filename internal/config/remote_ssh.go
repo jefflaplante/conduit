@@ -599,16 +599,16 @@ func DefaultRemoteSSHConfig() RemoteSSHConfig {
 				},
 			},
 			BlockedPatterns: []string{
-				`rm\s+(-[rf]+\s+)*/$`,     // rm -rf /
-				`>\s*/dev/[sh]d[a-z]`,     // overwrite disk
-				`dd\s+.*of=/dev/[sh]d`,    // dd to disk
-				`mkfs`,                    // format filesystem
-				`:\(\)\{\s*:\|:&\s*\};:`,  // fork bomb
-				`chmod\s+-R\s+777\s+/`,    // recursive 777 on root
-				`curl.*\|\s*(ba)?sh`,      // pipe to shell
-				`wget.*\|\s*(ba)?sh`,      // pipe to shell
-				`/etc/shadow`,             // shadow file access
-				`/etc/passwd.*>`,          // passwd file modification
+				`rm\s+(-[rf]+\s+)*/$`,    // rm -rf /
+				`>\s*/dev/[sh]d[a-z]`,    // overwrite disk
+				`dd\s+.*of=/dev/[sh]d`,   // dd to disk
+				`mkfs`,                   // format filesystem
+				`:\(\)\{\s*:\|:&\s*\};:`, // fork bomb
+				`chmod\s+-R\s+777\s+/`,   // recursive 777 on root
+				`curl.*\|\s*(ba)?sh`,     // pipe to shell
+				`wget.*\|\s*(ba)?sh`,     // pipe to shell
+				`/etc/shadow`,            // shadow file access
+				`/etc/passwd.*>`,         // passwd file modification
 			},
 		},
 		Pool: SSHPoolConfig{

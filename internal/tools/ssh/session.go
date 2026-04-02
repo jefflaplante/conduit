@@ -27,11 +27,11 @@ type SessionOutput struct {
 
 // SessionInfo provides information about an active session
 type SessionInfo struct {
-	ID         string    `json:"id"`
-	Host       string    `json:"host"`
-	CreatedAt  time.Time `json:"created_at"`
-	LastUsedAt time.Time `json:"last_used_at"`
-	CommandCount int     `json:"command_count"`
+	ID           string    `json:"id"`
+	Host         string    `json:"host"`
+	CreatedAt    time.Time `json:"created_at"`
+	LastUsedAt   time.Time `json:"last_used_at"`
+	CommandCount int       `json:"command_count"`
 }
 
 // PersistentSession wraps an SSH client with stdin/stdout/stderr pipes
@@ -57,17 +57,17 @@ type PersistentSession struct {
 
 // SessionManager manages persistent SSH sessions with lifecycle control
 type SessionManager struct {
-	mu           sync.RWMutex
-	sessions     map[string]*PersistentSession
-	maxSessions  int
-	idleTimeout  time.Duration
-	marker       string
-	shell        string
-	defaults     config.SSHHostDefaults
-	poolConfig   config.SSHPoolConfig
-	hosts        map[string]config.SSHHostConfig
-	cleanupDone  chan struct{}
-	cleanupOnce  sync.Once
+	mu          sync.RWMutex
+	sessions    map[string]*PersistentSession
+	maxSessions int
+	idleTimeout time.Duration
+	marker      string
+	shell       string
+	defaults    config.SSHHostDefaults
+	poolConfig  config.SSHPoolConfig
+	hosts       map[string]config.SSHHostConfig
+	cleanupDone chan struct{}
+	cleanupOnce sync.Once
 }
 
 // NewSessionManager creates a new session manager

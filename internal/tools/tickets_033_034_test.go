@@ -1,9 +1,9 @@
 package tools
 
 import (
-	"context"
 	"conduit/internal/config"
 	"conduit/internal/tools/types"
+	"context"
 	"testing"
 )
 

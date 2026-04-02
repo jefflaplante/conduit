@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PuerkitoBio/goquery"
 	"conduit/internal/tools/types"
+	"github.com/PuerkitoBio/goquery"
 )
 
 // WebFetchTool fetches and extracts readable content from URLs

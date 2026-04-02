@@ -722,8 +722,8 @@ func TestIsPrivateIP(t *testing.T) {
 		{"192.168.255.255", true},
 		{"127.0.0.1", true},
 		{"127.255.255.255", true},
-		{"169.254.0.1", true},   // Link-local
-		{"100.64.0.1", true},    // Carrier-grade NAT
+		{"169.254.0.1", true}, // Link-local
+		{"100.64.0.1", true},  // Carrier-grade NAT
 		{"100.127.255.255", true},
 		{"100.63.255.255", false}, // Just below CGNAT
 		{"100.128.0.0", false},    // Just above CGNAT

@@ -1082,4 +1082,3 @@ func (m *Model) validateShellCommand(cmdLine string) error {
 
 	return nil
 }
-

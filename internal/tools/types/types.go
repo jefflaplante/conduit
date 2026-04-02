@@ -57,14 +57,14 @@ type GatewayService interface {
 
 // SchedulerJob represents a scheduled job (mirrors scheduler.Job to avoid import cycle)
 type SchedulerJob struct {
-	ID       string `json:"id"`
-	Name     string `json:"name,omitempty"`
-	Schedule string `json:"schedule"`
-	Type     string `json:"type"` // "go" or "system"
-	Command  string `json:"command"`
-	Model    string `json:"model,omitempty"`
-	Target   string `json:"target,omitempty"`
-	Enabled  bool   `json:"enabled"`
+	ID       string   `json:"id"`
+	Name     string   `json:"name,omitempty"`
+	Schedule string   `json:"schedule"`
+	Type     string   `json:"type"` // "go" or "system"
+	Command  string   `json:"command"`
+	Model    string   `json:"model,omitempty"`
+	Target   string   `json:"target,omitempty"`
+	Enabled  bool     `json:"enabled"`
 	OneShot  bool     `json:"oneshot,omitempty"`
 	Skills   []string `json:"skills,omitempty"`
 }

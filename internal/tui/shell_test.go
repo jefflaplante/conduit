@@ -738,10 +738,10 @@ func TestIsKillCommand(t *testing.T) {
 		{"kill %1", true, 1},
 		{"kill %42", true, 42},
 		{"kill  %3", true, 3},
-		{"kill %0", true, 0}, // job 0 is invalid
-		{"kill %-1", true, 0}, // negative is invalid
+		{"kill %0", true, 0},   // job 0 is invalid
+		{"kill %-1", true, 0},  // negative is invalid
 		{"kill %abc", true, 0}, // malformed
-		{"kill %", true, 0}, // malformed
+		{"kill %", true, 0},    // malformed
 		{"kill 123", false, 0}, // not a job reference
 		{"kill -9 123", false, 0},
 		{"killall", false, 0},

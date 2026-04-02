@@ -325,9 +325,9 @@ func DefaultModelAliases() map[string]string {
 // ProviderConfig contains settings for a specific AI provider
 type ProviderConfig struct {
 	Name          string      `json:"name"`
-	Type          string      `json:"type"`                     // "anthropic", "openai", "ollama", etc.
-	APIKey        string      `json:"api_key,omitempty"`        // Legacy API key
-	BaseURL       string      `json:"base_url,omitempty"`       // Custom API base URL (for local/compatible servers)
+	Type          string      `json:"type"`               // "anthropic", "openai", "ollama", etc.
+	APIKey        string      `json:"api_key,omitempty"`  // Legacy API key
+	BaseURL       string      `json:"base_url,omitempty"` // Custom API base URL (for local/compatible servers)
 	Model         string      `json:"model"`
 	Auth          *AuthConfig `json:"auth,omitempty"`           // OAuth configuration
 	ContextWindow int         `json:"context_window,omitempty"` // Override context window size (tokens); 0 = auto-detect from model name

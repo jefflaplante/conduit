@@ -338,9 +338,9 @@ func (a *OnCallActions) ExecuteGetEscalationPolicy(ctx context.Context, args map
 				}
 			}
 			rules[i] = map[string]interface{}{
-				"level":           i + 1,
-				"delay_minutes":   r.EscalationDelayInMinutes,
-				"targets":         targets,
+				"level":         i + 1,
+				"delay_minutes": r.EscalationDelayInMinutes,
+				"targets":       targets,
 			}
 		}
 		data["escalation_rules"] = rules
