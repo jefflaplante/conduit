@@ -47,6 +47,8 @@ type botAPI interface {
 	StartWebhook(ctx context.Context)
 	SendMessage(ctx context.Context, params *bot.SendMessageParams) (*models.Message, error)
 	SendPhoto(ctx context.Context, params *bot.SendPhotoParams) (*models.Message, error)
+	SendVoice(ctx context.Context, params *bot.SendVoiceParams) (*models.Message, error)
+	SendAudio(ctx context.Context, params *bot.SendAudioParams) (*models.Message, error)
 	EditMessageText(ctx context.Context, params *bot.EditMessageTextParams) (*models.Message, error)
 	DeleteMessage(ctx context.Context, params *bot.DeleteMessageParams) (bool, error)
 	GetMe(ctx context.Context) (*models.User, error)
@@ -369,8 +371,37 @@ func (a *Adapter) SendMessage(msg *protocol.OutgoingMessage) error {
 		return nil
 	}
 
+	// Process MEDIA protocol lines in the response
+	mediaSender := NewMediaSender(a.bot, a.ctx)
+	textAfterMedia, mediaErrors := mediaSender.ProcessAndSendMedia(chatID, msg.Text)
+
+	// If there were media errors, append them to the text
+	for _, errMsg := range mediaErrors {
+		if textAfterMedia != "" {
+			textAfterMedia += "\n"
+		}
+		textAfterMedia += errMsg
+	}
+
+	// If no text remains after media processing, we're done
+	if textAfterMedia == "" {
+		log.Printf("[Telegram] Message was media-only, no text to send")
+
+		a.mutex.Lock()
+		a.msgCount++
+		a.mutex.Unlock()
+
+		return nil
+	}
+
 	// Sanitize text before sending
-	sanitizedText := sanitizeUserFacingText(msg.Text)
+	sanitizedText := sanitizeUserFacingText(textAfterMedia)
+
+	// If sanitized text is empty, skip sending
+	if sanitizedText == "" {
+		log.Printf("[Telegram] Message text empty after sanitization, skipping")
+		return nil
+	}
 
 	// Convert standard markdown to Telegram's limited markdown subset
 	telegramText := convertToTelegramMarkdown(sanitizedText)

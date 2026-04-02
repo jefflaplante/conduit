@@ -165,15 +165,19 @@ func TestPromptSectionPriorities(t *testing.T) {
 		counts[sec.priority]++
 	}
 
-	if counts[1] != 3 {
-		t.Errorf("expected 3 P1 sections, got %d", counts[1])
+	// P1: Identity, Runtime (critical, never dropped)
+	if counts[1] != 2 {
+		t.Errorf("expected 2 P1 sections, got %d", counts[1])
 	}
-	if counts[2] < 11 {
-		t.Errorf("expected at least 11 P2 sections, got %d", counts[2])
+	// P2: Grounding data and reference (Project Context, Memory, Tooling, etc.)
+	if counts[2] < 8 {
+		t.Errorf("expected at least 8 P2 sections, got %d", counts[2])
 	}
-	if counts[3] < 4 {
-		t.Errorf("expected at least 4 P3 sections, got %d", counts[3])
+	// P3: Behavioral rules (Tool Strategy, Tool Integrity, Error Recovery, Safety, etc.)
+	if counts[3] < 8 {
+		t.Errorf("expected at least 8 P3 sections, got %d", counts[3])
 	}
+	// P4: Nice-to-have (Silent Replies, Voice, Reactions, CLI, Self-Update)
 	if counts[4] < 4 {
 		t.Errorf("expected at least 4 P4 sections, got %d", counts[4])
 	}

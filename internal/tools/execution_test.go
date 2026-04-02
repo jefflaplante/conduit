@@ -655,3 +655,193 @@ func TestFormatToolResultForAI_NoTruncation(t *testing.T) {
 	}
 }
 
+// TestHandleToolCallFlow_RefocusInterval verifies that goal reminders are injected
+// at the configured interval to prevent agent drift on long tool chains.
+func TestHandleToolCallFlow_RefocusInterval(t *testing.T) {
+	registry := NewMockRegistry()
+	tool := &MockTool{
+		name:        "test_tool",
+		description: "A test tool",
+		parameters:  map[string]interface{}{"type": "object"},
+		executeFunc: func(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+			return &ToolResult{Success: true, Content: "ok"}, nil
+		},
+	}
+	registry.AddTool(tool)
+
+	engine := NewExecutionEngine(registry, 3, 30*time.Second, 25)
+	// Set refocus interval to 2 for easier testing (injects at depth 2, 4, 6, etc.)
+	engine.SetRefocusInterval(2)
+
+	provider := ai.NewMockProvider("test")
+	// Configure responses: tool calls at depth 0, 1, 2, then final response at depth 3
+	// Depth 0: initial call makes tool call
+	// Depth 1: provider responds with another tool call
+	// Depth 2: provider responds with another tool call (refocus should inject here)
+	// Depth 3: provider responds with final content
+	provider.AddResponse("", []ai.ToolCall{{ID: "c1", Name: "test_tool", Args: map[string]interface{}{}}})
+	provider.AddResponse("", []ai.ToolCall{{ID: "c2", Name: "test_tool", Args: map[string]interface{}{}}})
+	provider.AddResponse("", []ai.ToolCall{{ID: "c3", Name: "test_tool", Args: map[string]interface{}{}}})
+	provider.AddResponse("final answer", nil)
+
+	initialReq := &ai.GenerateRequest{
+		Messages:  []ai.ChatMessage{{Role: "user", Content: "Please analyze this complex data"}},
+		Model:     "test-model",
+		Tools:     []ai.Tool{{Name: "test_tool"}},
+		MaxTokens: 1024,
+	}
+
+	initialResp := &ai.GenerateResponse{
+		Content:   "",
+		ToolCalls: []ai.ToolCall{{ID: "c0", Name: "test_tool", Args: map[string]interface{}{}}},
+	}
+
+	resp, err := engine.HandleToolCallFlow(context.Background(), provider, initialReq, initialResp)
+	if err != nil {
+		t.Fatalf("HandleToolCallFlow failed: %v", err)
+	}
+
+	if resp == nil {
+		t.Fatal("Expected non-nil response")
+	}
+
+	// Check that refocus message was injected at depth 2
+	calls := provider.GetCalls()
+	if len(calls) != 4 {
+		t.Fatalf("Expected 4 provider calls (depths 0,1,2,3), got %d", len(calls))
+	}
+
+	// At depth 2 (3rd call, index 2), we should see a system message with the refocus reminder
+	depth2Request := calls[2].Request
+	foundRefocus := false
+	for _, msg := range depth2Request.Messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, "Reminder: Your original goal was:") {
+			foundRefocus = true
+			if !strings.Contains(msg.Content, "analyze this complex data") {
+				t.Errorf("Refocus message should contain original goal, got: %s", msg.Content)
+			}
+			break
+		}
+	}
+	if !foundRefocus {
+		t.Error("Expected refocus message to be injected at depth 2")
+	}
+
+	// At depth 1 (2nd call, index 1), there should be NO refocus message
+	depth1Request := calls[1].Request
+	for _, msg := range depth1Request.Messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, "Reminder: Your original goal was:") {
+			t.Error("Refocus message should NOT be injected at depth 1")
+		}
+	}
+}
+
+// TestHandleToolCallFlow_RefocusDisabled verifies that refocusing can be disabled.
+func TestHandleToolCallFlow_RefocusDisabled(t *testing.T) {
+	registry := NewMockRegistry()
+	tool := &MockTool{
+		name:        "test_tool",
+		description: "A test tool",
+		parameters:  map[string]interface{}{"type": "object"},
+		executeFunc: func(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+			return &ToolResult{Success: true, Content: "ok"}, nil
+		},
+	}
+	registry.AddTool(tool)
+
+	engine := NewExecutionEngine(registry, 3, 30*time.Second, 25)
+	// Disable refocusing
+	engine.SetRefocusInterval(0)
+
+	provider := ai.NewMockProvider("test")
+	// Go through multiple depths
+	provider.AddResponse("", []ai.ToolCall{{ID: "c1", Name: "test_tool", Args: map[string]interface{}{}}})
+	provider.AddResponse("", []ai.ToolCall{{ID: "c2", Name: "test_tool", Args: map[string]interface{}{}}})
+	provider.AddResponse("final answer", nil)
+
+	initialReq := &ai.GenerateRequest{
+		Messages:  []ai.ChatMessage{{Role: "user", Content: "Do something"}},
+		Model:     "test-model",
+		Tools:     []ai.Tool{{Name: "test_tool"}},
+		MaxTokens: 1024,
+	}
+
+	initialResp := &ai.GenerateResponse{
+		Content:   "",
+		ToolCalls: []ai.ToolCall{{ID: "c0", Name: "test_tool", Args: map[string]interface{}{}}},
+	}
+
+	_, err := engine.HandleToolCallFlow(context.Background(), provider, initialReq, initialResp)
+	if err != nil {
+		t.Fatalf("HandleToolCallFlow failed: %v", err)
+	}
+
+	// Check that NO refocus messages were injected
+	calls := provider.GetCalls()
+	for i, call := range calls {
+		for _, msg := range call.Request.Messages {
+			if msg.Role == "system" && strings.Contains(msg.Content, "Reminder: Your original goal was:") {
+				t.Errorf("Refocus message should NOT be injected when disabled (found at call %d)", i)
+			}
+		}
+	}
+}
+
+// TestExtractOriginalGoal verifies the goal extraction helper function.
+func TestExtractOriginalGoal(t *testing.T) {
+	engine := NewExecutionEngine(NewMockRegistry(), 3, 30*time.Second, 10)
+
+	tests := []struct {
+		name     string
+		messages []ai.ChatMessage
+		expected string
+	}{
+		{
+			name: "simple user message",
+			messages: []ai.ChatMessage{
+				{Role: "user", Content: "Please help me with this task"},
+			},
+			expected: "Please help me with this task",
+		},
+		{
+			name: "multiple messages - returns last user message",
+			messages: []ai.ChatMessage{
+				{Role: "system", Content: "You are a helpful assistant"},
+				{Role: "user", Content: "First question"},
+				{Role: "assistant", Content: "First answer"},
+				{Role: "user", Content: "Follow up question"},
+			},
+			expected: "Follow up question",
+		},
+		{
+			name: "no user messages",
+			messages: []ai.ChatMessage{
+				{Role: "system", Content: "You are a helpful assistant"},
+				{Role: "assistant", Content: "Hello"},
+			},
+			expected: "",
+		},
+		{
+			name: "empty messages",
+			messages: []ai.ChatMessage{},
+			expected: "",
+		},
+		{
+			name:     "truncates long goals",
+			messages: []ai.ChatMessage{
+				{Role: "user", Content: strings.Repeat("X", 250)},
+			},
+			expected: strings.Repeat("X", 200) + "...",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := engine.extractOriginalGoal(test.messages)
+			if result != test.expected {
+				t.Errorf("Expected: %q, got: %q", test.expected, result)
+			}
+		})
+	}
+}
+

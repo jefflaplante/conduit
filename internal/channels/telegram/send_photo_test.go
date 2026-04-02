@@ -20,10 +20,14 @@ import (
 type mockBot struct {
 	sendMessageCalls []*bot.SendMessageParams
 	sendPhotoCalls   []*bot.SendPhotoParams
+	sendVoiceCalls   []*bot.SendVoiceParams
+	sendAudioCalls   []*bot.SendAudioParams
 	sendMessageResp  *models.Message
 	sendPhotoResp    *models.Message
 	sendMessageErr   error
 	sendPhotoErr     error
+	sendVoiceErr     error
+	sendAudioErr     error
 }
 
 func (m *mockBot) Start(ctx context.Context)        {}
@@ -45,6 +49,22 @@ func (m *mockBot) SendPhoto(ctx context.Context, params *bot.SendPhotoParams) (*
 		resp = &models.Message{ID: 1}
 	}
 	return resp, m.sendPhotoErr
+}
+
+func (m *mockBot) SendVoice(ctx context.Context, params *bot.SendVoiceParams) (*models.Message, error) {
+	m.sendVoiceCalls = append(m.sendVoiceCalls, params)
+	if m.sendVoiceErr != nil {
+		return nil, m.sendVoiceErr
+	}
+	return &models.Message{ID: 1}, nil
+}
+
+func (m *mockBot) SendAudio(ctx context.Context, params *bot.SendAudioParams) (*models.Message, error) {
+	m.sendAudioCalls = append(m.sendAudioCalls, params)
+	if m.sendAudioErr != nil {
+		return nil, m.sendAudioErr
+	}
+	return &models.Message{ID: 1}, nil
 }
 
 func (m *mockBot) EditMessageText(ctx context.Context, params *bot.EditMessageTextParams) (*models.Message, error) {
@@ -276,4 +296,86 @@ func TestSendMessage_InvalidChatID(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid chat ID")
+}
+
+func TestSendMessage_WithMediaProtocol(t *testing.T) {
+	mb := &mockBot{}
+	adapter := newTestAdapter(mb)
+	defer adapter.cancel()
+
+	err := adapter.SendMessage(&protocol.OutgoingMessage{
+		UserID:   "12345",
+		Text:     "Here is your voice message:\nMEDIA:voice:SGVsbG8gV29ybGQ=\nEnjoy!",
+		Metadata: map[string]string{},
+	})
+
+	require.NoError(t, err)
+	// Should have sent a voice message
+	assert.Len(t, mb.sendVoiceCalls, 1)
+	assert.Equal(t, int64(12345), mb.sendVoiceCalls[0].ChatID)
+	// Should have sent the remaining text
+	assert.Len(t, mb.sendMessageCalls, 1)
+	assert.Contains(t, mb.sendMessageCalls[0].Text, "Here is your voice message:")
+	assert.Contains(t, mb.sendMessageCalls[0].Text, "Enjoy!")
+	// MEDIA line should be removed from text
+	assert.NotContains(t, mb.sendMessageCalls[0].Text, "MEDIA:")
+}
+
+func TestSendMessage_MediaOnly(t *testing.T) {
+	mb := &mockBot{}
+	adapter := newTestAdapter(mb)
+	defer adapter.cancel()
+
+	err := adapter.SendMessage(&protocol.OutgoingMessage{
+		UserID:   "12345",
+		Text:     "MEDIA:voice:SGVsbG8gV29ybGQ=",
+		Metadata: map[string]string{},
+	})
+
+	require.NoError(t, err)
+	// Should have sent a voice message
+	assert.Len(t, mb.sendVoiceCalls, 1)
+	// Should NOT have sent a text message (no text remaining)
+	assert.Len(t, mb.sendMessageCalls, 0)
+}
+
+func TestSendMessage_MediaWithCaption(t *testing.T) {
+	mb := &mockBot{}
+	adapter := newTestAdapter(mb)
+	defer adapter.cancel()
+
+	err := adapter.SendMessage(&protocol.OutgoingMessage{
+		UserID:   "12345",
+		Text:     "MEDIA:voice:SGVsbG8=|Voice memo for you",
+		Metadata: map[string]string{},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, mb.sendVoiceCalls, 1)
+	assert.Equal(t, "Voice memo for you", mb.sendVoiceCalls[0].Caption)
+}
+
+func TestSendMessage_TTSToolOutput(t *testing.T) {
+	mb := &mockBot{}
+	adapter := newTestAdapter(mb)
+	defer adapter.cancel()
+
+	// Create a temporary audio file
+	tmpDir := t.TempDir()
+	audioPath := filepath.Join(tmpDir, "tts_test.ogg")
+	require.NoError(t, os.WriteFile(audioPath, []byte("fake-ogg-data"), 0644))
+
+	err := adapter.SendMessage(&protocol.OutgoingMessage{
+		UserID:   "12345",
+		Text:     fmt.Sprintf("Here's the audio:\nMEDIA: %s\nDone!", audioPath),
+		Metadata: map[string]string{},
+	})
+
+	require.NoError(t, err)
+	// Should have sent a voice message from the file path
+	assert.Len(t, mb.sendVoiceCalls, 1)
+	// Should have sent the remaining text
+	assert.Len(t, mb.sendMessageCalls, 1)
+	assert.Contains(t, mb.sendMessageCalls[0].Text, "Here's the audio:")
+	assert.Contains(t, mb.sendMessageCalls[0].Text, "Done!")
 }
