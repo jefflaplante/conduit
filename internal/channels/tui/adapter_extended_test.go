@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"conduit/internal/channels"
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
