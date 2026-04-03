@@ -259,11 +259,22 @@ func (s *SearchDatabaseConfig) IsEnabled() bool {
 
 // AIConfig contains AI provider settings
 type AIConfig struct {
-	DefaultProvider string              `json:"default_provider"`
-	Providers       []ProviderConfig    `json:"providers"`
-	ModelAliases    map[string]string   `json:"model_aliases,omitempty"`
-	SmartRouting    *SmartRoutingConfig `json:"smart_routing,omitempty"`
-	Compaction      *CompactionConfig   `json:"compaction,omitempty"`
+	DefaultProvider string               `json:"default_provider"`
+	Providers       []ProviderConfig     `json:"providers"`
+	ModelAliases    map[string]string    `json:"model_aliases,omitempty"`
+	SmartRouting    *SmartRoutingConfig  `json:"smart_routing,omitempty"`
+	Compaction      *CompactionConfig    `json:"compaction,omitempty"`
+	PromptCaching   PromptCachingConfig  `json:"prompt_caching,omitempty"`
+}
+
+// PromptCachingConfig holds configuration for Anthropic prompt caching
+type PromptCachingConfig struct {
+	Enabled                   bool `json:"enabled"`                     // Master switch for prompt caching
+	ExtendedTTL               bool `json:"extended_ttl"`                // Use 1-hour TTL vs 5-minute default
+	CacheTools                bool `json:"cache_tools"`                 // Cache tool definitions
+	CacheSystem               bool `json:"cache_system"`                // Cache system prompt
+	CacheHistory              bool `json:"cache_history"`               // Cache conversation history
+	HistoryBreakpointInterval int  `json:"history_breakpoint_interval"` // Messages between history breakpoints
 }
 
 // CompactionConfig configures automatic context compaction for long sessions.

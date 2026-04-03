@@ -148,12 +148,16 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 	}
 
 	// Add tools if provided (with OAuth name mapping if needed)
+	var convertedTools []interface{}
 	if len(req.Tools) > 0 {
-		convertedTools := a.convertToolsToAnthropic(req.Tools)
+		convertedTools = a.convertToolsToAnthropic(req.Tools)
 		if len(convertedTools) > 0 {
 			anthropicReq["tools"] = convertedTools
 		}
 	}
+
+	// Apply cache breakpoints based on model-specific thresholds
+	a.addCacheBreakpoints(convertedTools, systemBlocks, anthropicMessages, modelToUse)
 
 	reqBody, err := json.Marshal(anthropicReq)
 	if err != nil {
@@ -228,6 +232,19 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 	// Extract content and tool calls from Anthropic response format
 	content, toolCalls := a.parseAnthropicContent(anthropicResp)
 	usage := a.parseAnthropicUsage(anthropicResp)
+
+	// Log cache statistics for debugging and monitoring
+	if usage.CacheCreationInputTokens > 0 || usage.CacheReadInputTokens > 0 {
+		totalInput := usage.PromptTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+		var hitRate float64
+		if totalInput > 0 {
+			hitRate = float64(usage.CacheReadInputTokens) / float64(totalInput) * 100
+		}
+		log.Printf("[Anthropic] Cache stats - Write: %d tokens, Read: %d tokens (%.1f%% hit rate)",
+			usage.CacheCreationInputTokens,
+			usage.CacheReadInputTokens,
+			hitRate)
+	}
 
 	return &GenerateResponse{
 		Content:   content,
@@ -390,9 +407,89 @@ func (a *AnthropicProvider) parseAnthropicUsage(resp map[string]interface{}) Usa
 			usage.CompletionTokens = int(outputTokens)
 		}
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+
+		// Parse cache metrics from Anthropic response
+		if cacheCreate, ok := usageObj["cache_creation_input_tokens"].(float64); ok {
+			usage.CacheCreationInputTokens = int(cacheCreate)
+		}
+		if cacheRead, ok := usageObj["cache_read_input_tokens"].(float64); ok {
+			usage.CacheReadInputTokens = int(cacheRead)
+		}
 	}
 
 	return usage
+}
+
+// addCacheBreakpoints adds cache_control markers to the request components
+// based on model-specific minimum token thresholds and content stability
+func (a *AnthropicProvider) addCacheBreakpoints(
+	tools []interface{},
+	systemBlocks []map[string]interface{},
+	messages []map[string]interface{},
+	model string,
+) {
+	minTokens := GetCacheMinTokens(model)
+	cacheControl := map[string]string{"type": "ephemeral"}
+
+	// Estimate tokens (rough: 4 chars per token)
+	estimateTokens := func(content string) int {
+		return len(content) / 4
+	}
+
+	// Breakpoint 1: Last tool definition (if tools meet threshold)
+	if len(tools) > 0 {
+		// Estimate tool tokens (rough: 100 tokens per tool for schema)
+		toolTokens := len(tools) * 100
+		if toolTokens >= minTokens {
+			if lastTool, ok := tools[len(tools)-1].(map[string]interface{}); ok {
+				lastTool["cache_control"] = cacheControl
+			}
+		}
+	}
+
+	// Breakpoint 2: Last system block
+	if len(systemBlocks) > 0 {
+		// Calculate total system prompt tokens
+		totalSystemTokens := 0
+		for _, block := range systemBlocks {
+			if text, ok := block["text"].(string); ok {
+				totalSystemTokens += estimateTokens(text)
+			}
+		}
+		if totalSystemTokens >= minTokens {
+			systemBlocks[len(systemBlocks)-1]["cache_control"] = cacheControl
+		}
+	}
+
+	// Breakpoint 3: Conversation history (for longer conversations)
+	// Only add if we have enough messages and they exceed threshold
+	if len(messages) > 5 {
+		totalHistoryTokens := 0
+		for _, msg := range messages[:len(messages)-1] { // Exclude last message
+			if content, ok := msg["content"].(string); ok {
+				totalHistoryTokens += estimateTokens(content)
+			}
+		}
+
+		if totalHistoryTokens >= minTokens {
+			// Mark the second-to-last message for caching
+			// This caches the conversation prefix, not the current turn
+			breakpointIdx := len(messages) - 2
+			if breakpointIdx >= 0 {
+				msg := messages[breakpointIdx]
+				// For string content, convert to block format with cache_control
+				if content, ok := msg["content"].(string); ok {
+					msg["content"] = []map[string]interface{}{
+						{
+							"type":          "text",
+							"text":          content,
+							"cache_control": cacheControl,
+						},
+					}
+				}
+			}
+		}
+	}
 }
 
 // refreshOAuthToken refreshes the OAuth token if needed.

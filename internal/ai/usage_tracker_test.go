@@ -3,12 +3,14 @@ package ai
 import (
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestUsageTracker_RecordAndGet(t *testing.T) {
 	tracker := NewUsageTracker()
 
-	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 250)
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 0, 0, 250)
 
 	pr, ok := tracker.GetProviderUsage("anthropic")
 	if !ok {
@@ -39,8 +41,8 @@ func TestUsageTracker_RecordAndGet(t *testing.T) {
 func TestUsageTracker_MultipleRecords(t *testing.T) {
 	tracker := NewUsageTracker()
 
-	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 200)
-	tracker.RecordUsage("anthropic", "claude-sonnet-4", 2000, 1000, 300)
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 0, 0, 200)
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 2000, 1000, 0, 0, 300)
 
 	pr, _ := tracker.GetProviderUsage("anthropic")
 	if pr.TotalRequests != 2 {
@@ -59,7 +61,7 @@ func TestUsageTracker_MultipleRecords(t *testing.T) {
 func TestUsageTracker_RecordError(t *testing.T) {
 	tracker := NewUsageTracker()
 
-	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 200)
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 0, 0, 200)
 	tracker.RecordError("anthropic", "claude-sonnet-4")
 
 	pr, _ := tracker.GetProviderUsage("anthropic")
@@ -74,8 +76,8 @@ func TestUsageTracker_RecordError(t *testing.T) {
 func TestUsageTracker_Snapshot(t *testing.T) {
 	tracker := NewUsageTracker()
 
-	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 200)
-	tracker.RecordUsage("openai", "gpt-4o", 500, 250, 150)
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 0, 0, 200)
+	tracker.RecordUsage("openai", "gpt-4o", 500, 250, 0, 0, 150)
 
 	snapshot := tracker.GetSnapshot()
 
@@ -90,7 +92,7 @@ func TestUsageTracker_Snapshot(t *testing.T) {
 func TestUsageTracker_TotalCost(t *testing.T) {
 	tracker := NewUsageTracker()
 
-	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1_000_000, 500_000, 200)
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1_000_000, 500_000, 0, 0, 200)
 
 	cost := tracker.TotalCost()
 	expected := 3.0 + 7.5 // 1M * $3/MTok + 500K * $15/MTok
@@ -102,7 +104,7 @@ func TestUsageTracker_TotalCost(t *testing.T) {
 func TestUsageTracker_Reset(t *testing.T) {
 	tracker := NewUsageTracker()
 
-	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 200)
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 0, 0, 200)
 	tracker.Reset()
 
 	_, ok := tracker.GetProviderUsage("anthropic")
@@ -123,7 +125,7 @@ func TestUsageTracker_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			tracker.RecordUsage("anthropic", "claude-sonnet-4", 100, 50, 10)
+			tracker.RecordUsage("anthropic", "claude-sonnet-4", 100, 50, 0, 0, 10)
 		}()
 	}
 	wg.Wait()
@@ -141,4 +143,24 @@ func TestUsageTracker_NonExistentProvider(t *testing.T) {
 	if ok {
 		t.Error("Expected no usage for non-existent provider")
 	}
+}
+
+func TestUsageTracker_CacheMetrics(t *testing.T) {
+	tracker := NewUsageTracker()
+
+	// First request: cache write
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 100, 200, 5000, 0, 100)
+
+	// Second request: cache read
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 50, 150, 0, 5000, 80)
+
+	pr, _ := tracker.GetProviderUsage("anthropic")
+	assert.Equal(t, int64(5000), pr.TotalCacheWriteTokens, "Cache write tokens mismatch")
+	assert.Equal(t, int64(5000), pr.TotalCacheReadTokens, "Cache read tokens mismatch")
+	assert.Greater(t, pr.CacheSavings, 0.0, "Cache savings should be positive")
+
+	mr, _ := tracker.GetModelUsage("claude-sonnet-4")
+	assert.Equal(t, int64(5000), mr.TotalCacheWriteTokens, "Model cache write tokens mismatch")
+	assert.Equal(t, int64(5000), mr.TotalCacheReadTokens, "Model cache read tokens mismatch")
+	assert.Greater(t, mr.CacheHitRate, 0.0, "Cache hit rate should be positive")
 }

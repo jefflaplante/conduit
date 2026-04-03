@@ -261,7 +261,7 @@ func TestGenerateResponseSmart_BudgetEnforcement(t *testing.T) {
 	router, mock := setupSmartRouter(t, 0.001)
 
 	// Pre-record some usage to exceed the budget
-	router.usageTracker.RecordUsage("mock", "claude-opus-4-6", 100000, 50000, 1000)
+	router.usageTracker.RecordUsage("mock", "claude-opus-4-6", 100000, 50000, 0, 0, 1000)
 
 	mock.AddResponse("budget response", nil)
 

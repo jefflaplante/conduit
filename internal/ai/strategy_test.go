@@ -113,7 +113,7 @@ func TestSelectModel_OverBudget(t *testing.T) {
 	// Simulate spending that exceeds the budget
 	// Use claude-opus pricing: $15/MTok input, $75/MTok output
 	// 1M input + 1M output = $15 + $75 = $90
-	tracker.RecordUsage("anthropic", "claude-opus-4-6", 1_000_000, 1_000_000, 500)
+	tracker.RecordUsage("anthropic", "claude-opus-4-6", 1_000_000, 1_000_000, 0, 0, 500)
 
 	smartCfg := &config.SmartRoutingConfig{
 		Enabled:         true,
@@ -135,7 +135,7 @@ func TestSelectModel_ApproachingBudget(t *testing.T) {
 	// Spend ~$9 against a $10 budget (>80%)
 	// Using sonnet: $3/MTok input, $15/MTok output
 	// Need ~$9 total: 1M input ($3) + 400K output ($6) = $9
-	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1_000_000, 400_000, 300)
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1_000_000, 400_000, 0, 0, 300)
 
 	smartCfg := &config.SmartRoutingConfig{
 		Enabled:         true,
@@ -154,7 +154,7 @@ func TestSelectModel_ApproachingBudget(t *testing.T) {
 func TestSelectModel_UnderBudget(t *testing.T) {
 	tracker := NewUsageTracker()
 	// Small spend
-	tracker.RecordUsage("anthropic", "claude-haiku-4-5", 1000, 500, 50)
+	tracker.RecordUsage("anthropic", "claude-haiku-4-5", 1000, 500, 0, 0, 50)
 
 	smartCfg := &config.SmartRoutingConfig{
 		Enabled:         true,
@@ -172,7 +172,7 @@ func TestSelectModel_UnderBudget(t *testing.T) {
 
 func TestSelectModel_NoBudget(t *testing.T) {
 	tracker := NewUsageTracker()
-	tracker.RecordUsage("anthropic", "claude-opus-4-6", 10_000_000, 5_000_000, 1000)
+	tracker.RecordUsage("anthropic", "claude-opus-4-6", 10_000_000, 5_000_000, 0, 0, 1000)
 
 	// No budget configured (0 means unlimited)
 	selector := NewDefaultModelSelector(nil, config.DefaultModelAliases(), tracker)
@@ -197,7 +197,7 @@ func TestSelectModel_HighErrorRate(t *testing.T) {
 		tracker.RecordError("anthropic", haikuModel)
 	}
 	// One success
-	tracker.RecordUsage("anthropic", haikuModel, 100, 50, 10)
+	tracker.RecordUsage("anthropic", haikuModel, 100, 50, 0, 0, 10)
 
 	selector := NewDefaultModelSelector(nil, aliases, tracker)
 
@@ -217,7 +217,7 @@ func TestSelectModel_LowErrorRate(t *testing.T) {
 
 	// 1 error out of 20 requests (5% error rate, below 30% threshold)
 	for i := 0; i < 19; i++ {
-		tracker.RecordUsage("anthropic", haikuModel, 100, 50, 10)
+		tracker.RecordUsage("anthropic", haikuModel, 100, 50, 0, 0, 10)
 	}
 	tracker.RecordError("anthropic", haikuModel)
 
@@ -309,11 +309,11 @@ func TestIsBudgetExhausted(t *testing.T) {
 	assert.False(t, IsBudgetExhausted(10.0, nil))
 
 	// Under budget
-	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 100)
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 0, 0, 100)
 	assert.False(t, IsBudgetExhausted(100.0, tracker))
 
 	// Over budget (spend a lot)
-	tracker.RecordUsage("anthropic", "claude-opus-4-6", 10_000_000, 10_000_000, 500)
+	tracker.RecordUsage("anthropic", "claude-opus-4-6", 10_000_000, 10_000_000, 0, 0, 500)
 	assert.True(t, IsBudgetExhausted(10.0, tracker))
 }
 
@@ -352,7 +352,7 @@ func TestEndToEnd_BudgetConstrainedComplexTask(t *testing.T) {
 	tracker := NewUsageTracker()
 
 	// Blow the budget
-	tracker.RecordUsage("anthropic", "claude-opus-4-6", 5_000_000, 5_000_000, 1000)
+	tracker.RecordUsage("anthropic", "claude-opus-4-6", 5_000_000, 5_000_000, 0, 0, 1000)
 
 	smartCfg := &config.SmartRoutingConfig{
 		Enabled:         true,

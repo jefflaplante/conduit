@@ -496,13 +496,13 @@ func TestDeriveHints_UsageTracker(t *testing.T) {
 	tracker := NewUsageTracker()
 	// Record successful usage of sonnet
 	for i := 0; i < 10; i++ {
-		tracker.RecordUsage("anthropic", "claude-sonnet-4-6", 1000, 500, 100)
+		tracker.RecordUsage("anthropic", "claude-sonnet-4-6", 1000, 500, 0, 0, 100)
 	}
 	// Record some errors for haiku
 	for i := 0; i < 3; i++ {
 		tracker.RecordError("anthropic", "claude-haiku-4-5")
 	}
-	tracker.RecordUsage("anthropic", "claude-haiku-4-5", 100, 50, 20)
+	tracker.RecordUsage("anthropic", "claude-haiku-4-5", 100, 50, 0, 0, 20)
 
 	search := &mockSearchService{
 		messages: []fts.MessageResult{
@@ -532,8 +532,8 @@ func TestDeriveHints_UsageTracker(t *testing.T) {
 func TestDeriveHints_UsageTracker_InsufficientData(t *testing.T) {
 	tracker := NewUsageTracker()
 	// Only 2 requests — below the threshold of 3
-	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 100)
-	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 100)
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 0, 0, 100)
+	tracker.RecordUsage("anthropic", "claude-sonnet-4", 1000, 500, 0, 0, 100)
 
 	engine := NewContextEngine(WithUsageTracker(tracker))
 	rc := engine.RetrieveContext(context.Background(), "query")
