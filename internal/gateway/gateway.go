@@ -1046,7 +1046,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Graceful shutdown
 	g.logger.Info("shutting down gateway")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
