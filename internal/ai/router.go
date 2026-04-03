@@ -137,9 +137,11 @@ type ToolCall struct {
 
 // Usage represents token usage statistics
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens             int `json:"prompt_tokens"`
+	CompletionTokens         int `json:"completion_tokens"`
+	TotalTokens              int `json:"total_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 // DefaultContextWindow is the fallback context window size in tokens.
@@ -504,7 +506,7 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 		return nil, err
 	}
 	if r.usageTracker != nil {
-		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, latencyMs)
+		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, latencyMs)
 	}
 
 	// Process response through agent system
@@ -615,7 +617,7 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 		return nil, fmt.Errorf("AI provider error: %w", err)
 	}
 	if r.usageTracker != nil {
-		r.usageTracker.RecordUsage(providerName, modelOverride, response.Usage.PromptTokens, response.Usage.CompletionTokens, latencyMs)
+		r.usageTracker.RecordUsage(providerName, modelOverride, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, latencyMs)
 	}
 
 	// Process response through agent system

@@ -7,28 +7,34 @@ import (
 
 // ProviderUsageRecord tracks usage metrics for a single provider.
 type ProviderUsageRecord struct {
-	Provider          string    `json:"provider"`
-	TotalRequests     int64     `json:"total_requests"`
-	TotalInputTokens  int64     `json:"total_input_tokens"`
-	TotalOutputTokens int64     `json:"total_output_tokens"`
-	TotalCost         float64   `json:"total_cost"`
-	TotalLatencyMs    int64     `json:"total_latency_ms"`
-	LastUsed          time.Time `json:"last_used"`
-	ErrorCount        int64     `json:"error_count"`
+	Provider              string    `json:"provider"`
+	TotalRequests         int64     `json:"total_requests"`
+	TotalInputTokens      int64     `json:"total_input_tokens"`
+	TotalOutputTokens     int64     `json:"total_output_tokens"`
+	TotalCacheWriteTokens int64     `json:"total_cache_write_tokens"`
+	TotalCacheReadTokens  int64     `json:"total_cache_read_tokens"`
+	CacheSavings          float64   `json:"cache_savings"`
+	TotalCost             float64   `json:"total_cost"`
+	TotalLatencyMs        int64     `json:"total_latency_ms"`
+	LastUsed              time.Time `json:"last_used"`
+	ErrorCount            int64     `json:"error_count"`
 }
 
 // ModelUsageRecord tracks usage metrics for a specific model.
 type ModelUsageRecord struct {
-	Model             string    `json:"model"`
-	Provider          string    `json:"provider"`
-	TotalRequests     int64     `json:"total_requests"`
-	TotalInputTokens  int64     `json:"total_input_tokens"`
-	TotalOutputTokens int64     `json:"total_output_tokens"`
-	TotalCost         float64   `json:"total_cost"`
-	TotalLatencyMs    int64     `json:"total_latency_ms"`
-	AvgLatencyMs      float64   `json:"avg_latency_ms"`
-	LastUsed          time.Time `json:"last_used"`
-	ErrorCount        int64     `json:"error_count"`
+	Model                 string    `json:"model"`
+	Provider              string    `json:"provider"`
+	TotalRequests         int64     `json:"total_requests"`
+	TotalInputTokens      int64     `json:"total_input_tokens"`
+	TotalOutputTokens     int64     `json:"total_output_tokens"`
+	TotalCacheWriteTokens int64     `json:"total_cache_write_tokens"`
+	TotalCacheReadTokens  int64     `json:"total_cache_read_tokens"`
+	CacheHitRate          float64   `json:"cache_hit_rate"`
+	TotalCost             float64   `json:"total_cost"`
+	TotalLatencyMs        int64     `json:"total_latency_ms"`
+	AvgLatencyMs          float64   `json:"avg_latency_ms"`
+	LastUsed              time.Time `json:"last_used"`
+	ErrorCount            int64     `json:"error_count"`
 }
 
 // UsageSnapshot holds a point-in-time summary of all usage data.
@@ -58,7 +64,7 @@ func NewUsageTracker() *UsageTracker {
 }
 
 // RecordUsage records a successful API call's usage metrics.
-func (ut *UsageTracker) RecordUsage(provider, model string, inputTokens, outputTokens int, latencyMs int64) {
+func (ut *UsageTracker) RecordUsage(provider, model string, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens int, latencyMs int64) {
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
 
@@ -78,6 +84,17 @@ func (ut *UsageTracker) RecordUsage(provider, model string, inputTokens, outputT
 	pr.TotalLatencyMs += latencyMs
 	pr.LastUsed = now
 
+	// Track cache metrics for provider
+	pr.TotalCacheWriteTokens += int64(cacheWriteTokens)
+	pr.TotalCacheReadTokens += int64(cacheReadTokens)
+
+	// Calculate savings (cache reads are 0.1x cost vs normal input)
+	if cacheReadTokens > 0 {
+		baseCost := CalculateCost(model, cacheReadTokens, 0)
+		actualCost := baseCost * 0.1
+		pr.CacheSavings += (baseCost - actualCost)
+	}
+
 	// Update model record
 	mr, ok := ut.models[model]
 	if !ok {
@@ -91,6 +108,16 @@ func (ut *UsageTracker) RecordUsage(provider, model string, inputTokens, outputT
 	mr.TotalLatencyMs += latencyMs
 	mr.AvgLatencyMs = float64(mr.TotalLatencyMs) / float64(mr.TotalRequests)
 	mr.LastUsed = now
+
+	// Track cache metrics for model
+	mr.TotalCacheWriteTokens += int64(cacheWriteTokens)
+	mr.TotalCacheReadTokens += int64(cacheReadTokens)
+
+	// Update cache hit rate
+	totalInputForRate := mr.TotalInputTokens + mr.TotalCacheWriteTokens + mr.TotalCacheReadTokens
+	if totalInputForRate > 0 {
+		mr.CacheHitRate = float64(mr.TotalCacheReadTokens) / float64(totalInputForRate)
+	}
 }
 
 // RecordError records an API call error.
