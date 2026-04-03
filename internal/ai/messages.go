@@ -145,7 +145,7 @@ func (r *Router) getRecentMessagesTokenAware(session *sessions.Session) ([]sessi
 	usedChars := 0
 
 	// Messages are returned chronologically (oldest first), so iterate from end
-	var selected []sessions.Message
+	selected := make([]sessions.Message, 0, len(messages))
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
 		msgChars := len(msg.Content) + len(msg.Role) + 10 // overhead for role/structure

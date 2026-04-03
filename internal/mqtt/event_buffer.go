@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"path"
+	"sort"
 	"sync"
 	"time"
 )
@@ -243,10 +244,7 @@ func (eb *EventBuffer) ActiveTopics() int {
 
 // sortEventsDesc sorts events by timestamp descending (newest first).
 func sortEventsDesc(events []Event) {
-	// Simple insertion sort — fine for the sizes we expect.
-	for i := 1; i < len(events); i++ {
-		for j := i; j > 0 && events[j].Timestamp.After(events[j-1].Timestamp); j-- {
-			events[j], events[j-1] = events[j-1], events[j]
-		}
-	}
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Timestamp.After(events[j].Timestamp)
+	})
 }
