@@ -78,7 +78,7 @@ func TestFormatStatusResponse_WithUsageTracker(t *testing.T) {
 	}
 
 	tracker := ai.NewUsageTracker()
-	tracker.RecordUsage("anthropic", "claude-sonnet-4-20250514", 1000, 500, 1200)
+	tracker.RecordUsage("anthropic", "claude-sonnet-4-20250514", 1000, 500, 0, 0, 1200)
 
 	result := formatStatusResponse(session, 5, tracker)
 
