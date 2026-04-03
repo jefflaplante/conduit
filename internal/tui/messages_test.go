@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 func TestConnectedMsg(t *testing.T) {
