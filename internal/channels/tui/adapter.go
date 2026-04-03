@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"conduit/internal/channels"
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // Adapter implements ChannelAdapter for TUI connections

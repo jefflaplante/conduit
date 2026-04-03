@@ -3,7 +3,7 @@ package tui
 import (
 	"time"
 
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // BubbleTea message types produced by the WebSocket read pump

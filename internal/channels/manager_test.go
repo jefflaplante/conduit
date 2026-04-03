@@ -3,7 +3,7 @@ package channels
 import (
 	"testing"
 
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 
 	"github.com/stretchr/testify/assert"
 )

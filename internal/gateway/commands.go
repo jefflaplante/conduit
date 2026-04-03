@@ -12,7 +12,7 @@ import (
 	"conduit/internal/sessions"
 	"conduit/internal/tools/debuglog"
 	"conduit/internal/version"
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // handleCommand handles slash commands and returns true if handled

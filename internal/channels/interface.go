@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // ChannelAdapter defines the interface for all channel implementations

@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"conduit/internal/ai"
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // ShellSecurityConfig holds shell escape security settings for the TUI

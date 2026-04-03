@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 func TestTUIAdapter_StopDoesNotPanic(t *testing.T) {

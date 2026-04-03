@@ -14,7 +14,7 @@ import (
 	"conduit/internal/sessions"
 	"conduit/internal/tools"
 	"conduit/internal/tools/types"
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // sendToClient sends a protocol message to a WebSocket client (non-blocking)
