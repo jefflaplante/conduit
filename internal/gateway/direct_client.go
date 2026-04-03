@@ -19,7 +19,7 @@ import (
 	"conduit/internal/tools"
 	"conduit/internal/tools/types"
 	"conduit/internal/tui"
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // DirectClientConfig holds configuration for creating a DirectClient.

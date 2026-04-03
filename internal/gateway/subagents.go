@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"conduit/internal/channels"
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // SpawnSubAgent spawns a new sub-agent session (quiet mode, no announcements)

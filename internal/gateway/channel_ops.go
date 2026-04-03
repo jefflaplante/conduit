@@ -8,7 +8,7 @@ import (
 
 	"conduit/internal/sessions"
 	"conduit/internal/tools/types"
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // SendMessage implements the ChannelSender interface for tools

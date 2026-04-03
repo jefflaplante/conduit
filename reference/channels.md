@@ -122,7 +122,7 @@ package yourplatform
 import (
     "context"
     "conduit/internal/channels"
-    "conduit/pkg/protocol"
+    "conduit/internal/protocol"
 )
 
 type Adapter struct {

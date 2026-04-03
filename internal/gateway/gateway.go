@@ -43,7 +43,7 @@ import (
 	"conduit/internal/vecgo/embedding"
 	"conduit/internal/version"
 	"conduit/internal/workspace"
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 
 	charmssh "github.com/charmbracelet/ssh"
 )

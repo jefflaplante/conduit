@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"conduit/internal/database"
-	tokenspkg "conduit/pkg/tokens"
+	tokenspkg "conduit/internal/tokens"
 
 	"github.com/spf13/cobra"
 )

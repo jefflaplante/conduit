@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"conduit/internal/channels"
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // Factory creates TUI channel adapters

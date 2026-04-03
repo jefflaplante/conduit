@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // mockBot implements botAPI for testing

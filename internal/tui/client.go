@@ -11,7 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gorilla/websocket"
 
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // WSClient manages the WebSocket connection to the gateway

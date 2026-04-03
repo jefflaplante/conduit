@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // ReplyTagRe matches [[reply_to_current]] and [[reply_to:<id>]] with optional whitespace

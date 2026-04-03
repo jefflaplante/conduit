@@ -19,7 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"conduit/internal/channels"
-	"conduit/pkg/protocol"
+	"conduit/internal/protocol"
 )
 
 // Patterns for sanitizing user-facing text
