@@ -16,8 +16,12 @@ func IsBusyError(err error) bool {
 		strings.Contains(msg, "database table is locked")
 }
 
+// maxBackoff caps the exponential backoff to prevent excessively long waits
+// on individual retries while still allowing cumulative retry time to grow.
+const maxBackoff = 500 * time.Millisecond
+
 // RetryOnBusy retries fn with exponential backoff when it returns a SQLite BUSY error.
-// Backoff sequence: 50ms, 100ms, 200ms, ...
+// Backoff sequence: 50ms, 100ms, 200ms, 400ms, 500ms (capped), ...
 func RetryOnBusy(maxRetries int, fn func() error) error {
 	var err error
 	backoff := 50 * time.Millisecond
@@ -30,6 +34,9 @@ func RetryOnBusy(maxRetries int, fn func() error) error {
 		if attempt < maxRetries {
 			time.Sleep(backoff)
 			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
 		}
 	}
 

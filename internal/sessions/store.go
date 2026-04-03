@@ -333,7 +333,7 @@ func (s *Store) AddMessage(sessionKey, role, content string, metadata map[string
 		return nil, fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
-	err = database.RetryOnBusy(2, func() error {
+	err = database.RetryOnBusy(5, func() error {
 		_, err := s.db.Exec(`
 			INSERT INTO messages (id, session_key, role, content, timestamp, metadata)
 			VALUES (?, ?, ?, ?, ?, ?)
@@ -368,31 +368,31 @@ func (s *Store) AddMessage(sessionKey, role, content string, metadata map[string
 	return message, nil
 }
 
-// GetMessages retrieves messages for a session
+// DefaultMessageLimit is the maximum number of messages returned when no explicit
+// limit is provided (limit <= 0). This prevents unbounded memory growth from
+// sessions with very long histories.
+const DefaultMessageLimit = 10000
+
+// GetMessages retrieves messages for a session.
+// If limit <= 0, DefaultMessageLimit is used to prevent unbounded reads.
 func (s *Store) GetMessages(sessionKey string, limit int) ([]Message, error) {
-	// Use subquery to get most recent N messages, then order chronologically
-	// Without this, LIMIT + ASC gives oldest messages, not newest
-	var query string
-	if limit > 0 {
-		query = fmt.Sprintf(`
-			SELECT id, session_key, role, content, timestamp, metadata
-			FROM (
-				SELECT id, session_key, role, content, timestamp, metadata
-				FROM messages
-				WHERE session_key = ?
-				ORDER BY timestamp DESC
-				LIMIT %d
-			) sub
-			ORDER BY timestamp ASC
-		`, limit)
-	} else {
-		query = `
+	if limit <= 0 {
+		limit = DefaultMessageLimit
+	}
+
+	// Use subquery to get most recent N messages, then order chronologically.
+	// Without this, LIMIT + ASC gives oldest messages, not newest.
+	query := fmt.Sprintf(`
+		SELECT id, session_key, role, content, timestamp, metadata
+		FROM (
 			SELECT id, session_key, role, content, timestamp, metadata
 			FROM messages
 			WHERE session_key = ?
-			ORDER BY timestamp ASC
-		`
-	}
+			ORDER BY timestamp DESC
+			LIMIT %d
+		) sub
+		ORDER BY timestamp ASC
+	`, limit)
 
 	rows, err := s.db.Query(query, sessionKey)
 	if err != nil {
@@ -400,7 +400,7 @@ func (s *Store) GetMessages(sessionKey string, limit int) ([]Message, error) {
 	}
 	defer rows.Close()
 
-	var messages []Message
+	messages := make([]Message, 0, min(limit, 256))
 
 	for rows.Next() {
 		var message Message
@@ -526,7 +526,7 @@ func (s *Store) SetSessionContextBatch(sessionKey string, kvPairs map[string]str
 	`, expr)
 
 	var result sql.Result
-	err := database.RetryOnBusy(2, func() error {
+	err := database.RetryOnBusy(5, func() error {
 		var execErr error
 		result, execErr = s.db.Exec(query, args...)
 		return execErr

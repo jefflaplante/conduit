@@ -291,6 +291,7 @@ func BuildDSN(path string) string {
 			"synchronous=NORMAL",
 			"cache_size=10000",
 			"foreign_keys=1",
+			"wal_autocheckpoint=1000",
 		},
 		"_txlock": []string{"immediate"},
 	}.Encode()

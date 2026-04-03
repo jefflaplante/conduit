@@ -39,7 +39,7 @@ func (s *MessageSyncer) SyncSingleMessage(id, sessionKey, role, content string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	err := database.RetryOnBusy(2, func() error {
+	err := database.RetryOnBusy(5, func() error {
 		_, err := s.searchDB.Exec(
 			`INSERT INTO messages_fts(message_id, session_key, role, content) VALUES (?, ?, ?, ?)`,
 			id, sessionKey, role, content,
