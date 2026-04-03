@@ -236,7 +236,11 @@ func (t *WebSearchTool) searchBrave(ctx context.Context, query string, count int
 
 	var searchResp BraveSearchResponse
 	if err := json.Unmarshal(body, &searchResp); err != nil {
-		log.Printf("[WebSearch] Parse error: %v, body: %s", err, string(body)[:500])
+		bodyPreview := string(body)
+		if len(bodyPreview) > 500 {
+			bodyPreview = bodyPreview[:500]
+		}
+		log.Printf("[WebSearch] Parse error: %v, body: %s", err, bodyPreview)
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
