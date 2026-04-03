@@ -67,6 +67,10 @@ const (
 
 	// MaxWebSocketConnections limits concurrent WebSocket connections.
 	MaxWebSocketConnections int32 = 1000
+
+	// MaxConcurrentRequests limits concurrent message-processing goroutines
+	// to prevent unbounded goroutine growth under sustained load.
+	MaxConcurrentRequests = 100
 )
 
 // Gateway represents the core Conduit gateway
@@ -108,6 +112,10 @@ type Gateway struct {
 	// Active request tracking for /stop
 	activeRequests   map[string]context.CancelFunc // sessionKey -> cancel function
 	activeRequestsMu sync.RWMutex
+
+	// Backpressure: limits concurrent message-processing goroutines to prevent
+	// unbounded goroutine growth under load. Sized via MaxConcurrentRequests.
+	msgSemaphore chan struct{}
 
 	// FTS5 full-text search
 	ftsIndexer  *fts.Indexer
@@ -451,6 +459,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		eventStore:          eventStore,
 		clients:             make(map[string]*Client),
 		activeRequests:      make(map[string]context.CancelFunc),
+		msgSemaphore:        make(chan struct{}, MaxConcurrentRequests),
 		ringBuffer:          debugBuffer,
 		upgrader: websocket.Upgrader{
 			CheckOrigin:  checkOrigin(cfg.AllowedOrigins),
@@ -1336,7 +1345,15 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 
 		switch msg := parsed.(type) {
 		case *protocol.ChatMessage:
-			go g.handleWebSocketChat(ctx, client, msg)
+			select {
+			case g.msgSemaphore <- struct{}{}:
+				go func() {
+					defer func() { <-g.msgSemaphore }()
+					g.handleWebSocketChat(ctx, client, msg)
+				}()
+			default:
+				g.logger.Warn("request backpressure: dropping chat message", "client_id", client.ID)
+			}
 		case *protocol.CommandMessage:
 			go g.handleWebSocketCommand(ctx, client, msg)
 		case *protocol.SessionSwitch:
@@ -1424,7 +1441,16 @@ func (g *Gateway) processMessages(ctx context.Context) {
 	for {
 		select {
 		case msg := <-g.channelManager.ReceiveMessages():
-			go g.handleIncomingMessage(ctx, msg)
+			select {
+			case g.msgSemaphore <- struct{}{}:
+				go func() {
+					defer func() { <-g.msgSemaphore }()
+					g.handleIncomingMessage(ctx, msg)
+				}()
+			default:
+				g.logger.Warn("request backpressure: dropping channel message",
+					"channel_id", msg.ChannelID)
+			}
 
 		case <-ctx.Done():
 			return
@@ -1467,8 +1493,9 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		return
 	}
 
-	// Start typing indicator loop (refreshes every 4 seconds until done)
-	typingDone := make(chan struct{})
+	// Start typing indicator loop (refreshes every 4 seconds until done).
+	// Buffered to 1 to prevent goroutine leak if close() races with send.
+	typingDone := make(chan struct{}, 1)
 	go func() {
 		ticker := time.NewTicker(4 * time.Second)
 		defer ticker.Stop()
