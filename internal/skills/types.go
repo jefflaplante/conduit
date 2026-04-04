@@ -24,6 +24,7 @@ type SkillMetadata struct {
 type SkillConduitMeta struct {
 	Emoji    string            `json:"emoji" yaml:"emoji"`
 	Requires SkillRequirements `json:"requires" yaml:"requires"`
+	Produces []string          `json:"produces" yaml:"produces"` // Brain keys this skill produces (e.g., "solar.production", "weather.temp")
 }
 
 // SkillRequirements defines what a skill needs to function
