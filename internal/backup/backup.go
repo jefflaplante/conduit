@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,6 +68,18 @@ func CreateBackup(ctx context.Context, opts BackupOptions) (*BackupResult, error
 	dbInfo, err := snapshotDatabase(ctx, dbPath, dbSnapshotPath)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot database: %w", err)
+	}
+
+	// Snapshot brain database if it exists.
+	brainDBPath := deriveBrainDBPath(dbPath)
+	var brainSnapshotPath string
+	if _, err := os.Stat(brainDBPath); err == nil {
+		brainSnapshotPath = filepath.Join(tmpDir, "brain.db")
+		if _, snErr := snapshotDatabase(ctx, brainDBPath, brainSnapshotPath); snErr != nil {
+			log.Printf("WARNING: failed to snapshot brain database: %v", snErr)
+		} else {
+			components |= ComponentBrainDB
+		}
 	}
 
 	absConfigPath, err := filepath.Abs(opts.ConfigPath)
@@ -135,6 +148,13 @@ func CreateBackup(ctx context.Context, opts BackupOptions) (*BackupResult, error
 		return nil, fmt.Errorf("write database: %w", err)
 	}
 	result.FileCount++
+
+	if brainSnapshotPath != "" {
+		if err := writeTarFile(tw, "database/brain.db", brainSnapshotPath); err != nil {
+			return nil, fmt.Errorf("archive brain database: %w", err)
+		}
+		result.FileCount++
+	}
 
 	// 3. Config file.
 	configFilename := filepath.Base(opts.ConfigPath)
@@ -324,6 +344,16 @@ func writeSSHKeys(tw *tar.Writer, cfg *config.Config) (int, []string) {
 	}
 
 	return count, warnings
+}
+
+// deriveBrainDBPath returns a brain DB path derived from the gateway DB path.
+func deriveBrainDBPath(gatewayDBPath string) string {
+	ext := filepath.Ext(gatewayDBPath)
+	base := strings.TrimSuffix(gatewayDBPath, ext)
+	if ext == "" {
+		ext = ".db"
+	}
+	return base + ".brain" + ext
 }
 
 // copyFile is a simple file copy helper.
