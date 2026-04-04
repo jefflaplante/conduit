@@ -13,7 +13,12 @@ import (
 
 // SpawnSubAgent spawns a new sub-agent session (quiet mode, no announcements)
 func (g *Gateway) SpawnSubAgent(ctx context.Context, task, agentId, model, label string, timeoutSeconds int) (string, error) {
-	return g.SpawnSubAgentWithCallback(ctx, task, agentId, model, label, timeoutSeconds, "", "", false)
+	return g.SpawnSubAgentWithCallback(ctx, task, agentId, model, label, timeoutSeconds, "", "", false, nil)
+}
+
+// SpawnSubAgentWithSkills spawns a sub-agent with a filtered skill set
+func (g *Gateway) SpawnSubAgentWithSkills(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, skills []string) (string, error) {
+	return g.SpawnSubAgentWithCallback(ctx, task, agentId, model, label, timeoutSeconds, "", "", false, skills)
 }
 
 // deriveSubAgentContext creates a sub-agent context from the gateway lifecycle context
@@ -22,8 +27,8 @@ func deriveSubAgentContext(gatewayCtx context.Context, timeoutSeconds int) (cont
 	return context.WithTimeout(gatewayCtx, time.Duration(timeoutSeconds)*time.Second)
 }
 
-// SpawnSubAgentWithCallback spawns a sub-agent with optional result announcement
-func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, parentChannelID, parentUserID string, announce bool) (string, error) {
+// SpawnSubAgentWithCallback spawns a sub-agent with optional result announcement and skill filtering
+func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, parentChannelID, parentUserID string, announce bool, skills []string) (string, error) {
 	// Check if caller's context is already done (don't spawn if request was canceled)
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("cannot spawn sub-agent: parent context already canceled")
@@ -52,6 +57,17 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 			modelToUse = g.getDefaultModel()
 		} else if fullModel, exists := g.getModelAliases()[strings.ToLower(modelToUse)]; exists && fullModel != "" {
 			modelToUse = fullModel
+		}
+
+		// Set model context for prompt builder's context window calculations
+		if session.Context == nil {
+			session.Context = make(map[string]string)
+		}
+		session.Context["model"] = modelToUse
+
+		// Set skill filter if skills are provided
+		if len(skills) > 0 {
+			session.Context["skill_filter"] = strings.Join(skills, ",")
 		}
 
 		log.Printf("[SubAgent] Starting task: %s (session: %s, model: %s, announce: %v)", task, session.Key, modelToUse, announce)

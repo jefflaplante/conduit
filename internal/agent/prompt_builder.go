@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"runtime"
 	"sort"
@@ -252,6 +253,11 @@ func (pb *PromptBuilder) buildFullPromptWithParams(ctx context.Context, session 
 		}
 	}
 
+	if len(dropped) > 0 {
+		log.Printf("[PromptBuilder] Budget-constrained: dropped sections %v (budget=%d chars, model context=%d)",
+			dropped, budgetChars, contextWindow)
+	}
+
 	return joinSectionsWithCache(allSections, included, dropped...)
 }
 
@@ -385,7 +391,7 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		{name: "Tool Integrity", priority: 3, build: func() string { return pb.buildToolCallStyleSection() }},
 		{name: "Error Recovery", priority: 3, build: func() string { return buildErrorRecoverySection(params.IsMinimal) }},
 		{name: "Safety", priority: 3, build: func() string { return buildSafetySection(params.IsMinimal) }},
-		{name: "Skills", priority: 3, build: func() string {
+		{name: "Skills", priority: 2, build: func() string {
 			if pb.capabilities.SkillsIntegration && pb.skillsManager != nil {
 				return pb.buildSkillsSection(ctx, session)
 			}

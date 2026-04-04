@@ -294,7 +294,7 @@ func (t *SessionsSpawnTool) Execute(ctx context.Context, args map[string]interfa
 	// Spawn sub-agent with optional announcement
 	sessionKey, err := t.services.Gateway.SpawnSubAgentWithCallback(
 		ctx, task, agentId, model, label, timeoutSeconds,
-		types.RequestChannelID(ctx), types.RequestUserID(ctx), announce,
+		types.RequestChannelID(ctx), types.RequestUserID(ctx), announce, nil,
 	)
 	if err != nil {
 		return &types.ToolResult{
