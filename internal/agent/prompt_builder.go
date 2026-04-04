@@ -374,6 +374,7 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		{name: "Project Context", priority: 2, build: func() string { return pb.buildWorkspaceContextSection(ctx, session) }},
 		{name: "Memory Recall", priority: 2, build: func() string { return buildMemorySection(params) }},
 		{name: "Memory Persistence", priority: 2, build: func() string { return buildMemoryPersistenceSection(params) }},
+		{name: "Brain", priority: 2, build: func() string { return buildBrainSection(params) }},
 		{name: "Tooling", priority: 2, build: func() string { return pb.buildToolingSection() }},
 		{name: "Heartbeats", priority: 2, build: func() string { return buildHeartbeatsSection(params) }},
 		{name: "Messaging", priority: 2, build: func() string { return buildMessagingSection(params) }},

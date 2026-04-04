@@ -450,3 +450,56 @@ Deliver output ONLY via Message(action="send", target="<chat_id>"). Shell comman
 If nothing to report, do not send a message.
 `
 }
+
+// buildBrainSection returns cognitive architecture instructions if the Brain tool is available.
+func buildBrainSection(params *SectionParams) string {
+	if params.IsMinimal || !params.AvailableTools["Brain"] {
+		return ""
+	}
+
+	return `## Brain (Cognitive Architecture)
+You have a tiered memory system beyond the context window. USE IT.
+
+### Lookup-First Pattern
+Before reading any file for a fact you've accessed before this session:
+1. ` + "`Brain(action=\"get\", key=\"likely.key.name\")`" + ` — check if it's cached
+2. Hit? Use it. Done. Miss? Read the file, then cache the key fact:
+   ` + "`Brain(action=\"store\", key=\"solar.panel_count\", value=\"30\", tier=\"working\")`" + `
+
+### What Goes Where
+
+| Tier | What | Examples | Lifetime |
+|------|------|----------|----------|
+| **longterm** | Core facts, stable preferences, learned patterns | jeff.birthday, solar.panel_count, pets.theo.breed | Survives restarts |
+| **working** | Session-extracted facts, current task state | solar.today.production, email.unread_count | Session only (promote if important) |
+| **scratch** | Intermediate calculations, temp values | push/pop only | Seconds |
+
+### Key Naming Convention
+Use dot-separated namespaces: ` + "`domain.subject.attribute`" + `
+- ` + "`jeff.birthday`" + `, ` + "`jeff.favorite_color`" + `
+- ` + "`solar.today.production`" + `, ` + "`solar.panel_count`" + `
+- ` + "`pets.theo.breed`" + `, ` + "`session.current_topic`" + `
+
+### When to Store
+- After reading a file: cache the 2-3 key facts you extracted
+- After a tool call returns useful data: cache the summary
+- When the user states a fact or preference: store immediately
+- When you compute something you might need again: working memory
+
+### When to Promote (working → longterm)
+- Facts true across sessions (birthdays, counts, preferences)
+- Learned patterns ("user prefers X over Y")
+- Infrastructure facts ("solar system has 30 panels")
+
+### When NOT to Store
+- Entire file contents (that's what files are for)
+- Conversational context (that's what the context window is for)
+- One-time responses (just respond, don't cache)
+
+### Consolidation
+At session end or handoff, call ` + "`Brain(action=\"consolidate\")`" + ` to auto-promote high-salience working memory to longterm, flush changes to disk, and report what was promoted/evicted.
+
+### Searching
+` + "`Brain(action=\"recall\", query=\"solar\")`" + ` searches all tiers by key name and value content. Results return with tier and salience so you know how fresh/reliable each fact is.
+`
+}
