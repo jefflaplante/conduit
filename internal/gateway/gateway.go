@@ -1655,9 +1655,17 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 								"final_chars", len(finalContent))
 						}
 						if finalContent != "" {
-							streamingAdapter.EditMessageText(chatID, placeholderMsgID, finalContent)
+							if editErr := streamingAdapter.EditMessageText(chatID, placeholderMsgID, finalContent); editErr != nil {
+								logging.Warn(reqCtx, "streaming: final edit failed, falling back to SendMessage", "error", editErr)
+								_ = streamingAdapter.DeleteMessage(chatID, placeholderMsgID)
+								// streamingUsed stays false → non-streaming SendMessage path will run
+							} else {
+								streamingUsed = true
+							}
+						} else {
+							logging.Warn(reqCtx, "streaming: finalContent empty after sanitization, deleting placeholder")
+							_ = streamingAdapter.DeleteMessage(chatID, placeholderMsgID)
 						}
-						streamingUsed = true
 					} else if streamedLength > 0 {
 						// Fallback to streamed text if no final content
 						streamedText := textBuilder.String()
@@ -1667,14 +1675,22 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 							if deleteErr := streamingAdapter.DeleteMessage(chatID, placeholderMsgID); deleteErr != nil {
 								logging.Warn(reqCtx, "streaming: failed to delete placeholder", "error", deleteErr)
 							}
+							streamingUsed = true
 						} else {
 							streamedText = channels.SanitizeOutgoingText(streamedText)
 							logging.Debug(reqCtx, "streaming: using streamed text only", "chars", streamedLength)
 							if streamedText != "" {
-								streamingAdapter.EditMessageText(chatID, placeholderMsgID, streamedText)
+								if editErr := streamingAdapter.EditMessageText(chatID, placeholderMsgID, streamedText); editErr != nil {
+									logging.Warn(reqCtx, "streaming: streamed text edit failed, falling back", "error", editErr)
+									_ = streamingAdapter.DeleteMessage(chatID, placeholderMsgID)
+								} else {
+									streamingUsed = true
+								}
+							} else {
+								logging.Warn(reqCtx, "streaming: streamedText empty after sanitization, deleting placeholder")
+								_ = streamingAdapter.DeleteMessage(chatID, placeholderMsgID)
 							}
 						}
-						streamingUsed = true
 					}
 				}
 			}
