@@ -348,9 +348,9 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 				Duration:  execResult.Duration,
 			})
 		}
-		// Record successful call for pattern detection
+		// Record successful call for pattern detection (with args for accurate detection)
 		if e.patternTracker != nil {
-			e.patternTracker.RecordCall(call.Name)
+			e.patternTracker.RecordCall(call.Name, call.Args)
 		}
 		// Reset consecutive failure count on success
 		if e.failureTracker != nil {
@@ -523,11 +523,11 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		if e.patternTracker != nil {
 			if detected, pattern := e.patternTracker.DetectCircular(); detected {
 				log.Printf("[ExecutionEngine] Circular pattern detected: %s", pattern)
-				// Inject warning into conversation to help LLM break the cycle
-				warningMsg := InjectWarning(pattern)
+				// Inject think step to force LLM to pause and reflect
+				thinkMsg := InjectThinkStep(pattern)
 				finalReq.Messages = append(finalReq.Messages, ai.ChatMessage{
 					Role:    "system",
-					Content: warningMsg,
+					Content: thinkMsg,
 				})
 			}
 		}

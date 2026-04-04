@@ -229,6 +229,21 @@ func TestIsSilentResponse(t *testing.T) {
 			input:    "HEARTBEAT is running fine",
 			expected: false,
 		},
+		{
+			name:     "long response ENDING with NO_REPLY is suppressed",
+			input:    "I've completed the scheduled task and everything looks good. The system is running normally. NO_REPLY",
+			expected: true,
+		},
+		{
+			name:     "long response ENDING with HEARTBEAT_OK is suppressed",
+			input:    "I've checked all the monitoring endpoints and everything is healthy. All services are responding normally. HEARTBEAT_OK",
+			expected: true,
+		},
+		{
+			name:     "long narration ending with token suppressed",
+			input:    "Let me check the status for you... Done! Everything is working as expected. NO_REPLY",
+			expected: true,
+		},
 	}
 
 	for _, tt := range tests {
