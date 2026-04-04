@@ -635,6 +635,21 @@ func New(cfg *config.Config) (*Gateway, error) {
 		if cfg.Brain.WMGracePeriodSeconds > 0 {
 			brainOpts = append(brainOpts, brain.WithWMGracePeriod(time.Duration(cfg.Brain.WMGracePeriodSeconds)*time.Second))
 		}
+		if cfg.Brain.AccessWeight > 0 {
+			brainOpts = append(brainOpts, brain.WithAccessWeight(cfg.Brain.AccessWeight))
+		}
+		if cfg.Brain.RecencyWeight > 0 {
+			brainOpts = append(brainOpts, brain.WithRecencyWeight(cfg.Brain.RecencyWeight))
+		}
+		if cfg.Brain.TierWeight > 0 {
+			brainOpts = append(brainOpts, brain.WithTierWeight(cfg.Brain.TierWeight))
+		}
+		if cfg.Brain.RecencyDecayRate > 0 {
+			brainOpts = append(brainOpts, brain.WithRecencyDecayRate(cfg.Brain.RecencyDecayRate))
+		}
+		if cfg.Brain.AccessCountCap > 0 {
+			brainOpts = append(brainOpts, brain.WithAccessCountCap(cfg.Brain.AccessCountCap))
+		}
 		brainSvc, brainErr := brain.New(brainDBPath, brainOpts...)
 		if brainErr != nil {
 			logger.Warn("failed to initialize brain, continuing without", "error", brainErr)
