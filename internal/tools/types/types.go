@@ -29,7 +29,8 @@ type ChannelSender interface {
 type GatewayService interface {
 	SendToSession(ctx context.Context, sessionKey, label, message string) error
 	SpawnSubAgent(ctx context.Context, task, agentId, model, label string, timeoutSeconds int) (string, error)
-	SpawnSubAgentWithCallback(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, parentChannelID, parentUserID string, announce bool) (string, error)
+	SpawnSubAgentWithCallback(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, parentChannelID, parentUserID string, announce bool, skills []string) (string, error)
+	SpawnSubAgentWithSkills(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, skills []string) (string, error)
 	GetSessionStatus(ctx context.Context, sessionKey string) (map[string]interface{}, error)
 	GetGatewayStatus() (map[string]interface{}, error)
 	RestartGateway(ctx context.Context) error

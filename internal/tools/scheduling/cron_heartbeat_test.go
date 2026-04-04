@@ -74,7 +74,10 @@ func (m *mockGatewayService) SendToSession(ctx context.Context, sessionKey, labe
 func (m *mockGatewayService) SpawnSubAgent(ctx context.Context, task, agentId, model, label string, timeoutSeconds int) (string, error) {
 	return "", nil
 }
-func (m *mockGatewayService) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, parentChannelID, parentUserID string, announce bool) (string, error) {
+func (m *mockGatewayService) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, parentChannelID, parentUserID string, announce bool, skills []string) (string, error) {
+	return "", nil
+}
+func (m *mockGatewayService) SpawnSubAgentWithSkills(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, skills []string) (string, error) {
 	return "", nil
 }
 func (m *mockGatewayService) GetSessionStatus(ctx context.Context, sessionKey string) (map[string]interface{}, error) {
