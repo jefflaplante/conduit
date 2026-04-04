@@ -253,6 +253,11 @@ func (r *Registry) registerAllTools() {
 		allTools = append(allTools, core.NewDebugLogTool(r.services, r.services.DebugLog))
 	}
 
+	// Brain cognitive architecture tool (optional - requires brain service)
+	if r.services.Brain != nil {
+		allTools = append(allTools, core.NewBrainTool(r.services))
+	}
+
 	// Google Workspace tools (optional - requires gws CLI)
 	allTools = append(allTools, []types.Tool{
 		&GoogleWorkspaceTool{registry: r},
