@@ -242,7 +242,7 @@ func (t *ChainTool) runChain(ctx context.Context, args map[string]interface{}) (
 		}
 	}
 
-	// Build runtime adapter that bridges ChainToolExecutor → chain.ToolExecutor.
+	// Build runtime adapter that bridges types.ToolRegistry → chain.ToolExecutor.
 	adapter := &registryChainAdapter{executor: t.executor, ctx: ctx}
 	runner := chain.NewRunner(adapter)
 
