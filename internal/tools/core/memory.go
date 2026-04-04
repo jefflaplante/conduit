@@ -556,7 +556,13 @@ func (t *MemorySearchTool) searchSessionMessagesFTS(ctx context.Context, query s
 }
 
 // searchBrain queries the Brain service for matching entries across all tiers.
+// Prefers FTS5 search if a brain indexer is available, falls back to LIKE-based Recall.
 func (t *MemorySearchTool) searchBrain(ctx context.Context, query string) ([]MemoryResult, error) {
+	// Prefer FTS5 search if brain indexer is available
+	if t.services.BrainFTS != nil {
+		return t.searchBrainFTS(ctx, query)
+	}
+	// Fallback to direct Brain.Recall (LIKE-based)
 	entries, err := t.services.Brain.Recall(ctx, query, 10)
 	if err != nil {
 		return nil, err
@@ -573,6 +579,32 @@ func (t *MemorySearchTool) searchBrain(ctx context.Context, query string) ([]Mem
 		})
 	}
 	return results, nil
+}
+
+// searchBrainFTS uses the FTS5-backed brain indexer for BM25-ranked search.
+func (t *MemorySearchTool) searchBrainFTS(ctx context.Context, query string) ([]MemoryResult, error) {
+	results, err := t.services.BrainFTS.SearchBrain(ctx, query, 10)
+	if err != nil {
+		return nil, err
+	}
+	var memResults []MemoryResult
+	for _, r := range results {
+		score := -r.Rank / 20.0
+		if score > 1.0 {
+			score = 1.0
+		}
+		if score < 0.0 {
+			score = 0.0
+		}
+		memResults = append(memResults, MemoryResult{
+			Path:       fmt.Sprintf("brain:%s", r.Key),
+			Content:    fmt.Sprintf("%s = %s", r.Key, r.Value),
+			Score:      score,
+			Source:     "brain",
+			SearchType: "fts5",
+		})
+	}
+	return memResults, nil
 }
 
 // getMemoryFilePaths returns paths to memory files

@@ -91,6 +91,18 @@ func getSearchMigrations() []SearchMigration {
 				-- column filters in MATCH queries for session_key
 			`,
 		},
+		{
+			Version: 3,
+			Name:    "create_brain_ltm_fts",
+			SQL: `
+				CREATE VIRTUAL TABLE IF NOT EXISTS brain_ltm_fts USING fts5(
+					key,
+					value,
+					source,
+					tokenize='porter unicode61'
+				);
+			`,
+		},
 	}
 }
 

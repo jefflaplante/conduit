@@ -126,6 +126,7 @@ type Gateway struct {
 	// Search database (separate from gateway.db)
 	searchDB       *searchdb.SearchDB
 	beadsIndexer   *searchdb.BeadsIndexer
+	brainIndexer   *searchdb.BrainIndexer
 	messageSyncer  *searchdb.MessageSyncer
 	asyncMsgSyncer *searchdb.AsyncMessageSyncer
 
@@ -665,6 +666,16 @@ func New(cfg *config.Config) (*Gateway, error) {
 		brainSvcAdapter = newBrainAdapter(gw.brainService)
 	}
 
+	// Build BrainFTSSearcher interface value (nil if brain or search DB unavailable)
+	var brainFTS types.BrainFTSSearcher
+	if gw.brainService != nil && gw.searchDB != nil {
+		gw.brainIndexer = searchdb.NewBrainIndexer(gw.searchDB.DB(), gw.brainService.DB())
+		if err := gw.brainIndexer.IndexBrain(context.Background()); err != nil {
+			logger.Warn("initial brain FTS5 index failed", "error", err)
+		}
+		brainFTS = gw.brainIndexer
+	}
+
 	toolServices := &tools.ToolServices{
 		SessionStore:  sessionStore,
 		ConfigMgr:     cfg,
@@ -675,6 +686,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		VectorSearch:  vectorSearch,
 		MQTTService:   mqttSvc,
 		Brain:         brainSvcAdapter,
+		BrainFTS:      brainFTS,
 		SchemaBuilder: schemaBuilder,
 		DebugLog:      debugBuffer,
 	}
@@ -1007,6 +1019,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 					if g.beadsIndexer != nil {
 						if err := g.beadsIndexer.IndexBeads(ctx); err != nil {
 							g.logger.Warn("beads periodic re-index failed", "error", err)
+						}
+					}
+
+					// Re-index brain LTM if available
+					if g.brainIndexer != nil {
+						if err := g.brainIndexer.IndexBrain(ctx); err != nil {
+							g.logger.Warn("brain periodic re-index failed", "error", err)
 						}
 					}
 
