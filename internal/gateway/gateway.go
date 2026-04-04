@@ -18,6 +18,7 @@ import (
 
 	"conduit/internal/agent"
 	"conduit/internal/ai"
+	"conduit/internal/brain"
 	"conduit/internal/auth"
 	"conduit/internal/channels"
 	"conduit/internal/channels/telegram"
@@ -133,6 +134,9 @@ type Gateway struct {
 
 	// MQTT event ingest (optional)
 	mqttService *mqtt.Service
+
+	// Brain cognitive architecture (optional)
+	brainService *brain.Brain
 
 	// SSH server (optional)
 	sshServer *charmssh.Server
@@ -608,6 +612,38 @@ func New(cfg *config.Config) (*Gateway, error) {
 		logger.Info("MQTT service configured", "broker", cfg.MQTT.BrokerURL, "topic_count", len(cfg.MQTT.Topics))
 	}
 
+	// Initialize optional Brain cognitive architecture
+	if cfg.Brain.Enabled {
+		brainDBPath := cfg.Brain.Path
+		if brainDBPath == "" {
+			brainDBPath = config.DeriveBrainDBPath(cfg.Database.Path)
+		}
+		var brainOpts []brain.Option
+		if cfg.Brain.MaxLTMEntries > 0 {
+			brainOpts = append(brainOpts, brain.WithMaxLTMEntries(cfg.Brain.MaxLTMEntries))
+		}
+		if cfg.Brain.AutoFlushSeconds > 0 {
+			brainOpts = append(brainOpts, brain.WithAutoFlushInterval(time.Duration(cfg.Brain.AutoFlushSeconds)*time.Second))
+		}
+		if cfg.Brain.ConsolidateThreshold > 0 {
+			brainOpts = append(brainOpts, brain.WithConsolidateThreshold(cfg.Brain.ConsolidateThreshold))
+		}
+		if cfg.Brain.EvictThreshold > 0 {
+			brainOpts = append(brainOpts, brain.WithEvictThreshold(cfg.Brain.EvictThreshold))
+		}
+		brainOpts = append(brainOpts, brain.WithAutoPromote(cfg.Brain.AutoPromote))
+		if cfg.Brain.WMGracePeriodSeconds > 0 {
+			brainOpts = append(brainOpts, brain.WithWMGracePeriod(time.Duration(cfg.Brain.WMGracePeriodSeconds)*time.Second))
+		}
+		brainSvc, brainErr := brain.New(brainDBPath, brainOpts...)
+		if brainErr != nil {
+			logger.Warn("failed to initialize brain, continuing without", "error", brainErr)
+		} else {
+			gw.brainService = brainSvc
+			logger.Info("brain cognitive architecture initialized", "path", brainDBPath)
+		}
+	}
+
 	// Create schema builder with discovery providers for enhanced tool schemas
 	schemaBuilder := createSchemaBuilder(gw, cfg)
 
@@ -623,6 +659,12 @@ func New(cfg *config.Config) (*Gateway, error) {
 		mqttSvc = mqtt.NewServiceAdapter(gw.mqttService)
 	}
 
+	// Build BrainService interface value (nil if disabled)
+	var brainSvcAdapter types.BrainService
+	if gw.brainService != nil {
+		brainSvcAdapter = newBrainAdapter(gw.brainService)
+	}
+
 	toolServices := &tools.ToolServices{
 		SessionStore:  sessionStore,
 		ConfigMgr:     cfg,
@@ -632,6 +674,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		Searcher:      ftsSearcher,
 		VectorSearch:  vectorSearch,
 		MQTTService:   mqttSvc,
+		Brain:         brainSvcAdapter,
 		SchemaBuilder: schemaBuilder,
 		DebugLog:      debugBuffer,
 	}
@@ -666,6 +709,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		"tool_count", len(aiTools),
 		"vector_search_enabled", gw.vectorService != nil,
 		"mqtt_enabled", gw.mqttService != nil,
+		"brain_enabled", gw.brainService != nil,
 		"compaction_enabled", gw.compactionEngine != nil,
 		"rate_limiting_enabled", cfg.RateLimiting.Enabled,
 		"model_alias_count", len(cfg.AI.ModelAliases))
@@ -1111,6 +1155,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 	if g.vectorService != nil {
 		if err := g.vectorService.Close(); err != nil {
 			g.logger.Error("error closing vector service", "error", err)
+		}
+	}
+
+	// Close brain service
+	if g.brainService != nil {
+		if err := g.brainService.Close(); err != nil {
+			g.logger.Error("error closing brain service", "error", err)
 		}
 	}
 
