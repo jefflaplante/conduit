@@ -30,7 +30,7 @@ type AgentHeartbeatConfig struct {
 	EnabledTaskTypes  []string `json:"enabled_task_types"`
 
 	// Logging and debugging
-	LogLevel       string `json:"log_level,omitempty"`
+	LogLevel       string `json:"log_level,omitempty" validate:"enum=debug|info|warn|error"`
 	VerboseLogging bool   `json:"verbose_logging,omitempty"`
 }
 
@@ -43,7 +43,7 @@ type QuietHoursConfig struct {
 // AlertTarget defines where alerts should be delivered
 type AlertTarget struct {
 	Name     string            `json:"name"`
-	Type     string            `json:"type"` // "telegram", "email", "slack", etc.
+	Type     string            `json:"type" validate:"enum=telegram|email|slack|webhook|mqtt"` // "telegram", "email", "slack", etc.
 	Config   map[string]string `json:"config"`
 	Severity []string          `json:"severity"` // Which severities this target handles
 }
@@ -100,22 +100,11 @@ func (a AgentHeartbeatConfig) Validate() error {
 		return fmt.Errorf("invalid alert retry policy: %w", err)
 	}
 
-	// Validate log level
-	if a.LogLevel != "" {
-		validLevels := []string{"debug", "info", "warn", "error"}
-		valid := false
-		for _, level := range validLevels {
-			if a.LogLevel == level {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return fmt.Errorf("invalid log level: %s (must be one of: %s)", a.LogLevel, strings.Join(validLevels, ", "))
-		}
+	if err := validateEnumTags(&a); err != nil {
+		return err
 	}
 
-	// Validate enabled task types
+	// Validate enabled task types ([]string can't use enum tags)
 	validTaskTypes := []string{"alerts", "checks", "reports", "maintenance"}
 	for _, taskType := range a.EnabledTaskTypes {
 		valid := false
@@ -160,20 +149,11 @@ func (a AlertTarget) Validate() error {
 	if a.Type == "" {
 		return fmt.Errorf("type cannot be empty")
 	}
-
-	validTypes := []string{"telegram", "email", "slack", "webhook", "mqtt"}
-	valid := false
-	for _, validType := range validTypes {
-		if a.Type == validType {
-			valid = true
-			break
-		}
-	}
-	if !valid {
-		return fmt.Errorf("invalid type: %s (must be one of: %s)", a.Type, strings.Join(validTypes, ", "))
+	if err := validateEnumTags(&a); err != nil {
+		return err
 	}
 
-	// Validate severity levels
+	// Validate severity levels ([]string can't use enum tags)
 	validSeverities := []string{"critical", "warning", "info"}
 	for _, severity := range a.Severity {
 		valid := false

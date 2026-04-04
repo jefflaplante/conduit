@@ -5,7 +5,7 @@ import "fmt"
 // PagerDutyConfig holds configuration for the optional PagerDuty integration.
 type PagerDutyConfig struct {
 	Enabled                   bool    `json:"enabled"`
-	APIToken                  string  `json:"api_token,omitempty"`
+	APIToken                  string  `json:"api_token,omitempty" cfg:"env"`
 	DefaultServiceID          string  `json:"default_service_id,omitempty"`
 	DefaultEscalationPolicyID string  `json:"default_escalation_policy_id,omitempty"`
 	BaseURL                   string  `json:"base_url,omitempty"`

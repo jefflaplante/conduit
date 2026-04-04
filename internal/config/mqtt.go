@@ -5,10 +5,10 @@ import "fmt"
 // MQTTConfig holds configuration for the optional MQTT event ingest service.
 type MQTTConfig struct {
 	Enabled         bool           `json:"enabled"`
-	BrokerURL       string         `json:"broker_url"`                       // "tcp://192.168.1.10:1883"
-	ClientID        string         `json:"client_id,omitempty"`              // default: "conduit"
-	Username        string         `json:"username,omitempty"`               // ${MQTT_USERNAME}
-	Password        string         `json:"password,omitempty"`               // ${MQTT_PASSWORD}
+	BrokerURL       string         `json:"broker_url" cfg:"env"`              // "tcp://192.168.1.10:1883"
+	ClientID        string         `json:"client_id,omitempty"`               // default: "conduit"
+	Username        string         `json:"username,omitempty" cfg:"env"`      // ${MQTT_USERNAME}
+	Password        string         `json:"password,omitempty" cfg:"env"`      // ${MQTT_PASSWORD}
 	Topics          []string       `json:"topics"`                           // ["zigbee2mqtt/#"]
 	QoS             int            `json:"qos,omitempty"`                    // 0-2, default 0
 	BufferMaxAge    int            `json:"buffer_max_age_seconds,omitempty"` // default 3600
@@ -26,7 +26,18 @@ type MQTTTLSConfig struct {
 	Insecure   bool   `json:"insecure,omitempty"`
 }
 
-// Validate checks the MQTT configuration for errors and applies defaults.
+// DefaultMQTTConfig returns sensible defaults for MQTT configuration.
+func DefaultMQTTConfig() MQTTConfig {
+	return MQTTConfig{
+		Enabled:         false,
+		ClientID:        "conduit",
+		BufferMaxAge:    3600,
+		BufferMaxEvents: 1000,
+		BufferMaxTopics: 500,
+	}
+}
+
+// Validate checks the MQTT configuration for errors.
 func (m *MQTTConfig) Validate() error {
 	if !m.Enabled {
 		return nil
@@ -44,7 +55,7 @@ func (m *MQTTConfig) Validate() error {
 		return fmt.Errorf("mqtt: qos must be 0, 1, or 2 (got %d)", m.QoS)
 	}
 
-	// Apply defaults
+	// Apply defaults for zero-valued fields that weren't set
 	if m.ClientID == "" {
 		m.ClientID = "conduit"
 	}
@@ -55,7 +66,7 @@ func (m *MQTTConfig) Validate() error {
 		m.BufferMaxEvents = 1000
 	}
 	if m.BufferMaxTopics <= 0 {
-		m.BufferMaxTopics = 1000
+		m.BufferMaxTopics = 500
 	}
 
 	return nil

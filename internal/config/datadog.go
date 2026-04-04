@@ -5,8 +5,8 @@ import "fmt"
 // DatadogConfig holds configuration for the optional Datadog integration.
 type DatadogConfig struct {
 	Enabled      bool    `json:"enabled"`
-	APIKey       string  `json:"api_key,omitempty"`
-	AppKey       string  `json:"app_key,omitempty"`
+	APIKey       string  `json:"api_key,omitempty" cfg:"env"`
+	AppKey       string  `json:"app_key,omitempty" cfg:"env"`
 	Site         string  `json:"site,omitempty"`
 	RateLimitRPS float64 `json:"rate_limit_rps,omitempty"`
 }

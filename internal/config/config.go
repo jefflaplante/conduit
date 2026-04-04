@@ -16,8 +16,8 @@ import (
 type Config struct {
 	Port           int                  `json:"port"`
 	Timezone       string               `json:"timezone,omitempty"`
-	DataDir        string               `json:"data_dir,omitempty"`
-	SecretsFile    string               `json:"secrets_file,omitempty"`
+	DataDir        string               `json:"data_dir,omitempty" cfg:"env,path"`
+	SecretsFile    string               `json:"secrets_file,omitempty" cfg:"env,path"`
 	AllowedOrigins []string             `json:"allowed_origins,omitempty"` // WebSocket allowed origins (empty = same-origin + localhost only)
 	WebSocket      WebSocketConfig      `json:"websocket,omitempty"`
 	Database       DatabaseConfig       `json:"database"`
@@ -50,7 +50,7 @@ type AuthTokenConfig struct {
 	// TokenSecret is the HMAC key used for hashing tokens (hex-encoded, 32 bytes).
 	// If empty, a random key is generated at startup (tokens won't survive restarts).
 	// Supports ${ENV_VAR} expansion.
-	TokenSecret string `json:"token_secret,omitempty"`
+	TokenSecret string `json:"token_secret,omitempty" cfg:"env"`
 }
 
 // LoggingConfig holds structured logging configuration
@@ -97,7 +97,7 @@ type VectorConfig struct {
 
 // OpenAIEmbedConfig holds configuration for OpenAI embedding provider.
 type OpenAIEmbedConfig struct {
-	APIKey string `json:"api_key,omitempty"` // Supports ${ENV_VAR} expansion
+	APIKey string `json:"api_key,omitempty" cfg:"env"` // Supports ${ENV_VAR} expansion
 	Model  string `json:"model,omitempty"`   // Default: "text-embedding-3-small"
 }
 
@@ -116,8 +116,8 @@ func DeriveVectorDBPath(gatewayDBPath string) string {
 type SSHServerConfig struct {
 	Enabled            bool   `json:"enabled"`
 	ListenAddr         string `json:"listen_addr,omitempty"`
-	HostKeyPath        string `json:"host_key_path,omitempty"`
-	AuthorizedKeysPath string `json:"authorized_keys_path,omitempty"`
+	HostKeyPath        string `json:"host_key_path,omitempty" cfg:"path"`
+	AuthorizedKeysPath string `json:"authorized_keys_path,omitempty" cfg:"path"`
 }
 
 // WebSocketConfig holds configuration for WebSocket connections
@@ -228,7 +228,7 @@ type DebugConfig struct {
 
 // DatabaseConfig contains database settings
 type DatabaseConfig struct {
-	Path string `json:"path"`
+	Path string `json:"path" cfg:"path"`
 }
 
 // SearchDatabaseConfig contains settings for the dedicated search database.
@@ -337,8 +337,8 @@ func DefaultModelAliases() map[string]string {
 type ProviderConfig struct {
 	Name          string      `json:"name"`
 	Type          string      `json:"type"`               // "anthropic", "openai", "ollama", etc.
-	APIKey        string      `json:"api_key,omitempty"`  // Legacy API key
-	BaseURL       string      `json:"base_url,omitempty"` // Custom API base URL (for local/compatible servers)
+	APIKey        string      `json:"api_key,omitempty" cfg:"env"`  // Legacy API key
+	BaseURL       string      `json:"base_url,omitempty" cfg:"env"` // Custom API base URL (for local/compatible servers)
 	Model         string      `json:"model"`
 	Auth          *AuthConfig `json:"auth,omitempty"`           // OAuth configuration
 	ContextWindow int         `json:"context_window,omitempty"` // Override context window size (tokens); 0 = auto-detect from model name
@@ -347,11 +347,11 @@ type ProviderConfig struct {
 // AuthConfig contains OAuth authentication settings
 type AuthConfig struct {
 	Type         string `json:"type"` // "oauth" or "api_key"
-	OAuthToken   string `json:"oauth_token,omitempty"`
-	RefreshToken string `json:"refresh_token,omitempty"`
+	OAuthToken   string `json:"oauth_token,omitempty" cfg:"env"`
+	RefreshToken string `json:"refresh_token,omitempty" cfg:"env"`
 	ExpiresAt    int64  `json:"expires_at,omitempty"`
-	ClientID     string `json:"client_id,omitempty"`
-	ClientSecret string `json:"client_secret,omitempty"`
+	ClientID     string `json:"client_id,omitempty" cfg:"env"`
+	ClientSecret string `json:"client_secret,omitempty" cfg:"env"`
 }
 
 // AgentConfig contains agent system settings
@@ -677,6 +677,10 @@ func Default() *Config {
 		Heartbeat:      DefaultHeartbeatConfig(),
 		AgentHeartbeat: DefaultAgentHeartbeatConfig(),
 		RemoteSSH:      DefaultRemoteSSHConfig(),
+		MQTT:           DefaultMQTTConfig(),
+		Kubernetes:     DefaultKubernetesConfig(),
+		PagerDuty:      DefaultPagerDutyConfig(),
+		Datadog:        DefaultDatadogConfig(),
 		Logging:        DefaultLoggingConfig(),
 		Channels: []ChannelConfig{
 			{
@@ -758,69 +762,13 @@ func (c *Config) Save(path string) error {
 	return nil
 }
 
-// expandEnvVars expands environment variables in configuration values
+// expandEnvVars expands ${ENV_VAR} placeholders in configuration values.
+// Struct fields tagged with cfg:"env" are expanded automatically via reflection.
+// map[string]interface{} fields (channels, tool services) are expanded manually
+// since map values can't carry struct tags.
 func (c *Config) expandEnvVars() error {
-	// Expand top-level path fields
-	c.DataDir = os.ExpandEnv(c.DataDir)
-	c.SecretsFile = os.ExpandEnv(c.SecretsFile)
-
-	// Expand AI provider settings
-	for i := range c.AI.Providers {
-		c.AI.Providers[i].APIKey = os.ExpandEnv(c.AI.Providers[i].APIKey)
-		c.AI.Providers[i].BaseURL = os.ExpandEnv(c.AI.Providers[i].BaseURL)
-
-		// Expand OAuth configuration if present
-		if c.AI.Providers[i].Auth != nil {
-			c.AI.Providers[i].Auth.OAuthToken = os.ExpandEnv(c.AI.Providers[i].Auth.OAuthToken)
-			c.AI.Providers[i].Auth.RefreshToken = os.ExpandEnv(c.AI.Providers[i].Auth.RefreshToken)
-			c.AI.Providers[i].Auth.ClientID = os.ExpandEnv(c.AI.Providers[i].Auth.ClientID)
-			c.AI.Providers[i].Auth.ClientSecret = os.ExpandEnv(c.AI.Providers[i].Auth.ClientSecret)
-		}
-	}
-
-	// Expand channel configuration
-	for i := range c.Channels {
-		for key, value := range c.Channels[i].Config {
-			if strVal, ok := value.(string); ok {
-				c.Channels[i].Config[key] = os.ExpandEnv(strVal)
-			}
-		}
-	}
-
-	// Expand tools services configuration
-	for _, serviceConfig := range c.Tools.Services {
-		for key, value := range serviceConfig {
-			if strVal, ok := value.(string); ok {
-				serviceConfig[key] = os.ExpandEnv(strVal)
-			}
-		}
-	}
-
-	// Expand vector/embedding configuration
-	if c.Vector.OpenAI != nil {
-		c.Vector.OpenAI.APIKey = os.ExpandEnv(c.Vector.OpenAI.APIKey)
-	}
-
-	// Expand MQTT configuration
-	c.MQTT.BrokerURL = os.ExpandEnv(c.MQTT.BrokerURL)
-	c.MQTT.Username = os.ExpandEnv(c.MQTT.Username)
-	c.MQTT.Password = os.ExpandEnv(c.MQTT.Password)
-
-	// Expand Kubernetes configuration
-	for i := range c.Kubernetes.Clusters {
-		c.Kubernetes.Clusters[i].KubeconfigPath = os.ExpandEnv(c.Kubernetes.Clusters[i].KubeconfigPath)
-	}
-
-	// Expand PagerDuty configuration
-	c.PagerDuty.APIToken = os.ExpandEnv(c.PagerDuty.APIToken)
-
-	// Expand Datadog configuration
-	c.Datadog.APIKey = os.ExpandEnv(c.Datadog.APIKey)
-	c.Datadog.AppKey = os.ExpandEnv(c.Datadog.AppKey)
-
-	// Expand auth configuration
-	c.Auth.TokenSecret = os.ExpandEnv(c.Auth.TokenSecret)
-
+	c.expandEnvTagged()
+	c.expandEnvMaps()
 	return nil
 }
 
@@ -908,36 +856,10 @@ func (c *Config) GetLocation() *time.Location {
 }
 
 // expandTilde replaces a leading "~/" with the user's home directory in
-// path-valued config fields. Called before env-var expansion so that
-// both "~/foo" and "${SOME_PATH}" work.
+// all string fields tagged with cfg:"path". Called before env-var expansion
+// so that both "~/foo" and "${SOME_PATH}" work.
 func (c *Config) expandTilde() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return // can't expand, leave as-is
-	}
-	expand := func(p string) string {
-		if p == "~" {
-			return home
-		}
-		if strings.HasPrefix(p, "~/") {
-			return filepath.Join(home, p[2:])
-		}
-		return p
-	}
-
-	c.DataDir = expand(c.DataDir)
-	c.SecretsFile = expand(c.SecretsFile)
-	c.Database.Path = expand(c.Database.Path)
-	c.SSH.HostKeyPath = expand(c.SSH.HostKeyPath)
-	c.SSH.AuthorizedKeysPath = expand(c.SSH.AuthorizedKeysPath)
-
-	// Expand tilde in RemoteSSH config
-	c.RemoteSSH.Audit.LogPath = expand(c.RemoteSSH.Audit.LogPath)
-	c.RemoteSSH.Pool.KnownHostsFile = expand(c.RemoteSSH.Pool.KnownHostsFile)
-	c.RemoteSSH.Defaults.IdentityFile = expand(c.RemoteSSH.Defaults.IdentityFile)
-	for i := range c.RemoteSSH.Hosts {
-		c.RemoteSSH.Hosts[i].IdentityFile = expand(c.RemoteSSH.Hosts[i].IdentityFile)
-	}
+	c.expandTildeTagged()
 }
 
 // loadSecretsFile reads a KEY=VALUE file into the process environment.

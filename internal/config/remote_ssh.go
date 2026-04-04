@@ -50,7 +50,7 @@ type SSHHostConfig struct {
 	User string `json:"user,omitempty"`
 
 	// IdentityFile is the path to the SSH private key
-	IdentityFile string `json:"identity_file,omitempty"`
+	IdentityFile string `json:"identity_file,omitempty" cfg:"path"`
 
 	// Groups lists which host groups this host belongs to
 	Groups []string `json:"groups,omitempty"`
@@ -60,7 +60,7 @@ type SSHHostConfig struct {
 
 	// SecurityTier overrides the default security tier for this host
 	// Values: "read", "modify", "dangerous", "blocked"
-	SecurityTier string `json:"security_tier,omitempty"`
+	SecurityTier string `json:"security_tier,omitempty" validate:"enum=read|modify|dangerous|blocked"`
 
 	// Enabled controls whether this host can be targeted (default: true)
 	Enabled *bool `json:"enabled,omitempty"`
@@ -84,7 +84,7 @@ type SSHHostGroup struct {
 	Pattern string `json:"pattern,omitempty"`
 
 	// SecurityTier sets the minimum security tier for commands on this group
-	SecurityTier string `json:"security_tier,omitempty"`
+	SecurityTier string `json:"security_tier,omitempty" validate:"enum=read|modify|dangerous|blocked"`
 
 	// MaxParallel limits concurrent executions within this group
 	MaxParallel int `json:"max_parallel,omitempty"`
@@ -94,7 +94,7 @@ type SSHHostGroup struct {
 type SSHSecurityConfig struct {
 	// DefaultTier is the security tier for unclassified commands
 	// MUST be "dangerous" or "blocked" for safety (default: "dangerous")
-	DefaultTier string `json:"default_tier"`
+	DefaultTier string `json:"default_tier" validate:"enum=dangerous|blocked"`
 
 	// RequireApproval lists tiers that require human approval
 	// Default: ["dangerous", "blocked"]
@@ -159,11 +159,11 @@ type SSHPoolConfig struct {
 	HealthCheckInterval time.Duration `json:"health_check_interval,omitempty"`
 
 	// KnownHostsFile is the path to the SSH known_hosts file
-	KnownHostsFile string `json:"known_hosts_file,omitempty"`
+	KnownHostsFile string `json:"known_hosts_file,omitempty" cfg:"path"`
 
 	// StrictHostKeyChecking controls host key verification
 	// Values: "yes", "no", "accept-new" (default: "yes")
-	StrictHostKeyChecking string `json:"strict_host_key_checking,omitempty"`
+	StrictHostKeyChecking string `json:"strict_host_key_checking,omitempty" validate:"enum=yes|no|accept-new"`
 }
 
 // SSHAuditConfig defines audit logging settings
@@ -172,7 +172,7 @@ type SSHAuditConfig struct {
 	Enabled bool `json:"enabled"`
 
 	// LogPath is the path to the audit log file (JSONL format)
-	LogPath string `json:"log_path"`
+	LogPath string `json:"log_path" cfg:"path"`
 
 	// LogCommands records all executed commands
 	LogCommands bool `json:"log_commands"`
@@ -217,7 +217,7 @@ type SSHHostDefaults struct {
 	User string `json:"user,omitempty"`
 
 	// IdentityFile is the default path to SSH private key
-	IdentityFile string `json:"identity_file,omitempty"`
+	IdentityFile string `json:"identity_file,omitempty" cfg:"path"`
 
 	// ConnectTimeout is the default connection timeout
 	ConnectTimeout time.Duration `json:"connect_timeout,omitempty"`
@@ -306,19 +306,8 @@ func (h *SSHHostConfig) Validate() error {
 		return fmt.Errorf("invalid port number: %d (must be 1-65535)", h.Port)
 	}
 
-	// Validate security tier if specified
-	if h.SecurityTier != "" {
-		validTiers := []string{"read", "modify", "dangerous", "blocked"}
-		valid := false
-		for _, tier := range validTiers {
-			if h.SecurityTier == tier {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return fmt.Errorf("invalid security tier: %s (must be one of: %s)", h.SecurityTier, strings.Join(validTiers, ", "))
-		}
+	if err := validateEnumTags(h); err != nil {
+		return err
 	}
 
 	// Validate identity file path if specified
@@ -338,19 +327,8 @@ func (g *SSHHostGroup) Validate() error {
 		return fmt.Errorf("group name cannot be empty")
 	}
 
-	// Validate security tier if specified
-	if g.SecurityTier != "" {
-		validTiers := []string{"read", "modify", "dangerous", "blocked"}
-		valid := false
-		for _, tier := range validTiers {
-			if g.SecurityTier == tier {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return fmt.Errorf("invalid security tier: %s", g.SecurityTier)
-		}
+	if err := validateEnumTags(g); err != nil {
+		return err
 	}
 
 	// Validate max parallel if specified
@@ -363,24 +341,14 @@ func (g *SSHHostGroup) Validate() error {
 
 // Validate validates SSHSecurityConfig
 func (s *SSHSecurityConfig) Validate() error {
-	// Default tier MUST be "dangerous" or "blocked" for safety
 	if s.DefaultTier == "" {
 		return fmt.Errorf("default_tier must be specified (use 'dangerous' or 'blocked')")
 	}
-
-	validDefaultTiers := []string{"dangerous", "blocked"}
-	valid := false
-	for _, tier := range validDefaultTiers {
-		if s.DefaultTier == tier {
-			valid = true
-			break
-		}
-	}
-	if !valid {
-		return fmt.Errorf("default_tier must be 'dangerous' or 'blocked' for safety (got: %s)", s.DefaultTier)
+	if err := validateEnumTags(s); err != nil {
+		return err
 	}
 
-	// Validate require_approval tiers
+	// Validate require_approval tiers ([]string can't use enum tags)
 	validTiers := []string{"read", "modify", "dangerous", "blocked"}
 	for _, tier := range s.RequireApproval {
 		valid := false
@@ -426,19 +394,8 @@ func (p *SSHPoolConfig) Validate() error {
 		return fmt.Errorf("connect_timeout cannot be negative")
 	}
 
-	// Validate strict host key checking
-	if p.StrictHostKeyChecking != "" {
-		validValues := []string{"yes", "no", "accept-new"}
-		valid := false
-		for _, v := range validValues {
-			if p.StrictHostKeyChecking == v {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return fmt.Errorf("invalid strict_host_key_checking: %s (must be one of: %s)", p.StrictHostKeyChecking, strings.Join(validValues, ", "))
-		}
+	if err := validateEnumTags(p); err != nil {
+		return err
 	}
 
 	return nil
