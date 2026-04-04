@@ -12,7 +12,7 @@ import (
 	"conduit/internal/tools/types"
 )
 
-// mockChainExecutor implements ChainToolExecutor for tests.
+// mockChainExecutor implements chain.ToolExecutor for tests.
 type mockChainExecutor struct {
 	tools   map[string]types.Tool
 	results map[string]*types.ToolResult
