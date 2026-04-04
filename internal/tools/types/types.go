@@ -77,6 +77,19 @@ type SearchService interface {
 	Search(ctx context.Context, query string, limit int) ([]fts.SearchResult, error)
 }
 
+// ToolExecutor provides a way to execute tools by name.
+// This is the canonical interface for tool execution, used by SRE, planning, and chain tools.
+type ToolExecutor interface {
+	ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (*ToolResult, error)
+}
+
+// ToolRegistry extends ToolExecutor with tool discovery.
+// Used by tools that need to enumerate available tools (e.g., chain tool).
+type ToolRegistry interface {
+	ToolExecutor
+	GetAvailableTools() map[string]Tool
+}
+
 // MQTTEvent represents a single MQTT message for the tool layer.
 type MQTTEvent struct {
 	Topic     string          `json:"topic"`

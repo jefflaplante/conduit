@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"conduit/internal/ai"
+	"conduit/internal/tools/types"
 )
 
 // PlanningEngine provides the main interface for advanced tool execution planning and optimization
@@ -48,7 +49,7 @@ type PlanningResult struct {
 }
 
 // NewPlanningEngine creates a new planning engine with default configuration
-func NewPlanningEngine(toolExecutor ToolExecutor) *PlanningEngine {
+func NewPlanningEngine(toolExecutor types.ToolExecutor) *PlanningEngine {
 	config := &PlanningConfig{
 		Enabled:               true,
 		MaxParallel:           5,
@@ -72,7 +73,7 @@ func NewPlanningEngine(toolExecutor ToolExecutor) *PlanningEngine {
 }
 
 // NewPlanningEngineWithConfig creates a planning engine with custom configuration
-func NewPlanningEngineWithConfig(config *PlanningConfig, toolExecutor ToolExecutor) *PlanningEngine {
+func NewPlanningEngineWithConfig(config *PlanningConfig, toolExecutor types.ToolExecutor) *PlanningEngine {
 	engine := &PlanningEngine{
 		config:  config,
 		enabled: config.Enabled,
@@ -93,7 +94,7 @@ func NewPlanningEngineWithConfig(config *PlanningConfig, toolExecutor ToolExecut
 }
 
 // initializeComponents sets up all planning engine components
-func (pe *PlanningEngine) initializeComponents(toolExecutor ToolExecutor) {
+func (pe *PlanningEngine) initializeComponents(toolExecutor types.ToolExecutor) {
 	// Initialize metrics collector
 	if pe.config.MetricsEnabled {
 		pe.metrics = NewMetricsCollector()
@@ -122,7 +123,7 @@ func (pe *PlanningEngine) initializeComponents(toolExecutor ToolExecutor) {
 }
 
 // PlanAndExecute is the main entry point for planning and executing tool calls
-func (pe *PlanningEngine) PlanAndExecute(ctx context.Context, toolCalls []ai.ToolCall, toolExecutor ToolExecutor) (*PlanningResult, error) {
+func (pe *PlanningEngine) PlanAndExecute(ctx context.Context, toolCalls []ai.ToolCall, toolExecutor types.ToolExecutor) (*PlanningResult, error) {
 	if !pe.enabled || len(toolCalls) < pe.config.OptimizationThreshold {
 		// Fall back to simple execution for small tool sets
 		return pe.executeSimple(ctx, toolCalls, toolExecutor)
@@ -187,7 +188,7 @@ func (pe *PlanningEngine) PlanAndExecute(ctx context.Context, toolCalls []ai.Too
 }
 
 // executeSimple performs simple execution without planning (fallback)
-func (pe *PlanningEngine) executeSimple(ctx context.Context, toolCalls []ai.ToolCall, toolExecutor ToolExecutor) (*PlanningResult, error) {
+func (pe *PlanningEngine) executeSimple(ctx context.Context, toolCalls []ai.ToolCall, toolExecutor types.ToolExecutor) (*PlanningResult, error) {
 	start := time.Now()
 
 	result := &PlanResult{
