@@ -175,6 +175,26 @@ type VectorService interface {
 	Close() error
 }
 
+// BrainTier represents the storage tier of a brain entry.
+type BrainTier string
+
+// BrainEntry represents a single entry in the Brain cognitive memory.
+type BrainEntry struct {
+	Key         string
+	Value       string
+	Tier        BrainTier
+	Salience    float64
+	AccessCount int
+	Source      string
+	CreatedAt   time.Time
+	AccessedAt  time.Time
+}
+
+// BrainService provides access to the Brain cognitive memory system.
+type BrainService interface {
+	Recall(ctx context.Context, query string, limit int) ([]*BrainEntry, error)
+}
+
 // ToolServices provides access to services for tools (no direct gateway dependency)
 type ToolServices struct {
 	SessionStore  *sessions.Store
@@ -186,6 +206,7 @@ type ToolServices struct {
 	Searcher      SearchService  // FTS5 full-text search
 	VectorSearch  VectorService  // Optional vector/semantic search
 	MQTTService   MQTTService    // Optional MQTT event ingest
+	Brain         BrainService   // Optional brain cognitive memory
 
 	// Schema enhancement
 	SchemaBuilder *schema.Builder // For enhancing tool schemas with discovery data

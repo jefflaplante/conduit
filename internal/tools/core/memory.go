@@ -130,6 +130,16 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]interfac
 	var results []MemoryResult
 	results = append(results, fileResults...)
 
+	// Search brain memory if available
+	if t.services.Brain != nil {
+		brainResults, brainErr := t.searchBrain(ctx, query)
+		if brainErr != nil {
+			log.Printf("Warning: brain search failed: %v", brainErr)
+		} else {
+			results = append(results, brainResults...)
+		}
+	}
+
 	// Search session messages if requested
 	var sessionResults []MemoryResult
 	if searchSessions && t.services.SessionStore != nil {
@@ -179,6 +189,7 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]interfac
 			"searchMode":      searchMode,
 			"effectiveMode":   effectiveMode,
 			"vectorAvailable": t.services.VectorSearch != nil,
+			"brainAvailable":  t.services.Brain != nil,
 		},
 	}, nil
 }
@@ -541,6 +552,26 @@ func (t *MemorySearchTool) searchSessionMessagesFTS(ctx context.Context, query s
 		})
 	}
 
+	return results, nil
+}
+
+// searchBrain queries the Brain service for matching entries across all tiers.
+func (t *MemorySearchTool) searchBrain(ctx context.Context, query string) ([]MemoryResult, error) {
+	entries, err := t.services.Brain.Recall(ctx, query, 10)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []MemoryResult
+	for _, e := range entries {
+		results = append(results, MemoryResult{
+			Path:       fmt.Sprintf("brain:%s", e.Key),
+			Content:    fmt.Sprintf("%s = %s", e.Key, e.Value),
+			Score:      e.Salience,
+			Source:     "brain",
+			SearchType: string(e.Tier),
+		})
+	}
 	return results, nil
 }
 
