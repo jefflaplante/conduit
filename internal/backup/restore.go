@@ -105,6 +105,13 @@ func mapEntryToDestination(name string, m *BackupManifest, opts RestoreOptions) 
 	case name == "manifest.json":
 		return "", false
 
+	case name == "database/brain.db":
+		restoreDBPath := m.OriginalPaths.Database
+		if opts.DatabasePath != "" {
+			restoreDBPath = opts.DatabasePath
+		}
+		return deriveBrainDBPath(restoreDBPath), false
+
 	case strings.HasPrefix(name, "database/"):
 		relName := strings.TrimPrefix(name, "database/")
 		if opts.DatabasePath != "" {

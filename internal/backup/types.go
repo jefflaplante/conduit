@@ -11,6 +11,7 @@ const (
 	ComponentWorkspace
 	ComponentSSHKeys
 	ComponentSkills
+	ComponentBrainDB
 )
 
 func (c BackupComponents) Has(flag BackupComponents) bool {
@@ -33,6 +34,9 @@ func (c BackupComponents) String() string {
 	}
 	if c.Has(ComponentSkills) {
 		parts = append(parts, "skills")
+	}
+	if c.Has(ComponentBrainDB) {
+		parts = append(parts, "brain_db")
 	}
 	if len(parts) == 0 {
 		return "none"
