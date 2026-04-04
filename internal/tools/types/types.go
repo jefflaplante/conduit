@@ -175,6 +175,61 @@ type VectorService interface {
 	Close() error
 }
 
+// BrainTier represents a memory tier in the cognitive architecture.
+type BrainTier string
+
+const (
+	BrainTierLongTerm BrainTier = "longterm"
+	BrainTierWorking  BrainTier = "working"
+	BrainTierScratch  BrainTier = "scratch"
+)
+
+// BrainEntry represents a single fact stored in the brain.
+type BrainEntry struct {
+	Key         string    `json:"key"`
+	Value       string    `json:"value"`
+	Tier        BrainTier `json:"tier"`
+	CreatedAt   time.Time `json:"created_at"`
+	AccessedAt  time.Time `json:"accessed_at"`
+	AccessCount int       `json:"access_count"`
+	Salience    float64   `json:"salience"`
+	Source      string    `json:"source,omitempty"`
+}
+
+// BrainStatus reports the current state of the brain service.
+type BrainStatus struct {
+	LTMEntries   int      `json:"ltm_entries"`
+	WMEntries    int      `json:"wm_entries"`
+	ScratchDepth int      `json:"scratch_depth"`
+	AvgSalience  float64  `json:"avg_salience,omitempty"`
+	HottestKeys  []string `json:"hottest_keys,omitempty"`
+}
+
+// ConsolidationReport summarizes a consolidation sweep.
+type ConsolidationReport struct {
+	PromotedCount int      `json:"promoted_count"`
+	EvictedCount  int      `json:"evicted_count"`
+	LTMSize       int      `json:"ltm_size"`
+	PromotedKeys  []string `json:"promoted_keys,omitempty"`
+	EvictedKeys   []string `json:"evicted_keys,omitempty"`
+}
+
+// BrainService provides tiered memory (LTM + working + scratchpad) to tools.
+type BrainService interface {
+	Store(ctx context.Context, key, value string, tier BrainTier, source string) error
+	Get(ctx context.Context, key string) (*BrainEntry, error)
+	Recall(ctx context.Context, query string, limit int) ([]*BrainEntry, error)
+	List(ctx context.Context, prefix string) ([]*BrainEntry, error)
+	Delete(ctx context.Context, key string) error
+	Push(ctx context.Context, userID, value string) error
+	Pop(ctx context.Context, userID string) (string, error)
+	Peek(ctx context.Context, userID string) (string, error)
+	Promote(ctx context.Context, key string) error
+	Consolidate(ctx context.Context, autoPromote bool) (*ConsolidationReport, error)
+	Status(ctx context.Context) (*BrainStatus, error)
+	Close() error
+}
+
 // ToolServices provides access to services for tools (no direct gateway dependency)
 type ToolServices struct {
 	SessionStore  *sessions.Store
@@ -186,6 +241,7 @@ type ToolServices struct {
 	Searcher      SearchService  // FTS5 full-text search
 	VectorSearch  VectorService  // Optional vector/semantic search
 	MQTTService   MQTTService    // Optional MQTT event ingest
+	Brain         BrainService   // Optional tiered memory (LTM + working + scratchpad)
 
 	// Schema enhancement
 	SchemaBuilder *schema.Builder // For enhancing tool schemas with discovery data
