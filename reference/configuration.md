@@ -57,7 +57,7 @@ Configuration is loaded from JSON files with support for:
     "enabled_tools": [
       "Read", "Write", "Edit", "Bash", "Glob",
       "MemorySearch", "WebSearch", "WebFetch",
-      "Message", "Cron", "Chain", "Gateway"
+      "Message", "Cron", "Chain", "Gateway", "Brain"
     ],
     "max_chain_depth": 10,
     "sandbox": {
@@ -120,6 +120,12 @@ Configuration is loaded from JSON files with support for:
       "end": "08:00",
       "timezone": "America/Los_Angeles"
     }
+  },
+
+  "brain": {
+    "enabled": true,
+    "max_ltm_entries": 10000,
+    "auto_promote": true
   },
 
   "skills": {
@@ -329,7 +335,7 @@ Optional email identity configuration for the agent. When configured, the agent'
 }
 ```
 
-Available tools: Read, Write, Edit, Bash, Glob, MemorySearch, Find, Facts, WebSearch, WebFetch, Message, Tts, Cron, Chain, Gateway, Context, Image, SessionsList, SessionsSend, SessionsSpawn, SessionStatus, google_workspace
+Available tools: Read, Write, Edit, Bash, Glob, MemorySearch, Find, Facts, WebSearch, WebFetch, Message, Tts, Cron, Chain, Gateway, Context, Image, Brain, SessionsList, SessionsSend, SessionsSpawn, SessionStatus, google_workspace
 
 #### Google Workspace Tool
 
@@ -540,6 +546,97 @@ Optional MQTT event ingest for IoT/home automation. See [MQTT Integration](mqtt.
 | `buffer_max_events` | int | `1000` | Max events per topic |
 | `buffer_max_topics` | int | `500` | Max tracked topics |
 | `publish_allowed` | bool | `false` | Allow AI to publish messages |
+
+### Brain (Cognitive Memory)
+
+Tiered cognitive memory system that gives the AI agent persistent memory across interactions. Stores facts in three tiers: long-term memory (SQLite-persisted), working memory (in-process per session), and a scratchpad stack (temporary LIFO).
+
+#### Minimal Setup
+
+```json
+{
+  "brain": {
+    "enabled": true
+  },
+  "tools": {
+    "enabled_tools": ["Brain"]
+  }
+}
+```
+
+That's all you need. The database path auto-derives from your gateway DB (e.g., `gateway.db` → `gateway.brain.db`), and all other settings have sensible defaults.
+
+#### Full Configuration
+
+```json
+{
+  "brain": {
+    "enabled": true,
+    "path": "",
+    "max_ltm_entries": 10000,
+    "wm_grace_period_seconds": 300,
+    "auto_flush_seconds": 600,
+    "consolidate_threshold": 0.6,
+    "evict_threshold": 0.1,
+    "auto_promote": true,
+    "access_weight": 0.4,
+    "recency_weight": 0.4,
+    "tier_weight": 0.2,
+    "recency_decay_rate": 1.0,
+    "access_count_cap": 100
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable the Brain subsystem |
+| `path` | string | `""` | Path to brain.db file. Empty = derived from gateway DB path |
+| `max_ltm_entries` | int | `10000` | Maximum long-term memory entries. Lowest-salience entries evicted when exceeded |
+| `wm_grace_period_seconds` | int | `300` | Seconds to keep working memory entries after session ends |
+| `auto_flush_seconds` | int | `600` | Interval for background working memory cleanup |
+| `consolidate_threshold` | float | `0.6` | Salience score above which working memory entries are auto-promoted to LTM |
+| `evict_threshold` | float | `0.1` | Salience score below which working memory entries are evicted |
+| `auto_promote` | bool | `true` | Automatically promote high-salience working memory to LTM during consolidation |
+
+**Salience Formula Tuning:**
+
+Salience determines which facts are important. The formula is: `(access_score × access_weight) + (recency_score × recency_weight) + (tier_score × tier_weight)`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `access_weight` | float | `0.4` | Weight for access frequency (how often a fact is read/written) |
+| `recency_weight` | float | `0.4` | Weight for recency (how recently a fact was accessed) |
+| `tier_weight` | float | `0.2` | Weight for storage tier (LTM=0.8, working=0.5, scratch=0.1) |
+| `recency_decay_rate` | float | `1.0` | How fast recency decays. Formula: `1/(1 + hours × rate)`. Higher = faster decay |
+| `access_count_cap` | int | `100` | Access count at which access score saturates to 1.0 |
+
+> **Note:** `access_weight + recency_weight + tier_weight` must sum to 1.0.
+
+**How It Works:**
+1. The agent stores facts in working memory during a session (e.g., `solar.production = 5000W`)
+2. Facts accessed frequently get higher salience scores
+3. On consolidation (session end), high-salience facts are promoted to LTM (persisted in SQLite)
+4. Low-salience facts are evicted from working memory
+5. On next session, the agent can recall persisted facts from LTM without re-querying tools
+6. Sub-agents can read the parent session's working memory (read-only sharing)
+
+**Integration with Skills:**
+
+Skills can declare brain keys they produce via the `produces` field in their SKILL.md metadata:
+
+```yaml
+conduit:
+  produces:
+    - solar.production
+    - solar.panel_count
+```
+
+After a skill executes successfully, matching keys from the result data are auto-stored in working memory.
+
+**Integration with Search:**
+
+When both Brain and SearchDB are enabled, brain LTM entries are indexed into an FTS5 virtual table (`brain_ltm_fts` in search.db) for BM25-ranked full-text search via MemorySearch. This provides better recall quality than the default LIKE-based search.
 
 ### Kubernetes
 
