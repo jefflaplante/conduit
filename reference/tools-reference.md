@@ -161,6 +161,46 @@ Extract structured facts from memory files.
 
 Extracts bullet points and key-value pairs from MEMORY.md and related files.
 
+### Brain
+
+Tiered cognitive memory: store, retrieve, search, and manage facts across long-term memory (persisted), working memory (session), and scratchpad (temporary stack). Requires `brain.enabled: true` in config.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | Yes | Operation: store, get, recall, list, delete, push, pop, peek, promote, consolidate, status |
+| `key` | string | Varies | Dot-separated key (e.g., `solar.panel_count`) — required for store, get, delete, promote |
+| `value` | string | Varies | Value to store or push — required for store and push |
+| `tier` | string | No | Memory tier: `longterm` or `working` (default: working) |
+| `query` | string | Varies | Search query — required for recall |
+| `prefix` | string | No | Key prefix for list action |
+| `limit` | int | No | Max results for recall (default: 20) |
+| `auto_promote` | bool | No | Auto-promote during consolidation (default: true) |
+
+**Actions:**
+
+| Action | Description | Required Params |
+|--------|-------------|-----------------|
+| `store` | Save a key-value fact | `key`, `value` |
+| `get` | Retrieve a fact by key (checks working memory first, then LTM) | `key` |
+| `recall` | Fuzzy search across all tiers, ranked by salience | `query` |
+| `list` | List entries matching a key prefix | `prefix` |
+| `delete` | Remove a key from all tiers | `key` |
+| `push` | Push value onto per-user scratchpad stack | `value` |
+| `pop` | Pop top value from scratchpad | — |
+| `peek` | View top scratchpad value without removing | — |
+| `promote` | Move a working memory key to long-term storage | `key` |
+| `consolidate` | Sweep working memory: auto-promote high-salience, evict stale | — |
+| `status` | Report entry counts, scratchpad depth, hottest keys | — |
+
+```json
+{"action": "store", "key": "solar.panel_count", "value": "30", "tier": "working"}
+{"action": "get", "key": "solar.panel_count"}
+{"action": "recall", "query": "solar", "limit": 10}
+{"action": "push", "value": "TODO: check inverter status"}
+{"action": "consolidate", "auto_promote": true}
+{"action": "status"}
+```
+
 ## Session Management
 
 ### SessionsList

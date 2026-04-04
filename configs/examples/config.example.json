@@ -44,7 +44,8 @@
       "read_file",
       "write_file",
       "exec",
-      "list_files"
+      "list_files",
+      "Brain"
     ],
     "sandbox": {
       "workspace_dir": "./workspace",
@@ -53,6 +54,11 @@
         "/tmp"
       ]
     }
+  },
+  "brain": {
+    "enabled": true,
+    "max_ltm_entries": 10000,
+    "auto_promote": true
   },
   "mqtt": {
     "enabled": false,

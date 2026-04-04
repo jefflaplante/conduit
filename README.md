@@ -87,8 +87,9 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **WebSocket API** — Real-time bidirectional communication
 
 ### Search & Memory
-- **FTS5 Full-Text Search** — SQLite-based document and message search
-- **Memory Search** — Semantic search across MEMORY.md and session history
+- **[Brain (Cognitive Memory)](reference/configuration.md#brain-cognitive-memory)** — Tiered memory system: long-term (SQLite), working (per-session), and scratchpad (LIFO stack). Salience-scored with configurable weights, auto-promotion, and sub-agent working memory sharing
+- **FTS5 Full-Text Search** — SQLite-based document, message, and brain LTM search
+- **Memory Search** — Semantic search across MEMORY.md, session history, and brain entries
 - **Web Search** — Hybrid Anthropic native + Brave API fallback
 
 ### Automation

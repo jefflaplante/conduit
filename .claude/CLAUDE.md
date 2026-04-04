@@ -56,11 +56,13 @@ Incoming messages flow: Channel Adapter → Channel Manager → Gateway → AI R
 - types.GatewayService (internal/tools/types/types.go) — Gateway operations exposed to tools without circular imports. Includes session, channel, config, metrics, and scheduler operations.
 - types.ChannelSender (internal/tools/types/types.go) — Channel message sending exposed to tools.
 - types.SearchService (internal/tools/types/types.go) — FTS5 full-text search interface over documents and messages.
+- types.BrainService (internal/tools/types/types.go) — Tiered cognitive memory: Store, Get, Recall, List, Delete, Push/Pop/Peek (scratchpad), Promote, Consolidate, Status, Close.
+- types.BrainFTSSearcher (internal/tools/types/types.go) — FTS5-backed search over brain LTM entries.
 - agent.AgentSystem (internal/agent/interface.go) — Concrete agent system interface with Name(), BuildSystemPrompt, SetTools, ProcessResponse. Includes SessionStateManager for tracking processing states.
 
 ### Dependency Injection Pattern
 
-Tools cannot import gateway directly (circular dependency). Instead, types.ToolServices struct in internal/tools/types/types.go aggregates service interfaces (SessionStore, ConfigMgr, WebClient, SkillsManager, ChannelSender, Gateway, Searcher, SchemaBuilder). The gateway creates services, then calls registry.SetServices() after construction.
+Tools cannot import gateway directly (circular dependency). Instead, types.ToolServices struct in internal/tools/types/types.go aggregates service interfaces (SessionStore, ConfigMgr, WebClient, SkillsManager, ChannelSender, Gateway, Searcher, Brain, BrainFTS, SchemaBuilder). The gateway creates services, then calls registry.SetServices() after construction.
 
 ## CLI Commands
 
@@ -92,7 +94,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
   - execution.go, execution_adapter.go — Tool execution engine and adapter
   - planning_execution.go — Planning-to-execution bridge
   - Tool subdirectories:
-    - core/ — Context management, file editing, gateway control, memory search, session management
+    - core/ — Context management, file editing, gateway control, memory search, session management, brain (tiered cognitive memory)
     - web/ — Web search (Brave/Anthropic), web fetch with HTML parsing
     - communication/ — Message sending to channels, TTS
     - scheduling/ — Cron job tool (includes heartbeat cron integration)
@@ -102,15 +104,17 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
     - validation/ — Parameter validation
     - mqtt/ — MQTT tool with action dispatch (status, topics, recent, history, publish)
     - errors/ — Tool error types
-- internal/tools/types/ — Single source of truth for tool-related types and service interfaces (Tool, ToolServices, GatewayService, ChannelSender, SearchService, MQTTService)
+- internal/tools/types/ — Single source of truth for tool-related types and service interfaces (Tool, ToolServices, GatewayService, ChannelSender, SearchService, MQTTService, BrainService, BrainFTSSearcher)
 - internal/channels/ — Channel adapter interface + manager; subdirectories:
   - telegram/ — Native Telegram adapter with pairing system (pairing storage, CLI, photo support)
   - tui/ — TUI channel adapter with factory for in-process BubbleTea connections
 - internal/sessions/ — SQLite session store with state tracking
 - internal/mqtt/ — MQTT event ingest: paho client wrapper, per-topic ring buffers, service with background pruning, adapter to tool-layer interface
-- internal/config/ — JSON config loading with ${ENV_VAR} expansion. Config struct includes: port, database, AI, agent, workspace, skills, tools, channels, debug, rate limiting, heartbeat, agent heartbeat, SSH, MQTT
+- internal/brain/ — Tiered cognitive memory: LTM (SQLite-persisted), working memory (in-process per-user), scratchpad (LIFO stack). Salience-scored entries with configurable weights. Sub-agent WM sharing via parent context.
+- internal/config/ — JSON config loading with ${ENV_VAR} expansion. Config struct includes: port, database, AI, agent, workspace, skills, tools, channels, debug, rate limiting, heartbeat, agent heartbeat, SSH, MQTT, brain
 - internal/database/ — SQLite migration system (4 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search)
 - internal/fts/ — FTS5 full-text search: document chunking, indexing, and search queries (Porter stemming, unicode61 tokenizer)
+- internal/searchdb/ — Dedicated search.db with FTS5 indexes (document chunks, beads, messages, brain LTM). Includes BeadsIndexer, BrainIndexer, MessageSyncer
 - internal/search/ — Web search routing: Brave API, Anthropic search, result caching, strategy selection
 - internal/auth/ — Token auth (128-bit entropy, Base58, SHA256 hash storage), OAuth support, CLI token management
 - internal/backup/ — Backup/restore system: create tar.gz archives of database, config, workspace, SSH keys, skills; restore with dry-run support; list/inspect archives
@@ -138,7 +142,7 @@ JSON config in configs/ directory with ${ENV_VAR} expansion. Key files:
 - config.live.json — Production (gitignored)
 - Database path auto-detected from config filename (e.g., config.telegram.json → config.telegram.db)
 
-Config struct covers: port, database path, AI providers (Anthropic with OAuth or API key), agent personality/identity/capabilities, workspace context (core files, memory, security, caching), skills, tools (enabled list, max chains, sandbox, services), channels, debug logging, rate limiting (anonymous/authenticated tiers), heartbeat loop, agent heartbeat (quiet hours, alert targets, retry policy), SSH server.
+Config struct covers: port, database path, AI providers (Anthropic with OAuth or API key), agent personality/identity/capabilities, workspace context (core files, memory, security, caching), skills, tools (enabled list, max chains, sandbox, services), channels, debug logging, rate limiting (anonymous/authenticated tiers), heartbeat loop, agent heartbeat (quiet hours, alert targets, retry policy), SSH server, brain (tiered memory with configurable salience weights).
 
 ## Database
 
