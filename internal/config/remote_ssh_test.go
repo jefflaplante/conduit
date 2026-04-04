@@ -54,7 +54,7 @@ func TestRemoteSSHConfig_Validate(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			errMsg:  "default_tier must be 'dangerous' or 'blocked'",
+			errMsg:  "invalid value",
 		},
 		{
 			name: "invalid default_tier - modify not allowed",
@@ -65,7 +65,7 @@ func TestRemoteSSHConfig_Validate(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			errMsg:  "default_tier must be 'dangerous' or 'blocked'",
+			errMsg:  "invalid value",
 		},
 		{
 			name: "valid default_tier - blocked",
@@ -221,7 +221,7 @@ func TestSSHHostConfig_Validate(t *testing.T) {
 				SecurityTier: "invalid",
 			},
 			wantErr: true,
-			errMsg:  "invalid security tier",
+			errMsg:  "invalid value",
 		},
 		{
 			name: "invalid characters in name",
@@ -319,7 +319,7 @@ func TestSSHSecurityConfig_Validate(t *testing.T) {
 				DefaultTier: "read",
 			},
 			wantErr: true,
-			errMsg:  "must be 'dangerous' or 'blocked'",
+			errMsg:  "invalid value",
 		},
 		{
 			name: "invalid modify default",
@@ -327,7 +327,7 @@ func TestSSHSecurityConfig_Validate(t *testing.T) {
 				DefaultTier: "modify",
 			},
 			wantErr: true,
-			errMsg:  "must be 'dangerous' or 'blocked'",
+			errMsg:  "invalid value",
 		},
 		{
 			name: "empty default",
@@ -522,7 +522,7 @@ func TestSSHPoolConfig_Validate(t *testing.T) {
 				StrictHostKeyChecking: "invalid",
 			},
 			wantErr: true,
-			errMsg:  "invalid strict_host_key_checking",
+			errMsg:  "invalid value",
 		},
 		{
 			name: "valid strict host key checking - yes",
@@ -890,7 +890,7 @@ func TestSSHHostGroup_Validate(t *testing.T) {
 			name:    "invalid security tier",
 			group:   SSHHostGroup{Name: "prod", SecurityTier: "invalid"},
 			wantErr: true,
-			errMsg:  "invalid security tier",
+			errMsg:  "invalid value",
 		},
 		{
 			name:    "negative max parallel",

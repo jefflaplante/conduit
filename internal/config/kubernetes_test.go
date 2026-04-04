@@ -104,7 +104,7 @@ func TestKubernetesConfig_Validate_InvalidSafetyLevel(t *testing.T) {
 			}
 			err := cfg.Validate()
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "invalid safety_level")
+			assert.Contains(t, err.Error(), "invalid value")
 		})
 	}
 }
@@ -118,7 +118,7 @@ func TestKubernetesConfig_Validate_InvalidDefaultSafetyLevel(t *testing.T) {
 	}
 	err := cfg.Validate()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid defaults safety_level")
+	assert.Contains(t, err.Error(), "invalid value")
 }
 
 func TestKubernetesConfig_Validate_DuplicateClusterName(t *testing.T) {

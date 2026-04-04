@@ -58,7 +58,7 @@ func TestHeartbeatConfig_Validate(t *testing.T) {
 				LogLevel:        "invalid",
 			},
 			wantErr: true,
-			errMsg:  "invalid log level: invalid",
+			errMsg:  "invalid value",
 		},
 		{
 			name: "negative max queue depth",

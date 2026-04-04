@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 )
 
 // KubernetesConfig contains settings for the Kubernetes management tool
@@ -25,7 +24,7 @@ type KubernetesCluster struct {
 	Name string `json:"name"`
 
 	// KubeconfigPath is the path to the kubeconfig file for this cluster
-	KubeconfigPath string `json:"kubeconfig_path"`
+	KubeconfigPath string `json:"kubeconfig_path" cfg:"env,path"`
 
 	// Context is the kubeconfig context to use (empty = current context)
 	Context string `json:"context,omitempty"`
@@ -38,7 +37,7 @@ type KubernetesCluster struct {
 
 	// SafetyLevel controls what operations are permitted on this cluster
 	// Values: "read", "modify", "dangerous"
-	SafetyLevel string `json:"safety_level,omitempty"`
+	SafetyLevel string `json:"safety_level,omitempty" validate:"enum=read|modify|dangerous"`
 }
 
 // KubernetesDefaults defines default settings for clusters
@@ -47,7 +46,7 @@ type KubernetesDefaults struct {
 	Namespace string `json:"namespace,omitempty"`
 
 	// SafetyLevel is the default safety level for clusters (default: "read")
-	SafetyLevel string `json:"safety_level,omitempty"`
+	SafetyLevel string `json:"safety_level,omitempty" validate:"enum=read|modify|dangerous"`
 }
 
 // DefaultKubernetesConfig returns safe default configuration
@@ -68,11 +67,8 @@ func (c *KubernetesConfig) Validate() error {
 		return nil // No validation needed if disabled
 	}
 
-	// Validate default safety level if specified
-	if c.Defaults.SafetyLevel != "" {
-		if err := validateSafetyLevel(c.Defaults.SafetyLevel); err != nil {
-			return fmt.Errorf("invalid defaults safety_level: %w", err)
-		}
+	if err := validateEnumTags(c); err != nil {
+		return err
 	}
 
 	// Validate clusters
@@ -105,11 +101,8 @@ func (c *KubernetesCluster) Validate() error {
 		log.Printf("WARNING: kubeconfig file does not exist: %s (cluster %s)", c.KubeconfigPath, c.Name)
 	}
 
-	// Validate safety level if specified
-	if c.SafetyLevel != "" {
-		if err := validateSafetyLevel(c.SafetyLevel); err != nil {
-			return err
-		}
+	if err := validateEnumTags(c); err != nil {
+		return err
 	}
 
 	return nil
@@ -136,15 +129,3 @@ func (c *KubernetesConfig) EffectiveSafetyLevel(cluster *KubernetesCluster) stri
 	return "read"
 }
 
-// validSafetyLevels are the permitted safety level values
-var validSafetyLevels = []string{"read", "modify", "dangerous"}
-
-// validateSafetyLevel checks if a safety level string is valid
-func validateSafetyLevel(level string) error {
-	for _, valid := range validSafetyLevels {
-		if level == valid {
-			return nil
-		}
-	}
-	return fmt.Errorf("invalid safety_level: %s (must be one of: %s)", level, strings.Join(validSafetyLevels, ", "))
-}

@@ -11,7 +11,7 @@ type HeartbeatConfig struct {
 	IntervalSeconds int    `json:"interval_seconds"`
 	EnableMetrics   bool   `json:"enable_metrics"`
 	EnableEvents    bool   `json:"enable_events"`
-	LogLevel        string `json:"log_level,omitempty"`
+	LogLevel        string `json:"log_level,omitempty" validate:"enum=debug|info|warn|error"`
 	MaxQueueDepth   int    `json:"max_queue_depth,omitempty"`
 }
 
@@ -29,8 +29,8 @@ func (h HeartbeatConfig) Validate() error {
 		return fmt.Errorf("heartbeat interval cannot exceed 1 hour (got %d seconds)", h.IntervalSeconds)
 	}
 
-	if h.LogLevel != "" && h.LogLevel != "debug" && h.LogLevel != "info" && h.LogLevel != "warn" && h.LogLevel != "error" {
-		return fmt.Errorf("invalid log level: %s (must be debug, info, warn, or error)", h.LogLevel)
+	if err := validateEnumTags(&h); err != nil {
+		return err
 	}
 
 	if h.MaxQueueDepth < 0 {

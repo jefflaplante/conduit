@@ -105,7 +105,7 @@ func TestAgentHeartbeatConfigValidation(t *testing.T) {
 				LogLevel: "invalid",
 			},
 			wantErr: true,
-			errMsg:  "invalid log level",
+			errMsg:  "invalid value",
 		},
 		{
 			name: "invalid task type",
@@ -245,7 +245,7 @@ func TestAlertTargetValidation(t *testing.T) {
 				Severity: []string{"critical"},
 			},
 			wantErr: true,
-			errMsg:  "invalid type",
+			errMsg:  "invalid value",
 		},
 		{
 			name: "invalid severity",
