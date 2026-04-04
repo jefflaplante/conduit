@@ -99,6 +99,8 @@ func TestWatchResources_MaxEvents(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Create 110 pods — should be capped at 100 events.
+	// Pace writes to avoid overflowing the fake watcher's internal channel buffer
+	// (RaceFreeFakeWatcher panics on Add if channel is full).
 	for i := 0; i < 110; i++ {
 		_, err := client.clientset.CoreV1().Pods("default").Create(ctx, &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
@@ -109,6 +111,7 @@ func TestWatchResources_MaxEvents(t *testing.T) {
 		if err != nil {
 			break // context may be cancelled after 100
 		}
+		time.Sleep(time.Millisecond)
 	}
 
 	result := <-resultCh
