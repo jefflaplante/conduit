@@ -120,6 +120,7 @@ type Gateway struct {
 	// FTS5 full-text search
 	ftsIndexer  *fts.Indexer
 	ftsSearcher *fts.Searcher
+	ftsWatcher  *fts.Watcher
 
 	// Search database (separate from gateway.db)
 	searchDB       *searchdb.SearchDB
@@ -552,6 +553,16 @@ func New(cfg *config.Config) (*Gateway, error) {
 	}
 	indexCancel()
 
+	// Start fsnotify watcher for incremental FTS indexing
+	if ftsWorkspaceDir != "" {
+		w, err := fts.NewWatcher(ftsIndexer, ftsWorkspaceDir)
+		if err != nil {
+			logger.Warn("FTS file watcher failed to start, falling back to polling", "error", err)
+		} else {
+			gw.ftsWatcher = w
+		}
+	}
+
 	// Initialize optional vector/semantic search service
 	if cfg.Vector.Enabled {
 		vectorDBPath := cfg.Vector.Path
@@ -925,17 +936,25 @@ func (g *Gateway) Start(ctx context.Context) error {
 		stopCleanup()
 	}()
 
-	// Start periodic FTS5 workspace re-indexing (every 5 minutes)
+	// Start fsnotify watcher for real-time FTS indexing of .md file changes
+	if g.ftsWatcher != nil {
+		go g.ftsWatcher.Run(ctx)
+		g.logger.Info("FTS file watcher started")
+	}
+
+	// Periodic safety-net re-indexing (every 30 minutes).
+	// The fsnotify watcher handles real-time .md changes; this catches anything
+	// it might miss (e.g., files changed while watcher was down) plus beads/messages.
 	if g.ftsIndexer != nil {
 		go func() {
-			ticker := time.NewTicker(5 * time.Minute)
+			ticker := time.NewTicker(30 * time.Minute)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					// Re-index workspace documents
+					// Full workspace re-index as safety net
 					if err := g.ftsIndexer.IndexWorkspace(ctx); err != nil {
 						g.logger.Warn("FTS5 periodic re-index failed", "error", err)
 					}
