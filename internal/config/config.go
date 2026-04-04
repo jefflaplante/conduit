@@ -43,6 +43,7 @@ type Config struct {
 	Datadog        DatadogConfig        `json:"datadog,omitempty"`
 	Auth           AuthTokenConfig      `json:"auth,omitempty"`
 	Logging        LoggingConfig        `json:"logging,omitempty"`
+	Brain          BrainConfig          `json:"brain,omitempty"`
 }
 
 // AuthTokenConfig holds configuration for the token authentication system
@@ -110,6 +111,59 @@ func DeriveVectorDBPath(gatewayDBPath string) string {
 		ext = ".db"
 	}
 	return base + ".vector" + ext
+}
+
+// DeriveBrainDBPath returns a brain DB path derived from the gateway DB path.
+// For example, "gateway.db" becomes "gateway.brain.db".
+func DeriveBrainDBPath(gatewayDBPath string) string {
+	ext := filepath.Ext(gatewayDBPath)
+	base := strings.TrimSuffix(gatewayDBPath, ext)
+	if ext == "" {
+		ext = ".db"
+	}
+	return base + ".brain" + ext
+}
+
+// BrainConfig holds configuration for the tiered memory (Brain) subsystem.
+type BrainConfig struct {
+	Enabled              bool    `json:"enabled"`
+	Path                 string  `json:"path,omitempty"`                    // Path to brain DB file (derived from gateway DB if empty)
+	MaxLTMEntries        int     `json:"max_ltm_entries,omitempty"`         // Maximum long-term memory entries (default 10000)
+	WMGracePeriodSeconds int     `json:"wm_grace_period_seconds,omitempty"` // Seconds to keep WM after session end (default 300)
+	AutoFlushSeconds     int     `json:"auto_flush_seconds,omitempty"`      // Auto-flush interval in seconds (default 600)
+	ConsolidateThreshold float64 `json:"consolidate_threshold,omitempty"`   // Salience threshold for auto-promote (default 0.6)
+	EvictThreshold       float64 `json:"evict_threshold,omitempty"`         // Salience threshold for eviction (default 0.1)
+	AutoPromote          bool    `json:"auto_promote,omitempty"`            // Auto-promote high-salience WM keys on consolidation
+}
+
+// DefaultBrainConfig returns sensible defaults for the brain subsystem.
+func DefaultBrainConfig() BrainConfig {
+	return BrainConfig{
+		Enabled:              false,
+		MaxLTMEntries:        10000,
+		WMGracePeriodSeconds: 300,
+		AutoFlushSeconds:     600,
+		ConsolidateThreshold: 0.6,
+		EvictThreshold:       0.1,
+		AutoPromote:          true,
+	}
+}
+
+// Validate checks the brain configuration for errors.
+func (b *BrainConfig) Validate() error {
+	if !b.Enabled {
+		return nil
+	}
+	if b.MaxLTMEntries < 0 {
+		return fmt.Errorf("max_ltm_entries must be non-negative")
+	}
+	if b.ConsolidateThreshold < 0 || b.ConsolidateThreshold > 1 {
+		return fmt.Errorf("consolidate_threshold must be between 0 and 1")
+	}
+	if b.EvictThreshold < 0 || b.EvictThreshold > 1 {
+		return fmt.Errorf("evict_threshold must be between 0 and 1")
+	}
+	return nil
 }
 
 // SSHServerConfig holds configuration for the integrated SSH server
@@ -682,6 +736,7 @@ func Default() *Config {
 		PagerDuty:      DefaultPagerDutyConfig(),
 		Datadog:        DefaultDatadogConfig(),
 		Logging:        DefaultLoggingConfig(),
+		Brain:          DefaultBrainConfig(),
 		Channels: []ChannelConfig{
 			{
 				Name:    "telegram",
@@ -832,6 +887,11 @@ func (c *Config) Validate() error {
 	// Validate Datadog configuration
 	if err := c.Datadog.Validate(); err != nil {
 		return fmt.Errorf("invalid Datadog configuration: %w", err)
+	}
+
+	// Validate Brain configuration
+	if err := c.Brain.Validate(); err != nil {
+		return fmt.Errorf("invalid brain configuration: %w", err)
 	}
 
 	return nil
