@@ -172,6 +172,11 @@ func (st *SkillTool) Parameters() map[string]interface{} {
 	}
 }
 
+// BrainProduces returns the brain keys this skill declares it produces.
+func (st *SkillTool) BrainProduces() []string {
+	return st.skill.Metadata.Conduit.Produces
+}
+
 // Execute runs the skill with the given parameters
 func (st *SkillTool) Execute(ctx context.Context, args map[string]interface{}) (*SkillToolResult, error) {
 	action, ok := args["action"].(string)

@@ -74,6 +74,20 @@ func (sta *SkillToolAdapter) Execute(ctx context.Context, args map[string]interf
 	}, nil
 }
 
+// BrainKeyProducer is implemented by skill tools that declare brain keys they produce.
+type BrainKeyProducer interface {
+	BrainProduces() []string
+}
+
+// BrainProduces returns the brain keys this skill declares it produces.
+// Delegates to the underlying skill tool if it implements BrainKeyProducer.
+func (sta *SkillToolAdapter) BrainProduces() []string {
+	if producer, ok := sta.skillTool.(BrainKeyProducer); ok {
+		return producer.BrainProduces()
+	}
+	return nil
+}
+
 // ToolResultCompatible type has been replaced by RegistryToolResult above
 
 // GetSkillSystemContext returns context information for agent prompts

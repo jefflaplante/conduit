@@ -42,7 +42,8 @@ type ToolResult = types.ToolResult
 // SkillToolAdapter.Execute returns *skills.RegistryToolResult (to avoid circular imports),
 // so this bridge converts it to *types.ToolResult.
 type skillToolBridge struct {
-	adapter *skills.SkillToolAdapter
+	adapter  *skills.SkillToolAdapter
+	services *types.ToolServices
 }
 
 func (b *skillToolBridge) Name() string                       { return b.adapter.Name() }
@@ -56,7 +57,33 @@ func (b *skillToolBridge) Execute(ctx context.Context, args map[string]interface
 	if !result.Success {
 		return types.NewErrorResult("skill_error", result.Error), nil
 	}
-	return &types.ToolResult{Success: true, Content: result.Content, Data: result.Data}, nil
+
+	toolResult := &types.ToolResult{Success: true, Content: result.Content, Data: result.Data}
+
+	// Auto-cache declared brain keys from skill output
+	b.autoCacheBrainKeys(ctx, result)
+
+	return toolResult, nil
+}
+
+// autoCacheBrainKeys stores declared Produces keys from skill output into Brain working memory.
+func (b *skillToolBridge) autoCacheBrainKeys(ctx context.Context, result *skills.RegistryToolResult) {
+	if b.services == nil || b.services.Brain == nil {
+		return
+	}
+	produces := b.adapter.BrainProduces()
+	if len(produces) == 0 || result.Data == nil {
+		return
+	}
+	source := "skill:" + b.adapter.Name()
+	for _, key := range produces {
+		if val, ok := result.Data[key]; ok {
+			valStr := fmt.Sprintf("%v", val)
+			if err := b.services.Brain.Store(ctx, key, valStr, types.BrainTierWorking, source); err != nil {
+				log.Printf("Brain auto-cache failed for %s: %v", key, err)
+			}
+		}
+	}
 }
 
 // NewRegistry creates a new tools registry with service dependencies
@@ -303,7 +330,7 @@ func (r *Registry) registerSkillTools() {
 		return
 	}
 	for _, adapter := range skillAdapters {
-		bridge := &skillToolBridge{adapter: adapter}
+		bridge := &skillToolBridge{adapter: adapter, services: r.services}
 		r.tools[bridge.Name()] = bridge
 		r.enabledTools[normalizeToolName(bridge.Name())] = true
 	}
