@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"conduit/internal/brain"
 	"conduit/internal/channels"
 	"conduit/internal/protocol"
+	"conduit/internal/tools/types"
 )
 
 // SpawnSubAgent spawns a new sub-agent session (quiet mode, no announcements)
@@ -43,12 +45,20 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 		return "", fmt.Errorf("failed to create sub-agent session: %w", err)
 	}
 
+	// Capture parent's effective brain user ID for WM sharing
+	parentBrainUID := types.RequestUserID(ctx)
+
 	// Run the sub-agent in a goroutine
 	go func() {
 		// Use gateway lifecycle context, not request context.
 		// Sub-agents are fire-and-forget - they should outlive the parent request.
 		subCtx, cancel := deriveSubAgentContext(g.ctx, timeoutSeconds)
 		defer cancel()
+
+		// Share parent's brain working memory (read-only fallback)
+		if parentBrainUID != "" {
+			subCtx = brain.WithParentUserID(subCtx, parentBrainUID)
+		}
 
 		// Resolve model alias (haiku -> claude-haiku-4-5-20251001, etc.)
 		modelToUse := model

@@ -372,3 +372,106 @@ func TestLTMSalienceWithConfigurableWeights(t *testing.T) {
 	require.NotNil(t, entry)
 	assert.Greater(t, entry.Salience, 0.0)
 }
+
+func TestSubAgentWMSharing(t *testing.T) {
+	b := newTestBrain(t)
+
+	parentCtx := testCtx("parent-user")
+	childCtx := WithUserID(context.Background(), "child-user")
+	childCtx = WithParentUserID(childCtx, "parent-user")
+
+	// Parent stores a fact
+	require.NoError(t, b.Store(parentCtx, "project.name", "Conduit", TierWorking, "test"))
+
+	// Child can read parent's WM
+	entry, err := b.Get(childCtx, "project.name")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "Conduit", entry.Value)
+
+	// Child's own WM takes priority
+	require.NoError(t, b.Store(childCtx, "project.name", "ChildOverride", TierWorking, "test"))
+	entry, err = b.Get(childCtx, "project.name")
+	require.NoError(t, err)
+	assert.Equal(t, "ChildOverride", entry.Value)
+
+	// Parent's value unchanged
+	entry, err = b.Get(parentCtx, "project.name")
+	require.NoError(t, err)
+	assert.Equal(t, "Conduit", entry.Value)
+}
+
+func TestSubAgentWMRecall(t *testing.T) {
+	b := newTestBrain(t)
+
+	parentCtx := testCtx("parent")
+	childCtx := WithUserID(context.Background(), "child")
+	childCtx = WithParentUserID(childCtx, "parent")
+
+	require.NoError(t, b.Store(parentCtx, "solar.production", "5000W", TierWorking, "test"))
+	require.NoError(t, b.Store(parentCtx, "solar.panels", "30", TierWorking, "test"))
+
+	results, err := b.Recall(childCtx, "solar", 10)
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+}
+
+func TestSubAgentWMWriteIsolation(t *testing.T) {
+	b := newTestBrain(t)
+
+	parentCtx := testCtx("parent")
+	childCtx := WithUserID(context.Background(), "child")
+	childCtx = WithParentUserID(childCtx, "parent")
+
+	// Child writes don't affect parent
+	require.NoError(t, b.Store(childCtx, "child.secret", "hidden", TierWorking, "test"))
+
+	entry, err := b.Get(parentCtx, "child.secret")
+	require.NoError(t, err)
+	assert.Nil(t, entry) // Parent should not see child's WM
+}
+
+func TestSubAgentWMList(t *testing.T) {
+	b := newTestBrain(t)
+
+	parentCtx := testCtx("parent")
+	childCtx := WithUserID(context.Background(), "child")
+	childCtx = WithParentUserID(childCtx, "parent")
+
+	require.NoError(t, b.Store(parentCtx, "env.temp", "72F", TierWorking, "test"))
+	require.NoError(t, b.Store(parentCtx, "env.humidity", "45%", TierWorking, "test"))
+	require.NoError(t, b.Store(childCtx, "env.temp", "override", TierWorking, "test")) // Override one
+
+	results, err := b.List(childCtx, "env.")
+	require.NoError(t, err)
+	assert.Len(t, results, 2) // child's env.temp + parent's env.humidity (deduped)
+
+	// Verify child's override takes priority
+	for _, r := range results {
+		if r.Key == "env.temp" {
+			assert.Equal(t, "override", r.Value)
+		}
+	}
+}
+
+func TestSubAgentWMGetReturnsCopy(t *testing.T) {
+	b := newTestBrain(t)
+
+	parentCtx := testCtx("parent")
+	childCtx := WithUserID(context.Background(), "child")
+	childCtx = WithParentUserID(childCtx, "parent")
+
+	require.NoError(t, b.Store(parentCtx, "shared.key", "original", TierWorking, "test"))
+
+	// Get from child returns a copy
+	entry, err := b.Get(childCtx, "shared.key")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+
+	// Mutating the returned copy must not affect parent's entry
+	entry.Value = "mutated"
+
+	parentEntry, err := b.Get(parentCtx, "shared.key")
+	require.NoError(t, err)
+	assert.Equal(t, "original", parentEntry.Value)
+}
