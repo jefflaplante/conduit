@@ -30,9 +30,8 @@ func NewEnhancedExecutionEngine(registry *Registry, maxParallel int, timeout tim
 	}
 
 	if planningEnabled {
-		// Initialize planning engine with tool executor adapter
-		toolExecutor := &RegistryToolExecutor{registry: registry}
-		enhanced.planningEngine = planning.NewPlanningEngine(toolExecutor)
+		// Initialize planning engine - Registry implements types.ToolExecutor directly
+		enhanced.planningEngine = planning.NewPlanningEngine(registry)
 
 		log.Printf("Enhanced execution engine initialized with planning enabled")
 	} else {
@@ -53,8 +52,8 @@ func NewEnhancedExecutionEngineWithConfig(registry *Registry, maxParallel int, t
 	}
 
 	if planningConfig.Enabled {
-		toolExecutor := &RegistryToolExecutor{registry: registry}
-		enhanced.planningEngine = planning.NewPlanningEngineWithConfig(planningConfig, toolExecutor)
+		// Registry implements types.ToolExecutor directly
+		enhanced.planningEngine = planning.NewPlanningEngineWithConfig(planningConfig, registry)
 
 		log.Printf("Enhanced execution engine initialized with custom planning config")
 	}
@@ -77,10 +76,8 @@ func (ee *EnhancedExecutionEngine) ExecuteToolCalls(ctx context.Context, calls [
 
 // executeWithPlanning executes tool calls using the planning engine
 func (ee *EnhancedExecutionEngine) executeWithPlanning(ctx context.Context, calls []ai.ToolCall) ([]*ExecutionResult, error) {
-	toolExecutor := &RegistryToolExecutor{registry: ee.registry}
-
-	// Execute with planning
-	planningResult, err := ee.planningEngine.PlanAndExecute(ctx, calls, toolExecutor)
+	// Execute with planning - registry implements types.ToolExecutor directly
+	planningResult, err := ee.planningEngine.PlanAndExecute(ctx, calls, ee.registry)
 	if err != nil {
 		log.Printf("Planned execution failed, falling back to basic: %v", err)
 		return ee.ExecutionEngine.ExecuteToolCalls(ctx, calls)
@@ -232,30 +229,6 @@ func (ee *EnhancedExecutionEngine) ResetMetrics() {
 	}
 }
 
-// RegistryToolExecutor adapts the Registry to the ToolExecutor interface
-type RegistryToolExecutor struct {
-	registry *Registry
-}
-
-// ExecuteTool implements the ToolExecutor interface
-func (rte *RegistryToolExecutor) ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (*planning.ToolResult, error) {
-	// Use the registry to execute the tool
-	result, err := rte.registry.ExecuteTool(ctx, name, args)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert tools.ToolResult to planning.ToolResult
-	planningResult := &planning.ToolResult{
-		Success: result.Success,
-		Content: result.Content,
-		Error:   result.Error,
-		Data:    result.Data,
-	}
-
-	return planningResult, nil
-}
-
 // Enhanced middleware for planning metrics collection
 
 // PlanningMetricsMiddleware collects metrics for the planning system
@@ -318,6 +291,6 @@ func CreateEnhancedExecutionEngine(registry *Registry) *EnhancedExecutionEngine 
 
 // CreatePlanningEngineForRegistry creates a standalone planning engine for a registry
 func CreatePlanningEngineForRegistry(registry *Registry) *planning.PlanningEngine {
-	toolExecutor := &RegistryToolExecutor{registry: registry}
-	return planning.NewPlanningEngine(toolExecutor)
+	// Registry implements types.ToolExecutor directly
+	return planning.NewPlanningEngine(registry)
 }

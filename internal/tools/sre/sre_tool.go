@@ -19,18 +19,12 @@ type SRETool struct {
 	ddConfig     *config.DatadogConfig
 	k8sConfig    *config.KubernetesConfig
 	sshConfig    *config.RemoteSSHConfig
-	toolExecutor ToolExecutor
-}
-
-// ToolExecutor provides a way to execute other tools. This interface allows
-// the SRE tool to orchestrate calls to PagerDuty, Datadog, K8s, and SSH tools.
-type ToolExecutor interface {
-	ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (*types.ToolResult, error)
+	toolExecutor types.ToolExecutor
 }
 
 // NewSRETool creates a new SRE tool with the given services and configurations.
 // It requires at least PagerDuty and Datadog to be configured.
-func NewSRETool(services *types.ToolServices, executor ToolExecutor) (*SRETool, error) {
+func NewSRETool(services *types.ToolServices, executor types.ToolExecutor) (*SRETool, error) {
 	if services == nil || services.ConfigMgr == nil {
 		return nil, fmt.Errorf("services and config manager are required")
 	}

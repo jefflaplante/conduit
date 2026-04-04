@@ -6,6 +6,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"conduit/internal/tools/types"
 )
 
 // ParallelExecutor executes tool plans with advanced optimization and monitoring
@@ -34,22 +36,6 @@ type StepExecutionResult struct {
 	Error  error
 }
 
-// ToolExecutor defines the interface for executing individual tools
-type ToolExecutor interface {
-	ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (*ToolResult, error)
-}
-
-// ToolResult represents the result of a tool execution (from existing codebase)
-type ToolResult struct {
-	Success      bool                   `json:"success"`
-	Content      string                 `json:"content"`
-	Error        string                 `json:"error,omitempty"`
-	Data         map[string]interface{} `json:"data,omitempty"`
-	FallbackUsed bool                   `json:"fallback_used,omitempty"`
-	CacheHit     bool                   `json:"cache_hit,omitempty"`
-	Retries      int                    `json:"retries,omitempty"`
-}
-
 // NewParallelExecutor creates a new parallel executor
 func NewParallelExecutor(planner *ExecutionPlanner, cache *ResultCache, metrics *MetricsCollector, maxParallel int) *ParallelExecutor {
 	return &ParallelExecutor{
@@ -69,7 +55,7 @@ func NewParallelExecutor(planner *ExecutionPlanner, cache *ResultCache, metrics 
 }
 
 // ExecutePlan executes an optimized execution plan
-func (pe *ParallelExecutor) ExecutePlan(ctx context.Context, plan *ExecutionPlan, toolExecutor ToolExecutor) (*PlanResult, error) {
+func (pe *ParallelExecutor) ExecutePlan(ctx context.Context, plan *ExecutionPlan, toolExecutor types.ToolExecutor) (*PlanResult, error) {
 	log.Printf("Executing plan %s with %d steps in %d parallel groups",
 		plan.ID, len(plan.Steps), len(plan.Parallel))
 
@@ -120,7 +106,7 @@ func (pe *ParallelExecutor) ExecutePlan(ctx context.Context, plan *ExecutionPlan
 }
 
 // executeParallelGroup executes a group of steps that can run in parallel
-func (pe *ParallelExecutor) executeParallelGroup(ctx context.Context, stepIDs []string, plan *ExecutionPlan, prevResults *PlanResult, toolExecutor ToolExecutor) (map[string]*StepResult, error) {
+func (pe *ParallelExecutor) executeParallelGroup(ctx context.Context, stepIDs []string, plan *ExecutionPlan, prevResults *PlanResult, toolExecutor types.ToolExecutor) (map[string]*StepResult, error) {
 	results := make(map[string]*StepResult)
 
 	if len(stepIDs) == 1 {
@@ -195,7 +181,7 @@ func (pe *ParallelExecutor) executeParallelGroup(ctx context.Context, stepIDs []
 }
 
 // executeStepWithOptimizations executes a single step with caching, retries, and fallbacks
-func (pe *ParallelExecutor) executeStepWithOptimizations(ctx context.Context, step ExecutionStep, prevResults *PlanResult, toolExecutor ToolExecutor) (*StepResult, error) {
+func (pe *ParallelExecutor) executeStepWithOptimizations(ctx context.Context, step ExecutionStep, prevResults *PlanResult, toolExecutor types.ToolExecutor) (*StepResult, error) {
 	startTime := time.Now()
 
 	// Check cache first
@@ -275,7 +261,7 @@ func (pe *ParallelExecutor) executeStepWithOptimizations(ctx context.Context, st
 }
 
 // executeStepWithRetry executes a step with retry logic
-func (pe *ParallelExecutor) executeStepWithRetry(ctx context.Context, step ExecutionStep, toolExecutor ToolExecutor) (*ToolResult, error) {
+func (pe *ParallelExecutor) executeStepWithRetry(ctx context.Context, step ExecutionStep, toolExecutor types.ToolExecutor) (*types.ToolResult, error) {
 	var lastErr error
 	retries := 0
 

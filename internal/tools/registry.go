@@ -239,9 +239,8 @@ func (r *Registry) registerAllTools() {
 	if r.services.ConfigMgr != nil &&
 		r.services.ConfigMgr.PagerDuty.Enabled &&
 		r.services.ConfigMgr.Datadog.Enabled {
-		// Create executor adapter that wraps the registry's ExecuteTool method
-		executor := &registryToolExecutor{registry: r}
-		sre, err := sreTool.NewSRETool(r.services, executor)
+		// Registry implements types.ToolExecutor directly
+		sre, err := sreTool.NewSRETool(r.services, r)
 		if err != nil {
 			log.Printf("Failed to create SRE tool: %v", err)
 		} else {
@@ -624,13 +623,3 @@ func (r *Registry) isPathAllowed(path string) bool {
 	return false
 }
 
-// registryToolExecutor adapts the Registry to implement sreTool.ToolExecutor.
-// This allows the SRE tool to orchestrate calls to other registered tools.
-type registryToolExecutor struct {
-	registry *Registry
-}
-
-// ExecuteTool executes a tool by name through the registry.
-func (e *registryToolExecutor) ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (*types.ToolResult, error) {
-	return e.registry.ExecuteTool(ctx, name, args)
-}

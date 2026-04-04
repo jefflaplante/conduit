@@ -12,21 +12,14 @@ import (
 	"conduit/internal/tools/types"
 )
 
-// ChainToolExecutor decouples the chain tool from the registry package.
-// *Registry satisfies this interface directly.
-type ChainToolExecutor interface {
-	ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (*types.ToolResult, error)
-	GetAvailableTools() map[string]types.Tool
-}
-
 // ChainTool exposes chain list/show/validate/run actions to the AI agent.
 type ChainTool struct {
 	services   *types.ToolServices
 	sandboxCfg config.SandboxConfig
-	executor   ChainToolExecutor
+	executor   types.ToolRegistry
 }
 
-func NewChainTool(services *types.ToolServices, sandboxCfg config.SandboxConfig, executor ChainToolExecutor) *ChainTool {
+func NewChainTool(services *types.ToolServices, sandboxCfg config.SandboxConfig, executor types.ToolRegistry) *ChainTool {
 	return &ChainTool{
 		services:   services,
 		sandboxCfg: sandboxCfg,
@@ -303,10 +296,10 @@ func (t *ChainTool) runChain(ctx context.Context, args map[string]interface{}) (
 
 // --- adapters ---
 
-// registryChainAdapter bridges ChainToolExecutor (registry) to chain.ToolExecutor.
+// registryChainAdapter bridges types.ToolRegistry to chain.ToolExecutor.
 // Created per-invocation so chain steps inherit the request ctx.
 type registryChainAdapter struct {
-	executor ChainToolExecutor
+	executor types.ToolRegistry
 	ctx      context.Context
 }
 
