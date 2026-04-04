@@ -134,6 +134,17 @@ type BrainConfig struct {
 	ConsolidateThreshold float64 `json:"consolidate_threshold,omitempty"`   // Salience threshold for auto-promote (default 0.6)
 	EvictThreshold       float64 `json:"evict_threshold,omitempty"`         // Salience threshold for eviction (default 0.1)
 	AutoPromote          bool    `json:"auto_promote,omitempty"`            // Auto-promote high-salience WM keys on consolidation
+
+	// Salience formula weights (must sum to 1.0)
+	AccessWeight  float64 `json:"access_weight,omitempty"`  // default 0.4
+	RecencyWeight float64 `json:"recency_weight,omitempty"` // default 0.4
+	TierWeight    float64 `json:"tier_weight,omitempty"`    // default 0.2
+
+	// Recency decay rate: 1/(1 + hours * decay_rate). Higher = faster decay
+	RecencyDecayRate float64 `json:"recency_decay_rate,omitempty"` // default 1.0
+
+	// Access count normalization cap
+	AccessCountCap int `json:"access_count_cap,omitempty"` // default 100
 }
 
 // DefaultBrainConfig returns sensible defaults for the brain subsystem.
@@ -146,6 +157,11 @@ func DefaultBrainConfig() BrainConfig {
 		ConsolidateThreshold: 0.6,
 		EvictThreshold:       0.1,
 		AutoPromote:          true,
+		AccessWeight:         0.4,
+		RecencyWeight:        0.4,
+		TierWeight:           0.2,
+		RecencyDecayRate:     1.0,
+		AccessCountCap:       100,
 	}
 }
 
@@ -162,6 +178,18 @@ func (b *BrainConfig) Validate() error {
 	}
 	if b.EvictThreshold < 0 || b.EvictThreshold > 1 {
 		return fmt.Errorf("evict_threshold must be between 0 and 1")
+	}
+	if b.AccessWeight > 0 || b.RecencyWeight > 0 || b.TierWeight > 0 {
+		sum := b.AccessWeight + b.RecencyWeight + b.TierWeight
+		if sum < 0.99 || sum > 1.01 {
+			return fmt.Errorf("brain salience weights must sum to 1.0 (got %.2f)", sum)
+		}
+	}
+	if b.RecencyDecayRate < 0 {
+		return fmt.Errorf("brain recency_decay_rate must be non-negative")
+	}
+	if b.AccessCountCap < 1 {
+		return fmt.Errorf("brain access_count_cap must be >= 1")
 	}
 	return nil
 }
