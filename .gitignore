@@ -101,3 +101,4 @@ PRIVATE/
 # Backup files
 *.jsonl.bak
 issues-bak.jsonl
+.claude/worktrees/
