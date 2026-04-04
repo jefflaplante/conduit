@@ -161,7 +161,7 @@ func (a AlertTarget) Validate() error {
 		return fmt.Errorf("type cannot be empty")
 	}
 
-	validTypes := []string{"telegram", "email", "slack", "webhook"}
+	validTypes := []string{"telegram", "email", "slack", "webhook", "mqtt"}
 	valid := false
 	for _, validType := range validTypes {
 		if a.Type == validType {

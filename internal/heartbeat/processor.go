@@ -1,6 +1,7 @@
 package heartbeat
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -14,7 +15,10 @@ type AlertProcessorImpl struct {
 	router *AlertSeverityRouter
 	config *config.AgentHeartbeatConfig
 
-	// Delivery function - injected for flexibility (testing, different channels)
+	// Delivery registry - routes alerts to appropriate deliverers (telegram, webhook, mqtt)
+	registry *DeliveryRegistry
+
+	// Legacy delivery function - used as fallback if registry doesn't have a deliverer
 	deliveryFunc func(alert Alert, target config.AlertTarget) error
 }
 
@@ -30,6 +34,26 @@ func NewAlertProcessor(
 		config:       config,
 		deliveryFunc: deliveryFunc,
 	}
+}
+
+// NewAlertProcessorWithRegistry creates an alert processor with a delivery registry.
+// The registry routes alerts to the appropriate deliverer based on target type.
+func NewAlertProcessorWithRegistry(
+	queuePath string,
+	cfg *config.AgentHeartbeatConfig,
+	registry *DeliveryRegistry,
+) *AlertProcessorImpl {
+	return &AlertProcessorImpl{
+		queue:    NewSharedAlertQueue(queuePath),
+		router:   NewAlertSeverityRouter(cfg),
+		config:   cfg,
+		registry: registry,
+	}
+}
+
+// SetRegistry sets or replaces the delivery registry.
+func (p *AlertProcessorImpl) SetRegistry(registry *DeliveryRegistry) {
+	p.registry = registry
 }
 
 // ProcessAlert processes a single alert (validation, routing, delivery)
@@ -162,13 +186,20 @@ func (p *AlertProcessorImpl) DeliverAlert(alert Alert, targetName string) error 
 		return fmt.Errorf("target '%s' not found in configuration", targetName)
 	}
 
-	// Use the injected delivery function
-	if p.deliveryFunc == nil {
-		return fmt.Errorf("no delivery function configured")
+	start := time.Now()
+	var err error
+
+	// Try registry first (preferred), fall back to legacy function
+	if p.registry != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err = p.registry.DeliverAlert(ctx, alert, *targetConfig)
+	} else if p.deliveryFunc != nil {
+		err = p.deliveryFunc(alert, *targetConfig)
+	} else {
+		return fmt.Errorf("no delivery mechanism configured (registry or deliveryFunc)")
 	}
 
-	start := time.Now()
-	err := p.deliveryFunc(alert, *targetConfig)
 	duration := time.Since(start)
 
 	// Log delivery attempt (in a real implementation, this would use proper logging)
