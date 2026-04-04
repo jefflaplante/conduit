@@ -179,6 +179,17 @@ func (b *Brain) Get(ctx context.Context, key string) (*Entry, error) {
 			return entry, nil
 		}
 	}
+	// Check parent's WM (read-only — return a copy, no access bump)
+	parentID := parentUserIDFromCtx(ctx)
+	if parentID != "" && parentID != userID {
+		if parentWM, ok := b.working[parentID]; ok {
+			if entry, ok := parentWM[key]; ok {
+				b.mu.RUnlock()
+				copied := *entry
+				return &copied, nil
+			}
+		}
+	}
 	b.mu.RUnlock()
 	return b.getLTM(key)
 }
@@ -210,13 +221,29 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 	}
 	queryLower := strings.ToLower(query)
 	var results []*Entry
+	seen := make(map[string]bool)
 
 	userID := userIDFromCtx(ctx)
+	parentID := parentUserIDFromCtx(ctx)
+
 	b.mu.RLock()
 	if wm, ok := b.working[userID]; ok {
 		for _, entry := range wm {
 			if matchesQuery(entry, queryLower) {
 				results = append(results, entry)
+				seen[entry.Key] = true
+			}
+		}
+	}
+	// Include parent's WM entries (read-only copies, deduped by key)
+	if parentID != "" && parentID != userID {
+		if parentWM, ok := b.working[parentID]; ok {
+			for _, entry := range parentWM {
+				if !seen[entry.Key] && matchesQuery(entry, queryLower) {
+					copied := *entry
+					results = append(results, &copied)
+					seen[entry.Key] = true
+				}
 			}
 		}
 	}
@@ -249,12 +276,27 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 
 func (b *Brain) List(ctx context.Context, prefix string) ([]*Entry, error) {
 	var results []*Entry
+	seen := make(map[string]bool)
 	userID := userIDFromCtx(ctx)
+	parentID := parentUserIDFromCtx(ctx)
+
 	b.mu.RLock()
 	if wm, ok := b.working[userID]; ok {
 		for _, entry := range wm {
 			if strings.HasPrefix(entry.Key, prefix) {
 				results = append(results, entry)
+				seen[entry.Key] = true
+			}
+		}
+	}
+	// Include parent's WM entries (read-only copies, deduped by key)
+	if parentID != "" && parentID != userID {
+		if parentWM, ok := b.working[parentID]; ok {
+			for _, entry := range parentWM {
+				if !seen[entry.Key] && strings.HasPrefix(entry.Key, prefix) {
+					copied := *entry
+					results = append(results, &copied)
+				}
 			}
 		}
 	}
@@ -480,6 +522,21 @@ func userIDFromCtx(ctx context.Context) string {
 		return uid
 	}
 	return "default"
+}
+
+type brainParentUserIDKey struct{}
+
+// WithParentUserID attaches a parent brain user ID to the context, enabling
+// read-only fallback to the parent's working memory for sub-agent sessions.
+func WithParentUserID(ctx context.Context, parentUserID string) context.Context {
+	return context.WithValue(ctx, brainParentUserIDKey{}, parentUserID)
+}
+
+func parentUserIDFromCtx(ctx context.Context) string {
+	if uid, ok := ctx.Value(brainParentUserIDKey{}).(string); ok {
+		return uid
+	}
+	return ""
 }
 
 func (b *Brain) startAutoFlush() {
