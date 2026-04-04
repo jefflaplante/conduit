@@ -319,3 +319,56 @@ func TestPromoteNonexistent(t *testing.T) {
 	err := b.Promote(ctx, "does.not.exist")
 	assert.Error(t, err)
 }
+
+func TestConfigurableSalienceWeights(t *testing.T) {
+	// Access-heavy weighting
+	b := newTestBrain(t, WithAccessWeight(0.8), WithRecencyWeight(0.1), WithTierWeight(0.1))
+
+	ctx := testCtx("user")
+	for i := 0; i < 50; i++ {
+		b.Store(ctx, "hot.key", "value", TierWorking, "test")
+	}
+
+	entry, err := b.Get(ctx, "hot.key")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Greater(t, entry.Salience, 0.3)
+}
+
+func TestRecencyDecayRate(t *testing.T) {
+	b := newTestBrain(t, WithRecencyDecayRate(2.0))
+
+	ctx := testCtx("user")
+	b.Store(ctx, "test.key", "value", TierWorking, "test")
+
+	entry, err := b.Get(ctx, "test.key")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Greater(t, entry.Salience, 0.2)
+}
+
+func TestAccessCountCap(t *testing.T) {
+	b := newTestBrain(t, WithAccessCountCap(10))
+
+	ctx := testCtx("user")
+	for i := 0; i < 20; i++ {
+		b.Store(ctx, "capped", "v", TierWorking, "test")
+	}
+
+	entry, err := b.Get(ctx, "capped")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.LessOrEqual(t, entry.Salience, 1.0)
+}
+
+func TestLTMSalienceWithConfigurableWeights(t *testing.T) {
+	b := newTestBrain(t, WithAccessWeight(0.6), WithRecencyWeight(0.3), WithTierWeight(0.1))
+
+	ctx := testCtx("user")
+	b.Store(ctx, "ltm.key", "persistent", TierLongTerm, "test")
+
+	entry, err := b.Get(ctx, "ltm.key")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Greater(t, entry.Salience, 0.0)
+}
