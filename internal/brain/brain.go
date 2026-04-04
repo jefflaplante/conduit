@@ -58,6 +58,11 @@ func WithConsolidateThreshold(t float64) Option     { return func(b *Brain) { b.
 func WithEvictThreshold(t float64) Option           { return func(b *Brain) { b.evictThreshold = t } }
 func WithAutoPromote(v bool) Option                 { return func(b *Brain) { b.autoPromote = v } }
 func WithWMGracePeriod(d time.Duration) Option      { return func(b *Brain) { b.wmGracePeriod = d } }
+func WithAccessWeight(w float64) Option              { return func(b *Brain) { b.accessWeight = w } }
+func WithRecencyWeight(w float64) Option             { return func(b *Brain) { b.recencyWeight = w } }
+func WithTierWeight(w float64) Option                { return func(b *Brain) { b.tierWeight = w } }
+func WithRecencyDecayRate(r float64) Option          { return func(b *Brain) { b.recencyDecayRate = r } }
+func WithAccessCountCap(n int) Option                { return func(b *Brain) { b.accessCountCap = n } }
 
 type Brain struct {
 	mu      sync.RWMutex
@@ -71,6 +76,11 @@ type Brain struct {
 	evictThreshold       float64
 	autoPromote          bool
 	wmGracePeriod        time.Duration
+	accessWeight         float64
+	recencyWeight        float64
+	tierWeight           float64
+	recencyDecayRate     float64
+	accessCountCap       int
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -100,6 +110,11 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 		evictThreshold:       0.1,
 		autoPromote:          true,
 		wmGracePeriod:        5 * time.Minute,
+		accessWeight:         0.4,
+		recencyWeight:        0.4,
+		tierWeight:           0.2,
+		recencyDecayRate:     1.0,
+		accessCountCap:       100,
 		stopCh:               make(chan struct{}),
 	}
 	for _, opt := range opts {
@@ -142,7 +157,7 @@ func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source 
 }
 
 func (b *Brain) storeLTM(key, value, source string, now time.Time) error {
-	_, err := b.db.Exec(`
+	_, err := b.db.Exec(fmt.Sprintf(`
 		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
 		VALUES (?, ?, ?, ?, ?, 1, 0.5)
 		ON CONFLICT(key) DO UPDATE SET
@@ -150,10 +165,11 @@ func (b *Brain) storeLTM(key, value, source string, now time.Time) error {
 			source = excluded.source,
 			accessed_at = excluded.accessed_at,
 			access_count = access_count + 1,
-			salience = (CAST(access_count + 1 AS REAL) * 0.4) +
-				(1.0 / (1.0 + (julianday('now') - julianday(excluded.accessed_at)) * 24.0)) * 0.4 +
-				0.16
-	`, key, value, source, now, now)
+			salience = (MIN(CAST(access_count + 1 AS REAL) / %d.0, 1.0) * %f) +
+				(1.0 / (1.0 + (julianday('now') - julianday(excluded.accessed_at)) * 24.0 * %f)) * %f +
+				(0.8 * %f)
+	`, b.accessCountCap, b.accessWeight, b.recencyDecayRate, b.recencyWeight, b.tierWeight),
+		key, value, source, now, now)
 	if err != nil {
 		return fmt.Errorf("store LTM: %w", err)
 	}
@@ -184,14 +200,14 @@ func (b *Brain) Get(ctx context.Context, key string) (*Entry, error) {
 }
 
 func (b *Brain) getLTM(key string) (*Entry, error) {
-	row := b.db.QueryRow(`
+	row := b.db.QueryRow(fmt.Sprintf(`
 		UPDATE brain_ltm SET
 			accessed_at = datetime('now'),
 			access_count = access_count + 1,
-			salience = (CAST(access_count + 1 AS REAL) * 0.4) + (1.0 / (1.0 + 0.0)) * 0.4 + 0.16
+			salience = (MIN(CAST(access_count + 1 AS REAL) / %d.0, 1.0) * %f) + (1.0 / (1.0 + 0.0)) * %f + (0.8 * %f)
 		WHERE key = ?
 		RETURNING key, value, created_at, accessed_at, access_count, salience, source
-	`, key)
+	`, b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight), key)
 	entry := &Entry{Tier: TierLongTerm}
 	err := row.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
 		&entry.AccessCount, &entry.Salience, &entry.Source)
@@ -449,19 +465,19 @@ func (b *Brain) Close() error {
 }
 
 func (b *Brain) computeSalience(e *Entry) float64 {
-	accessScore := math.Min(float64(e.AccessCount)/100.0, 1.0)
+	accessScore := math.Min(float64(e.AccessCount)/float64(b.accessCountCap), 1.0)
 	hoursSince := time.Since(e.AccessedAt).Hours()
-	recencyScore := 1.0 / (1.0 + hoursSince)
-	var tierWeight float64
+	recencyScore := 1.0 / (1.0 + hoursSince*b.recencyDecayRate)
+	var tierScore float64
 	switch e.Tier {
 	case TierLongTerm:
-		tierWeight = 0.8
+		tierScore = 0.8
 	case TierWorking:
-		tierWeight = 0.5
+		tierScore = 0.5
 	default:
-		tierWeight = 0.1
+		tierScore = 0.1
 	}
-	return (accessScore * 0.4) + (recencyScore * 0.4) + (tierWeight * 0.2)
+	return (accessScore * b.accessWeight) + (recencyScore * b.recencyWeight) + (tierScore * b.tierWeight)
 }
 
 func matchesQuery(e *Entry, queryLower string) bool {
