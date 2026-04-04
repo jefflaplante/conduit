@@ -230,6 +230,19 @@ type BrainService interface {
 	Close() error
 }
 
+// BrainFTSResult represents a single FTS5 search result from brain LTM.
+type BrainFTSResult struct {
+	Key    string  `json:"key"`
+	Value  string  `json:"value"`
+	Source string  `json:"source"`
+	Rank   float64 `json:"rank"`
+}
+
+// BrainFTSSearcher provides FTS5-backed search over brain LTM entries.
+type BrainFTSSearcher interface {
+	SearchBrain(ctx context.Context, query string, limit int) ([]BrainFTSResult, error)
+}
+
 // ToolServices provides access to services for tools (no direct gateway dependency)
 type ToolServices struct {
 	SessionStore  *sessions.Store
@@ -242,6 +255,7 @@ type ToolServices struct {
 	VectorSearch  VectorService  // Optional vector/semantic search
 	MQTTService   MQTTService    // Optional MQTT event ingest
 	Brain         BrainService   // Optional tiered memory (LTM + working + scratchpad)
+	BrainFTS      BrainFTSSearcher // Optional FTS5 search over brain LTM
 
 	// Schema enhancement
 	SchemaBuilder *schema.Builder // For enhancing tool schemas with discovery data

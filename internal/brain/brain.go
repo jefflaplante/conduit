@@ -439,6 +439,9 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 	}, nil
 }
 
+// DB returns the underlying database connection for external indexers.
+func (b *Brain) DB() *sql.DB { return b.db }
+
 func (b *Brain) Close() error {
 	close(b.stopCh)
 	b.wg.Wait()
