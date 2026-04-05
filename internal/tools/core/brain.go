@@ -305,13 +305,15 @@ func (t *BrainTool) handleStatus(ctx context.Context, brain types.BrainService) 
 }
 
 func (t *BrainTool) handleREMCycle(ctx context.Context, args map[string]interface{}, brain types.BrainService) (*types.ToolResult, error) {
-	// Parse phases parameter
-	phases := []string{"triage", "consolidate", "prune", "integrate", "groom"}
+	// Parse phases parameter — accept both short forms (triage, consolidate, prune, integrate, groom)
+	// and full forms (triage, consolidation, pruning, integration, grooming)
+	defaultPhases := []string{"triage", "consolidation", "pruning", "integration", "grooming"}
+	phases := defaultPhases
 	if p, ok := args["phases"].([]interface{}); ok {
 		phases = make([]string, len(p))
 		for i, v := range p {
 			if s, ok := v.(string); ok {
-				phases[i] = s
+				phases[i] = normalizePhase(s)
 			} else {
 				return &types.ToolResult{Success: false, Error: fmt.Sprintf("invalid phase at index %d: must be string", i)}, nil
 			}
@@ -321,19 +323,36 @@ func (t *BrainTool) handleREMCycle(ctx context.Context, args map[string]interfac
 	// Parse dry_run parameter
 	dryRun, _ := args["dry_run"].(bool)
 
-	// Parse force_groom parameter (for future use)
-	forceGroom, _ := args["force_groom"].(bool)
-
-	// Get REM cycle from tool services (will need to be wired)
-	// For now, return a placeholder indicating the action is available
-	result := map[string]interface{}{
-		"status":      "rem_cycle_action_available",
-		"phases":      phases,
-		"dry_run":     dryRun,
-		"force_groom": forceGroom,
-		"note":        "REM cycle execution requires gateway wiring (next task)",
+	// Check if REM cycle runner is available
+	remRunner := t.services.REMCycle
+	if remRunner == nil {
+		return &types.ToolResult{Success: false, Error: "REM cycle not available — brain or REM scheduling may be disabled in config"}, nil
 	}
 
-	data, _ := json.Marshal(result)
+	// Execute the REM cycle
+	report, err := remRunner.RunREMCycle(ctx, phases, dryRun)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("REM cycle failed: %v", err)}, nil
+	}
+
+	data, _ := json.Marshal(report)
 	return &types.ToolResult{Success: true, Content: string(data)}, nil
+}
+
+// normalizePhase maps short-form phase names to the full forms expected by REMCycle.Run().
+func normalizePhase(phase string) string {
+	switch strings.ToLower(strings.TrimSpace(phase)) {
+	case "consolidate", "consolidation":
+		return "consolidation"
+	case "prune", "pruning":
+		return "pruning"
+	case "integrate", "integration":
+		return "integration"
+	case "groom", "grooming":
+		return "grooming"
+	case "triage":
+		return "triage"
+	default:
+		return phase // pass through — REMCycle.Run will error on unknown phases
+	}
 }

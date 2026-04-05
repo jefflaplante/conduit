@@ -245,6 +245,22 @@ type BrainFTSSearcher interface {
 	SearchBrain(ctx context.Context, query string, limit int) ([]BrainFTSResult, error)
 }
 
+// REMCycleReport is the tool-layer representation of a REM cycle execution report.
+type REMCycleReport struct {
+	Date          string                  `json:"date"`
+	DryRun        bool                    `json:"dry_run"`
+	Triage        map[string]interface{}  `json:"triage,omitempty"`
+	Consolidation map[string]interface{}  `json:"consolidation,omitempty"`
+	Pruning       map[string]interface{}  `json:"pruning,omitempty"`
+	Integration   map[string]interface{}  `json:"integration,omitempty"`
+	Grooming      map[string]interface{}  `json:"grooming,omitempty"`
+}
+
+// REMCycleRunner executes the REM sleep consolidation cycle.
+type REMCycleRunner interface {
+	RunREMCycle(ctx context.Context, phases []string, dryRun bool) (*REMCycleReport, error)
+}
+
 // ToolServices provides access to services for tools (no direct gateway dependency)
 type ToolServices struct {
 	SessionStore  *sessions.Store
@@ -258,6 +274,7 @@ type ToolServices struct {
 	MQTTService   MQTTService    // Optional MQTT event ingest
 	Brain         BrainService   // Optional tiered memory (LTM + working + scratchpad)
 	BrainFTS      BrainFTSSearcher // Optional FTS5 search over brain LTM
+	REMCycle      REMCycleRunner   // Optional REM sleep cycle runner
 
 	// Schema enhancement
 	SchemaBuilder *schema.Builder // For enhancing tool schemas with discovery data
