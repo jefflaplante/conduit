@@ -37,6 +37,7 @@ func setupTestREMCycle(t *testing.T) (*REMCycle, *brain.Brain, string) {
 		IntegrationDay:       0,
 		GroomWithLLM:         false,
 		LogPath:              "",
+		WorkspaceDir:         tmpDir,
 	}
 
 	rem := NewREMCycle(b, db, config)

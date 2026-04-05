@@ -81,13 +81,10 @@ func (r *REMCycle) Triage(ctx context.Context, dryRun bool) (*TriageResult, erro
 	return result, nil
 }
 
-// getMemoryDir returns the memory directory path from config or default
+// getMemoryDir returns the absolute path to the workspace memory directory.
 func (r *REMCycle) getMemoryDir() string {
-	if r.config.LogPath != "" {
-		// LogPath may contain the parent directory where memory/ lives
-		// or it may be the directory where REM logs go
-		// Default to using it as the workspace root
-		return filepath.Join(filepath.Dir(r.config.LogPath), "memory")
+	if r.config.WorkspaceDir != "" {
+		return filepath.Join(r.config.WorkspaceDir, "memory")
 	}
 	return "memory"
 }
