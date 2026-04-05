@@ -41,27 +41,28 @@ func (r *REMCycle) Consolidate(ctx context.Context, dryRun bool) (*Consolidation
 
 // promoteHighSalienceEntries promotes WM entries with high salience to LTM
 func (r *REMCycle) promoteHighSalienceEntries(ctx context.Context, result *ConsolidationResult, dryRun bool) error {
-	// Get all WM entries for all users by listing with empty prefix
-	// Note: Brain.List requires a userID in context, but we want all users
-	// We'll need to query the working memory map directly
-	// Since we have direct access to r.brain, we'll need to get the entries
+	entries := r.brain.WorkingMemoryEntries(ctx)
+	if len(entries) == 0 {
+		return nil
+	}
 
-	// For now, we'll use a threshold-based approach on LTM entries themselves
-	// and promote based on the config.consolidateThreshold
+	threshold := r.config.ConsolidateThreshold
+	if threshold <= 0 {
+		threshold = 0.6
+	}
 
-	// Since WM is in-memory and per-user, we'll use the Brain's Consolidate method
-	// which already handles promotion logic. However, we need to trigger it for all users.
+	for _, entry := range entries {
+		if entry.Salience >= threshold {
+			if !dryRun {
+				if err := r.brain.Promote(ctx, entry.Key); err != nil {
+					// Entry may have been removed between snapshot and promote, skip
+					continue
+				}
+			}
+			result.Promoted = append(result.Promoted, entry.Key)
+		}
+	}
 
-	// For REM consolidation, we'll focus on LTM operations and assume WM->LTM promotion
-	// happens through the normal Brain.Consolidate() flow during runtime.
-	// REM consolidation primarily works on the persistent LTM store.
-
-	// TODO: If we need to promote specific WM entries, we'd need to:
-	// 1. Iterate through brain.working map (requires exposing it or adding a method)
-	// 2. For each user, check entry.Salience >= threshold
-	// 3. Call r.brain.Promote(ctx, key) for those entries
-
-	// For now, skip WM promotion in REM and focus on LTM consolidation
 	return nil
 }
 
