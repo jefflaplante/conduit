@@ -197,6 +197,10 @@ func TestBuildBrainFTSQuery(t *testing.T) {
 		{"with special chars", "key:value (test)", "keyvalue OR test"},
 		{"empty query", "", ""},
 		{"only special chars", ":()+-", ""},
+		{"stopword stripping", "what is the helm config", "helm OR config"},
+		{"delimiter splitting", "helm/kustomize", "helm OR kustomize"},
+		{"all stopwords fallback", "what is it", "what OR is OR it"},
+		{"natural language", "who passed away recently", "passed OR away"},
 	}
 
 	for _, tt := range tests {
