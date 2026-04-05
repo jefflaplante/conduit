@@ -54,6 +54,13 @@ var migrations = []migration{
 		CREATE INDEX IF NOT EXISTS idx_brain_rel_key_a ON brain_relationships(key_a);
 		CREATE INDEX IF NOT EXISTS idx_brain_rel_key_b ON brain_relationships(key_b);`,
 	},
+	// Migration 3: Staleness tracking and source indexes
+	{
+		Version: 3,
+		SQL: `ALTER TABLE brain_ltm ADD COLUMN stale INTEGER DEFAULT 0;
+		CREATE INDEX IF NOT EXISTS idx_brain_ltm_source ON brain_ltm(source);
+		CREATE INDEX IF NOT EXISTS idx_brain_ltm_source_hash ON brain_ltm(source_hash);`,
+	},
 }
 
 func runMigrations(db *sql.DB) error {

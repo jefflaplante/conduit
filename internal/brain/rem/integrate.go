@@ -69,7 +69,7 @@ func (r *REMCycle) shouldRunIntegration() bool {
 // fetchAllLTMEntries retrieves all long-term memory entries from the database
 func (r *REMCycle) fetchAllLTMEntries(ctx context.Context) ([]brain.Entry, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT key, value, created_at, accessed_at, access_count, salience, source
+		SELECT key, value, created_at, accessed_at, access_count, salience, source, stale
 		FROM brain_ltm
 		ORDER BY key
 	`)
@@ -82,9 +82,11 @@ func (r *REMCycle) fetchAllLTMEntries(ctx context.Context) ([]brain.Entry, error
 	for rows.Next() {
 		var e brain.Entry
 		e.Tier = brain.TierLongTerm
-		if err := rows.Scan(&e.Key, &e.Value, &e.CreatedAt, &e.AccessedAt, &e.AccessCount, &e.Salience, &e.Source); err != nil {
+		var staleInt int
+		if err := rows.Scan(&e.Key, &e.Value, &e.CreatedAt, &e.AccessedAt, &e.AccessCount, &e.Salience, &e.Source, &staleInt); err != nil {
 			return nil, err
 		}
+		e.Stale = staleInt != 0
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
