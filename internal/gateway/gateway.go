@@ -19,6 +19,7 @@ import (
 	"conduit/internal/agent"
 	"conduit/internal/ai"
 	"conduit/internal/brain"
+	"conduit/internal/brain/rem"
 	"conduit/internal/auth"
 	"conduit/internal/channels"
 	"conduit/internal/channels/telegram"
@@ -138,6 +139,7 @@ type Gateway struct {
 
 	// Brain cognitive architecture (optional)
 	brainService *brain.Brain
+	remCycle     *rem.REMCycle
 
 	// SSH server (optional)
 	sshServer *charmssh.Server
@@ -657,6 +659,22 @@ func New(cfg *config.Config) (*Gateway, error) {
 		} else {
 			gw.brainService = brainSvc
 			logger.Info("brain cognitive architecture initialized", "path", brainDBPath)
+
+			// Initialize REM cycle if enabled
+			if cfg.Brain.REMEnabled {
+				remConfig := rem.REMConfig{
+					PruneAgeDays:      cfg.Brain.REMPruneAgeDays,
+					SalienceDecayRate: cfg.Brain.REMSalienceDecayRate,
+					IntegrationDay:    cfg.Brain.REMIntegrationDay,
+					GroomWithLLM:      cfg.Brain.REMGroomWithLLM,
+					LogPath:           cfg.Brain.REMLogPath,
+				}
+				gw.remCycle = rem.NewREMCycle(gw.brainService, gw.brainService.DB(), remConfig)
+				logger.Info("REM sleep cycle initialized",
+					"schedule", cfg.Brain.REMSchedule,
+					"prune_age_days", cfg.Brain.REMPruneAgeDays,
+					"integration_day", cfg.Brain.REMIntegrationDay)
+			}
 		}
 	}
 
@@ -990,6 +1008,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 	if schedulerReady {
 		if err := g.initializeAgentHeartbeat(g.config); err != nil {
 			g.logger.Warn("failed to initialize agent heartbeat", "error", err)
+		}
+
+		// Auto-create REM sleep cycle job if brain and REM are enabled
+		if err := g.initializeREMCycle(g.config); err != nil {
+			g.logger.Warn("failed to initialize REM sleep cycle", "error", err)
 		}
 	}
 

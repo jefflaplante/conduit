@@ -194,3 +194,50 @@ func (g *Gateway) updateHeartbeatJobMetrics() {
 
 	g.metricsCollector.UpdateHeartbeatJobs(total, enabled)
 }
+
+// initializeREMCycle sets up automatic REM sleep cycle job based on configuration
+func (g *Gateway) initializeREMCycle(cfg *config.Config) error {
+	if !cfg.Brain.Enabled || !cfg.Brain.REMEnabled {
+		log.Printf("[REMCycle] REM sleep cycle disabled in configuration")
+		return nil
+	}
+
+	if g.remCycle == nil {
+		log.Printf("[REMCycle] REM cycle not initialized, skipping job creation")
+		return nil
+	}
+
+	jobID := "rem_sleep_nightly"
+
+	// Check if job already exists (avoid duplicates on restart)
+	existingJobs := g.scheduler.ListJobs()
+	for _, job := range existingJobs {
+		if job.ID == jobID {
+			log.Printf("[REMCycle] Job %s already exists, skipping auto-creation", jobID)
+			return nil
+		}
+	}
+
+	// Create the REM cycle job
+	job := &scheduler.Job{
+		ID:       jobID,
+		Name:     "REM Sleep Consolidation",
+		Schedule: cfg.Brain.REMSchedule,
+		Type:     scheduler.JobTypeGo,
+		Command:  "brain rem_cycle",
+		Model:    "haiku",
+		Enabled:  true,
+		Metadata: map[string]interface{}{
+			"rem_sleep": true,
+			"brain":     true,
+		},
+	}
+
+	if err := g.scheduler.AddJob(job); err != nil {
+		return fmt.Errorf("failed to schedule REM cycle job: %w", err)
+	}
+
+	log.Printf("[REMCycle] Auto-created REM sleep cycle job: %s (schedule: %s)", jobID, cfg.Brain.REMSchedule)
+
+	return nil
+}
