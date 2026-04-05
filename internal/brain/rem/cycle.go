@@ -86,7 +86,7 @@ func (r *REMCycle) Run(ctx context.Context, phases []string, dryRun bool) (*REMR
 	return report, nil
 }
 
-// Individual phase methods (stub implementations for now)
+// Individual phase methods delegate to the full implementations in their respective files.
 
 func (r *REMCycle) runTriage(ctx context.Context, dryRun bool) (*TriageResult, error) {
 	return r.Triage(ctx, dryRun)
