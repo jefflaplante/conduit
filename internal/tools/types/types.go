@@ -219,7 +219,7 @@ type BrainService interface {
 	Store(ctx context.Context, key, value string, tier BrainTier, source string) error
 	Get(ctx context.Context, key string) (*BrainEntry, error)
 	Recall(ctx context.Context, query string, limit int) ([]*BrainEntry, error)
-	List(ctx context.Context, prefix string) ([]*BrainEntry, error)
+	List(ctx context.Context, prefix string, sourcePrefix string) ([]*BrainEntry, error)
 	Delete(ctx context.Context, key string) error
 	Push(ctx context.Context, userID, value string) error
 	Pop(ctx context.Context, userID string) (string, error)

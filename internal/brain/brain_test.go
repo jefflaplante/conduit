@@ -117,7 +117,7 @@ func TestList(t *testing.T) {
 	require.NoError(t, b.Store(ctx, "solar.panel_count", "30", TierLongTerm, ""))
 	require.NoError(t, b.Store(ctx, "pets.theo", "golden", TierWorking, ""))
 
-	results, err := b.List(ctx, "solar.")
+	results, err := b.List(ctx, "solar.", "")
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
 }
@@ -243,7 +243,7 @@ func TestConcurrentAccess(t *testing.T) {
 			_ = b.Store(ctx, key, "value", TierWorking, "")
 			_, _ = b.Get(ctx, key)
 			_, _ = b.Recall(ctx, "concurrent", 5)
-			_, _ = b.List(ctx, "concurrent.")
+			_, _ = b.List(ctx, "concurrent.", "")
 		}(i)
 	}
 	wg.Wait()
@@ -442,7 +442,7 @@ func TestSubAgentWMList(t *testing.T) {
 	require.NoError(t, b.Store(parentCtx, "env.humidity", "45%", TierWorking, "test"))
 	require.NoError(t, b.Store(childCtx, "env.temp", "override", TierWorking, "test")) // Override one
 
-	results, err := b.List(childCtx, "env.")
+	results, err := b.List(childCtx, "env.", "")
 	require.NoError(t, err)
 	assert.Len(t, results, 2) // child's env.temp + parent's env.humidity (deduped)
 

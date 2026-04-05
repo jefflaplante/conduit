@@ -348,7 +348,7 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 	return results, nil
 }
 
-func (b *Brain) List(ctx context.Context, prefix string) ([]*Entry, error) {
+func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([]*Entry, error) {
 	var results []*Entry
 	seen := make(map[string]bool)
 	userID := userIDFromCtx(ctx)
@@ -358,8 +358,10 @@ func (b *Brain) List(ctx context.Context, prefix string) ([]*Entry, error) {
 	if wm, ok := b.working[userID]; ok {
 		for _, entry := range wm {
 			if strings.HasPrefix(entry.Key, prefix) {
-				results = append(results, entry)
-				seen[entry.Key] = true
+				if sourcePrefix == "" || strings.HasPrefix(entry.Source, sourcePrefix) {
+					results = append(results, entry)
+					seen[entry.Key] = true
+				}
 			}
 		}
 	}
@@ -368,17 +370,26 @@ func (b *Brain) List(ctx context.Context, prefix string) ([]*Entry, error) {
 		if parentWM, ok := b.working[parentID]; ok {
 			for _, entry := range parentWM {
 				if !seen[entry.Key] && strings.HasPrefix(entry.Key, prefix) {
-					copied := *entry
-					results = append(results, &copied)
+					if sourcePrefix == "" || strings.HasPrefix(entry.Source, sourcePrefix) {
+						copied := *entry
+						results = append(results, &copied)
+					}
 				}
 			}
 		}
 	}
 	b.mu.RUnlock()
 
-	rows, err := b.db.Query(`
-		SELECT key, value, created_at, accessed_at, access_count, salience, source
-		FROM brain_ltm WHERE key LIKE ? ORDER BY key`, prefix+"%")
+	query := `SELECT key, value, created_at, accessed_at, access_count, salience, source
+		FROM brain_ltm WHERE key LIKE ?`
+	args := []interface{}{prefix + "%"}
+	if sourcePrefix != "" {
+		query += " AND source LIKE ?"
+		args = append(args, sourcePrefix+"%")
+	}
+	query += " ORDER BY key"
+
+	rows, err := b.db.Query(query, args...)
 	if err != nil {
 		return results, fmt.Errorf("list LTM: %w", err)
 	}
