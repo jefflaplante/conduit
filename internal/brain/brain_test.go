@@ -529,13 +529,78 @@ func TestRecallMultiTermWM(t *testing.T) {
 	err := b.Store(ctx, "project.alpha", "deadline is friday, team lead is Bob", TierWorking, "test")
 	require.NoError(t, err)
 
-	// Both terms present across key+value
+	// Both terms present across key+value — full match
 	results, err := b.Recall(ctx, "alpha friday", 10)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 
-	// One term missing entirely
+	// One term present (OR logic) — partial match still returns result
 	results, err = b.Recall(ctx, "alpha saturday", 10)
 	require.NoError(t, err)
-	assert.Len(t, results, 0, "should not match when a term is absent from both key and value")
+	assert.Len(t, results, 1, "OR logic: 'alpha' matches even though 'saturday' does not")
+
+	// No terms present at all
+	results, err = b.Recall(ctx, "zebra saturday", 10)
+	require.NoError(t, err)
+	assert.Len(t, results, 0, "should not match when no terms are found")
+}
+
+func TestRecallNaturalLanguageQuery(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := WithUserID(context.Background(), "user1")
+
+	err := b.Store(ctx, "food.bourbon", "Maker's Mark, neat. Jeff's go-to.", TierLongTerm, "test")
+	require.NoError(t, err)
+
+	// Natural language query with stopwords
+	results, err := b.Recall(ctx, "what bourbon does Jeff drink", 10)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(results), 1, "stopwords stripped, 'bourbon' and 'jeff' should match")
+	assert.Equal(t, "food.bourbon", results[0].Key)
+}
+
+func TestRecallDelimiterSplitting(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := WithUserID(context.Background(), "user1")
+
+	err := b.Store(ctx, "work.deck.prd", "Uses Helm/Kustomize for K8s deployments", TierLongTerm, "test")
+	require.NoError(t, err)
+
+	// Query individual terms that appear as compound token in value
+	results, err := b.Recall(ctx, "Helm Kustomize", 10)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(results), 1, "delimiter splitting should match Helm/Kustomize")
+	assert.Equal(t, "work.deck.prd", results[0].Key)
+}
+
+func TestRecallORRanking(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := WithUserID(context.Background(), "user1")
+
+	// Entry matching 2 of 3 terms
+	err := b.Store(ctx, "food.bourbon", "Maker's Mark bourbon, Jeff's favorite", TierLongTerm, "test")
+	require.NoError(t, err)
+	// Entry matching 1 of 3 terms
+	err = b.Store(ctx, "food.wine", "Jeff prefers red", TierLongTerm, "test")
+	require.NoError(t, err)
+
+	// After stopword stripping: ["bourbon", "jeff", "drink"]
+	results, err := b.Recall(ctx, "what bourbon does Jeff drink", 10)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(results), 2)
+	// The entry with more matching terms should rank first
+	assert.Equal(t, "food.bourbon", results[0].Key, "2-term match should rank above 1-term match")
+}
+
+func TestRecallAllStopwordsQuery(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := WithUserID(context.Background(), "user1")
+
+	err := b.Store(ctx, "meta.note", "what is it about this thing", TierLongTerm, "test")
+	require.NoError(t, err)
+
+	// All stopwords — falls back to original tokens
+	results, err := b.Recall(ctx, "what is it", 10)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(results), 1, "all-stopwords fallback should still search")
 }

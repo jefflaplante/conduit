@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"conduit/internal/brain"
 	"conduit/internal/tools/types"
 )
 
@@ -141,23 +142,25 @@ func (idx *BrainIndexer) GetIndexedCount() (int, error) {
 }
 
 // buildBrainFTSQuery converts a user query into an FTS5 MATCH expression.
+// Uses the shared brain tokenizer for stopword stripping and delimiter splitting.
 func buildBrainFTSQuery(query string) string {
-	words := strings.Fields(strings.ToLower(query))
-	if len(words) == 0 {
-		return ""
-	}
-
-	var terms []string
-	for _, w := range words {
-		cleaned := cleanFTSTerm(w)
-		if cleaned != "" {
-			terms = append(terms, cleaned)
-		}
-	}
-
+	terms := brain.TokenizeQuery(query)
 	if len(terms) == 0 {
 		return ""
 	}
 
-	return strings.Join(terms, " OR ")
+	// Clean each term for FTS5 safety.
+	var ftsTerms []string
+	for _, t := range terms {
+		cleaned := cleanFTSTerm(t)
+		if cleaned != "" {
+			ftsTerms = append(ftsTerms, cleaned)
+		}
+	}
+
+	if len(ftsTerms) == 0 {
+		return ""
+	}
+
+	return strings.Join(ftsTerms, " OR ")
 }

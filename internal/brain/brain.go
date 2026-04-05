@@ -244,8 +244,18 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 	if limit <= 0 {
 		limit = 20
 	}
-	queryLower := strings.ToLower(query)
-	var results []*Entry
+
+	terms := TokenizeQuery(query)
+	if len(terms) == 0 {
+		return nil, nil
+	}
+
+	type scoredEntry struct {
+		entry      *Entry
+		matchScore float64
+	}
+
+	var scored []scoredEntry
 	seen := make(map[string]bool)
 
 	userID := userIDFromCtx(ctx)
@@ -254,8 +264,8 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 	b.mu.RLock()
 	if wm, ok := b.working[userID]; ok {
 		for _, entry := range wm {
-			if matchesQuery(entry, queryLower) {
-				results = append(results, entry)
+			if ms := queryMatchScore(entry, terms); ms > 0 {
+				scored = append(scored, scoredEntry{entry, ms})
 				seen[entry.Key] = true
 			}
 		}
@@ -264,49 +274,73 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 	if parentID != "" && parentID != userID {
 		if parentWM, ok := b.working[parentID]; ok {
 			for _, entry := range parentWM {
-				if !seen[entry.Key] && matchesQuery(entry, queryLower) {
-					copied := *entry
-					results = append(results, &copied)
-					seen[entry.Key] = true
+				if !seen[entry.Key] {
+					if ms := queryMatchScore(entry, terms); ms > 0 {
+						copied := *entry
+						scored = append(scored, scoredEntry{&copied, ms})
+						seen[entry.Key] = true
+					}
 				}
 			}
 		}
 	}
 	b.mu.RUnlock()
 
-	// Split query into terms — each term must match either key or value.
-	// This allows "paris trip" to match a key "travel.paris" with value mentioning "trip".
-	terms := strings.Fields(strings.ToLower(query))
-	if len(terms) == 0 {
-		return results, nil
-	}
+	// Build OR-joined SQL query with per-term match counting.
 	var whereClauses []string
-	var args []interface{}
+	var matchExprs []string
+	var whereArgs []interface{}
+	var matchArgs []interface{}
 	for _, term := range terms {
 		whereClauses = append(whereClauses, "(LOWER(key) LIKE ? OR LOWER(value) LIKE ?)")
-		args = append(args, "%"+term+"%", "%"+term+"%")
+		whereArgs = append(whereArgs, "%"+term+"%", "%"+term+"%")
+		matchExprs = append(matchExprs, "(CASE WHEN LOWER(key) LIKE ? OR LOWER(value) LIKE ? THEN 1 ELSE 0 END)")
+		matchArgs = append(matchArgs, "%"+term+"%", "%"+term+"%")
 	}
+
+	sql := fmt.Sprintf(
+		`SELECT key, value, created_at, accessed_at, access_count, salience, source,
+		(%s) AS match_count
+		FROM brain_ltm WHERE %s
+		ORDER BY match_count DESC, salience DESC LIMIT ?`,
+		strings.Join(matchExprs, " + "),
+		strings.Join(whereClauses, " OR "),
+	)
+	args := append(matchArgs, whereArgs...)
 	args = append(args, limit)
-	rows, err := b.db.Query(
-		`SELECT key, value, created_at, accessed_at, access_count, salience, source
-		FROM brain_ltm WHERE `+strings.Join(whereClauses, " AND ")+`
-		ORDER BY salience DESC LIMIT ?`, args...)
+
+	rows, err := b.db.Query(sql, args...)
 	if err != nil {
-		return results, fmt.Errorf("recall LTM: %w", err)
+		return nil, fmt.Errorf("recall LTM: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		entry := &Entry{Tier: TierLongTerm}
+		var matchCount int
 		if err := rows.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-			&entry.AccessCount, &entry.Salience, &entry.Source); err != nil {
+			&entry.AccessCount, &entry.Salience, &entry.Source, &matchCount); err != nil {
 			continue
 		}
-		results = append(results, entry)
+		if !seen[entry.Key] {
+			ms := float64(matchCount) / float64(len(terms))
+			scored = append(scored, scoredEntry{entry, ms})
+			seen[entry.Key] = true
+		}
 	}
 
-	sort.Slice(results, func(i, j int) bool { return results[i].Salience > results[j].Salience })
-	if len(results) > limit {
-		results = results[:limit]
+	// Sort by blended score: match relevance (60%) + salience (40%).
+	sort.Slice(scored, func(i, j int) bool {
+		si := (scored[i].matchScore * 0.6) + (scored[i].entry.Salience * 0.4)
+		sj := (scored[j].matchScore * 0.6) + (scored[j].entry.Salience * 0.4)
+		return si > sj
+	})
+
+	if len(scored) > limit {
+		scored = scored[:limit]
+	}
+	results := make([]*Entry, len(scored))
+	for i, s := range scored {
+		results[i] = s.entry
 	}
 	return results, nil
 }
@@ -546,16 +580,21 @@ func (b *Brain) computeSalience(e *Entry) float64 {
 	return (accessScore * b.accessWeight) + (recencyScore * b.recencyWeight) + (tierScore * b.tierWeight)
 }
 
-func matchesQuery(e *Entry, queryLower string) bool {
+// queryMatchScore returns the fraction of query terms found in the entry's key or value.
+// Returns 0.0 if no terms match, up to 1.0 if all terms match.
+func queryMatchScore(e *Entry, terms []string) float64 {
+	if len(terms) == 0 {
+		return 0
+	}
 	keyLower := strings.ToLower(e.Key)
 	valueLower := strings.ToLower(e.Value)
-	// Split query into terms — each term must match in key or value
-	for _, term := range strings.Fields(queryLower) {
-		if !strings.Contains(keyLower, term) && !strings.Contains(valueLower, term) {
-			return false
+	matched := 0
+	for _, term := range terms {
+		if strings.Contains(keyLower, term) || strings.Contains(valueLower, term) {
+			matched++
 		}
 	}
-	return len(strings.Fields(queryLower)) > 0
+	return float64(matched) / float64(len(terms))
 }
 
 type brainUserIDKey struct{}
