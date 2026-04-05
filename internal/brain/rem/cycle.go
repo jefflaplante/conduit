@@ -93,17 +93,7 @@ func (r *REMCycle) runTriage(ctx context.Context, dryRun bool) (*TriageResult, e
 }
 
 func (r *REMCycle) runConsolidation(ctx context.Context, dryRun bool) (*ConsolidationResult, error) {
-	// TODO: Implement consolidation logic
-	// - Promote high-salience WM entries to LTM
-	// - Merge duplicates
-	// - Apply salience decay and boosting
-	result := &ConsolidationResult{
-		Promoted:        []string{},
-		Merged:          []MergeRecord{},
-		SalienceDecayed: 0,
-		SalienceBoosted: 0,
-	}
-	return result, nil
+	return r.Consolidate(ctx, dryRun)
 }
 
 func (r *REMCycle) runPruning(ctx context.Context, dryRun bool) (*PruneResult, error) {

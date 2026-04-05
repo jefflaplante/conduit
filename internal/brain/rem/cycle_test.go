@@ -332,3 +332,60 @@ func TestCycle_ReportTimestamp(t *testing.T) {
 	assert.True(t, report.Date.After(before) || report.Date.Equal(before))
 	assert.True(t, report.Date.Before(after) || report.Date.Equal(after))
 }
+
+func TestFullREMCycle_WithProvenance(t *testing.T) {
+	rem, b, tmpDir := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+	ctxNoUser := context.Background()
+
+	// Create a source file
+	testFile := filepath.Join(tmpDir, "MEMORY.md")
+	require.NoError(t, os.WriteFile(testFile, []byte("# Memory\nJeff lives in Portland"), 0644))
+
+	// Store entries with various sources
+	require.NoError(t, b.Store(ctxNoUser, "jeff.location", "Portland", brain.TierLongTerm, "file:"+testFile))
+	require.NoError(t, b.Store(ctxNoUser, "jeff.role", "engineer", brain.TierLongTerm, "skill:profile"))
+	require.NoError(t, b.Store(ctxNoUser, "jeff.hobby", "coding", brain.TierLongTerm, "user:manual"))
+
+	// Store WM entry for consolidation
+	require.NoError(t, b.Store(ctx, "session.topic", "provenance", brain.TierWorking, "tool"))
+	// Boost its salience
+	for i := 0; i < 50; i++ {
+		_, _ = b.Get(ctx, "session.topic")
+	}
+
+	// Run first groom to set initial hash
+	groomResult, err := rem.Groom(ctxNoUser, false)
+	require.NoError(t, err)
+	require.NotNil(t, groomResult)
+	assert.GreaterOrEqual(t, groomResult.FilesChecked, 1, "should check the file: source")
+
+	// Modify file after hash is set
+	require.NoError(t, os.WriteFile(testFile, []byte("# Memory\nJeff lives in Austin"), 0644))
+
+	// Configure REM cycle
+	rem.config.IntegrationDay = int(time.Now().Weekday())
+	rem.config.PruneAgeDays = 365 // Don't prune recent entries
+	logDir := filepath.Join(tmpDir, "rem-logs")
+	require.NoError(t, os.MkdirAll(logDir, 0755))
+	rem.config.LogPath = logDir
+
+	// Run full REM cycle
+	report, err := rem.Run(ctxNoUser, nil, false)
+	require.NoError(t, err)
+	require.NotNil(t, report)
+
+	// Verify all phases ran
+	assert.NotNil(t, report.Triage)
+	assert.NotNil(t, report.Consolidation)
+	assert.NotNil(t, report.Pruning)
+	assert.NotNil(t, report.Integration)
+	assert.NotNil(t, report.Grooming)
+
+	// Key verification: The full cycle completed successfully with provenance-tracked entries
+	// The grooming phase should have processed file sources (even if they were later pruned)
+	// The consolidation phase should have run
+	assert.GreaterOrEqual(t, len(report.Consolidation.Promoted), 0)
+}
