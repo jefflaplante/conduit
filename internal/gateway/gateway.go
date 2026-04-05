@@ -709,6 +709,12 @@ func New(cfg *config.Config) (*Gateway, error) {
 		brainFTS = gw.brainIndexer
 	}
 
+	// Build REMCycleRunner interface value (nil if REM cycle not initialized)
+	var remCycleRunner types.REMCycleRunner
+	if gw.remCycle != nil {
+		remCycleRunner = newREMCycleAdapter(gw.remCycle)
+	}
+
 	toolServices := &tools.ToolServices{
 		SessionStore:  sessionStore,
 		ConfigMgr:     cfg,
@@ -720,6 +726,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		MQTTService:   mqttSvc,
 		Brain:         brainSvcAdapter,
 		BrainFTS:      brainFTS,
+		REMCycle:      remCycleRunner,
 		SchemaBuilder: schemaBuilder,
 		DebugLog:      debugBuffer,
 	}

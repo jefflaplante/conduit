@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"conduit/internal/brain"
+	"conduit/internal/brain/rem"
 	"conduit/internal/tools/types"
 )
 
@@ -110,5 +111,74 @@ func convertEntries(entries []*brain.Entry) []*types.BrainEntry {
 	for i, e := range entries {
 		result[i] = convertEntry(e)
 	}
+	return result
+}
+
+// remCycleAdapter adapts *rem.REMCycle to types.REMCycleRunner interface.
+type remCycleAdapter struct {
+	cycle *rem.REMCycle
+}
+
+func newREMCycleAdapter(c *rem.REMCycle) *remCycleAdapter {
+	return &remCycleAdapter{cycle: c}
+}
+
+func (a *remCycleAdapter) RunREMCycle(ctx context.Context, phases []string, dryRun bool) (*types.REMCycleReport, error) {
+	report, err := a.cycle.Run(ctx, phases, dryRun)
+	if err != nil {
+		return nil, err
+	}
+	return convertREMReport(report), nil
+}
+
+// convertREMReport converts a rem.REMReport to types.REMCycleReport.
+func convertREMReport(r *rem.REMReport) *types.REMCycleReport {
+	result := &types.REMCycleReport{
+		Date:   r.Date.Format("2006-01-02 15:04:05"),
+		DryRun: r.DryRun,
+	}
+
+	if r.Triage != nil {
+		result.Triage = map[string]interface{}{
+			"daily_log_scanned": r.Triage.DailyLogScanned,
+			"wm_keys_found":     r.Triage.WMKeysFound,
+			"new_facts":         r.Triage.NewFacts,
+			"updated_facts":     r.Triage.UpdatedFacts,
+			"stale_candidates":  r.Triage.StaleCandidates,
+		}
+	}
+
+	if r.Consolidation != nil {
+		result.Consolidation = map[string]interface{}{
+			"promoted":         r.Consolidation.Promoted,
+			"merged":           r.Consolidation.Merged,
+			"salience_decayed": r.Consolidation.SalienceDecayed,
+			"salience_boosted": r.Consolidation.SalienceBoosted,
+		}
+	}
+
+	if r.Pruning != nil {
+		result.Pruning = map[string]interface{}{
+			"archived": r.Pruning.Archived,
+			"orphaned": r.Pruning.Orphaned,
+		}
+	}
+
+	if r.Integration != nil {
+		result.Integration = map[string]interface{}{
+			"relationships_created": r.Integration.RelationshipsCreated,
+			"patterns":              r.Integration.Patterns,
+		}
+	}
+
+	if r.Grooming != nil {
+		result.Grooming = map[string]interface{}{
+			"files_checked":        r.Grooming.FilesChecked,
+			"files_changed":        r.Grooming.FilesChanged,
+			"keys_updated":         r.Grooming.KeysUpdated,
+			"entries_marked_stale": r.Grooming.EntriesMarkedStale,
+		}
+	}
+
 	return result
 }
