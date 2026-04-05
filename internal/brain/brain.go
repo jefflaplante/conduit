@@ -126,6 +126,9 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 }
 
 func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source string) error {
+	if err := ValidateSource(source); err != nil {
+		log.Printf("Brain: warning: %v (key=%q)", err, key)
+	}
 	now := time.Now()
 	switch tier {
 	case TierLongTerm:
