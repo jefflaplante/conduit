@@ -87,7 +87,7 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **WebSocket API** — Real-time bidirectional communication
 
 ### Search & Memory
-- **[Brain (Cognitive Memory)](reference/configuration.md#brain-cognitive-memory)** — Tiered memory system: long-term (SQLite), working (per-session), and scratchpad (LIFO stack). Salience-scored with configurable weights, auto-promotion, and sub-agent working memory sharing
+- **[Brain (Cognitive Memory)](reference/configuration.md#brain-cognitive-memory)** — Tiered memory system: long-term (SQLite), working (per-session), and scratchpad (LIFO stack). Salience-scored with configurable weights, auto-promotion, and sub-agent working memory sharing. **Eliminates context window poisoning** — instead of dumping entire files into the prompt to retrieve a single fact, Brain returns just the fact (30 bytes vs. 12KB+). This dramatically reduces token waste, lowers cost, and keeps the context window clear for actual reasoning — especially critical for smaller models (Haiku, local quantized) where every token counts
 - **FTS5 Full-Text Search** — SQLite-based document, message, and brain LTM search
 - **Memory Search** — Semantic search across MEMORY.md, session history, and brain entries
 - **Web Search** — Hybrid Anthropic native + Brave API fallback
