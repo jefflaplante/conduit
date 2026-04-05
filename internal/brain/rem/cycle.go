@@ -88,17 +88,7 @@ func (r *REMCycle) Run(ctx context.Context, phases []string, dryRun bool) (*REMR
 // Individual phase methods (stub implementations for now)
 
 func (r *REMCycle) runTriage(ctx context.Context, dryRun bool) (*TriageResult, error) {
-	// TODO: Implement triage logic
-	// - Scan daily log for WM keys
-	// - Detect new facts vs updates vs stale candidates
-	result := &TriageResult{
-		DailyLogScanned:  "conduit.daily.log",
-		WMKeysFound:      0,
-		NewFacts:         []string{},
-		UpdatedFacts:     []string{},
-		StaleCandidates:  []string{},
-	}
-	return result, nil
+	return r.Triage(ctx, dryRun)
 }
 
 func (r *REMCycle) runConsolidation(ctx context.Context, dryRun bool) (*ConsolidationResult, error) {
@@ -116,35 +106,13 @@ func (r *REMCycle) runConsolidation(ctx context.Context, dryRun bool) (*Consolid
 }
 
 func (r *REMCycle) runPruning(ctx context.Context, dryRun bool) (*PruneResult, error) {
-	// TODO: Implement pruning logic
-	// - Archive old/low-salience entries
-	// - Identify orphaned entries
-	result := &PruneResult{
-		Archived: []ArchiveRecord{},
-		Orphaned: []string{},
-	}
-	return result, nil
+	return r.Prune(ctx, dryRun)
 }
 
 func (r *REMCycle) runIntegration(ctx context.Context, dryRun bool) (*IntegrationResult, error) {
-	// TODO: Implement integration logic
-	// - Create relationships between entries
-	// - Detect patterns
-	result := &IntegrationResult{
-		RelationshipsCreated: 0,
-		Patterns:             []string{},
-	}
-	return result, nil
+	return r.Integrate(ctx, dryRun)
 }
 
 func (r *REMCycle) runGrooming(ctx context.Context, dryRun bool) (*GroomResult, error) {
-	// TODO: Implement grooming logic
-	// - Optional LLM-based memory file grooming
-	// - Update memory files based on LTM state
-	result := &GroomResult{
-		FilesChecked: 0,
-		FilesChanged: []string{},
-		KeysUpdated:  0,
-	}
-	return result, nil
+	return r.Groom(ctx, dryRun)
 }
