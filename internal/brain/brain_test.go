@@ -475,3 +475,67 @@ func TestSubAgentWMGetReturnsCopy(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "original", parentEntry.Value)
 }
+
+func TestLTMUpsertDoesNotViolateConstraint(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := WithUserID(context.Background(), "user1")
+
+	// Store a key in LTM
+	err := b.Store(ctx, "jeff.birthday", "January 1", TierLongTerm, "test")
+	require.NoError(t, err)
+
+	// Upsert same key with new value — previously failed with NOT NULL on salience
+	err = b.Store(ctx, "jeff.birthday", "January 2", TierLongTerm, "test")
+	require.NoError(t, err)
+
+	// Verify value was updated
+	entry, err := b.Get(ctx, "jeff.birthday")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "January 2", entry.Value)
+	assert.Equal(t, 3, entry.AccessCount) // 1 insert + 1 upsert + 1 get
+	assert.Greater(t, entry.Salience, 0.0)
+}
+
+func TestRecallMatchesValueContent(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := WithUserID(context.Background(), "user1")
+
+	// Store with key that doesn't contain the full query
+	err := b.Store(ctx, "travel.paris", "June 21-July 3, 2026, with Cam. Delta nonstop SEA-CDG.", TierLongTerm, "test")
+	require.NoError(t, err)
+
+	// "paris trip" — "paris" is in key, "trip" is not in key or value,
+	// but "paris" alone should match via the key
+	results, err := b.Recall(ctx, "paris", 10)
+	require.NoError(t, err)
+	assert.Len(t, results, 1, "should find entry by key substring")
+
+	// Search by value content
+	results, err = b.Recall(ctx, "Delta nonstop", 10)
+	require.NoError(t, err)
+	assert.Len(t, results, 1, "should find entry by value content")
+
+	// Multi-term: "paris june" — paris in key, june in value
+	results, err = b.Recall(ctx, "paris june", 10)
+	require.NoError(t, err)
+	assert.Len(t, results, 1, "should find entry when terms span key and value")
+}
+
+func TestRecallMultiTermWM(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := WithUserID(context.Background(), "user1")
+
+	err := b.Store(ctx, "project.alpha", "deadline is friday, team lead is Bob", TierWorking, "test")
+	require.NoError(t, err)
+
+	// Both terms present across key+value
+	results, err := b.Recall(ctx, "alpha friday", 10)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+
+	// One term missing entirely
+	results, err = b.Recall(ctx, "alpha saturday", 10)
+	require.NoError(t, err)
+	assert.Len(t, results, 0, "should not match when a term is absent from both key and value")
+}
