@@ -1,0 +1,150 @@
+package rem
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+
+	"conduit/internal/brain"
+)
+
+// REMConfig holds configuration for the REM sleep cycle
+type REMConfig struct {
+	PruneAgeDays      int
+	SalienceDecayRate float64
+	IntegrationDay    int // 0 = Sunday
+	GroomWithLLM      bool
+	LogPath           string
+}
+
+// REMCycle orchestrates offline memory consolidation
+type REMCycle struct {
+	brain  *brain.Brain
+	config REMConfig
+	db     *sql.DB // direct DB access for archive/relationships
+}
+
+// NewREMCycle creates a new REM cycle orchestrator
+func NewREMCycle(b *brain.Brain, db *sql.DB, config REMConfig) *REMCycle {
+	return &REMCycle{
+		brain:  b,
+		config: config,
+		db:     db,
+	}
+}
+
+// Run executes the full REM cycle and returns a report
+func (r *REMCycle) Run(ctx context.Context, phases []string, dryRun bool) (*REMReport, error) {
+	// Default to all phases if none specified
+	if len(phases) == 0 {
+		phases = []string{"triage", "consolidation", "pruning", "integration", "grooming"}
+	}
+
+	report := &REMReport{
+		Date:   time.Now(),
+		DryRun: dryRun,
+	}
+
+	// Execute requested phases in order
+	for _, phase := range phases {
+		select {
+		case <-ctx.Done():
+			return report, ctx.Err()
+		default:
+		}
+
+		var err error
+		switch phase {
+		case "triage":
+			report.Triage, err = r.runTriage(ctx, dryRun)
+		case "consolidation":
+			report.Consolidation, err = r.runConsolidation(ctx, dryRun)
+		case "pruning":
+			report.Pruning, err = r.runPruning(ctx, dryRun)
+		case "integration":
+			report.Integration, err = r.runIntegration(ctx, dryRun)
+		case "grooming":
+			report.Grooming, err = r.runGrooming(ctx, dryRun)
+		default:
+			return report, fmt.Errorf("unknown phase: %s", phase)
+		}
+
+		if err != nil {
+			return report, fmt.Errorf("phase %s failed: %w", phase, err)
+		}
+	}
+
+	// Write log if configured
+	if r.config.LogPath != "" && !dryRun {
+		if err := report.WriteLog(r.config.LogPath); err != nil {
+			return report, fmt.Errorf("failed to write log: %w", err)
+		}
+	}
+
+	return report, nil
+}
+
+// Individual phase methods (stub implementations for now)
+
+func (r *REMCycle) runTriage(ctx context.Context, dryRun bool) (*TriageResult, error) {
+	// TODO: Implement triage logic
+	// - Scan daily log for WM keys
+	// - Detect new facts vs updates vs stale candidates
+	result := &TriageResult{
+		DailyLogScanned:  "conduit.daily.log",
+		WMKeysFound:      0,
+		NewFacts:         []string{},
+		UpdatedFacts:     []string{},
+		StaleCandidates:  []string{},
+	}
+	return result, nil
+}
+
+func (r *REMCycle) runConsolidation(ctx context.Context, dryRun bool) (*ConsolidationResult, error) {
+	// TODO: Implement consolidation logic
+	// - Promote high-salience WM entries to LTM
+	// - Merge duplicates
+	// - Apply salience decay and boosting
+	result := &ConsolidationResult{
+		Promoted:        []string{},
+		Merged:          []MergeRecord{},
+		SalienceDecayed: 0,
+		SalienceBoosted: 0,
+	}
+	return result, nil
+}
+
+func (r *REMCycle) runPruning(ctx context.Context, dryRun bool) (*PruneResult, error) {
+	// TODO: Implement pruning logic
+	// - Archive old/low-salience entries
+	// - Identify orphaned entries
+	result := &PruneResult{
+		Archived: []ArchiveRecord{},
+		Orphaned: []string{},
+	}
+	return result, nil
+}
+
+func (r *REMCycle) runIntegration(ctx context.Context, dryRun bool) (*IntegrationResult, error) {
+	// TODO: Implement integration logic
+	// - Create relationships between entries
+	// - Detect patterns
+	result := &IntegrationResult{
+		RelationshipsCreated: 0,
+		Patterns:             []string{},
+	}
+	return result, nil
+}
+
+func (r *REMCycle) runGrooming(ctx context.Context, dryRun bool) (*GroomResult, error) {
+	// TODO: Implement grooming logic
+	// - Optional LLM-based memory file grooming
+	// - Update memory files based on LTM state
+	result := &GroomResult{
+		FilesChecked: 0,
+		FilesChanged: []string{},
+		KeysUpdated:  0,
+	}
+	return result, nil
+}
