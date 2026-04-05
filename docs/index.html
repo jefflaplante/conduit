@@ -123,6 +123,7 @@
                     <button class="carousel-tab" data-tab="telegram">Telegram</button>
                     <button class="carousel-tab" data-tab="tools">Tools</button>
                     <button class="carousel-tab" data-tab="search">Search</button>
+                    <button class="carousel-tab" data-tab="brain">Brain</button>
                     <button class="carousel-tab" data-tab="automation">Automation</button>
                 </div>
 
@@ -169,6 +170,15 @@
                             <h3>Search & Memory</h3>
                             <p>FTS5 full-text search over documents and messages. Semantic memory search across MEMORY.md and session history. Hybrid Anthropic + Brave web search.</p>
                             <code>SELECT * FROM fts_documents WHERE content MATCH 'query';</code>
+                        </div>
+                    </div>
+
+                    <div class="carousel-panel" data-panel="brain">
+                        <div class="feature-card">
+                            <div class="feature-icon">&#x1F9E0;</div>
+                            <h3>Brain — Cognitive Memory</h3>
+                            <p><strong>Eliminates context window poisoning.</strong> Instead of dumping entire files into the prompt to recall a single fact, Brain returns just the answer — 30 bytes vs. 12KB+. Three tiers: long-term (SQLite-persisted), working (per-session), and scratchpad (LIFO stack). Salience-scored with auto-promotion, configurable decay, and sub-agent memory sharing. Critical for smaller models where every token counts.</p>
+                            <code>Brain(action="get", key="jeff.birthday") → "October 5"</code>
                         </div>
                     </div>
 
