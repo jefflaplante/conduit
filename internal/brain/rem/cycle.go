@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"conduit/internal/brain"
@@ -16,7 +17,8 @@ type REMConfig struct {
 	ConsolidateThreshold float64 // Salience threshold for WM→LTM promotion (default 0.6)
 	IntegrationDay       int     // 0 = Sunday
 	GroomWithLLM         bool
-	LogPath              string
+	LogPath              string // Relative to WorkspaceDir if not absolute
+	WorkspaceDir         string // Absolute path to workspace root (e.g. /home/jules/ocgo/workspace)
 }
 
 // REMCycle orchestrates offline memory consolidation
@@ -78,7 +80,8 @@ func (r *REMCycle) Run(ctx context.Context, phases []string, dryRun bool) (*REMR
 
 	// Write log if configured
 	if r.config.LogPath != "" && !dryRun {
-		if err := report.WriteLog(r.config.LogPath); err != nil {
+		logPath := r.resolvePath(r.config.LogPath)
+		if err := report.WriteLog(logPath); err != nil {
 			return report, fmt.Errorf("failed to write log: %w", err)
 		}
 	}
@@ -106,4 +109,15 @@ func (r *REMCycle) runIntegration(ctx context.Context, dryRun bool) (*Integratio
 
 func (r *REMCycle) runGrooming(ctx context.Context, dryRun bool) (*GroomResult, error) {
 	return r.Groom(ctx, dryRun)
+}
+
+// resolvePath resolves a path against WorkspaceDir if it's not absolute.
+func (r *REMCycle) resolvePath(p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	if r.config.WorkspaceDir != "" {
+		return filepath.Join(r.config.WorkspaceDir, p)
+	}
+	return p
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -76,8 +77,14 @@ func (r *REMCycle) groomFileSources(ctx context.Context, result *GroomResult, dr
 			continue
 		}
 
+		// Resolve relative paths against workspace directory
+		resolvedPath := filePath
+		if !filepath.IsAbs(filePath) && r.config.WorkspaceDir != "" {
+			resolvedPath = filepath.Join(r.config.WorkspaceDir, filePath)
+		}
+
 		// Compute current file hash
-		currentHash, err := computeFileHash(filePath)
+		currentHash, err := computeFileHash(resolvedPath)
 		if err != nil {
 			// File may be missing or unreadable, log and continue
 			// In a real system, might want to flag these entries for archival
