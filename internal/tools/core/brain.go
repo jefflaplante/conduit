@@ -36,6 +36,7 @@ Actions:
 - promote: Move a working-memory key to long-term storage
 - consolidate: Sweep working memory — auto-promote high-salience keys, evict stale ones
 - status: Report entry counts, scratchpad depth, and hottest keys
+- rem_cycle: Run REM sleep consolidation phases (triage, consolidate, prune, integrate, groom)
 
 Typical Workflow:
 1. Store important facts as they come up (tier=working for session-scoped, tier=longterm for persistent)
@@ -50,7 +51,7 @@ func (t *BrainTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"store", "get", "recall", "list", "delete", "push", "pop", "peek", "promote", "consolidate", "status"},
+				"enum":        []string{"store", "get", "recall", "list", "delete", "push", "pop", "peek", "promote", "consolidate", "status", "rem_cycle"},
 				"description": "Action to perform on the brain memory system",
 			},
 			"key": map[string]interface{}{
@@ -81,6 +82,19 @@ func (t *BrainTool) Parameters() map[string]interface{} {
 			"auto_promote": map[string]interface{}{
 				"type":        "boolean",
 				"description": "Whether to auto-promote high-salience keys during consolidation (default: true)",
+			},
+			"phases": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "REM cycle phases to run (default: [\"triage\", \"consolidate\", \"prune\", \"integrate\", \"groom\"])",
+			},
+			"dry_run": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Preview REM cycle changes without applying (default: false)",
+			},
+			"force_groom": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Re-extract groom data even if hashes match (default: false)",
 			},
 		},
 		"required": []string{"action"},
@@ -121,6 +135,8 @@ func (t *BrainTool) Execute(ctx context.Context, args map[string]interface{}) (*
 		return t.handleConsolidate(ctx, args, brain)
 	case "status":
 		return t.handleStatus(ctx, brain)
+	case "rem_cycle":
+		return t.handleREMCycle(ctx, args, brain)
 	default:
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("unknown action: %s", action)}, nil
 	}
@@ -276,5 +292,39 @@ func (t *BrainTool) handleStatus(ctx context.Context, brain types.BrainService) 
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("status failed: %v", err)}, nil
 	}
 	data, _ := json.Marshal(status)
+	return &types.ToolResult{Success: true, Content: string(data)}, nil
+}
+
+func (t *BrainTool) handleREMCycle(ctx context.Context, args map[string]interface{}, brain types.BrainService) (*types.ToolResult, error) {
+	// Parse phases parameter
+	phases := []string{"triage", "consolidate", "prune", "integrate", "groom"}
+	if p, ok := args["phases"].([]interface{}); ok {
+		phases = make([]string, len(p))
+		for i, v := range p {
+			if s, ok := v.(string); ok {
+				phases[i] = s
+			} else {
+				return &types.ToolResult{Success: false, Error: fmt.Sprintf("invalid phase at index %d: must be string", i)}, nil
+			}
+		}
+	}
+
+	// Parse dry_run parameter
+	dryRun, _ := args["dry_run"].(bool)
+
+	// Parse force_groom parameter (for future use)
+	forceGroom, _ := args["force_groom"].(bool)
+
+	// Get REM cycle from tool services (will need to be wired)
+	// For now, return a placeholder indicating the action is available
+	result := map[string]interface{}{
+		"status":      "rem_cycle_action_available",
+		"phases":      phases,
+		"dry_run":     dryRun,
+		"force_groom": forceGroom,
+		"note":        "REM cycle execution requires gateway wiring (next task)",
+	}
+
+	data, _ := json.Marshal(result)
 	return &types.ToolResult{Success: true, Content: string(data)}, nil
 }
