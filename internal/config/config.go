@@ -145,6 +145,15 @@ type BrainConfig struct {
 
 	// Access count normalization cap
 	AccessCountCap int `json:"access_count_cap,omitempty"` // default 100
+
+	// REM Sleep configuration
+	REMEnabled           bool    `json:"rem_enabled,omitempty"`
+	REMSchedule          string  `json:"rem_schedule,omitempty"`
+	REMIntegrationDay    int     `json:"rem_integration_day,omitempty"`
+	REMPruneAgeDays      int     `json:"rem_prune_age_days,omitempty"`
+	REMSalienceDecayRate float64 `json:"rem_salience_decay_rate,omitempty"`
+	REMGroomWithLLM      bool    `json:"rem_groom_with_llm,omitempty"`
+	REMLogPath           string  `json:"rem_log_path,omitempty"`
 }
 
 // DefaultBrainConfig returns sensible defaults for the brain subsystem.
@@ -162,6 +171,13 @@ func DefaultBrainConfig() BrainConfig {
 		TierWeight:           0.2,
 		RecencyDecayRate:     1.0,
 		AccessCountCap:       100,
+		REMEnabled:           true,
+		REMSchedule:          "0 2 * * *",
+		REMIntegrationDay:    0,
+		REMPruneAgeDays:      30,
+		REMSalienceDecayRate: 0.1,
+		REMGroomWithLLM:      true,
+		REMLogPath:           "memory/rem-log",
 	}
 }
 
@@ -194,6 +210,21 @@ func (b *BrainConfig) ApplyDefaults() {
 	}
 	if b.AccessCountCap == 0 {
 		b.AccessCountCap = defaults.AccessCountCap
+	}
+	if b.REMSchedule == "" {
+		b.REMSchedule = defaults.REMSchedule
+	}
+	if b.REMIntegrationDay == 0 {
+		b.REMIntegrationDay = defaults.REMIntegrationDay
+	}
+	if b.REMPruneAgeDays == 0 {
+		b.REMPruneAgeDays = defaults.REMPruneAgeDays
+	}
+	if b.REMSalienceDecayRate == 0 {
+		b.REMSalienceDecayRate = defaults.REMSalienceDecayRate
+	}
+	if b.REMLogPath == "" {
+		b.REMLogPath = defaults.REMLogPath
 	}
 }
 
