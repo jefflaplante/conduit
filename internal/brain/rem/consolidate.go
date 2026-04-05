@@ -218,7 +218,7 @@ func (r *REMCycle) boostRecentlyAccessed(ctx context.Context, result *Consolidat
 // archiveEntry moves an entry to the archive table
 func (r *REMCycle) archiveEntry(key, value string, salience float64, reason string) error {
 	_, err := r.db.Exec(`
-		INSERT INTO brain_archive (key, value, tier, salience, reason, archived_at)
+		INSERT OR REPLACE INTO brain_archive (key, value, tier, salience, reason, archived_at)
 		VALUES (?, ?, 'longterm', ?, ?, datetime('now'))
 	`, key, value, salience, reason)
 	if err != nil {

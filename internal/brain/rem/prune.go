@@ -58,10 +58,10 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 	// 2. Archive entries (move, don't delete)
 	for _, c := range candidates {
 		if !dryRun {
-			// Insert into archive
+			// Insert into archive (replace if already archived)
 			_, err := r.db.Exec(`
-				INSERT INTO brain_archive (key, value, source, tier, salience, reason)
-				VALUES (?, ?, ?, 'longterm', ?, 'low_salience')
+				INSERT OR REPLACE INTO brain_archive (key, value, source, tier, salience, reason, archived_at)
+				VALUES (?, ?, ?, 'longterm', ?, 'low_salience', datetime('now'))
 			`, c.key, c.value, c.source, c.salience)
 			if err != nil {
 				return nil, fmt.Errorf("archive entry %q: %w", c.key, err)
@@ -122,10 +122,10 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 	// Archive orphaned entries
 	for _, o := range orphans {
 		if !dryRun {
-			// Insert into archive
+			// Insert into archive (replace if already archived)
 			_, err := r.db.Exec(`
-				INSERT INTO brain_archive (key, value, source, tier, salience, reason)
-				VALUES (?, ?, ?, 'longterm', ?, 'orphaned')
+				INSERT OR REPLACE INTO brain_archive (key, value, source, tier, salience, reason, archived_at)
+				VALUES (?, ?, ?, 'longterm', ?, 'orphaned', datetime('now'))
 			`, o.key, o.value, o.source, o.salience)
 			if err != nil {
 				return nil, fmt.Errorf("archive orphaned entry %q: %w", o.key, err)
