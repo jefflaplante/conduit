@@ -57,9 +57,10 @@ type IntegrationResult struct {
 }
 
 type GroomResult struct {
-	FilesChecked int
-	FilesChanged []string
-	KeysUpdated  int
+	FilesChecked       int
+	FilesChanged       []string
+	KeysUpdated        int
+	EntriesMarkedStale int
 }
 
 // WriteLog writes the REM report to a markdown file
@@ -181,7 +182,8 @@ func (r *REMReport) WriteLog(logPath string) error {
 		sb.WriteString("## Phase 5: Grooming\n\n")
 		sb.WriteString(fmt.Sprintf("- Files checked: %d\n", r.Grooming.FilesChecked))
 		sb.WriteString(fmt.Sprintf("- Files changed: %d\n", len(r.Grooming.FilesChanged)))
-		sb.WriteString(fmt.Sprintf("- Keys updated: %d\n\n", r.Grooming.KeysUpdated))
+		sb.WriteString(fmt.Sprintf("- Keys updated: %d\n", r.Grooming.KeysUpdated))
+		sb.WriteString(fmt.Sprintf("- Entries marked stale: %d\n\n", r.Grooming.EntriesMarkedStale))
 
 		if len(r.Grooming.FilesChanged) > 0 {
 			sb.WriteString("### Changed Files\n")
