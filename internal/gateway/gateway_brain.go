@@ -87,6 +87,10 @@ func (a *brainAdapter) Status(ctx context.Context) (*types.BrainStatus, error) {
 	}, nil
 }
 
+func (a *brainAdapter) WorkingMemoryEntries(ctx context.Context) []*types.BrainEntry {
+	return convertEntries(a.b.WorkingMemoryEntries(ctx))
+}
+
 func (a *brainAdapter) Close() error {
 	return a.b.Close()
 }
@@ -96,7 +100,7 @@ func convertEntry(e *brain.Entry) *types.BrainEntry {
 	return &types.BrainEntry{
 		Key: e.Key, Value: e.Value, Tier: types.BrainTier(e.Tier),
 		CreatedAt: e.CreatedAt, AccessedAt: e.AccessedAt,
-		AccessCount: e.AccessCount, Salience: e.Salience, Source: e.Source,
+		AccessCount: e.AccessCount, Salience: e.Salience, Source: e.Source, Stale: e.Stale,
 	}
 }
 

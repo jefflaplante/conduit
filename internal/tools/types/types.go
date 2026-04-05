@@ -227,6 +227,7 @@ type BrainService interface {
 	Peek(ctx context.Context, userID string) (string, error)
 	Promote(ctx context.Context, key string) error
 	Consolidate(ctx context.Context, autoPromote bool) (*ConsolidationReport, error)
+	WorkingMemoryEntries(ctx context.Context) []*BrainEntry
 	Status(ctx context.Context) (*BrainStatus, error)
 	Close() error
 }
