@@ -7,9 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"conduit/internal/brain"
 	"conduit/internal/database"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func setupTestREMCycle(t *testing.T) (*REMCycle, *brain.Brain, string) {
@@ -208,4 +212,75 @@ func TestGroom_NonFileSource(t *testing.T) {
 	if result.FilesChecked != 0 {
 		t.Errorf("expected 0 files checked, got %d", result.FilesChecked)
 	}
+}
+
+func TestGroom_AgeBasedStaleness(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := context.Background()
+
+	// Store an old skill-sourced entry (>30 days old)
+	oldTime := time.Now().Add(-35 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+	_, err := rem.db.Exec(`
+		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
+		VALUES (?, ?, ?, ?, ?, 1, 0.5)
+	`, "skill.fact", "value", "skill:profile", oldTime, oldTime)
+	require.NoError(t, err)
+
+	// Store a recent skill-sourced entry
+	require.NoError(t, b.Store(ctx, "skill.recent", "value", brain.TierLongTerm, "skill:profile"))
+
+	result, err := rem.Groom(ctx, false)
+	require.NoError(t, err)
+
+	// Old entry should be marked stale
+	assert.Equal(t, 1, result.EntriesMarkedStale)
+
+	// Verify stale flag in DB
+	var stale int
+	err = rem.db.QueryRow(`SELECT stale FROM brain_ltm WHERE key = ?`, "skill.fact").Scan(&stale)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stale)
+
+	// Recent entry should NOT be stale
+	err = rem.db.QueryRow(`SELECT stale FROM brain_ltm WHERE key = ?`, "skill.recent").Scan(&stale)
+	require.NoError(t, err)
+	assert.Equal(t, 0, stale)
+}
+
+func TestGroom_UserSourceNeverStale(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	// Store an old user-sourced entry
+	oldTime := time.Now().Add(-365 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+	_, err := rem.db.Exec(`
+		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
+		VALUES (?, ?, ?, ?, ?, 1, 0.5)
+	`, "user.old", "value", "user:manual", oldTime, oldTime)
+	require.NoError(t, err)
+
+	result, err := rem.Groom(context.Background(), false)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, result.EntriesMarkedStale)
+}
+
+func TestGroom_LLMSourceStaleFaster(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	// Store an LLM-sourced entry 20 days old (> 14 day threshold)
+	oldTime := time.Now().Add(-20 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+	_, err := rem.db.Exec(`
+		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
+		VALUES (?, ?, ?, ?, ?, 1, 0.5)
+	`, "llm.inference", "value", "llm:generated", oldTime, oldTime)
+	require.NoError(t, err)
+
+	result, err := rem.Groom(context.Background(), false)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, result.EntriesMarkedStale)
 }
