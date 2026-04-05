@@ -165,11 +165,44 @@ func DefaultBrainConfig() BrainConfig {
 	}
 }
 
+// ApplyDefaults fills in zero-valued fields with sensible defaults.
+// Called before Validate to handle omitempty JSON fields that weren't specified.
+func (b *BrainConfig) ApplyDefaults() {
+	defaults := DefaultBrainConfig()
+	if b.MaxLTMEntries == 0 {
+		b.MaxLTMEntries = defaults.MaxLTMEntries
+	}
+	if b.WMGracePeriodSeconds == 0 {
+		b.WMGracePeriodSeconds = defaults.WMGracePeriodSeconds
+	}
+	if b.AutoFlushSeconds == 0 {
+		b.AutoFlushSeconds = defaults.AutoFlushSeconds
+	}
+	if b.ConsolidateThreshold == 0 {
+		b.ConsolidateThreshold = defaults.ConsolidateThreshold
+	}
+	if b.EvictThreshold == 0 {
+		b.EvictThreshold = defaults.EvictThreshold
+	}
+	if b.AccessWeight == 0 && b.RecencyWeight == 0 && b.TierWeight == 0 {
+		b.AccessWeight = defaults.AccessWeight
+		b.RecencyWeight = defaults.RecencyWeight
+		b.TierWeight = defaults.TierWeight
+	}
+	if b.RecencyDecayRate == 0 {
+		b.RecencyDecayRate = defaults.RecencyDecayRate
+	}
+	if b.AccessCountCap == 0 {
+		b.AccessCountCap = defaults.AccessCountCap
+	}
+}
+
 // Validate checks the brain configuration for errors.
 func (b *BrainConfig) Validate() error {
 	if !b.Enabled {
 		return nil
 	}
+	b.ApplyDefaults()
 	if b.MaxLTMEntries < 0 {
 		return fmt.Errorf("max_ltm_entries must be non-negative")
 	}
