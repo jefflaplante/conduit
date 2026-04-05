@@ -194,6 +194,7 @@ type BrainEntry struct {
 	AccessCount int       `json:"access_count"`
 	Salience    float64   `json:"salience"`
 	Source      string    `json:"source,omitempty"`
+	Stale       bool      `json:"stale,omitempty"`
 }
 
 // BrainStatus reports the current state of the brain service.

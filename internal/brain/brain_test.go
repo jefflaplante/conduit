@@ -604,3 +604,15 @@ func TestRecallAllStopwordsQuery(t *testing.T) {
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(results), 1, "all-stopwords fallback should still search")
 }
+
+func TestStaleColumnExists(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	require.NoError(t, b.Store(ctx, "test.stale", "value", TierLongTerm, "tool"))
+
+	entry, err := b.Get(ctx, "test.stale")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.False(t, entry.Stale)
+}

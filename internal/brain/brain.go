@@ -32,6 +32,7 @@ type Entry struct {
 	AccessCount int       `json:"access_count"`
 	Salience    float64   `json:"salience"`
 	Source      string    `json:"source,omitempty"`
+	Stale       bool      `json:"stale,omitempty"`
 }
 
 type ConsolidationReport struct {
@@ -229,17 +230,19 @@ func (b *Brain) getLTM(key string) (*Entry, error) {
 				(0.8 * ?),
 				salience, 0.5)
 		WHERE key = ?
-		RETURNING key, value, created_at, accessed_at, access_count, salience, source
+		RETURNING key, value, created_at, accessed_at, access_count, salience, source, stale
 	`, b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight, key)
 	entry := &Entry{Tier: TierLongTerm}
+	var staleInt int
 	err := row.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-		&entry.AccessCount, &entry.Salience, &entry.Source)
+		&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get LTM: %w", err)
 	}
+	entry.Stale = staleInt != 0
 	return entry, nil
 }
 
@@ -302,7 +305,7 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 	}
 
 	sql := fmt.Sprintf(
-		`SELECT key, value, created_at, accessed_at, access_count, salience, source,
+		`SELECT key, value, created_at, accessed_at, access_count, salience, source, stale,
 		(%s) AS match_count
 		FROM brain_ltm WHERE %s
 		ORDER BY match_count DESC, salience DESC LIMIT ?`,
@@ -320,10 +323,12 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 	for rows.Next() {
 		entry := &Entry{Tier: TierLongTerm}
 		var matchCount int
+		var staleInt int
 		if err := rows.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-			&entry.AccessCount, &entry.Salience, &entry.Source, &matchCount); err != nil {
+			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &matchCount); err != nil {
 			continue
 		}
+		entry.Stale = staleInt != 0
 		if !seen[entry.Key] {
 			ms := float64(matchCount) / float64(len(terms))
 			scored = append(scored, scoredEntry{entry, ms})
@@ -380,7 +385,7 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 	}
 	b.mu.RUnlock()
 
-	query := `SELECT key, value, created_at, accessed_at, access_count, salience, source
+	query := `SELECT key, value, created_at, accessed_at, access_count, salience, source, stale
 		FROM brain_ltm WHERE key LIKE ?`
 	args := []interface{}{prefix + "%"}
 	if sourcePrefix != "" {
@@ -396,10 +401,12 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 	defer rows.Close()
 	for rows.Next() {
 		entry := &Entry{Tier: TierLongTerm}
+		var staleInt int
 		if err := rows.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-			&entry.AccessCount, &entry.Salience, &entry.Source); err != nil {
+			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt); err != nil {
 			continue
 		}
+		entry.Stale = staleInt != 0
 		results = append(results, entry)
 	}
 	return results, nil
