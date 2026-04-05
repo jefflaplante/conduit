@@ -157,7 +157,10 @@ func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source 
 }
 
 func (b *Brain) storeLTM(key, value, source string, now time.Time) error {
-	_, err := b.db.Exec(fmt.Sprintf(`
+	nowStr := now.UTC().Format("2006-01-02 15:04:05")
+	// Use a simple default salience for upsert; the exact salience is recomputed on access.
+	// The ON CONFLICT UPDATE preserves the existing salience bumped slightly for the access.
+	_, err := b.db.Exec(`
 		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
 		VALUES (?, ?, ?, ?, ?, 1, 0.5)
 		ON CONFLICT(key) DO UPDATE SET
@@ -165,11 +168,13 @@ func (b *Brain) storeLTM(key, value, source string, now time.Time) error {
 			source = excluded.source,
 			accessed_at = excluded.accessed_at,
 			access_count = access_count + 1,
-			salience = (MIN(CAST(access_count + 1 AS REAL) / %d.0, 1.0) * %f) +
-				(1.0 / (1.0 + (julianday('now') - julianday(excluded.accessed_at)) * 24.0 * %f)) * %f +
-				(0.8 * %f)
-	`, b.accessCountCap, b.accessWeight, b.recencyDecayRate, b.recencyWeight, b.tierWeight),
-		key, value, source, now, now)
+			salience = COALESCE(
+				(MIN(CAST(access_count + 1 AS REAL) / CAST(? AS REAL), 1.0) * ?) +
+				(1.0 / (1.0 + 0.0)) * ? +
+				(0.8 * ?),
+				salience, 0.5)
+	`, key, value, source, nowStr, nowStr,
+		b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight)
 	if err != nil {
 		return fmt.Errorf("store LTM: %w", err)
 	}
@@ -211,14 +216,18 @@ func (b *Brain) Get(ctx context.Context, key string) (*Entry, error) {
 }
 
 func (b *Brain) getLTM(key string) (*Entry, error) {
-	row := b.db.QueryRow(fmt.Sprintf(`
+	row := b.db.QueryRow(`
 		UPDATE brain_ltm SET
 			accessed_at = datetime('now'),
 			access_count = access_count + 1,
-			salience = (MIN(CAST(access_count + 1 AS REAL) / %d.0, 1.0) * %f) + (1.0 / (1.0 + 0.0)) * %f + (0.8 * %f)
+			salience = COALESCE(
+				(MIN(CAST(access_count + 1 AS REAL) / CAST(? AS REAL), 1.0) * ?) +
+				(1.0 / (1.0 + 0.0)) * ? +
+				(0.8 * ?),
+				salience, 0.5)
 		WHERE key = ?
 		RETURNING key, value, created_at, accessed_at, access_count, salience, source
-	`, b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight), key)
+	`, b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight, key)
 	entry := &Entry{Tier: TierLongTerm}
 	err := row.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
 		&entry.AccessCount, &entry.Salience, &entry.Source)
@@ -265,11 +274,23 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 	}
 	b.mu.RUnlock()
 
-	rows, err := b.db.Query(`
-		SELECT key, value, created_at, accessed_at, access_count, salience, source
-		FROM brain_ltm WHERE key LIKE ? OR value LIKE ?
-		ORDER BY salience DESC LIMIT ?
-	`, "%"+query+"%", "%"+query+"%", limit)
+	// Split query into terms — each term must match either key or value.
+	// This allows "paris trip" to match a key "travel.paris" with value mentioning "trip".
+	terms := strings.Fields(strings.ToLower(query))
+	if len(terms) == 0 {
+		return results, nil
+	}
+	var whereClauses []string
+	var args []interface{}
+	for _, term := range terms {
+		whereClauses = append(whereClauses, "(LOWER(key) LIKE ? OR LOWER(value) LIKE ?)")
+		args = append(args, "%"+term+"%", "%"+term+"%")
+	}
+	args = append(args, limit)
+	rows, err := b.db.Query(
+		`SELECT key, value, created_at, accessed_at, access_count, salience, source
+		FROM brain_ltm WHERE `+strings.Join(whereClauses, " AND ")+`
+		ORDER BY salience DESC LIMIT ?`, args...)
 	if err != nil {
 		return results, fmt.Errorf("recall LTM: %w", err)
 	}
@@ -526,8 +547,15 @@ func (b *Brain) computeSalience(e *Entry) float64 {
 }
 
 func matchesQuery(e *Entry, queryLower string) bool {
-	return strings.Contains(strings.ToLower(e.Key), queryLower) ||
-		strings.Contains(strings.ToLower(e.Value), queryLower)
+	keyLower := strings.ToLower(e.Key)
+	valueLower := strings.ToLower(e.Value)
+	// Split query into terms — each term must match in key or value
+	for _, term := range strings.Fields(queryLower) {
+		if !strings.Contains(keyLower, term) && !strings.Contains(valueLower, term) {
+			return false
+		}
+	}
+	return len(strings.Fields(queryLower)) > 0
 }
 
 type brainUserIDKey struct{}
