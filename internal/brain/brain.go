@@ -481,6 +481,23 @@ func (b *Brain) Promote(ctx context.Context, key string) error {
 	return b.storeLTM(key, entry.Value, entry.Source, time.Now())
 }
 
+// WorkingMemoryEntries returns a snapshot of all WM entries for the given user.
+func (b *Brain) WorkingMemoryEntries(ctx context.Context) []*Entry {
+	userID := userIDFromCtx(ctx)
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	wm, ok := b.working[userID]
+	if !ok {
+		return nil
+	}
+	entries := make([]*Entry, 0, len(wm))
+	for _, e := range wm {
+		copied := *e
+		entries = append(entries, &copied)
+	}
+	return entries
+}
+
 func (b *Brain) Consolidate(ctx context.Context, autoPromote bool) (*ConsolidationReport, error) {
 	userID := userIDFromCtx(ctx)
 	report := &ConsolidationReport{}

@@ -31,11 +31,12 @@ func setupTestREMCycle(t *testing.T) (*REMCycle, *brain.Brain, string) {
 	}
 
 	config := REMConfig{
-		PruneAgeDays:      30,
-		SalienceDecayRate: 0.1,
-		IntegrationDay:    0,
-		GroomWithLLM:      false,
-		LogPath:           "",
+		PruneAgeDays:         30,
+		SalienceDecayRate:    0.1,
+		ConsolidateThreshold: 0.6,
+		IntegrationDay:       0,
+		GroomWithLLM:         false,
+		LogPath:              "",
 	}
 
 	rem := NewREMCycle(b, db, config)

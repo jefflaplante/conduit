@@ -11,11 +11,12 @@ import (
 
 // REMConfig holds configuration for the REM sleep cycle
 type REMConfig struct {
-	PruneAgeDays      int
-	SalienceDecayRate float64
-	IntegrationDay    int // 0 = Sunday
-	GroomWithLLM      bool
-	LogPath           string
+	PruneAgeDays         int
+	SalienceDecayRate    float64
+	ConsolidateThreshold float64 // Salience threshold for WM→LTM promotion (default 0.6)
+	IntegrationDay       int     // 0 = Sunday
+	GroomWithLLM         bool
+	LogPath              string
 }
 
 // REMCycle orchestrates offline memory consolidation

@@ -243,3 +243,33 @@ func TestConsolidate_MergeKeepsHigherSalience(t *testing.T) {
 		t.Skip("No duplicates detected - keys may not normalize to same value")
 	}
 }
+
+func TestConsolidate_PromoteWM(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+
+	// Store high-salience WM entries
+	require.NoError(t, b.Store(ctx, "hot.fact", "important", brain.TierWorking, "tool"))
+
+	// Access it many times to boost salience
+	for i := 0; i < 50; i++ {
+		_, _ = b.Get(ctx, "hot.fact")
+	}
+
+	// Verify it's in WM
+	entry, err := b.Get(ctx, "hot.fact")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, brain.TierWorking, entry.Tier)
+	assert.GreaterOrEqual(t, entry.Salience, 0.5)
+
+	// Run consolidation
+	result, err := rem.Consolidate(ctx, false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// High-salience entry should have been promoted
+	assert.Contains(t, result.Promoted, "hot.fact")
+}
