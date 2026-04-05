@@ -71,6 +71,10 @@ func (t *BrainTool) Parameters() map[string]interface{} {
 				"type":        "string",
 				"description": "Source label for store action (e.g. 'user', 'tool', 'observation')",
 			},
+			"source_prefix": map[string]interface{}{
+				"type":        "string",
+				"description": "Filter list results by source prefix (e.g. 'file:', 'skill:')",
+			},
 			"query": map[string]interface{}{
 				"type":        "string",
 				"description": "Search query for recall action",
@@ -210,12 +214,17 @@ func (t *BrainTool) handleRecall(ctx context.Context, args map[string]interface{
 
 func (t *BrainTool) handleList(ctx context.Context, args map[string]interface{}, brain types.BrainService) (*types.ToolResult, error) {
 	prefix, _ := args["key"].(string)
-	entries, err := brain.List(ctx, prefix)
+	sourcePrefix, _ := args["source_prefix"].(string)
+	entries, err := brain.List(ctx, prefix, sourcePrefix)
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("list failed: %v", err)}, nil
 	}
 	if len(entries) == 0 {
-		return &types.ToolResult{Success: true, Content: fmt.Sprintf("No entries with prefix=%q", prefix)}, nil
+		msg := fmt.Sprintf("No entries with prefix=%q", prefix)
+		if sourcePrefix != "" {
+			msg += fmt.Sprintf(" and source_prefix=%q", sourcePrefix)
+		}
+		return &types.ToolResult{Success: true, Content: msg}, nil
 	}
 	data, _ := json.Marshal(entries)
 	return &types.ToolResult{Success: true, Content: string(data)}, nil

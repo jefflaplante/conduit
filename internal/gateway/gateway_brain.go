@@ -36,8 +36,8 @@ func (a *brainAdapter) Recall(ctx context.Context, query string, limit int) ([]*
 	return convertEntries(entries), nil
 }
 
-func (a *brainAdapter) List(ctx context.Context, prefix string) ([]*types.BrainEntry, error) {
-	entries, err := a.b.List(ctx, prefix)
+func (a *brainAdapter) List(ctx context.Context, prefix string, sourcePrefix string) ([]*types.BrainEntry, error) {
+	entries, err := a.b.List(ctx, prefix, sourcePrefix)
 	if err != nil {
 		return nil, err
 	}

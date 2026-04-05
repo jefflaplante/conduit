@@ -34,7 +34,7 @@ func (r *REMCycle) Triage(ctx context.Context, dryRun bool) (*TriageResult, erro
 	result.UpdatedFacts = updatedFacts
 
 	// 2. Scan working memory for unpromoted keys
-	wmEntries, err := r.brain.List(ctx, "")
+	wmEntries, err := r.brain.List(ctx, "", "")
 	if err != nil {
 		return result, fmt.Errorf("list working memory: %w", err)
 	}
