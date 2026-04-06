@@ -124,6 +124,8 @@
                     <button class="carousel-tab" data-tab="tools">Tools</button>
                     <button class="carousel-tab" data-tab="search">Search</button>
                     <button class="carousel-tab" data-tab="brain">Brain</button>
+                    <button class="carousel-tab" data-tab="rem">REM Sleep</button>
+                    <button class="carousel-tab" data-tab="selftest">SelfTest</button>
                     <button class="carousel-tab" data-tab="automation">Automation</button>
                 </div>
 
@@ -182,6 +184,24 @@
                         </div>
                     </div>
 
+                    <div class="carousel-panel" data-panel="rem">
+                        <div class="feature-card">
+                            <div class="feature-icon">&#x1F4A4;</div>
+                            <h3>REM Sleep — Memory Consolidation</h3>
+                            <p>Inspired by biological sleep cycles, REM runs 5 phases on a configurable schedule: <strong>Triage</strong> (identify valuable working memory), <strong>Consolidation</strong> (promote to LTM), <strong>Pruning</strong> (evict stale entries), <strong>Integration</strong> (cross-reference with workspace files), and <strong>Grooming</strong> (staleness tracking). Keeps long-term memory lean, relevant, and self-maintaining — no manual curation required.</p>
+                            <code>Brain(action="rem_cycle") → triage → consolidate → prune → integrate → groom</code>
+                        </div>
+                    </div>
+
+                    <div class="carousel-panel" data-panel="selftest">
+                        <div class="feature-card">
+                            <div class="feature-icon">&#x2705;</div>
+                            <h3>Tool SelfTest</h3>
+                            <p>Every built-in tool exposes a <strong>SelfTest</strong> capability. The gateway can programmatically verify tool health at startup or on demand — checking connectivity, credentials, and runtime dependencies. Surfaces issues before they hit a user session.</p>
+                            <code>./bin/conduit tools selftest --all</code>
+                        </div>
+                    </div>
+
                     <div class="carousel-panel" data-panel="automation">
                         <div class="feature-card">
                             <div class="feature-icon">&#x23F0;</div>
@@ -202,7 +222,7 @@
             <p class="section-subtitle">Clean, modular design for maximum flexibility</p>
 
             <div class="architecture-svg-container">
-                <svg viewBox="0 0 800 520" class="architecture-svg" xmlns="http://www.w3.org/2000/svg">
+                <svg viewBox="0 0 800 540" class="architecture-svg" xmlns="http://www.w3.org/2000/svg">
                     <!-- Background -->
                     <defs>
                         <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -237,7 +257,7 @@
                     </g>
 
                     <!-- Main Gateway container -->
-                    <rect x="40" y="90" width="720" height="420" rx="12" fill="#0f172a" stroke="url(#headerGrad)" stroke-width="3" filter="url(#shadow)"/>
+                    <rect x="40" y="90" width="720" height="440" rx="12" fill="#0f172a" stroke="url(#headerGrad)" stroke-width="3" filter="url(#shadow)"/>
 
                     <!-- Gateway title -->
                     <text x="400" y="125" text-anchor="middle" fill="url(#headerGrad)" font-size="20" font-weight="700">Conduit Gateway</text>
@@ -272,20 +292,20 @@
                     </g>
 
                     <!-- Core Services box -->
-                    <rect x="80" y="375" width="640" height="120" rx="8" fill="#1e293b" stroke="#7c3aed" stroke-width="2"/>
+                    <rect x="80" y="375" width="640" height="140" rx="8" fill="#1e293b" stroke="#7c3aed" stroke-width="2"/>
                     <text x="400" y="400" text-anchor="middle" fill="#7c3aed" font-size="14" font-weight="700">Core Services</text>
 
                     <!-- Services grid -->
                     <g fill="#f8fafc" font-size="11">
                         <text x="120" y="425">• Session Store (SQLite)</text>
-                        <text x="120" y="445">• Tool Registry</text>
+                        <text x="120" y="445">• Tool Registry + SelfTest</text>
                         <text x="120" y="465">• Config Management</text>
                         <text x="120" y="485">• Authentication</text>
 
                         <text x="320" y="425">• AI Router (Anthropic/OpenAI)</text>
-                        <text x="320" y="445">• WebSocket API</text>
-                        <text x="320" y="465">• HTTP Endpoints</text>
-                        <text x="320" y="485">• Web Search</text>
+                        <text x="320" y="445">• Brain Memory (LTM/WM)</text>
+                        <text x="320" y="465">• REM Sleep Consolidation</text>
+                        <text x="320" y="485">• Web Search / FTS5</text>
 
                         <text x="540" y="425">• Heartbeat Monitoring</text>
                         <text x="540" y="445">• Alert Processing</text>
