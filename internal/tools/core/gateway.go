@@ -556,3 +556,147 @@ func (t *GatewayTool) reloadSkills(ctx context.Context) (*types.ToolResult, erro
 	}, nil
 }
 
+// SelfTest implements types.SelfTester for GatewayTool.
+func (t *GatewayTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check Gateway service - required for all operations
+	gatewayDep := types.DependencyStatus{
+		Name:     "GatewayService",
+		Required: true,
+	}
+
+	if t.services == nil || t.services.Gateway == nil {
+		gatewayDep.Available = false
+		gatewayDep.Status = "not_configured"
+		gatewayDep.Message = "Gateway service not available in ToolServices"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Gateway tool is not functional: gateway service unavailable"
+		result.Suggestions = []string{
+			"Ensure gateway is properly initialized",
+			"Check that ToolServices has Gateway set",
+		}
+	} else {
+		gatewayDep.Available = true
+		gatewayDep.Status = "connected"
+		result.Capabilities = []string{
+			"status", "restart", "channels", "enable_channel", "disable_channel",
+			"config", "update_config", "metrics", "version", "debug_prompt", "reload_skills",
+		}
+		result.Status = types.SelfTestStatusOK
+		result.Message = "Gateway tool is fully functional"
+
+		// Get verbose details if requested
+		if opts.Verbose {
+			status, err := t.services.Gateway.GetGatewayStatus()
+			if err == nil {
+				result.Details = map[string]interface{}{
+					"gateway_status": status,
+					"version":        t.services.Gateway.GetVersion(),
+				}
+			}
+		}
+	}
+	deps = append(deps, gatewayDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Get gateway status",
+				Description: "Check gateway health, uptime, and connection stats",
+				Args: map[string]interface{}{
+					"action": "status",
+				},
+				Expected: "Returns uptime, health status, active connections, and message counts",
+			},
+			{
+				Name:        "List channels",
+				Description: "Get status of all configured channels",
+				Args: map[string]interface{}{
+					"action": "channels",
+				},
+				Expected: "Returns per-channel status including enabled state and message counts",
+			},
+			{
+				Name:        "Get metrics",
+				Description: "View gateway performance metrics",
+				Args: map[string]interface{}{
+					"action": "metrics",
+				},
+				Expected: "Returns requests/min, response times, error rate, and token usage",
+			},
+			{
+				Name:        "Reload skills",
+				Description: "Hot-reload skill tools from SKILL.md files",
+				Args: map[string]interface{}{
+					"action": "reload_skills",
+				},
+				Expected: "Reloads all skills and reports count of registered skill tools",
+			},
+		}
+	}
+
+	return result
+}
+
+// GetUsageExamples implements types.UsageExampleProvider for GatewayTool.
+func (t *GatewayTool) GetUsageExamples() []types.ToolExample {
+	return []types.ToolExample{
+		{
+			Name:        "Get gateway status",
+			Description: "Check gateway health, uptime, and connection stats",
+			Args: map[string]interface{}{
+				"action": "status",
+			},
+			Expected: "Returns uptime, health status, active connections, and message counts",
+		},
+		{
+			Name:        "List channels",
+			Description: "Get status of all configured channels",
+			Args: map[string]interface{}{
+				"action": "channels",
+			},
+			Expected: "Returns per-channel status including enabled state and message counts",
+		},
+		{
+			Name:        "Get metrics",
+			Description: "View gateway performance metrics",
+			Args: map[string]interface{}{
+				"action": "metrics",
+			},
+			Expected: "Returns requests/min, response times, error rate, and token usage",
+		},
+		{
+			Name:        "Debug system prompt",
+			Description: "Inspect system prompt sections and budget allocation",
+			Args: map[string]interface{}{
+				"action": "debug_prompt",
+			},
+			Expected: "Returns section list with priority, char count, and inclusion status",
+		},
+		{
+			Name:        "Reload skills",
+			Description: "Hot-reload skill tools from SKILL.md files",
+			Args: map[string]interface{}{
+				"action": "reload_skills",
+			},
+			Expected: "Reloads all skills and reports count of registered skill tools",
+		},
+	}
+}
+

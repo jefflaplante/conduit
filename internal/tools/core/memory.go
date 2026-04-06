@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"conduit/internal/config"
 	toolargs "conduit/internal/tools/args"
@@ -876,6 +877,147 @@ func (t *MemoryGetTool) readMemorySnippet(path string, from, lines int) (string,
 
 	selectedLines := fileLines[startIdx:endIdx]
 	return strings.Join(selectedLines, "\n"), nil
+}
+
+// SelfTest implements types.SelfTester for MemorySearchTool.
+func (t *MemorySearchTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+	var unavailable []string
+
+	// Check Searcher (FTS5) - primary search backend
+	searcherDep := types.DependencyStatus{
+		Name:     "SearchService",
+		Required: false, // can fall back to grep
+	}
+	hasFTS5 := t.services != nil && t.services.Searcher != nil
+	if hasFTS5 {
+		searcherDep.Available = true
+		searcherDep.Status = "available"
+		result.Capabilities = append(result.Capabilities, "fts5_search", "document_search", "message_search")
+	} else {
+		searcherDep.Available = false
+		searcherDep.Status = "not_configured"
+		searcherDep.Message = "FTS5 search service not available; falling back to grep"
+		unavailable = append(unavailable, "fts5_search")
+	}
+	deps = append(deps, searcherDep)
+
+	// Check VectorSearch - semantic/vector search backend
+	vectorDep := types.DependencyStatus{
+		Name:     "VectorService",
+		Required: false,
+	}
+	hasVector := t.services != nil && t.services.VectorSearch != nil
+	if hasVector {
+		vectorDep.Available = true
+		vectorDep.Status = "available"
+		result.Capabilities = append(result.Capabilities, "vector_search", "semantic_search")
+	} else {
+		vectorDep.Available = false
+		vectorDep.Status = "not_configured"
+		vectorDep.Message = "Vector search not available; semantic search disabled"
+		unavailable = append(unavailable, "vector_search", "semantic_search")
+	}
+	deps = append(deps, vectorDep)
+
+	// Hybrid search requires both FTS5 and Vector
+	if hasFTS5 && hasVector {
+		result.Capabilities = append(result.Capabilities, "hybrid_search")
+	} else {
+		unavailable = append(unavailable, "hybrid_search")
+	}
+
+	// Check Brain service for brain memory search
+	brainDep := types.DependencyStatus{
+		Name:     "BrainService",
+		Required: false,
+	}
+	if t.services != nil && t.services.Brain != nil {
+		brainDep.Available = true
+		brainDep.Status = "available"
+		result.Capabilities = append(result.Capabilities, "brain_search")
+	} else {
+		brainDep.Available = false
+		brainDep.Status = "not_configured"
+		brainDep.Message = "Brain service not available; brain memory search disabled"
+		unavailable = append(unavailable, "brain_search")
+	}
+	deps = append(deps, brainDep)
+
+	// Check SessionStore for session message search
+	sessionDep := types.DependencyStatus{
+		Name:     "SessionStore",
+		Required: false,
+	}
+	if t.services != nil && t.services.SessionStore != nil {
+		sessionDep.Available = true
+		sessionDep.Status = "available"
+		result.Capabilities = append(result.Capabilities, "session_search")
+	} else {
+		sessionDep.Available = false
+		sessionDep.Status = "not_configured"
+		sessionDep.Message = "Session store not available; session history search disabled"
+		unavailable = append(unavailable, "session_search")
+	}
+	deps = append(deps, sessionDep)
+
+	// Grep fallback is always available
+	result.Capabilities = append(result.Capabilities, "grep_search")
+
+	// Determine overall status
+	if !hasFTS5 && !hasVector {
+		result.Status = types.SelfTestStatusDegraded
+		result.Message = "MemorySearch is degraded: only grep fallback available"
+		result.Suggestions = []string{
+			"Configure search.db for FTS5 document/message search",
+			"Configure vector service for semantic search",
+		}
+	} else if !hasFTS5 || !hasVector {
+		result.Status = types.SelfTestStatusDegraded
+		if !hasFTS5 {
+			result.Message = "MemorySearch is degraded: FTS5 not available, using vector-only"
+		} else {
+			result.Message = "MemorySearch is degraded: vector search not available, using FTS5-only"
+		}
+	} else {
+		result.Status = types.SelfTestStatusOK
+		result.Message = "MemorySearch is fully functional with hybrid search"
+	}
+
+	result.Dependencies = deps
+	result.UnavailableCapabilities = unavailable
+	result.TestDuration = time.Since(start)
+
+	// Add verbose details
+	if opts.Verbose {
+		sandboxEnabled := t.sandboxCfg.WorkspaceDir != "" || len(t.sandboxCfg.AllowedPaths) > 0
+		result.Details = map[string]interface{}{
+			"workspace_dir":   t.workspaceDir,
+			"has_fts5":        hasFTS5,
+			"has_vector":      hasVector,
+			"effective_mode":  t.resolveSearchMode("auto"),
+			"sandbox_enabled": sandboxEnabled,
+		}
+	}
+
+	// Add examples if requested and tool is functional
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = t.GetUsageExamples()
+	}
+
+	return result
 }
 
 // GetUsageExamples implements types.UsageExampleProvider for MemorySearchTool.

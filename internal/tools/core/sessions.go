@@ -128,6 +128,76 @@ func (t *SessionsListTool) formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%d days", int(d.Hours()/24))
 }
 
+// SelfTest implements types.SelfTester for SessionsListTool.
+func (t *SessionsListTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:   types.SelfTestStatusOK,
+		TestedAt: time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check SessionStore - required for this tool
+	storeDep := types.DependencyStatus{
+		Name:     "SessionStore",
+		Required: true,
+	}
+
+	if t.services == nil || t.services.SessionStore == nil {
+		storeDep.Available = false
+		storeDep.Status = "not_configured"
+		storeDep.Message = "Session store not available"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "SessionsList tool is not functional: session store unavailable"
+		result.Suggestions = []string{
+			"Ensure database is configured",
+			"Check that SessionStore is initialized in ToolServices",
+		}
+	} else {
+		storeDep.Available = true
+		storeDep.Status = "connected"
+		result.Capabilities = []string{"list_sessions", "filter_by_activity"}
+		result.Status = types.SelfTestStatusOK
+		result.Message = "SessionsList tool is fully functional"
+
+		if opts.Verbose {
+			// Get session count for details
+			sessions, err := t.services.SessionStore.ListActiveSessions(100)
+			if err == nil {
+				result.Details = map[string]interface{}{
+					"active_session_count": len(sessions),
+				}
+			}
+		}
+	}
+	deps = append(deps, storeDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "List recent sessions",
+				Description: "List sessions active in the last hour",
+				Args: map[string]interface{}{
+					"activeMinutes": 60,
+					"limit":         10,
+				},
+				Expected: "Returns list of recently active sessions with metadata",
+			},
+		}
+	}
+
+	return result
+}
+
 // SessionsSendTool sends messages to other sessions
 type SessionsSendTool struct {
 	services *types.ToolServices
@@ -215,6 +285,75 @@ func (t *SessionsSendTool) Execute(ctx context.Context, args map[string]interfac
 			"message":    message,
 		},
 	}, nil
+}
+
+// SelfTest implements types.SelfTester for SessionsSendTool.
+func (t *SessionsSendTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:   types.SelfTestStatusOK,
+		TestedAt: time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check Gateway service - required for sending messages
+	gatewayDep := types.DependencyStatus{
+		Name:     "GatewayService",
+		Required: true,
+	}
+
+	if t.services == nil || t.services.Gateway == nil {
+		gatewayDep.Available = false
+		gatewayDep.Status = "not_configured"
+		gatewayDep.Message = "Gateway service not available"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "SessionsSend tool is not functional: gateway service unavailable"
+		result.Suggestions = []string{
+			"Ensure gateway is properly initialized",
+			"Check that ToolServices has Gateway set",
+		}
+	} else {
+		gatewayDep.Available = true
+		gatewayDep.Status = "connected"
+		result.Capabilities = []string{"send_by_key", "send_by_label"}
+		result.Status = types.SelfTestStatusOK
+		result.Message = "SessionsSend tool is fully functional"
+	}
+	deps = append(deps, gatewayDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Send message by session key",
+				Description: "Send a message to a specific session",
+				Args: map[string]interface{}{
+					"message":    "Hello from another session",
+					"sessionKey": "session-abc123",
+				},
+				Expected: "Message delivered to the target session",
+			},
+			{
+				Name:        "Send message by label",
+				Description: "Send a message to a labeled session",
+				Args: map[string]interface{}{
+					"message": "Task complete",
+					"label":   "worker-1",
+				},
+				Expected: "Message delivered to session with matching label",
+			},
+		}
+	}
+
+	return result
 }
 
 // SessionsSpawnTool spawns new sub-agent sessions
@@ -330,6 +469,76 @@ func truncateTask(task string, maxLen int) string {
 	return task[:maxLen] + "..."
 }
 
+// SelfTest implements types.SelfTester for SessionsSpawnTool.
+func (t *SessionsSpawnTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:   types.SelfTestStatusOK,
+		TestedAt: time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check Gateway service - required for spawning sub-agents
+	gatewayDep := types.DependencyStatus{
+		Name:     "GatewayService",
+		Required: true,
+	}
+
+	if t.services == nil || t.services.Gateway == nil {
+		gatewayDep.Available = false
+		gatewayDep.Status = "not_configured"
+		gatewayDep.Message = "Gateway service not available"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "SessionsSpawn tool is not functional: gateway service unavailable"
+		result.Suggestions = []string{
+			"Ensure gateway is properly initialized",
+			"Check that ToolServices has Gateway set",
+		}
+	} else {
+		gatewayDep.Available = true
+		gatewayDep.Status = "connected"
+		result.Capabilities = []string{"spawn_subagent", "async_tasks", "announce_results"}
+		result.Status = types.SelfTestStatusOK
+		result.Message = "SessionsSpawn tool is fully functional"
+	}
+	deps = append(deps, gatewayDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Spawn sub-agent with announcement",
+				Description: "Spawn a sub-agent that announces results when complete",
+				Args: map[string]interface{}{
+					"task":     "Research the topic and summarize findings",
+					"announce": true,
+				},
+				Expected: "Sub-agent spawned; results will be announced to user when complete",
+			},
+			{
+				Name:        "Spawn quiet sub-agent",
+				Description: "Spawn a sub-agent for background work without announcement",
+				Args: map[string]interface{}{
+					"task":           "Process data in the background",
+					"announce":       false,
+					"timeoutSeconds": 600,
+				},
+				Expected: "Sub-agent spawned quietly; poll SessionStatus to check progress",
+			},
+		}
+	}
+
+	return result
+}
+
 // SessionStatusTool provides session usage and status information
 type SessionStatusTool struct {
 	services *types.ToolServices
@@ -437,4 +646,69 @@ func (t *SessionStatusTool) formatSessionStatus(status map[string]interface{}) s
 	}
 
 	return builder.String()
+}
+
+// SelfTest implements types.SelfTester for SessionStatusTool.
+func (t *SessionStatusTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:   types.SelfTestStatusOK,
+		TestedAt: time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check Gateway service - required for getting session status
+	gatewayDep := types.DependencyStatus{
+		Name:     "GatewayService",
+		Required: true,
+	}
+
+	if t.services == nil || t.services.Gateway == nil {
+		gatewayDep.Available = false
+		gatewayDep.Status = "not_configured"
+		gatewayDep.Message = "Gateway service not available"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "SessionStatus tool is not functional: gateway service unavailable"
+		result.Suggestions = []string{
+			"Ensure gateway is properly initialized",
+			"Check that ToolServices has Gateway set",
+		}
+	} else {
+		gatewayDep.Available = true
+		gatewayDep.Status = "connected"
+		result.Capabilities = []string{"current_session_status", "specific_session_status"}
+		result.Status = types.SelfTestStatusOK
+		result.Message = "SessionStatus tool is fully functional"
+	}
+	deps = append(deps, gatewayDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Get current session status",
+				Description: "Get status of the current session",
+				Args:        map[string]interface{}{},
+				Expected:    "Returns session key, user, channel, message count, and token usage",
+			},
+			{
+				Name:        "Get specific session status",
+				Description: "Get status of a specific session by key",
+				Args: map[string]interface{}{
+					"sessionKey": "session-abc123",
+				},
+				Expected: "Returns detailed status for the specified session",
+			},
+		}
+	}
+
+	return result
 }

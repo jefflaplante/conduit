@@ -449,3 +449,171 @@ func base64URLEncode(data []byte) string {
 	encoded := base64.URLEncoding.EncodeToString(data)
 	return strings.TrimRight(encoded, "=")
 }
+
+// SelfTest verifies the GoogleWorkspaceTool is functional by checking gws CLI availability.
+func (t *GoogleWorkspaceTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:   types.SelfTestStatusOK,
+		TestedAt: time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check gws CLI availability
+	gwsDep := types.DependencyStatus{
+		Name:     "gws CLI",
+		Required: true,
+	}
+
+	gwsPath := t.getGwsPath()
+	err := t.checkGwsAvailable()
+	if err != nil {
+		gwsDep.Available = false
+		gwsDep.Status = "not_found"
+		gwsDep.Message = fmt.Sprintf("gws CLI not found at '%s'", gwsPath)
+
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "gws CLI is not installed or not in PATH"
+		result.Capabilities = []string{}
+		result.UnavailableCapabilities = []string{
+			"email_search", "email_read", "email_send", "email_trash",
+			"calendar_list", "calendar_create", "calendar_delete",
+		}
+		result.Suggestions = []string{
+			"Install gws: npm install -g @googleworkspace/cli",
+			"Authenticate: gws auth login",
+			"Documentation: https://github.com/googleworkspace/cli",
+		}
+	} else {
+		gwsDep.Available = true
+		gwsDep.Status = "installed"
+		if gwsPath != "gws" {
+			gwsDep.Message = fmt.Sprintf("Using custom path: %s", gwsPath)
+		}
+
+		result.Status = types.SelfTestStatusOK
+		result.Message = "gws CLI is installed and available"
+		result.Capabilities = []string{
+			"email_search", "email_read", "email_send", "email_trash",
+			"calendar_list", "calendar_create", "calendar_delete",
+		}
+	}
+	deps = append(deps, gwsDep)
+
+	// Check Registry/Services configuration
+	configDep := types.DependencyStatus{
+		Name:     "Configuration",
+		Required: false,
+	}
+
+	if t.registry != nil && t.registry.GetServices() != nil {
+		services := t.registry.GetServices()
+		if services.ConfigMgr != nil {
+			configDep.Available = true
+			configDep.Status = "configured"
+
+			// Check for google_workspace service config
+			if cfg := services.ConfigMgr.Tools.Services["google_workspace"]; cfg != nil {
+				if opts.Verbose {
+					configDep.Message = "Custom configuration found"
+				}
+			}
+
+			// Check for agent email configuration
+			agentEmail := services.ConfigMgr.Agent.Email
+			if agentEmail.Address != "" {
+				if opts.Verbose {
+					result.Details = map[string]interface{}{
+						"gws_path":       gwsPath,
+						"user_id":        t.getUserID(),
+						"email_address":  agentEmail.Address,
+						"email_aliases":  agentEmail.Aliases,
+					}
+				}
+			}
+		} else {
+			configDep.Available = false
+			configDep.Status = "no_config"
+			configDep.Message = "ConfigMgr not available; using defaults"
+		}
+	} else {
+		configDep.Available = false
+		configDep.Status = "no_registry"
+		configDep.Message = "Registry/services not configured; using defaults"
+	}
+	deps = append(deps, configDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.Verbose && result.Details == nil {
+		result.Details = map[string]interface{}{
+			"gws_path": gwsPath,
+			"user_id":  t.getUserID(),
+		}
+	}
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Search unread emails",
+				Description: "Search for unread emails in Gmail",
+				Args: map[string]interface{}{
+					"action": "email_search",
+					"query":  "is:unread",
+					"limit":  10,
+				},
+				Expected: "Returns list of unread message IDs",
+			},
+			{
+				Name:        "Read email",
+				Description: "Read a specific email by message ID",
+				Args: map[string]interface{}{
+					"action":     "email_read",
+					"message_id": "18abc123def456",
+				},
+				Expected: "Returns full email content including headers and body",
+			},
+			{
+				Name:        "Send email",
+				Description: "Send an email to a recipient",
+				Args: map[string]interface{}{
+					"action":  "email_send",
+					"to":      "recipient@example.com",
+					"subject": "Hello",
+					"body":    "This is a test message.",
+				},
+				Expected: "Sends email and returns message ID",
+			},
+			{
+				Name:        "List upcoming calendar events",
+				Description: "List calendar events for the next 7 days",
+				Args: map[string]interface{}{
+					"action": "calendar_list",
+					"days":   7,
+					"limit":  10,
+				},
+				Expected: "Returns list of upcoming events with times and details",
+			},
+			{
+				Name:        "Create calendar event",
+				Description: "Create a new calendar event",
+				Args: map[string]interface{}{
+					"action": "calendar_create",
+					"title":  "Team Meeting",
+					"start":  "2024-03-15T10:00:00-07:00",
+					"end":    "2024-03-15T11:00:00-07:00",
+				},
+				Expected: "Creates event and returns event ID",
+			},
+		}
+	}
+
+	return result
+}

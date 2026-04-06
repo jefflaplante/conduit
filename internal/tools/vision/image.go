@@ -369,3 +369,112 @@ func (t *ImageTool) formatAnalysisResult(result *ImageAnalysisResult, prompt str
 	return builder.String()
 }
 
+// SelfTest verifies the ImageTool is functional.
+func (t *ImageTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Message:      "Image tool is functional",
+		Capabilities: []string{"load_from_file", "load_from_url", "load_from_data_url", "format_detection"},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check HTTP client dependency
+	httpClientDep := types.DependencyStatus{
+		Name:     "HTTPClient",
+		Required: false, // Only needed for URL-based loading
+	}
+
+	if t.httpClient != nil {
+		httpClientDep.Available = true
+		httpClientDep.Status = "ready"
+	} else {
+		httpClientDep.Available = false
+		httpClientDep.Status = "not_configured"
+		httpClientDep.Message = "HTTP client not available; URL-based image loading disabled"
+		result.UnavailableCapabilities = append(result.UnavailableCapabilities, "load_from_url")
+		// Remove load_from_url from capabilities
+		caps := []string{}
+		for _, c := range result.Capabilities {
+			if c != "load_from_url" {
+				caps = append(caps, c)
+			}
+		}
+		result.Capabilities = caps
+	}
+	deps = append(deps, httpClientDep)
+
+	// Check ToolServices availability
+	servicesDep := types.DependencyStatus{
+		Name:     "ToolServices",
+		Required: false,
+	}
+
+	if t.services != nil {
+		servicesDep.Available = true
+		servicesDep.Status = "configured"
+	} else {
+		servicesDep.Available = false
+		servicesDep.Status = "not_configured"
+		servicesDep.Message = "Tool services not configured; using defaults"
+	}
+	deps = append(deps, servicesDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	// Note: This tool uses a placeholder vision service - actual vision analysis
+	// would require integration with a vision API (e.g., Claude vision, GPT-4V)
+	result.Message = "Image tool is functional (placeholder analysis mode)"
+
+	if opts.Verbose {
+		result.Details = map[string]interface{}{
+			"workspace_dir":   t.workspaceDir,
+			"http_timeout":    t.httpClient.Timeout.String(),
+			"analysis_mode":   "placeholder",
+			"supported_formats": []string{"jpeg", "png", "gif", "webp"},
+		}
+	}
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Analyze local image",
+				Description: "Load and analyze an image from a local file path",
+				Args: map[string]interface{}{
+					"image":  "/path/to/image.jpg",
+					"prompt": "Describe what you see in this image",
+				},
+				Expected: "Returns image analysis with format detection and description",
+			},
+			{
+				Name:        "Analyze image from URL",
+				Description: "Fetch and analyze an image from a URL",
+				Args: map[string]interface{}{
+					"image":      "https://example.com/photo.png",
+					"maxBytesMb": 5.0,
+				},
+				Expected: "Downloads image (up to 5MB) and returns analysis",
+			},
+			{
+				Name:        "Analyze base64 image",
+				Description: "Analyze an inline base64-encoded image",
+				Args: map[string]interface{}{
+					"image":       "data:image/jpeg;base64,/9j/4AAQ...",
+					"extractText": true,
+				},
+				Expected: "Decodes and analyzes base64 image with OCR",
+			},
+		}
+	}
+
+	return result
+}
+

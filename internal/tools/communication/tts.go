@@ -334,3 +334,163 @@ func (t *TTSTool) GetSchemaHints() map[string]schema.SchemaHints {
 		},
 	}
 }
+
+// GetUsageExamples implements types.UsageExampleProvider.
+func (t *TTSTool) GetUsageExamples() []types.ToolExample {
+	return []types.ToolExample{
+		{
+			Name:        "Basic TTS",
+			Description: "Convert text to speech with default settings",
+			Args: map[string]interface{}{
+				"text": "Hello, how can I help you today?",
+			},
+			Expected: "Generates OGG audio file with default voice",
+		},
+		{
+			Name:        "TTS with custom voice",
+			Description: "Use a different voice for speech synthesis",
+			Args: map[string]interface{}{
+				"text":  "Good morning! The weather looks great today.",
+				"voice": "en-US-GuyNeural",
+			},
+			Expected: "Generates audio with male voice",
+		},
+		{
+			Name:        "TTS for Telegram",
+			Description: "Generate audio optimized for Telegram voice messages",
+			Args: map[string]interface{}{
+				"text":    "Task completed successfully!",
+				"channel": "telegram",
+			},
+			Expected: "Generates OGG audio optimized for Telegram",
+		},
+		{
+			Name:        "TTS with adjusted rate",
+			Description: "Generate slower speech for clarity",
+			Args: map[string]interface{}{
+				"text": "This is an important announcement.",
+				"rate": "-10%",
+			},
+			Expected: "Generates audio at 90% normal speed",
+		},
+	}
+}
+
+// SelfTest implements types.SelfTester for TTSTool.
+func (t *TTSTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check edge-tts availability
+	edgeTTSDep := types.DependencyStatus{
+		Name:     "edge-tts",
+		Required: true,
+	}
+
+	if t.isEdgeTTSAvailable() {
+		edgeTTSDep.Available = true
+		edgeTTSDep.Status = "installed"
+		result.Capabilities = append(result.Capabilities, "text-to-speech")
+	} else {
+		edgeTTSDep.Available = false
+		edgeTTSDep.Status = "not_installed"
+		edgeTTSDep.Message = "edge-tts command not found"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "TTS tool requires edge-tts which is not installed"
+		result.Suggestions = []string{
+			"Install edge-tts: pip install edge-tts",
+			"Verify Python pip is available",
+		}
+	}
+	deps = append(deps, edgeTTSDep)
+
+	// Check ffmpeg availability (for OGG conversion)
+	ffmpegDep := types.DependencyStatus{
+		Name:     "ffmpeg",
+		Required: false,
+	}
+
+	cmd := exec.Command("ffmpeg", "-version")
+	if cmd.Run() == nil {
+		ffmpegDep.Available = true
+		ffmpegDep.Status = "installed"
+		result.Capabilities = append(result.Capabilities, "ogg-conversion")
+	} else {
+		ffmpegDep.Available = false
+		ffmpegDep.Status = "not_installed"
+		ffmpegDep.Message = "ffmpeg not found; OGG format will not work"
+
+		// Only degrade if edge-tts is available
+		if result.Status == types.SelfTestStatusOK {
+			result.Status = types.SelfTestStatusDegraded
+			result.Message = "TTS available but OGG conversion requires ffmpeg"
+			result.UnavailableCapabilities = append(result.UnavailableCapabilities, "ogg-conversion")
+			result.Suggestions = []string{
+				"Install ffmpeg for OGG format support",
+				"Use mp3 or wav format instead",
+			}
+		}
+	}
+	deps = append(deps, ffmpegDep)
+
+	// Check workspace directory
+	workspaceDep := types.DependencyStatus{
+		Name:     "workspace",
+		Required: true,
+	}
+
+	audioDir := filepath.Join(t.workspaceDir, "audio")
+	if err := os.MkdirAll(audioDir, 0755); err != nil {
+		workspaceDep.Available = false
+		workspaceDep.Status = "error"
+		workspaceDep.Message = fmt.Sprintf("cannot create audio directory: %v", err)
+
+		if result.Status != types.SelfTestStatusFailed {
+			result.Status = types.SelfTestStatusFailed
+			result.Message = "Cannot create workspace directory for audio files"
+			result.Suggestions = append(result.Suggestions,
+				"Check workspace directory permissions",
+				fmt.Sprintf("Ensure %s is writable", t.workspaceDir),
+			)
+		}
+	} else {
+		workspaceDep.Available = true
+		workspaceDep.Status = "writable"
+		workspaceDep.Message = audioDir
+	}
+	deps = append(deps, workspaceDep)
+
+	// Set final message if not already set
+	if result.Message == "" {
+		if result.Status == types.SelfTestStatusOK {
+			result.Message = "TTS tool fully functional"
+		}
+	}
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.Verbose {
+		result.Details = map[string]interface{}{
+			"workspace_dir": t.workspaceDir,
+			"audio_dir":     audioDir,
+		}
+	}
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = t.GetUsageExamples()
+	}
+
+	return result
+}

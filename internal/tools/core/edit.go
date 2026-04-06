@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/schema"
@@ -492,4 +493,111 @@ func (t *EditTool) GetSchemaHints() map[string]schema.SchemaHints {
 			},
 		},
 	}
+}
+
+// SelfTest implements types.SelfTester for EditTool.
+func (t *EditTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check ConfigMgr for sandbox/workspace configuration
+	configDep := types.DependencyStatus{
+		Name:     "ConfigMgr",
+		Required: false,
+	}
+
+	workspaceDir := ""
+	sandboxEnabled := false
+
+	if t.services != nil && t.services.ConfigMgr != nil {
+		configDep.Available = true
+		configDep.Status = "available"
+		workspaceDir = t.services.ConfigMgr.Tools.Sandbox.WorkspaceDir
+		sandboxEnabled = workspaceDir != "" || len(t.services.ConfigMgr.Tools.Sandbox.AllowedPaths) > 0
+	} else {
+		configDep.Available = false
+		configDep.Status = "not_configured"
+		configDep.Message = "No config manager — paths will not be resolved against workspace"
+	}
+	deps = append(deps, configDep)
+
+	// Core capabilities are always available
+	result.Capabilities = []string{
+		"exact_text_replacement",
+		"fuzzy_match_smart_quotes",
+		"line_ending_preservation",
+		"bom_preservation",
+	}
+
+	// Sandbox capability depends on config
+	if sandboxEnabled {
+		result.Capabilities = append(result.Capabilities, "sandbox_path_validation")
+	}
+
+	// Verbose details
+	if opts.Verbose {
+		details := map[string]interface{}{
+			"sandbox_enabled": sandboxEnabled,
+		}
+		if workspaceDir != "" {
+			details["workspace_dir"] = workspaceDir
+		}
+		if t.services != nil && t.services.ConfigMgr != nil && len(t.services.ConfigMgr.Tools.Sandbox.AllowedPaths) > 0 {
+			details["allowed_paths_count"] = len(t.services.ConfigMgr.Tools.Sandbox.AllowedPaths)
+		}
+		result.Details = details
+	}
+
+	result.Dependencies = deps
+	result.Status = types.SelfTestStatusOK
+	result.Message = "Edit tool is fully functional"
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Replace text in file",
+				Description: "Change a function name in a Go file",
+				Args: map[string]interface{}{
+					"path":       "main.go",
+					"old_string": "func oldName() {",
+					"new_string": "func newName() {",
+				},
+				Expected: "Text replaced in file",
+			},
+			{
+				Name:        "Update version constant",
+				Description: "Bump version number in a config file",
+				Args: map[string]interface{}{
+					"path":       "version.go",
+					"old_string": "const VERSION = \"1.0.0\"",
+					"new_string": "const VERSION = \"1.1.0\"",
+				},
+				Expected: "Version constant updated",
+			},
+			{
+				Name:        "Delete text",
+				Description: "Remove a comment by replacing with empty string",
+				Args: map[string]interface{}{
+					"path":       "script.sh",
+					"old_string": "# TODO: remove this later\n",
+					"new_string": "",
+				},
+				Expected: "Comment line removed",
+			},
+		}
+	}
+
+	return result
 }

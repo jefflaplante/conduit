@@ -404,6 +404,167 @@ func (t *DatadogTool) executeListIndexes(ctx context.Context) (*types.ToolResult
 	}, nil
 }
 
+// SelfTest implements types.SelfTester for DatadogTool.
+func (t *DatadogTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:   types.SelfTestStatusOK,
+		TestedAt: time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check Datadog API configuration
+	apiDep := types.DependencyStatus{
+		Name:     "DatadogAPI",
+		Required: true,
+	}
+
+	if t.config == nil || t.config.APIKey == "" {
+		apiDep.Available = false
+		apiDep.Status = "not_configured"
+		apiDep.Message = "Datadog API key not configured"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Datadog API is not configured"
+		result.Suggestions = []string{
+			"Set DD_API_KEY environment variable",
+			"Configure api_key in datadog config section",
+		}
+		deps = append(deps, apiDep)
+		result.Dependencies = deps
+		result.TestDuration = time.Since(start)
+		return result
+	}
+
+	if t.config.AppKey == "" {
+		apiDep.Available = false
+		apiDep.Status = "incomplete_config"
+		apiDep.Message = "Datadog application key not configured"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Datadog application key is required for API access"
+		result.Suggestions = []string{
+			"Set DD_APP_KEY environment variable",
+			"Configure app_key in datadog config section",
+		}
+		deps = append(deps, apiDep)
+		result.Dependencies = deps
+		result.TestDuration = time.Since(start)
+		return result
+	}
+
+	apiDep.Available = true
+	apiDep.Status = "configured"
+
+	// Test API connectivity by validating keys
+	validationErr := t.validateAPIConnection(ctx)
+
+	if validationErr != nil {
+		apiDep.Status = "connection_failed"
+		apiDep.Message = validationErr.Error()
+		result.Status = types.SelfTestStatusDegraded
+		result.Message = "Datadog API configured but not connected"
+		result.Capabilities = []string{}
+		result.UnavailableCapabilities = []string{
+			"query_metrics", "list_metrics", "get_metric_metadata",
+			"search_logs", "get_log", "list_indexes",
+			"search_traces", "get_trace",
+		}
+		result.Suggestions = []string{
+			"Check network connectivity to Datadog API",
+			"Verify API and application keys are valid",
+			"Ensure keys have not been revoked",
+		}
+	} else {
+		apiDep.Status = "connected"
+		apiDep.Message = "API keys validated successfully"
+		result.Status = types.SelfTestStatusOK
+		result.Message = "Datadog API connected and ready"
+		result.Capabilities = []string{
+			"query_metrics", "list_metrics", "get_metric_metadata",
+			"search_logs", "get_log", "list_indexes",
+			"search_traces", "get_trace",
+		}
+
+		if opts.Verbose {
+			result.Details = map[string]interface{}{
+				"base_url":       t.config.BaseURL(),
+				"rate_limit_rps": t.config.RateLimitRPS,
+			}
+		}
+	}
+
+	deps = append(deps, apiDep)
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Query CPU metrics",
+				Description: "Query average CPU usage over the last hour",
+				Args: map[string]interface{}{
+					"action": "query_metrics",
+					"query":  "avg:system.cpu.user{*}",
+					"from":   "-3600",
+				},
+				Expected: "Returns time series data with timestamps and values",
+			},
+			{
+				Name:        "Search error logs",
+				Description: "Search for error logs in the last 15 minutes",
+				Args: map[string]interface{}{
+					"action": "search_logs",
+					"query":  "status:error",
+					"from":   "-15m",
+					"limit":  25,
+				},
+				Expected: "Returns matching log entries with timestamps and messages",
+			},
+			{
+				Name:        "Find slow traces",
+				Description: "Search for traces slower than 1 second",
+				Args: map[string]interface{}{
+					"action":       "search_traces",
+					"service":      "api",
+					"min_duration": "1s",
+					"from":         "-1h",
+				},
+				Expected: "Returns trace IDs with duration and status information",
+			},
+		}
+	}
+
+	return result
+}
+
+// validateAPIConnection tests connectivity to the Datadog API.
+func (t *DatadogTool) validateAPIConnection(ctx context.Context) error {
+	resp, err := t.client.Do(ctx, "GET", "api/v1/validate", nil)
+	if err != nil {
+		return fmt.Errorf("failed to connect: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 200 {
+		return nil
+	}
+
+	if resp.StatusCode == 401 {
+		return fmt.Errorf("invalid API key (HTTP 401)")
+	}
+
+	if resp.StatusCode == 403 {
+		return fmt.Errorf("forbidden - check API key permissions (HTTP 403)")
+	}
+
+	return fmt.Errorf("unexpected response (HTTP %d)", resp.StatusCode)
+}
+
 // parseTime parses a time string, supporting RFC3339 and relative formats like "-1h", "-15m".
 func parseTime(s string) (time.Time, error) {
 	// Try RFC3339 first

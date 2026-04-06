@@ -614,3 +614,147 @@ func TestRegistry_EnabledToolsNormalized(t *testing.T) {
 		t.Error("snake_case key should not exist (should be normalized)")
 	}
 }
+
+// mockSelfTesterTool is a test tool that implements SelfTester
+type mockSelfTesterTool struct {
+	name   string
+	status types.SelfTestStatus
+}
+
+func (m *mockSelfTesterTool) Name() string        { return m.name }
+func (m *mockSelfTesterTool) Description() string { return "Mock tool for testing" }
+func (m *mockSelfTesterTool) Parameters() map[string]interface{} {
+	return map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+}
+func (m *mockSelfTesterTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	return &types.ToolResult{Success: true}, nil
+}
+func (m *mockSelfTesterTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	return &types.SelfTestResult{
+		Status:       m.status,
+		Message:      "Mock self-test result",
+		Capabilities: []string{"mock_capability"},
+	}
+}
+
+func TestSelfTestTool_Exists(t *testing.T) {
+	registry, _ := setupTestRegistry(t, "workspace", "sandbox")
+
+	// Test SelfTestTool on an enabled tool that doesn't implement SelfTester
+	result := registry.SelfTestTool(context.Background(), "Read", nil)
+	if result == nil {
+		t.Fatal("Expected result for existing tool")
+	}
+	if result.Status != types.SelfTestStatusOK {
+		t.Errorf("Expected OK status for non-SelfTester tool, got %s", result.Status)
+	}
+	if result.Message == "" {
+		t.Error("Expected message for non-SelfTester tool")
+	}
+}
+
+func TestSelfTestTool_NotExists(t *testing.T) {
+	registry, _ := setupTestRegistry(t, "workspace", "sandbox")
+
+	result := registry.SelfTestTool(context.Background(), "NonExistentTool", nil)
+	if result != nil {
+		t.Error("Expected nil result for non-existent tool")
+	}
+}
+
+func TestSelfTestAll(t *testing.T) {
+	registry, _ := setupTestRegistry(t, "workspace", "sandbox")
+
+	result := registry.SelfTestAll(context.Background(), nil)
+	if result == nil {
+		t.Fatal("Expected result from SelfTestAll")
+	}
+	if result.TotalTools == 0 {
+		t.Error("Expected at least some tools in registry")
+	}
+	if result.TestedAt.IsZero() {
+		t.Error("Expected TestedAt to be set")
+	}
+}
+
+func TestSelfTestResult_Helpers(t *testing.T) {
+	tests := []struct {
+		status       types.SelfTestStatus
+		wantOK       bool
+		wantFunctional bool
+	}{
+		{types.SelfTestStatusOK, true, true},
+		{types.SelfTestStatusDegraded, false, true},
+		{types.SelfTestStatusFailed, false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.status), func(t *testing.T) {
+			result := &types.SelfTestResult{Status: tt.status}
+			if result.IsOK() != tt.wantOK {
+				t.Errorf("IsOK() = %v, want %v", result.IsOK(), tt.wantOK)
+			}
+			if result.IsFunctional() != tt.wantFunctional {
+				t.Errorf("IsFunctional() = %v, want %v", result.IsFunctional(), tt.wantFunctional)
+			}
+		})
+	}
+}
+
+func TestRegistrySelfTestResult_Summary(t *testing.T) {
+	result := &RegistrySelfTestResult{
+		TotalTools:    10,
+		TestedTools:   8,
+		HealthyTools:  5,
+		DegradedTools: 2,
+		FailedTools:   1,
+	}
+
+	summary := result.Summary()
+	if summary == "" {
+		t.Error("Expected non-empty summary")
+	}
+	// Check that summary contains key numbers
+	if !strContains(summary, "8") || !strContains(summary, "5") || !strContains(summary, "2") || !strContains(summary, "1") {
+		t.Errorf("Summary missing expected counts: %s", summary)
+	}
+}
+
+func TestRegistrySelfTestResult_IsHealthy(t *testing.T) {
+	tests := []struct {
+		name          string
+		failed        int
+		degraded      int
+		wantHealthy   bool
+	}{
+		{"all healthy", 0, 0, true},
+		{"has failed", 1, 0, false},
+		{"has degraded", 0, 1, false},
+		{"both issues", 1, 1, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := &RegistrySelfTestResult{
+				FailedTools:   tt.failed,
+				DegradedTools: tt.degraded,
+			}
+			if result.IsHealthy() != tt.wantHealthy {
+				t.Errorf("IsHealthy() = %v, want %v", result.IsHealthy(), tt.wantHealthy)
+			}
+		})
+	}
+}
+
+func strContains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && strContainsHelper(s, substr))
+}
+
+func strContainsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

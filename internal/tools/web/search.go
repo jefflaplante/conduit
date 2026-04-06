@@ -277,3 +277,100 @@ func (t *WebSearchTool) formatSearchResults(results []BraveSearchResult, query s
 	return builder.String()
 }
 
+// SelfTest implements types.SelfTester for WebSearchTool.
+func (t *WebSearchTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Message:      "WebSearch tool is functional",
+		Capabilities: []string{"web_search", "region_filtering", "freshness_filtering", "language_filtering"},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check HTTP client
+	httpClientStatus := types.DependencyStatus{
+		Name:     "HTTPClient",
+		Required: true,
+	}
+
+	if t.httpClient != nil {
+		httpClientStatus.Available = true
+		httpClientStatus.Status = "ready"
+	} else {
+		httpClientStatus.Available = false
+		httpClientStatus.Status = "not_configured"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "HTTP client not available"
+		result.Suggestions = append(result.Suggestions, "Check WebClient configuration in ToolServices")
+	}
+	deps = append(deps, httpClientStatus)
+
+	// Check Brave API key
+	braveAPIStatus := types.DependencyStatus{
+		Name:     "BraveAPIKey",
+		Required: true,
+	}
+
+	if t.braveAPIKey != "" {
+		braveAPIStatus.Available = true
+		braveAPIStatus.Status = "configured"
+		braveAPIStatus.Message = fmt.Sprintf("API key present (%d chars)", len(t.braveAPIKey))
+	} else {
+		braveAPIStatus.Available = false
+		braveAPIStatus.Status = "missing"
+		if result.Status != types.SelfTestStatusFailed {
+			result.Status = types.SelfTestStatusFailed
+			result.Message = "Brave Search API key not configured"
+		}
+		result.Suggestions = append(result.Suggestions,
+			"Set BRAVE_API_KEY environment variable",
+			"Or configure tools.services.brave.api_key in config")
+	}
+	deps = append(deps, braveAPIStatus)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Basic search",
+				Description: "Search the web for a query",
+				Args: map[string]interface{}{
+					"query": "golang best practices",
+					"count": 5,
+				},
+				Expected: "Returns up to 5 search results with titles, URLs, and descriptions",
+			},
+			{
+				Name:        "Region-specific search",
+				Description: "Search with region filtering",
+				Args: map[string]interface{}{
+					"query":   "local news",
+					"country": "DE",
+					"count":   10,
+				},
+				Expected: "Returns results localized to Germany",
+			},
+			{
+				Name:        "Recent results search",
+				Description: "Search for recent content only",
+				Args: map[string]interface{}{
+					"query":     "breaking news",
+					"freshness": "pd",
+				},
+				Expected: "Returns only results from the past day",
+			},
+		}
+	}
+
+	return result
+}
+

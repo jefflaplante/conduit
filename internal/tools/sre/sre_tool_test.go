@@ -57,6 +57,12 @@ func setupTestTool(t *testing.T) (*SRETool, *mockToolExecutor) {
 				{Name: "test-cluster"},
 			},
 		},
+		RemoteSSH: config.RemoteSSHConfig{
+			Enabled: true,
+			Hosts: []config.SSHHostConfig{
+				{Name: "test-host", Hostname: "192.168.1.100"},
+			},
+		},
 	}
 
 	services := &types.ToolServices{
@@ -561,6 +567,245 @@ func TestParseTimeRange(t *testing.T) {
 				t.Errorf("For '%s': expected %s, got %s", tc.input, tc.expected, result.String())
 			}
 		})
+	}
+}
+
+// === SelfTest Tests ===
+
+func TestSRETool_SelfTest_OK(t *testing.T) {
+	tool, _ := setupTestTool(t)
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result.Status != types.SelfTestStatusOK {
+		t.Errorf("SelfTest() status = %v, want OK", result.Status)
+	}
+
+	if !containsString(result.Message, "full investigation") {
+		t.Errorf("Message should indicate full investigation capabilities, got: %s", result.Message)
+	}
+
+	if len(result.Capabilities) == 0 {
+		t.Error("Should have capabilities")
+	}
+
+	// Check expected capabilities
+	expectedCaps := []string{"triage_incident", "correlate", "suggest_investigation", "status"}
+	for _, expected := range expectedCaps {
+		found := false
+		for _, cap := range result.Capabilities {
+			if cap == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Missing capability: %s", expected)
+		}
+	}
+
+	if result.TestDuration == 0 {
+		t.Error("TestDuration should be set")
+	}
+}
+
+func TestSRETool_SelfTest_Degraded_NoK8s(t *testing.T) {
+	cfg := &config.Config{
+		PagerDuty: config.PagerDutyConfig{
+			Enabled:  true,
+			APIToken: "test-key",
+		},
+		Datadog: config.DatadogConfig{
+			Enabled: true,
+			APIKey:  "test-key",
+			AppKey:  "test-app-key",
+		},
+		// No Kubernetes
+	}
+
+	services := &types.ToolServices{ConfigMgr: cfg}
+	executor := newMockExecutor()
+	tool, err := NewSRETool(services, executor)
+	if err != nil {
+		t.Fatalf("Failed to create SRE tool: %v", err)
+	}
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result.Status != types.SelfTestStatusDegraded {
+		t.Errorf("SelfTest() status = %v, want Degraded", result.Status)
+	}
+
+	if len(result.UnavailableCapabilities) == 0 {
+		t.Error("Should have unavailable capabilities")
+	}
+
+	// Should have k8s_context in unavailable
+	hasK8s := false
+	for _, cap := range result.UnavailableCapabilities {
+		if cap == "k8s_context" {
+			hasK8s = true
+			break
+		}
+	}
+	if !hasK8s {
+		t.Error("Should have k8s_context as unavailable")
+	}
+}
+
+func TestSRETool_SelfTest_Dependencies(t *testing.T) {
+	tool, _ := setupTestTool(t)
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if len(result.Dependencies) == 0 {
+		t.Error("Should report dependencies")
+	}
+
+	// Check for expected dependencies
+	foundPD := false
+	foundDD := false
+	foundK8s := false
+	foundExecutor := false
+
+	for _, dep := range result.Dependencies {
+		switch dep.Name {
+		case "PagerDuty":
+			foundPD = true
+			if !dep.Available {
+				t.Error("PagerDuty should be available")
+			}
+			if !dep.Required {
+				t.Error("PagerDuty should be required")
+			}
+		case "Datadog":
+			foundDD = true
+			if !dep.Available {
+				t.Error("Datadog should be available")
+			}
+			if !dep.Required {
+				t.Error("Datadog should be required")
+			}
+		case "Kubernetes":
+			foundK8s = true
+			if !dep.Available {
+				t.Error("Kubernetes should be available in test config")
+			}
+			if dep.Required {
+				t.Error("Kubernetes should not be required")
+			}
+		case "ToolExecutor":
+			foundExecutor = true
+			if !dep.Available {
+				t.Error("ToolExecutor should be available")
+			}
+		}
+	}
+
+	if !foundPD {
+		t.Error("Should have PagerDuty dependency")
+	}
+	if !foundDD {
+		t.Error("Should have Datadog dependency")
+	}
+	if !foundK8s {
+		t.Error("Should have Kubernetes dependency")
+	}
+	if !foundExecutor {
+		t.Error("Should have ToolExecutor dependency")
+	}
+}
+
+func TestSRETool_SelfTest_WithVerbose(t *testing.T) {
+	tool, _ := setupTestTool(t)
+
+	opts := &types.SelfTestOptions{
+		Verbose:         true,
+		IncludeExamples: false,
+	}
+	result := tool.SelfTest(context.Background(), opts)
+
+	if result.Details == nil {
+		t.Error("Verbose mode should include details")
+	}
+
+	// Check for expected detail keys
+	if _, ok := result.Details["pagerduty_enabled"]; !ok {
+		t.Error("Details should include pagerduty_enabled")
+	}
+	if _, ok := result.Details["datadog_enabled"]; !ok {
+		t.Error("Details should include datadog_enabled")
+	}
+	if _, ok := result.Details["k8s_clusters"]; !ok {
+		t.Error("Details should include k8s_clusters when K8s is enabled")
+	}
+}
+
+func TestSRETool_SelfTest_WithExamples(t *testing.T) {
+	tool, _ := setupTestTool(t)
+
+	opts := &types.SelfTestOptions{
+		Verbose:         false,
+		IncludeExamples: true,
+	}
+	result := tool.SelfTest(context.Background(), opts)
+
+	if len(result.Examples) == 0 {
+		t.Error("Should include examples when requested")
+	}
+
+	// Check examples cover main actions
+	actions := make(map[string]bool)
+	for _, ex := range result.Examples {
+		if action, ok := ex.Args["action"].(string); ok {
+			actions[action] = true
+		}
+	}
+
+	expectedActions := []string{"triage_incident", "correlate", "suggest_investigation"}
+	for _, action := range expectedActions {
+		if !actions[action] {
+			t.Errorf("Missing example for action: %s", action)
+		}
+	}
+}
+
+func TestSRETool_SelfTest_NilExecutor(t *testing.T) {
+	cfg := &config.Config{
+		PagerDuty: config.PagerDutyConfig{
+			Enabled:  true,
+			APIToken: "test-key",
+		},
+		Datadog: config.DatadogConfig{
+			Enabled: true,
+			APIKey:  "test-key",
+			AppKey:  "test-app-key",
+		},
+	}
+
+	services := &types.ToolServices{ConfigMgr: cfg}
+	// Create tool without executor
+	tool := &SRETool{
+		services:     services,
+		pdConfig:     &cfg.PagerDuty,
+		ddConfig:     &cfg.Datadog,
+		toolExecutor: nil,
+	}
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result.Status != types.SelfTestStatusFailed {
+		t.Errorf("SelfTest() status = %v, want Failed", result.Status)
+	}
+
+	// Check executor dependency is marked unavailable
+	for _, dep := range result.Dependencies {
+		if dep.Name == "ToolExecutor" {
+			if dep.Available {
+				t.Error("ToolExecutor should be unavailable")
+			}
+			break
+		}
 	}
 }
 

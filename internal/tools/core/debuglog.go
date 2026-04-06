@@ -208,3 +208,101 @@ func truncateStr(s string, maxLen int) string {
 	}
 	return s[:maxLen] + "…"
 }
+
+// SelfTest implements types.SelfTester for DebugLogTool.
+func (t *DebugLogTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check RingBuffer dependency
+	bufferDep := types.DependencyStatus{
+		Name:     "RingBuffer",
+		Required: true,
+	}
+
+	if t.buffer == nil {
+		bufferDep.Available = false
+		bufferDep.Status = "not_configured"
+		bufferDep.Message = "RingBuffer not provided"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Debug log ring buffer is not available"
+		result.Suggestions = []string{
+			"Ensure DebugLogTool is initialized with a RingBuffer",
+			"Check that debug logging is enabled in config",
+		}
+	} else {
+		bufferDep.Available = true
+		bufferDep.Status = "ready"
+
+		currentLen := t.buffer.Len()
+		bufferDep.Message = fmt.Sprintf("%d entries in buffer (capacity: %d)", currentLen, debuglog.DefaultCapacity)
+
+		result.Capabilities = []string{"dump", "clear", "status"}
+		result.Message = "Debug log tool is fully functional"
+
+		if opts.Verbose {
+			result.Details = map[string]interface{}{
+				"buffer_entries":  currentLen,
+				"buffer_capacity": debuglog.DefaultCapacity,
+			}
+
+			// Include entry type breakdown if there are entries
+			if currentLen > 0 {
+				entries := t.buffer.Entries(nil)
+				typeCounts := map[string]int{}
+				for _, e := range entries {
+					typeCounts[string(e.Type)]++
+				}
+				result.Details["entry_types"] = typeCounts
+			}
+		}
+	}
+	deps = append(deps, bufferDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Dump recent entries",
+				Description: "Show the last 50 debug log entries",
+				Args: map[string]interface{}{
+					"action": "dump",
+					"limit":  50,
+				},
+				Expected: "Recent tool calls, LLM requests, and thinking entries",
+			},
+			{
+				Name:        "Filter by type",
+				Description: "Show only tool error entries",
+				Args: map[string]interface{}{
+					"action": "dump",
+					"filter": "tool_error",
+				},
+				Expected: "Only entries of type tool_error",
+			},
+			{
+				Name:        "Check status",
+				Description: "Get current buffer status",
+				Args: map[string]interface{}{
+					"action": "status",
+				},
+				Expected: "Entry count and capacity",
+			},
+		}
+	}
+
+	return result
+}

@@ -6,6 +6,7 @@ package sre
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"conduit/internal/config"
 	toolargs "conduit/internal/tools/args"
@@ -186,6 +187,213 @@ func (t *SRETool) Execute(ctx context.Context, args map[string]interface{}) (*ty
 			WithParameter("action", action).
 			WithAvailableValues([]string{"triage_incident", "correlate", "suggest_investigation", "status"}), nil
 	}
+}
+
+// SelfTest performs a functional check of the SRE tool.
+// It verifies that required integrations (PagerDuty, Datadog) are configured
+// and checks optional integrations (Kubernetes, SSH) for deeper investigation.
+func (t *SRETool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check PagerDuty (required)
+	pdDep := types.DependencyStatus{
+		Name:     "PagerDuty",
+		Required: true,
+	}
+
+	if t.pdConfig == nil {
+		pdDep.Available = false
+		pdDep.Status = "not_configured"
+		pdDep.Message = "PagerDuty not configured"
+		result.Status = types.SelfTestStatusFailed
+	} else {
+		pdDep.Available = true
+		pdDep.Status = "configured"
+	}
+	deps = append(deps, pdDep)
+
+	// Check Datadog (required)
+	ddDep := types.DependencyStatus{
+		Name:     "Datadog",
+		Required: true,
+	}
+
+	if t.ddConfig == nil {
+		ddDep.Available = false
+		ddDep.Status = "not_configured"
+		ddDep.Message = "Datadog not configured"
+		result.Status = types.SelfTestStatusFailed
+	} else {
+		ddDep.Available = true
+		ddDep.Status = "configured"
+	}
+	deps = append(deps, ddDep)
+
+	// Check tool executor (required for orchestration)
+	executorDep := types.DependencyStatus{
+		Name:     "ToolExecutor",
+		Required: true,
+	}
+
+	if t.toolExecutor == nil {
+		executorDep.Available = false
+		executorDep.Status = "not_configured"
+		executorDep.Message = "Tool executor not available"
+		result.Status = types.SelfTestStatusFailed
+	} else {
+		executorDep.Available = true
+		executorDep.Status = "available"
+	}
+	deps = append(deps, executorDep)
+
+	// Check Kubernetes (optional but valuable)
+	k8sDep := types.DependencyStatus{
+		Name:     "Kubernetes",
+		Required: false,
+	}
+
+	if t.k8sConfig != nil {
+		k8sDep.Available = true
+		k8sDep.Status = "configured"
+		k8sDep.Message = fmt.Sprintf("%d cluster(s)", len(t.k8sConfig.Clusters))
+	} else {
+		k8sDep.Available = false
+		k8sDep.Status = "not_configured"
+		k8sDep.Message = "K8s context unavailable for triage"
+	}
+	deps = append(deps, k8sDep)
+
+	// Check SSH (optional but valuable)
+	sshDep := types.DependencyStatus{
+		Name:     "SSH",
+		Required: false,
+	}
+
+	if t.sshConfig != nil && t.sshConfig.Enabled {
+		sshDep.Available = true
+		sshDep.Status = "configured"
+		sshDep.Message = fmt.Sprintf("%d host(s)", len(t.sshConfig.Hosts))
+	} else {
+		sshDep.Available = false
+		sshDep.Status = "not_configured"
+		sshDep.Message = "SSH investigation unavailable"
+	}
+	deps = append(deps, sshDep)
+
+	// Determine capabilities based on available integrations
+	if result.Status != types.SelfTestStatusFailed {
+		result.Capabilities = []string{"triage_incident", "correlate", "suggest_investigation", "status"}
+
+		// Check for degraded state (missing optional integrations)
+		if t.k8sConfig == nil && (t.sshConfig == nil || !t.sshConfig.Enabled) {
+			result.Status = types.SelfTestStatusDegraded
+			result.Message = "SRE ready with limited investigation capabilities (no K8s or SSH)"
+			result.UnavailableCapabilities = []string{"k8s_context", "ssh_investigation"}
+			result.Suggestions = []string{
+				"Enable kubernetes in config for pod/deployment context",
+				"Enable remote_ssh in config for host-level investigation",
+			}
+		} else if t.k8sConfig == nil {
+			result.Status = types.SelfTestStatusDegraded
+			result.Message = "SRE ready — K8s context unavailable"
+			result.UnavailableCapabilities = []string{"k8s_context"}
+			result.Suggestions = []string{
+				"Enable kubernetes in config for pod/deployment context",
+			}
+		} else if t.sshConfig == nil || !t.sshConfig.Enabled {
+			result.Status = types.SelfTestStatusDegraded
+			result.Message = "SRE ready — SSH investigation unavailable"
+			result.UnavailableCapabilities = []string{"ssh_investigation"}
+			result.Suggestions = []string{
+				"Enable remote_ssh in config for host-level investigation",
+			}
+		} else {
+			result.Status = types.SelfTestStatusOK
+			result.Message = "SRE ready — full investigation capabilities available"
+		}
+	} else {
+		result.Message = "SRE tool requires PagerDuty and Datadog to be enabled"
+		result.Suggestions = []string{
+			"Enable pagerduty in config",
+			"Enable datadog in config",
+		}
+	}
+
+	// Add verbose details
+	if opts.Verbose {
+		details := map[string]interface{}{
+			"pagerduty_enabled": t.pdConfig != nil,
+			"datadog_enabled":   t.ddConfig != nil,
+			"k8s_enabled":       t.k8sConfig != nil,
+			"ssh_enabled":       t.sshConfig != nil && t.sshConfig.Enabled,
+		}
+		if t.k8sConfig != nil {
+			clusterNames := make([]string, len(t.k8sConfig.Clusters))
+			for i, c := range t.k8sConfig.Clusters {
+				clusterNames[i] = c.Name
+			}
+			details["k8s_clusters"] = clusterNames
+		}
+		if t.sshConfig != nil && t.sshConfig.Enabled {
+			hostNames := make([]string, len(t.sshConfig.Hosts))
+			for i, h := range t.sshConfig.Hosts {
+				hostNames[i] = h.Name
+			}
+			details["ssh_hosts"] = hostNames
+		}
+		result.Details = details
+	}
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	// Include examples if requested and tool is functional
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Triage incident",
+				Description: "Gather unified context for a PagerDuty incident",
+				Args: map[string]interface{}{
+					"action":      "triage_incident",
+					"incident_id": "P123ABC",
+				},
+				Expected: "Incident details with metrics, logs, and K8s context",
+			},
+			{
+				Name:        "Correlate service data",
+				Description: "Cross-reference incidents and monitors for a service",
+				Args: map[string]interface{}{
+					"action":     "correlate",
+					"service":    "api-gateway",
+					"time_range": "1h",
+				},
+				Expected: "Correlated incidents, monitors, and log patterns",
+			},
+			{
+				Name:        "Get investigation suggestions",
+				Description: "Get recommended next steps for an incident type",
+				Args: map[string]interface{}{
+					"action":        "suggest_investigation",
+					"incident_type": "high_cpu",
+				},
+				Expected: "Suggested K8s, SSH commands and Datadog queries",
+			},
+		}
+	}
+
+	return result
 }
 
 // status returns the SRE tool configuration status.

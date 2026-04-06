@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 
 	"conduit/internal/config"
@@ -305,5 +306,132 @@ func (t *FactsTool) formatFacts(facts []Fact) string {
 	}
 
 	return builder.String()
+}
+
+// SelfTest implements types.SelfTester for FactsTool.
+func (t *FactsTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check workspace directory configuration
+	workspaceDep := types.DependencyStatus{
+		Name:     "WorkspaceDir",
+		Required: true,
+	}
+
+	if t.workspaceDir == "" {
+		workspaceDep.Available = false
+		workspaceDep.Status = "not_configured"
+		workspaceDep.Message = "Workspace directory not configured"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Facts tool requires a workspace directory"
+		result.Suggestions = []string{
+			"Configure workspace_dir in sandbox settings",
+			"Check config.json tools.sandbox.workspace_dir",
+		}
+	} else {
+		// Check if workspace directory exists
+		if info, err := os.Stat(t.workspaceDir); err != nil {
+			workspaceDep.Available = false
+			workspaceDep.Status = "error"
+			workspaceDep.Message = fmt.Sprintf("Workspace directory error: %v", err)
+			result.Status = types.SelfTestStatusFailed
+			result.Message = "Workspace directory is not accessible"
+			result.Suggestions = []string{
+				"Check workspace directory exists",
+				"Verify read permissions on workspace",
+			}
+		} else if !info.IsDir() {
+			workspaceDep.Available = false
+			workspaceDep.Status = "invalid"
+			workspaceDep.Message = "Workspace path is not a directory"
+			result.Status = types.SelfTestStatusFailed
+			result.Message = "Workspace path is not a directory"
+		} else {
+			workspaceDep.Available = true
+			workspaceDep.Status = "available"
+			result.Capabilities = []string{
+				"extract_markdown_facts",
+				"categorize_facts",
+				"filter_by_category",
+				"parse_key_value_patterns",
+			}
+		}
+	}
+	deps = append(deps, workspaceDep)
+
+	// Check for memory files (informational, not required)
+	if result.Status != types.SelfTestStatusFailed {
+		memoryPaths, err := t.getMemoryFilePaths()
+		if err == nil && len(memoryPaths) > 0 {
+			result.Capabilities = append(result.Capabilities, "memory_files_found")
+			if opts.Verbose {
+				result.Details = map[string]interface{}{
+					"workspace_dir":      t.workspaceDir,
+					"memory_files_count": len(memoryPaths),
+					"memory_files":       memoryPaths,
+				}
+			}
+		} else {
+			// Memory files not found — still functional but note it
+			if opts.Verbose {
+				result.Details = map[string]interface{}{
+					"workspace_dir":      t.workspaceDir,
+					"memory_files_count": 0,
+					"note":               "No MEMORY.md or memory/*.md files found",
+				}
+			}
+		}
+	}
+
+	result.Dependencies = deps
+
+	// Set final status and message if not already failed
+	if result.Status != types.SelfTestStatusFailed {
+		result.Status = types.SelfTestStatusOK
+		result.Message = "Facts tool is fully functional"
+	}
+
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Extract all facts",
+				Description: "Get all facts from memory files",
+				Args:        map[string]interface{}{},
+				Expected:    "List of categorized facts from MEMORY.md and memory/*.md",
+			},
+			{
+				Name:        "Filter by category",
+				Description: "Get only facts in the 'preferences' category",
+				Args: map[string]interface{}{
+					"category": "preferences",
+				},
+				Expected: "Facts filtered to preferences category only",
+			},
+			{
+				Name:        "Limit results",
+				Description: "Get at most 10 facts",
+				Args: map[string]interface{}{
+					"maxFacts": 10,
+				},
+				Expected: "Up to 10 facts from memory files",
+			},
+		}
+	}
+
+	return result
 }
 

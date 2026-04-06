@@ -312,3 +312,67 @@ func (t *WebFetchTool) cleanContent(content string) string {
 	return content
 }
 
+// SelfTest implements types.SelfTester for WebFetchTool.
+func (t *WebFetchTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Message:      "WebFetch tool is functional",
+		Capabilities: []string{"fetch_url", "extract_markdown", "extract_text"},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	httpClientStatus := types.DependencyStatus{
+		Name:     "HTTPClient",
+		Required: true,
+	}
+
+	if t.httpClient != nil {
+		httpClientStatus.Available = true
+		httpClientStatus.Status = "ready"
+	} else {
+		httpClientStatus.Available = false
+		httpClientStatus.Status = "not_configured"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "HTTP client not available"
+		result.Suggestions = []string{"Check WebClient configuration in ToolServices"}
+	}
+	deps = append(deps, httpClientStatus)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Fetch webpage as markdown",
+				Description: "Fetch a URL and convert HTML content to readable markdown",
+				Args: map[string]interface{}{
+					"url":         "https://example.com",
+					"extractMode": "markdown",
+				},
+				Expected: "Returns page content formatted as markdown",
+			},
+			{
+				Name:        "Fetch plain text",
+				Description: "Fetch a URL and extract plain text content",
+				Args: map[string]interface{}{
+					"url":         "https://example.com",
+					"extractMode": "text",
+					"maxChars":    10000,
+				},
+				Expected: "Returns plain text content, truncated if exceeds maxChars",
+			},
+		}
+	}
+
+	return result
+}
+

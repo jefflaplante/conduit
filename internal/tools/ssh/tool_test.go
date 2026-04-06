@@ -1360,6 +1360,181 @@ func TestSSHTool_GetStatus_WithTunnelInfo(t *testing.T) {
 	}
 }
 
+// === SelfTest Tests ===
+
+func TestSSHTool_SelfTest_OK(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	tool.SetClient(&mockClient{})
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result.Status != types.SelfTestStatusOK {
+		t.Errorf("SelfTest() status = %v, want OK", result.Status)
+	}
+
+	if !contains(result.Message, "SSH ready") {
+		t.Errorf("Message should indicate ready, got: %s", result.Message)
+	}
+
+	if len(result.Capabilities) == 0 {
+		t.Error("Should have capabilities when client connected")
+	}
+
+	// Should include exec capability
+	hasExec := false
+	for _, cap := range result.Capabilities {
+		if cap == "exec" {
+			hasExec = true
+			break
+		}
+	}
+	if !hasExec {
+		t.Error("Capabilities should include exec")
+	}
+
+	if result.TestDuration == 0 {
+		t.Error("TestDuration should be set")
+	}
+}
+
+func TestSSHTool_SelfTest_Degraded_NoClient(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	// No client set
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result.Status != types.SelfTestStatusDegraded {
+		t.Errorf("SelfTest() status = %v, want Degraded", result.Status)
+	}
+
+	if !contains(result.Message, "client not connected") {
+		t.Errorf("Message should mention client not connected, got: %s", result.Message)
+	}
+
+	// Should have limited capabilities
+	if len(result.Capabilities) == 0 {
+		t.Error("Should have some capabilities even without client")
+	}
+
+	// Should have unavailable capabilities
+	if len(result.UnavailableCapabilities) == 0 {
+		t.Error("Should have unavailable capabilities without client")
+	}
+}
+
+func TestSSHTool_SelfTest_Failed_Disabled(t *testing.T) {
+	cfg := testSSHConfig()
+	cfg.Enabled = false
+	tool, _ := NewSSHTool(&types.ToolServices{}, cfg)
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result.Status != types.SelfTestStatusFailed {
+		t.Errorf("SelfTest() status = %v, want Failed", result.Status)
+	}
+
+	if !contains(result.Message, "disabled") {
+		t.Errorf("Message should mention disabled, got: %s", result.Message)
+	}
+}
+
+func TestSSHTool_SelfTest_Failed_NoHosts(t *testing.T) {
+	cfg := testSSHConfig()
+	cfg.Hosts = []config.SSHHostConfig{}
+	tool, _ := NewSSHTool(&types.ToolServices{}, cfg)
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result.Status != types.SelfTestStatusFailed {
+		t.Errorf("SelfTest() status = %v, want Failed", result.Status)
+	}
+
+	if !contains(result.Message, "No SSH hosts") {
+		t.Errorf("Message should mention no hosts, got: %s", result.Message)
+	}
+}
+
+func TestSSHTool_SelfTest_WithVerbose(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	tool.SetClient(&mockClient{})
+
+	opts := &types.SelfTestOptions{
+		Verbose:         true,
+		IncludeExamples: false,
+	}
+	result := tool.SelfTest(context.Background(), opts)
+
+	if result.Details == nil {
+		t.Error("Verbose mode should include details")
+	}
+
+	// Check for expected detail keys
+	if _, ok := result.Details["enabled_hosts"]; !ok {
+		t.Error("Details should include enabled_hosts")
+	}
+
+	if _, ok := result.Details["security"]; !ok {
+		t.Error("Details should include security config")
+	}
+}
+
+func TestSSHTool_SelfTest_WithExamples(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+	tool.SetClient(&mockClient{})
+
+	opts := &types.SelfTestOptions{
+		Verbose:         false,
+		IncludeExamples: true,
+	}
+	result := tool.SelfTest(context.Background(), opts)
+
+	if len(result.Examples) == 0 {
+		t.Error("Should include examples when requested")
+	}
+}
+
+func TestSSHTool_SelfTest_Dependencies(t *testing.T) {
+	tool, _ := NewSSHTool(&types.ToolServices{}, testSSHConfig())
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if len(result.Dependencies) == 0 {
+		t.Error("Should report dependencies")
+	}
+
+	// Check for expected dependencies
+	foundConfig := false
+	foundHosts := false
+	foundClient := false
+	for _, dep := range result.Dependencies {
+		switch dep.Name {
+		case "SSHConfig":
+			foundConfig = true
+			if !dep.Available {
+				t.Error("SSHConfig should be available")
+			}
+		case "SSHHosts":
+			foundHosts = true
+			if !dep.Available {
+				t.Error("SSHHosts should be available")
+			}
+		case "SSHClient":
+			foundClient = true
+			// Client not available without SetClient
+		}
+	}
+
+	if !foundConfig {
+		t.Error("Should have SSHConfig dependency")
+	}
+	if !foundHosts {
+		t.Error("Should have SSHHosts dependency")
+	}
+	if !foundClient {
+		t.Error("Should have SSHClient dependency")
+	}
+}
+
 // Helper function
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))

@@ -662,3 +662,98 @@ func isHeartbeatJob(job *types.SchedulerJob) bool {
 		strings.Contains(strings.ToLower(job.Command), "heartbeat") ||
 		strings.Contains(strings.ToLower(job.Name), "heartbeat")
 }
+
+// SelfTest implements types.SelfTester for CronTool.
+func (t *CronTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check Gateway service (provides scheduler)
+	gatewayDep := types.DependencyStatus{
+		Name:     "Gateway",
+		Required: true,
+	}
+
+	if t.services == nil || t.services.Gateway == nil {
+		gatewayDep.Available = false
+		gatewayDep.Status = "not_configured"
+		gatewayDep.Message = "Gateway service not available in ToolServices"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Cron service is not available — gateway not configured"
+		result.Suggestions = []string{
+			"Verify gateway is running",
+			"Check scheduler configuration",
+		}
+	} else {
+		gatewayDep.Available = true
+		gatewayDep.Status = "connected"
+		result.Capabilities = []string{
+			"schedule", "list", "cancel", "run", "enable", "disable", "status",
+			"heartbeat_list", "heartbeat_enable", "heartbeat_disable", "heartbeat_status",
+		}
+
+		// Get scheduler status for verbose output
+		if opts.Verbose {
+			status := t.services.Gateway.GetSchedulerStatus()
+			jobs := t.services.Gateway.ListJobs()
+			result.Details = map[string]interface{}{
+				"scheduler_status": status,
+				"job_count":        len(jobs),
+			}
+		}
+
+		result.Status = types.SelfTestStatusOK
+		result.Message = "Cron tool is fully functional"
+	}
+	deps = append(deps, gatewayDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Set a reminder",
+				Description: "Schedule a reminder in 30 minutes",
+				Args: map[string]interface{}{
+					"action":       "schedule",
+					"command":      "Remind Jeff to check email",
+					"delayMinutes": 30,
+				},
+				Expected: "Reminder scheduled as a one-shot job",
+			},
+			{
+				Name:        "List jobs",
+				Description: "List all scheduled jobs",
+				Args: map[string]interface{}{
+					"action": "list",
+				},
+				Expected: "Returns list of scheduled jobs",
+			},
+			{
+				Name:        "Schedule recurring task",
+				Description: "Schedule a daily task at 9 AM",
+				Args: map[string]interface{}{
+					"action":   "schedule",
+					"schedule": "0 9 * * *",
+					"command":  "Generate daily briefing",
+					"name":     "Daily Briefing",
+				},
+				Expected: "Job scheduled with cron expression",
+			},
+		}
+	}
+
+	return result
+}

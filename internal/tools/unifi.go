@@ -290,3 +290,165 @@ func (t *UniFiTool) fetchProtectCameras(unvrURL, apiKey string) ([]map[string]in
 
 	return cameras, nil
 }
+
+// SelfTest verifies the UniFiTool is functional by checking credentials and connectivity.
+func (t *UniFiTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:   types.SelfTestStatusOK,
+		TestedAt: time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check UNVR_URL environment variable
+	unvrURL := os.Getenv("UNVR_URL")
+	urlDep := types.DependencyStatus{
+		Name:     "UNVR_URL",
+		Required: true,
+	}
+
+	if unvrURL == "" {
+		urlDep.Available = false
+		urlDep.Status = "not_set"
+		urlDep.Message = "UNVR_URL environment variable is not set"
+	} else {
+		urlDep.Available = true
+		urlDep.Status = "configured"
+		if opts.Verbose {
+			urlDep.Message = unvrURL
+		}
+	}
+	deps = append(deps, urlDep)
+
+	// Check UNVR_API_KEY environment variable
+	apiKey := os.Getenv("UNVR_API_KEY")
+	keyDep := types.DependencyStatus{
+		Name:     "UNVR_API_KEY",
+		Required: true,
+	}
+
+	if apiKey == "" {
+		keyDep.Available = false
+		keyDep.Status = "not_set"
+		keyDep.Message = "UNVR_API_KEY environment variable is not set"
+	} else {
+		keyDep.Available = true
+		keyDep.Status = "configured"
+		if opts.Verbose {
+			keyDep.Message = fmt.Sprintf("API key set (%d chars)", len(apiKey))
+		}
+	}
+	deps = append(deps, keyDep)
+
+	// Check TLS configuration
+	tlsDep := types.DependencyStatus{
+		Name:     "TLS",
+		Required: false,
+	}
+	tlsDep.Available = true
+	if os.Getenv("UNIFI_INSECURE_TLS") == "true" {
+		tlsDep.Status = "insecure"
+		tlsDep.Message = "TLS verification disabled (UNIFI_INSECURE_TLS=true)"
+	} else {
+		tlsDep.Status = "secure"
+		tlsDep.Message = "TLS verification enabled"
+	}
+	deps = append(deps, tlsDep)
+
+	result.Dependencies = deps
+
+	// Determine overall status based on credentials
+	if unvrURL == "" || apiKey == "" {
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "UniFi credentials not configured"
+		result.Capabilities = []string{}
+		result.UnavailableCapabilities = []string{"snapshot", "cameras", "devices", "status"}
+		result.Suggestions = []string{
+			"Set UNVR_URL environment variable (e.g., https://192.168.1.1)",
+			"Set UNVR_API_KEY environment variable with your UniFi Protect API key",
+			"Optionally set UNIFI_INSECURE_TLS=true for self-signed certificates",
+		}
+	} else {
+		// Credentials are configured, try to verify connectivity if requested
+		if opts.CheckDependencies {
+			// Attempt a lightweight API call to verify credentials
+			_, err := t.fetchProtectCameras(unvrURL, apiKey)
+			if err != nil {
+				result.Status = types.SelfTestStatusDegraded
+				result.Message = fmt.Sprintf("UniFi credentials configured but API test failed: %v", err)
+				result.Capabilities = []string{}
+				result.UnavailableCapabilities = []string{"snapshot", "cameras", "devices", "status"}
+				result.Suggestions = []string{
+					"Verify UNVR_URL is correct and reachable",
+					"Verify UNVR_API_KEY is valid",
+					"Check network connectivity to UniFi controller",
+					"If using self-signed certs, set UNIFI_INSECURE_TLS=true",
+				}
+
+				if opts.Verbose {
+					result.Details = map[string]interface{}{
+						"error":    err.Error(),
+						"unvr_url": unvrURL,
+					}
+				}
+			} else {
+				result.Status = types.SelfTestStatusOK
+				result.Message = "UniFi Protect connected and functional"
+				result.Capabilities = []string{"snapshot", "cameras"}
+				result.UnavailableCapabilities = []string{"devices", "status"} // Not yet implemented
+
+				if opts.Verbose {
+					result.Details = map[string]interface{}{
+						"unvr_url":     unvrURL,
+						"insecure_tls": os.Getenv("UNIFI_INSECURE_TLS") == "true",
+					}
+				}
+			}
+		} else {
+			result.Status = types.SelfTestStatusOK
+			result.Message = "UniFi credentials configured (connectivity not tested)"
+			result.Capabilities = []string{"snapshot", "cameras"}
+			result.UnavailableCapabilities = []string{"devices", "status"} // Not yet implemented
+		}
+	}
+
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "List cameras",
+				Description: "Get a list of all UniFi Protect cameras",
+				Args: map[string]interface{}{
+					"action": "cameras",
+				},
+				Expected: "Returns JSON list of cameras with name, ID, state, and connection status",
+			},
+			{
+				Name:        "Take snapshot",
+				Description: "Capture a snapshot from a specific camera",
+				Args: map[string]interface{}{
+					"action": "snapshot",
+					"camera": "Front Door",
+				},
+				Expected: "Saves snapshot to /tmp and returns file path",
+			},
+			{
+				Name:        "Snapshot from first camera",
+				Description: "Take a snapshot from the first available camera",
+				Args: map[string]interface{}{
+					"action": "snapshot",
+				},
+				Expected: "Captures from default camera when no camera specified",
+			},
+		}
+	}
+
+	return result
+}

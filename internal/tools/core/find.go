@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"conduit/internal/tools/types"
 )
@@ -426,4 +427,89 @@ func (t *FindTool) GetUsageExamples() []types.ToolExample {
 			Expected: "Up to 5 messages from session history about deployment",
 		},
 	}
+}
+
+// SelfTest implements types.SelfTester for FindTool.
+func (t *FindTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check Searcher service (FTS5)
+	searcherDep := types.DependencyStatus{
+		Name:     "SearchService",
+		Required: true,
+	}
+
+	if t.services == nil || t.services.Searcher == nil {
+		searcherDep.Available = false
+		searcherDep.Status = "not_configured"
+		searcherDep.Message = "FTS5 search service not available in ToolServices"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Search service is not enabled — Find tool is non-functional"
+		result.Suggestions = []string{
+			"Enable FTS5 search in config.json",
+			"Check that search database is initialized",
+			"Verify database migrations have run",
+		}
+	} else {
+		searcherDep.Available = true
+		searcherDep.Status = "connected"
+		result.Capabilities = []string{
+			"search_documents",
+			"search_messages",
+			"search_beads",
+			"bm25_ranking",
+			"cross_source_deduplication",
+		}
+	}
+	deps = append(deps, searcherDep)
+
+	// Check VectorSearch service (optional)
+	vectorDep := types.DependencyStatus{
+		Name:     "VectorSearch",
+		Required: false,
+	}
+	if t.services != nil && t.services.VectorSearch != nil {
+		vectorDep.Available = true
+		vectorDep.Status = "available"
+		result.Capabilities = append(result.Capabilities, "semantic_search")
+	} else {
+		vectorDep.Available = false
+		vectorDep.Status = "not_configured"
+		vectorDep.Message = "Vector search not enabled — semantic search unavailable"
+		result.UnavailableCapabilities = append(result.UnavailableCapabilities, "semantic_search")
+	}
+	deps = append(deps, vectorDep)
+
+	result.Dependencies = deps
+
+	// Set final status if not already failed
+	if result.Status != types.SelfTestStatusFailed {
+		if len(result.UnavailableCapabilities) > 0 {
+			result.Status = types.SelfTestStatusDegraded
+			result.Message = "Find tool is functional with FTS5; semantic search unavailable"
+		} else {
+			result.Status = types.SelfTestStatusOK
+			result.Message = "Find tool is fully functional"
+		}
+	}
+
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = t.GetUsageExamples()
+	}
+
+	return result
 }

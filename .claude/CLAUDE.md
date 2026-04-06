@@ -52,7 +52,7 @@ Incoming messages flow: Channel Adapter → Channel Manager → Gateway → AI R
 - ai.Provider (internal/ai/router.go) — AI model providers. Each implements GenerateResponse(ctx, *GenerateRequest) (*GenerateResponse, error).
 - ai.ExecutionEngine (internal/ai/router.go) — Tool call flow handling: HandleToolCallFlow processes iterative tool execution.
 - ai.AgentSystem (internal/ai/router.go) — Pluggable agent personality: BuildSystemPrompt, GetToolDefinitions, ProcessResponse.
-- types.Tool (internal/tools/types/types.go) — All tools implement Name(), Description(), Parameters(), Execute(ctx, args). Optional interfaces: EnhancedSchemaProvider, ParameterValidator, ParameterDiscoverer, UsageExampleProvider.
+- types.Tool (internal/tools/types/types.go) — All tools implement Name(), Description(), Parameters(), Execute(ctx, args). Optional interfaces: EnhancedSchemaProvider, ParameterValidator, ParameterDiscoverer, UsageExampleProvider, SelfTester.
 - types.GatewayService (internal/tools/types/types.go) — Gateway operations exposed to tools without circular imports. Includes session, channel, config, metrics, and scheduler operations.
 - types.ChannelSender (internal/tools/types/types.go) — Channel message sending exposed to tools.
 - types.SearchService (internal/tools/types/types.go) — FTS5 full-text search interface over documents and messages.
@@ -156,3 +156,90 @@ SQLite with WAL mode, 5s busy timeout, NORMAL synchronous, foreign keys enabled,
 ## Test Patterns
 
 Tests use testing.T with t.TempDir() for isolation. testify assertions available. Integration tests use _integration_test.go suffix. Helper functions like setupTestRegistry() create configured instances with temp directories. No test tags required for standard tests; integration tests in test/integration/ use -tags=integration. Mock provider available at internal/ai/mock_provider.go. Test fixtures in test/fixtures/. Test scripts in test/scripts/.
+
+## Tool SelfTest
+
+Tools can implement the optional `SelfTester` interface to provide diagnostic information about their health and capabilities. This allows AI models to verify a tool is functional before relying on it.
+
+### Interface
+
+```go
+// internal/tools/types/types.go
+type SelfTester interface {
+    SelfTest(ctx context.Context, opts *SelfTestOptions) *SelfTestResult
+}
+
+type SelfTestOptions struct {
+    Verbose           bool  // Include additional diagnostic detail
+    IncludeExamples   bool  // Include usage examples in result
+    CheckDependencies bool  // Verify dependencies explicitly
+}
+
+type SelfTestResult struct {
+    Status                  SelfTestStatus          // "ok", "degraded", "failed"
+    Message                 string                  // Human-readable summary
+    Dependencies            []DependencyStatus      // Required/optional service status
+    Capabilities            []string                // Available features
+    UnavailableCapabilities []string                // Features currently non-functional
+    Examples                []ToolExample           // Usage examples when functional
+    Suggestions             []string                // Actionable hints for issues
+    TestDuration            time.Duration           // How long the test took
+    Details                 map[string]interface{}  // Verbose diagnostic data
+}
+```
+
+### Status Levels
+
+- **ok** — Tool is fully functional, all dependencies available
+- **degraded** — Partial functionality (e.g., MQTTTool connected but publish disabled, SSHTool configured but not connected)
+- **failed** — Tool cannot function (missing required dependencies)
+
+### Registry Methods
+
+```go
+// Test a single tool by name
+result := registry.SelfTestTool(ctx, "Brain", nil)
+
+// Test all enabled tools (5s timeout per tool)
+allResults := registry.SelfTestAll(ctx, &types.SelfTestOptions{Verbose: true})
+fmt.Println(allResults.Summary()) // "24 tools tested: 22 healthy, 2 degraded, 0 failed"
+```
+
+### Example Implementation (BrainTool)
+
+```go
+func (t *BrainTool) SelfTest(ctx context.Context, opts *SelfTestOptions) *SelfTestResult {
+    result := &SelfTestResult{Status: SelfTestStatusOK, Capabilities: []string{}}
+
+    // Check required dependency
+    if t.services.Brain == nil {
+        return &SelfTestResult{
+            Status:      SelfTestStatusFailed,
+            Message:     "Brain service is not enabled",
+            Suggestions: []string{"Enable brain in config.json"},
+        }
+    }
+
+    // Report capabilities
+    result.Capabilities = []string{"store", "get", "recall", "list", "delete", "push", "pop", "peek"}
+
+    // Check optional enhancement
+    if t.services.REMCycle != nil {
+        result.Capabilities = append(result.Capabilities, "rem_cycle")
+    } else {
+        result.UnavailableCapabilities = []string{"rem_cycle"}
+    }
+
+    // Verbose mode: include runtime stats
+    if opts.Verbose {
+        status, _ := t.services.Brain.Status(ctx)
+        result.Details = map[string]interface{}{"brain_status": status}
+    }
+
+    return result
+}
+```
+
+### Tools with SelfTest
+
+All ~30 tools implement SelfTest: BashTool, ReadFileTool, WriteFileTool, GlobTool, EditTool, FindTool, FactsTool, MemorySearchTool, BrainTool, GatewayTool, ContextTool, ChainTool, DebugLogTool, SessionsListTool, SessionsSendTool, SessionsSpawnTool, SessionStatusTool, MessageTool, StatusUpdateTool, TtsTool, CronTool, WebFetchTool, WebSearchTool, ImageTool, MQTTTool, DatadogTool, PagerDutyTool, K8sTool, SSHTool, SRETool, UniFiTool, GoogleWorkspaceTool.

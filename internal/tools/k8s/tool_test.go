@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"conduit/internal/config"
+	"conduit/internal/tools/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -350,4 +351,92 @@ func TestK8sTool_Execute_MissingAction(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, result.Error, "action parameter is required")
+}
+
+func TestK8sTool_SelfTest_OK(t *testing.T) {
+	tool := setupTestTool(t)
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	assert.Equal(t, types.SelfTestStatusOK, result.Status)
+	assert.Contains(t, result.Message, "1 cluster(s) connected")
+	assert.NotEmpty(t, result.Capabilities)
+	assert.Contains(t, result.Capabilities, "get")
+	assert.Contains(t, result.Capabilities, "logs")
+	assert.NotNil(t, result.Dependencies)
+	assert.True(t, result.TestDuration > 0)
+}
+
+func TestK8sTool_SelfTest_Degraded_NoConnections(t *testing.T) {
+	cfg := &config.KubernetesConfig{
+		Enabled: true,
+		Clusters: []config.KubernetesCluster{
+			{Name: "cluster-a", KubeconfigPath: "/fake/a"},
+			{Name: "cluster-b", KubeconfigPath: "/fake/b"},
+		},
+		Defaults: config.KubernetesDefaults{Namespace: "default"},
+	}
+	tool, err := NewK8sTool(nil, cfg)
+	require.NoError(t, err)
+	// No clients injected — lazy-connect mode
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	assert.Equal(t, types.SelfTestStatusDegraded, result.Status)
+	assert.Contains(t, result.Message, "none connected yet")
+	assert.NotEmpty(t, result.Suggestions)
+}
+
+func TestK8sTool_SelfTest_PartialConnections(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset()
+	cfg := &config.KubernetesConfig{
+		Enabled: true,
+		Clusters: []config.KubernetesCluster{
+			{Name: "connected-cluster", KubeconfigPath: "/fake/a"},
+			{Name: "disconnected-cluster", KubeconfigPath: "/fake/b"},
+		},
+		Defaults: config.KubernetesDefaults{Namespace: "default"},
+	}
+	tool, err := NewK8sTool(nil, cfg)
+	require.NoError(t, err)
+
+	// Inject one connected client
+	tool.clients.SetClient("connected-cluster", &ClusterClient{
+		name:      "connected-cluster",
+		clientset: fakeClient,
+		namespace: "default",
+	})
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	assert.Equal(t, types.SelfTestStatusDegraded, result.Status)
+	assert.Contains(t, result.Message, "1 of 2")
+}
+
+func TestK8sTool_SelfTest_NilConfig(t *testing.T) {
+	tool := &K8sTool{
+		config:  nil,
+		clients: NewClientManager(nil),
+	}
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	assert.Equal(t, types.SelfTestStatusFailed, result.Status)
+	assert.Contains(t, result.Message, "not configured")
+}
+
+func TestK8sTool_SelfTest_WithExamples(t *testing.T) {
+	tool := setupTestTool(t)
+	opts := &types.SelfTestOptions{
+		IncludeExamples: true,
+		Verbose:         true,
+	}
+
+	result := tool.SelfTest(context.Background(), opts)
+
+	assert.Equal(t, types.SelfTestStatusOK, result.Status)
+	assert.NotEmpty(t, result.Examples)
+	assert.NotNil(t, result.Details)
+	// Check for cluster details in verbose mode
+	assert.Contains(t, result.Details, "clusters")
 }

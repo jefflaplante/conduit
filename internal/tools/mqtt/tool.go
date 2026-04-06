@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
@@ -424,4 +425,118 @@ func matchGlobInsensitive(pattern, name string) (bool, error) {
 
 func joinParts(parts []string) string {
 	return strings.Join(parts, ", ")
+}
+
+// SelfTest implements types.SelfTester for MQTTTool.
+func (t *MQTTTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check MQTT service
+	mqttDep := types.DependencyStatus{
+		Name:     "MQTTService",
+		Required: true,
+	}
+
+	if t.services == nil || t.services.MQTTService == nil {
+		mqttDep.Available = false
+		mqttDep.Status = "not_configured"
+		mqttDep.Message = "MQTT service not enabled in config"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "MQTT is not configured"
+		result.Suggestions = []string{
+			"Add 'mqtt' section to config with enabled: true",
+			"Configure broker_url in mqtt config",
+		}
+	} else {
+		mqttDep.Available = true
+
+		// Get MQTT status to determine capabilities
+		status := t.services.MQTTService.Status()
+
+		if !status.Connected {
+			mqttDep.Status = "disconnected"
+			mqttDep.Message = "Not connected to MQTT broker"
+			result.Status = types.SelfTestStatusDegraded
+			result.Message = "MQTT configured but not connected to broker"
+			result.Capabilities = []string{"status"}
+			result.UnavailableCapabilities = []string{"devices", "topics", "recent", "history", "publish"}
+			result.Suggestions = []string{
+				"Check MQTT broker is running",
+				"Verify broker_url in config",
+				"Check network connectivity",
+			}
+		} else {
+			mqttDep.Status = "connected"
+			result.Capabilities = []string{"devices", "status", "topics", "recent", "history"}
+
+			if status.PublishAllowed {
+				result.Capabilities = append(result.Capabilities, "publish")
+			} else {
+				result.UnavailableCapabilities = []string{"publish"}
+			}
+
+			result.Status = types.SelfTestStatusOK
+			result.Message = fmt.Sprintf("MQTT connected — %d active topics, %d total events",
+				status.ActiveTopics, status.TotalEvents)
+
+			if opts.Verbose {
+				result.Details = map[string]interface{}{
+					"broker_url":        status.BrokerURL,
+					"subscribed_topics": status.SubscribedTopics,
+					"active_topics":     status.ActiveTopics,
+					"total_events":      status.TotalEvents,
+					"publish_allowed":   status.PublishAllowed,
+				}
+			}
+		}
+	}
+	deps = append(deps, mqttDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Discover devices",
+				Description: "List all paired MQTT devices",
+				Args: map[string]interface{}{
+					"action": "devices",
+				},
+				Expected: "Returns zigbee2mqtt devices and other MQTT sources",
+			},
+			{
+				Name:        "Check status",
+				Description: "Get MQTT connection status",
+				Args: map[string]interface{}{
+					"action": "status",
+				},
+				Expected: "Returns connection state and event counts",
+			},
+			{
+				Name:        "Get device history",
+				Description: "Get recent events for a specific device",
+				Args: map[string]interface{}{
+					"action": "history",
+					"topic":  "zigbee2mqtt/Living Room Sensor",
+					"limit":  10,
+				},
+				Expected: "Returns recent events for the device",
+			},
+		}
+	}
+
+	return result
 }

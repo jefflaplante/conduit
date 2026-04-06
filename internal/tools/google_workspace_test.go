@@ -341,3 +341,141 @@ func TestBase64URLEncode(t *testing.T) {
 		})
 	}
 }
+
+func TestGoogleWorkspaceTool_SelfTest_GwsNotInstalled(t *testing.T) {
+	// Create a tool with a bogus gws path that won't exist
+	registry := &Registry{
+		services: &types.ToolServices{
+			ConfigMgr: &config.Config{
+				Tools: config.ToolsConfig{
+					Services: map[string]map[string]interface{}{
+						"google_workspace": {
+							"gws_path": "/nonexistent/path/to/gws",
+						},
+					},
+				},
+			},
+		},
+	}
+	tool := &GoogleWorkspaceTool{registry: registry}
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result == nil {
+		t.Fatal("Expected non-nil result")
+	}
+
+	if result.Status != types.SelfTestStatusFailed {
+		t.Errorf("Expected failed status when gws not installed, got %s", result.Status)
+	}
+
+	if result.IsFunctional() {
+		t.Error("Tool should not be functional without gws")
+	}
+
+	// Should have suggestions
+	if len(result.Suggestions) == 0 {
+		t.Error("Expected suggestions for missing gws")
+	}
+
+	// Check for npm install suggestion
+	hasInstallSuggestion := false
+	for _, s := range result.Suggestions {
+		if strings.Contains(s, "npm install") {
+			hasInstallSuggestion = true
+			break
+		}
+	}
+	if !hasInstallSuggestion {
+		t.Error("Expected npm install suggestion")
+	}
+
+	// Should have unavailable capabilities
+	if len(result.UnavailableCapabilities) == 0 {
+		t.Error("Expected unavailable capabilities")
+	}
+}
+
+func TestGoogleWorkspaceTool_SelfTest_Dependencies(t *testing.T) {
+	tool := &GoogleWorkspaceTool{registry: &Registry{services: &types.ToolServices{}}}
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result == nil {
+		t.Fatal("Expected non-nil result")
+	}
+
+	// Should have dependencies reported
+	if len(result.Dependencies) == 0 {
+		t.Error("Expected dependency information")
+	}
+
+	// Check for gws CLI dependency
+	foundGwsDep := false
+	for _, dep := range result.Dependencies {
+		if dep.Name == "gws CLI" {
+			foundGwsDep = true
+			if dep.Required != true {
+				t.Error("gws CLI should be marked as required")
+			}
+		}
+	}
+	if !foundGwsDep {
+		t.Error("Expected 'gws CLI' dependency")
+	}
+}
+
+func TestGoogleWorkspaceTool_SelfTest_Timing(t *testing.T) {
+	tool := &GoogleWorkspaceTool{registry: &Registry{services: &types.ToolServices{}}}
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result == nil {
+		t.Fatal("Expected non-nil result")
+	}
+
+	if result.TestedAt.IsZero() {
+		t.Error("Expected TestedAt to be set")
+	}
+
+	if result.TestDuration == 0 {
+		t.Error("Expected TestDuration to be non-zero")
+	}
+}
+
+func TestGoogleWorkspaceTool_SelfTest_VerboseMode(t *testing.T) {
+	registry := &Registry{
+		services: &types.ToolServices{
+			ConfigMgr: &config.Config{
+				Agent: config.AgentConfig{
+					Email: config.AgentEmail{
+						Address: "agent@example.com",
+						Aliases: []string{"alias@example.com"},
+					},
+				},
+			},
+		},
+	}
+	tool := &GoogleWorkspaceTool{registry: registry}
+
+	opts := &types.SelfTestOptions{
+		Verbose: true,
+	}
+	result := tool.SelfTest(context.Background(), opts)
+
+	if result == nil {
+		t.Fatal("Expected non-nil result")
+	}
+
+	// In verbose mode with config, should have details
+	if result.Details == nil {
+		t.Error("Expected details in verbose mode")
+	} else {
+		if _, ok := result.Details["gws_path"]; !ok {
+			t.Error("Expected gws_path in details")
+		}
+		if _, ok := result.Details["user_id"]; !ok {
+			t.Error("Expected user_id in details")
+		}
+	}
+}

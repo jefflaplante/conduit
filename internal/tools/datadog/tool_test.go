@@ -9,6 +9,7 @@ import (
 
 	"conduit/internal/config"
 	toolargs "conduit/internal/tools/args"
+	"conduit/internal/tools/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -756,4 +757,97 @@ func TestGetIntArg(t *testing.T) {
 	assert.Equal(t, 999, toolargs.GetInt(args, "int64", 0))
 	assert.Equal(t, 0, toolargs.GetInt(args, "str", 0))
 	assert.Equal(t, -100, toolargs.GetInt(args, "missing", -100))
+}
+
+// --- SelfTest Tests ---
+
+func TestDatadogTool_SelfTest_NotConfigured(t *testing.T) {
+	tool := &DatadogTool{
+		config: nil,
+	}
+
+	result := tool.SelfTest(context.Background(), nil)
+	assert.Equal(t, types.SelfTestStatusFailed, result.Status)
+	assert.Contains(t, result.Message, "not configured")
+	assert.Len(t, result.Dependencies, 1)
+	assert.Equal(t, "not_configured", result.Dependencies[0].Status)
+}
+
+func TestDatadogTool_SelfTest_MissingAppKey(t *testing.T) {
+	tool := &DatadogTool{
+		config: &config.DatadogConfig{
+			APIKey: "test-api-key",
+			AppKey: "", // Missing
+		},
+	}
+
+	result := tool.SelfTest(context.Background(), nil)
+	assert.Equal(t, types.SelfTestStatusFailed, result.Status)
+	assert.Contains(t, result.Message, "application key")
+	assert.Len(t, result.Dependencies, 1)
+	assert.Equal(t, "incomplete_config", result.Dependencies[0].Status)
+}
+
+func TestDatadogTool_SelfTest_Connected(t *testing.T) {
+	tool := setupTestTool(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/validate" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	result := tool.SelfTest(context.Background(), nil)
+	assert.Equal(t, types.SelfTestStatusOK, result.Status)
+	assert.Contains(t, result.Message, "connected")
+	assert.True(t, len(result.Capabilities) > 0)
+	assert.Contains(t, result.Capabilities, "query_metrics")
+}
+
+func TestDatadogTool_SelfTest_Degraded_InvalidKey(t *testing.T) {
+	tool := setupTestTool(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/validate" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	result := tool.SelfTest(context.Background(), nil)
+	assert.Equal(t, types.SelfTestStatusDegraded, result.Status)
+	assert.Contains(t, result.Message, "not connected")
+	assert.True(t, len(result.UnavailableCapabilities) > 0)
+}
+
+func TestDatadogTool_SelfTest_WithVerbose(t *testing.T) {
+	tool := setupTestTool(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/validate" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	opts := &types.SelfTestOptions{
+		Verbose:         true,
+		IncludeExamples: true,
+	}
+	result := tool.SelfTest(context.Background(), opts)
+	assert.Equal(t, types.SelfTestStatusOK, result.Status)
+	assert.NotNil(t, result.Details)
+	assert.True(t, len(result.Examples) > 0)
+}
+
+func TestDatadogTool_SelfTest_NoExamplesOnFailure(t *testing.T) {
+	tool := &DatadogTool{
+		config: nil,
+	}
+
+	opts := &types.SelfTestOptions{
+		IncludeExamples: true,
+	}
+	result := tool.SelfTest(context.Background(), opts)
+	assert.Equal(t, types.SelfTestStatusFailed, result.Status)
+	assert.Len(t, result.Examples, 0) // No examples when failed
 }
