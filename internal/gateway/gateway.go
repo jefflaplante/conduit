@@ -669,6 +669,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 					GroomWithLLM:      cfg.Brain.REMGroomWithLLM,
 					LogPath:           cfg.Brain.REMLogPath,
 					WorkspaceDir:      cfg.Workspace.ContextDir,
+					MaxLTMEntries:     cfg.Brain.MaxLTMEntries,
 				}
 				gw.remCycle = rem.NewREMCycle(gw.brainService, gw.brainService.DB(), remConfig)
 				logger.Info("REM sleep cycle initialized",

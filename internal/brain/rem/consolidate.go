@@ -139,8 +139,24 @@ func (r *REMCycle) mergeDuplicates(ctx context.Context, result *ConsolidationRes
 	return nil
 }
 
-// applySalienceDecay reduces salience for entries not accessed in >7 days
+// applySalienceDecay reduces salience for entries not accessed in >7 days.
+// Skipped when LTM is under MaxLTMEntries — no need to push entries toward
+// eviction when the table is small.
 func (r *REMCycle) applySalienceDecay(ctx context.Context, result *ConsolidationResult, dryRun bool) error {
+	// Guard: skip decay when LTM is under the size threshold.
+	maxEntries := r.config.MaxLTMEntries
+	if maxEntries <= 0 {
+		maxEntries = 10000
+	}
+
+	var ltmCount int
+	if err := r.db.QueryRow("SELECT COUNT(*) FROM brain_ltm").Scan(&ltmCount); err != nil {
+		return fmt.Errorf("count LTM entries: %w", err)
+	}
+	if ltmCount < maxEntries {
+		return nil // small table, no decay needed
+	}
+
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
 
 	if dryRun {
