@@ -621,6 +621,18 @@ With `groupPolicy: "allowlist"`, the bot ignores messages from groups not listed
 
 WhatsApp uses an external TypeScript adapter process. The session directory stores authentication state — losing it requires re-pairing with WhatsApp.
 
+### Telegram photo vision
+
+When a Telegram channel is enabled, incoming photos are automatically downloaded and sent to the AI as image content blocks for vision analysis. No additional configuration is needed.
+
+**Behavior:** When a user sends a photo, Conduit downloads the highest-resolution version (up to 20 MB), detects the MIME type, and passes it inline to the AI provider. The AI can then describe or analyze the image. Captions are included as accompanying text.
+
+- **Anthropic providers** receive native `image` content blocks (requires Claude 3+ vision models)
+- **OpenAI / Ollama providers** receive `image_url` content blocks with base64 data URIs (requires vision-capable models like GPT-4o or LLaVA)
+- Supported formats: JPEG, PNG, GIF, WebP
+- Images are in-memory only — never stored in the database. Session history records `[Photo] caption` or `[Sent a photo]` as a text marker.
+- If the AI model does not support vision, it will only see the caption text
+
 ### Interaction with tools
 
 The `Message` tool sends messages through enabled channels. If no channels are enabled, the Message tool has no targets. Channel names in the Message tool correspond to the `name` field in the channels config.
