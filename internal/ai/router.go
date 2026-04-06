@@ -115,10 +115,19 @@ type GenerateResponse struct {
 
 // ChatMessage represents a message in a conversation
 type ChatMessage struct {
-	Role       string     `json:"role"` // "system", "user", "assistant", "tool"
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // For assistant messages with tool calls
-	ToolCallID string     `json:"tool_call_id,omitempty"` // For tool result messages
+	Role        string       `json:"role"` // "system", "user", "assistant", "tool"
+	Content     string       `json:"content"`
+	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`   // For assistant messages with tool calls
+	ToolCallID  string       `json:"tool_call_id,omitempty"` // For tool result messages
+	Attachments []Attachment `json:"attachments,omitempty"`  // In-memory media attachments (images, etc.)
+}
+
+// Attachment represents media content attached to a message (e.g., images from Telegram).
+// Carried in-memory only for the current request; never persisted to the database.
+type Attachment struct {
+	Type      string // "image", "document", "audio"
+	MediaType string // MIME type: "image/jpeg", "image/png", etc.
+	Data      []byte // Raw bytes
 }
 
 // Tool represents a tool/function that the AI can call
@@ -478,7 +487,7 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 	}
 
 	// Build chat messages from session history with agent system prompt
-	messages, err := r.buildChatMessagesWithSystemPrompt(session, userMessage, systemBlocks)
+	messages, err := r.buildChatMessagesWithSystemPrompt(ctx, session, userMessage, systemBlocks)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build chat messages: %w", err)
 	}
@@ -587,7 +596,7 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 	}
 
 	// Build chat messages from session history with agent system prompt
-	messages, err := r.buildChatMessagesWithSystemPrompt(session, userMessage, systemBlocks)
+	messages, err := r.buildChatMessagesWithSystemPrompt(ctx, session, userMessage, systemBlocks)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build chat messages: %w", err)
 	}
@@ -753,7 +762,7 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	}
 
 	// Build chat messages
-	messages, err := r.buildChatMessagesWithSystemPrompt(session, userMessage, systemBlocks)
+	messages, err := r.buildChatMessagesWithSystemPrompt(ctx, session, userMessage, systemBlocks)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build messages: %w", err)
 	}
@@ -859,4 +868,25 @@ func (r *Router) processSilentPatterns(response ConversationResponse) Conversati
 
 	// Return original response if no silent patterns detected
 	return response
+}
+
+// contextKey is a private type for context keys in the ai package.
+type contextKey string
+
+const attachmentsContextKey contextKey = "ai_attachments"
+
+// WithAttachments stores attachments in the context for the current request.
+func WithAttachments(ctx context.Context, attachments []Attachment) context.Context {
+	return context.WithValue(ctx, attachmentsContextKey, attachments)
+}
+
+// AttachmentsFromContext retrieves attachments from the context, or nil if none.
+func AttachmentsFromContext(ctx context.Context) []Attachment {
+	if ctx == nil {
+		return nil
+	}
+	if v, ok := ctx.Value(attachmentsContextKey).([]Attachment); ok {
+		return v
+	}
+	return nil
 }

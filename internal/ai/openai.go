@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -399,7 +400,31 @@ func (o *OpenAIProvider) convertMessagesToOpenAI(messages []ChatMessage) []map[s
 		}
 
 		// Regular message
-		converted["content"] = msg.Content
+		if msg.Role == "user" && len(msg.Attachments) > 0 {
+			contentBlocks := make([]map[string]interface{}, 0, len(msg.Attachments)+1)
+			for _, att := range msg.Attachments {
+				if att.Type == "image" && len(att.Data) > 0 {
+					dataURI := "data:" + att.MediaType + ";base64," + base64.StdEncoding.EncodeToString(att.Data)
+					contentBlocks = append(contentBlocks, map[string]interface{}{
+						"type": "image_url",
+						"image_url": map[string]interface{}{
+							"url": dataURI,
+						},
+					})
+				}
+			}
+			if msg.Content != "" {
+				contentBlocks = append(contentBlocks, map[string]interface{}{
+					"type": "text",
+					"text": msg.Content,
+				})
+			}
+			if len(contentBlocks) > 0 {
+				converted["content"] = contentBlocks
+			}
+		} else {
+			converted["content"] = msg.Content
+		}
 		result = append(result, converted)
 	}
 

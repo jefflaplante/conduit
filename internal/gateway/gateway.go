@@ -1627,8 +1627,16 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		return
 	}
 
-	// Add user message to session
-	_, err = g.sessions.AddMessage(session.Key, "user", msg.Text, msg.Metadata)
+	// Add user message to session (store text marker for photos, not binary data)
+	textToStore := msg.Text
+	if len(msg.Attachments) > 0 {
+		if textToStore == "" {
+			textToStore = "[Sent a photo]"
+		} else {
+			textToStore = "[Photo] " + textToStore
+		}
+	}
+	_, err = g.sessions.AddMessage(session.Key, "user", textToStore, msg.Metadata)
 	if err != nil {
 		logging.Error(ctx, "error saving user message", "error", err)
 		return
@@ -1659,6 +1667,19 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		// Create cancellable context for this request
 		reqCtx, cancel := context.WithCancel(ctx)
 		reqCtx = types.WithRequestContext(reqCtx, msg.ChannelID, msg.UserID, session.Key)
+
+		// Thread image attachments to the AI layer for vision analysis
+		if len(msg.Attachments) > 0 {
+			aiAttachments := make([]ai.Attachment, len(msg.Attachments))
+			for i, att := range msg.Attachments {
+				aiAttachments[i] = ai.Attachment{
+					Type:      att.Type,
+					MediaType: att.MediaType,
+					Data:      att.Data,
+				}
+			}
+			reqCtx = ai.WithAttachments(reqCtx, aiAttachments)
+		}
 
 		// Track this request so /stop can cancel it
 		g.activeRequestsMu.Lock()

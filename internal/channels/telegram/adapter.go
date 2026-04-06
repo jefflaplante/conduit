@@ -711,58 +711,7 @@ func (a *Adapter) handleUpdate(ctx context.Context, b *bot.Bot, update *models.U
 
 	// Handle photo messages
 	if update.Message != nil && len(update.Message.Photo) > 0 {
-		userID := strconv.FormatInt(update.Message.Chat.ID, 10)
-		chatID := update.Message.Chat.ID
-
-		// Check pairing status if pairing manager is enabled
-		if a.pairingMgr != nil {
-			isPaired, err := a.pairingMgr.HandlePairingForUser(ctx, b, userID, chatID)
-			if err != nil {
-				log.Printf("[Telegram] Error handling pairing for photo user %s: %v", userID, err)
-				return // Don't process the photo further
-			}
-
-			if !isPaired {
-				log.Printf("[Telegram] User %s is not paired, photo blocked", userID)
-				return // User not paired, photo was handled by pairing system
-			}
-		}
-
-		caption := update.Message.Caption
-		if caption == "" {
-			caption = "[Photo]"
-		}
-
-		incomingMsg := &protocol.IncomingMessage{
-			BaseMessage: protocol.BaseMessage{
-				Type:      protocol.TypeIncomingMessage,
-				ID:        a.generateMessageID(),
-				Timestamp: time.Now(),
-			},
-			ChannelID:  a.id,
-			SessionKey: fmt.Sprintf("telegram_%d", update.Message.Chat.ID),
-			UserID:     strconv.FormatInt(update.Message.Chat.ID, 10),
-			Text:       caption,
-			Metadata: map[string]string{
-				"type":            "photo",
-				"message_id":      strconv.Itoa(update.Message.ID),
-				"chat_type":       string(update.Message.Chat.Type),
-				"from_first_name": update.Message.From.FirstName,
-				"from_last_name":  update.Message.From.LastName,
-				"from_username":   update.Message.From.Username,
-				"photo_count":     strconv.Itoa(len(update.Message.Photo)),
-			},
-		}
-
-		select {
-		case a.incoming <- incomingMsg:
-			a.mutex.Lock()
-			a.msgCount++
-			a.mutex.Unlock()
-			log.Printf("[Telegram] Received photo from %s", update.Message.From.FirstName)
-		default:
-			log.Printf("[Telegram] Warning: incoming message channel is full, dropping photo")
-		}
+		a.handlePhotoMessage(ctx, b, update)
 	}
 
 	// Handle voice messages

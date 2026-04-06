@@ -2,6 +2,7 @@ package ai
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -261,10 +262,38 @@ func (a *AnthropicProvider) convertMessagesToAnthropic(messages []ChatMessage) [
 	for _, msg := range messages {
 		switch msg.Role {
 		case "user":
-			result = append(result, map[string]interface{}{
-				"role":    "user",
-				"content": msg.Content,
-			})
+			if len(msg.Attachments) > 0 {
+				contentBlocks := make([]map[string]interface{}, 0, len(msg.Attachments)+1)
+				for _, att := range msg.Attachments {
+					if att.Type == "image" && len(att.Data) > 0 {
+						contentBlocks = append(contentBlocks, map[string]interface{}{
+							"type": "image",
+							"source": map[string]interface{}{
+								"type":       "base64",
+								"media_type": att.MediaType,
+								"data":       base64.StdEncoding.EncodeToString(att.Data),
+							},
+						})
+					}
+				}
+				if msg.Content != "" {
+					contentBlocks = append(contentBlocks, map[string]interface{}{
+						"type": "text",
+						"text": msg.Content,
+					})
+				}
+				if len(contentBlocks) > 0 {
+					result = append(result, map[string]interface{}{
+						"role":    "user",
+						"content": contentBlocks,
+					})
+				}
+			} else {
+				result = append(result, map[string]interface{}{
+					"role":    "user",
+					"content": msg.Content,
+				})
+			}
 		case "assistant":
 			// Build assistant message with potential tool_use blocks
 			if len(msg.ToolCalls) > 0 {

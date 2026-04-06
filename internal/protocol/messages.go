@@ -43,14 +43,24 @@ type BaseMessage struct {
 	Timestamp time.Time   `json:"timestamp"`
 }
 
+// Attachment represents a media attachment (image, document, etc.) carried in-memory.
+// Data is excluded from JSON serialization and is never persisted to the database.
+type Attachment struct {
+	Type      string `json:"type"`                // "image", "document", "audio"
+	MediaType string `json:"media_type"`          // MIME type: "image/jpeg", "image/png", etc.
+	Data      []byte `json:"-"`                   // Raw bytes, excluded from JSON
+	Filename  string `json:"filename,omitempty"`   // Optional original filename
+}
+
 // IncomingMessage represents a message received from a channel
 type IncomingMessage struct {
 	BaseMessage
-	ChannelID  string            `json:"channel_id"`
-	SessionKey string            `json:"session_key"`
-	UserID     string            `json:"user_id"`
-	Text       string            `json:"text"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
+	ChannelID   string            `json:"channel_id"`
+	SessionKey  string            `json:"session_key"`
+	UserID      string            `json:"user_id"`
+	Text        string            `json:"text"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	Attachments []Attachment      `json:"attachments,omitempty"`
 }
 
 // OutgoingMessage represents a message to be sent through a channel
