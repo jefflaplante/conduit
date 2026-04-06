@@ -20,6 +20,7 @@ import (
 
 	"conduit/internal/channels"
 	"conduit/internal/protocol"
+	"conduit/internal/stt"
 )
 
 // Patterns for sanitizing user-facing text
@@ -55,6 +56,8 @@ type botAPI interface {
 	AnswerCallbackQuery(ctx context.Context, params *bot.AnswerCallbackQueryParams) (bool, error)
 	SendChatAction(ctx context.Context, params *bot.SendChatActionParams) (bool, error)
 	SetMyCommands(ctx context.Context, params *bot.SetMyCommandsParams) (bool, error)
+	GetFile(ctx context.Context, params *bot.GetFileParams) (*models.File, error)
+	FileDownloadLink(f *models.File) string
 }
 
 // Adapter implements the ChannelAdapter interface for Telegram
@@ -72,6 +75,7 @@ type Adapter struct {
 	startTime  time.Time
 	msgCount   int64
 	pairingMgr *PairingManager
+	stt        stt.Transcriber
 }
 
 // TelegramConfig contains Telegram-specific configuration
@@ -84,7 +88,8 @@ type TelegramConfig struct {
 
 // Factory creates Telegram channel adapters
 type Factory struct {
-	db *sql.DB
+	db  *sql.DB
+	stt stt.Transcriber
 }
 
 // NewFactory creates a new Telegram adapter factory
@@ -93,9 +98,10 @@ func NewFactory() *Factory {
 }
 
 // NewFactoryWithDB creates a new Telegram adapter factory with database support
-func NewFactoryWithDB(db *sql.DB) *Factory {
+func NewFactoryWithDB(db *sql.DB, transcriber stt.Transcriber) *Factory {
 	return &Factory{
-		db: db,
+		db:  db,
+		stt: transcriber,
 	}
 }
 
@@ -133,6 +139,7 @@ func (f *Factory) CreateAdapter(config channels.ChannelConfig) (channels.Channel
 		config:   telegramConfig,
 		status:   channels.StatusInitializing,
 		incoming: make(chan *protocol.IncomingMessage, 100),
+		stt:      f.stt,
 	}
 
 	// Initialize pairing manager if database is available
@@ -756,6 +763,11 @@ func (a *Adapter) handleUpdate(ctx context.Context, b *bot.Bot, update *models.U
 		default:
 			log.Printf("[Telegram] Warning: incoming message channel is full, dropping photo")
 		}
+	}
+
+	// Handle voice messages
+	if update.Message != nil && update.Message.Voice != nil {
+		a.handleVoiceMessage(ctx, b, update)
 	}
 }
 

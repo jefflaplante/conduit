@@ -159,6 +159,14 @@ func (m *mockBotForMedia) SetMyCommands(ctx context.Context, params *bot.SetMyCo
 	return true, nil
 }
 
+func (m *mockBotForMedia) GetFile(ctx context.Context, params *bot.GetFileParams) (*models.File, error) {
+	return &models.File{}, nil
+}
+
+func (m *mockBotForMedia) FileDownloadLink(f *models.File) string {
+	return ""
+}
+
 func TestMediaSender_SendVoiceBase64(t *testing.T) {
 	mockBot := &mockBotForMedia{}
 	sender := NewMediaSender(mockBot, context.Background())

@@ -91,6 +91,14 @@ func (m *mockBot) SetMyCommands(ctx context.Context, params *bot.SetMyCommandsPa
 	return true, nil
 }
 
+func (m *mockBot) GetFile(ctx context.Context, params *bot.GetFileParams) (*models.File, error) {
+	return &models.File{}, nil
+}
+
+func (m *mockBot) FileDownloadLink(f *models.File) string {
+	return ""
+}
+
 func newTestAdapter(mb *mockBot) *Adapter {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Adapter{
