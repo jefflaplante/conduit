@@ -747,6 +747,28 @@ Datadog API integration for metrics, logs, and monitors.
 }
 ```
 
+### Speech-to-Text (STT)
+
+Enables transcription of incoming voice messages (e.g., Telegram voice notes) via OpenAI Whisper API. Transcribed text is passed to the AI as a normal message with voice metadata.
+
+```json
+{
+  "stt": {
+    "enabled": true,
+    "provider": "whisper",
+    "api_key": "${OPENAI_API_KEY}",
+    "model": "whisper-1"
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable speech-to-text transcription |
+| `provider` | string | `"whisper"` | STT provider (`"whisper"` is currently the only option) |
+| `api_key` | string | — | OpenAI API key (supports `${ENV_VAR}` expansion) |
+| `model` | string | `"whisper-1"` | Whisper model to use |
+
 ## Environment Variables
 
 Common environment variables:
@@ -756,6 +778,7 @@ Common environment variables:
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `ANTHROPIC_OAUTH_TOKEN` | OAuth token for Claude Code compatibility |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token |
+| `OPENAI_API_KEY` | OpenAI API key (used for STT/Whisper and vector embeddings) |
 | `BRAVE_API_KEY` | Brave Search API key |
 | `MQTT_USERNAME` | MQTT broker username |
 | `MQTT_PASSWORD` | MQTT broker password |
