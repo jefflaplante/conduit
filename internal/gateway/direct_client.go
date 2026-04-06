@@ -425,6 +425,7 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 			"/model [alias] - View/switch model\n" +
 			"/provider [name] - View/switch provider\n" +
 			"/context - Show context window usage\n" +
+			"/cost - Show detailed cost breakdown\n" +
 			"/stop - Stop current operation\n" +
 			"/quit - Exit TUI\n\n" +
 			"Alt+Enter: Insert new line"
@@ -441,6 +442,18 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 			return
 		}
 		sendResponse(formatContextUsage(session))
+
+	case text == "/cost" || strings.HasPrefix(text, "/cost "):
+		if sessionKey == "" {
+			sendResponse("No active session.")
+			return
+		}
+		session, err := c.sessions.GetSession(sessionKey)
+		if err != nil {
+			sendResponse("Could not retrieve session info.")
+			return
+		}
+		sendResponse(formatCostResponse(session, c.ai.GetUsageTracker()))
 
 	case text == "/provider" || strings.HasPrefix(text, "/provider "):
 		parts := strings.Fields(text)

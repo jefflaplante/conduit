@@ -421,6 +421,7 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			"/model [alias] - View/switch model\n" +
 			"/provider [name] - View/switch provider\n" +
 			"/context - Show context window usage\n" +
+			"/cost - Show detailed cost breakdown\n" +
 			"/compact - Compact context by summarizing older messages\n" +
 			"/stop - Stop current operation\n" +
 			"/smartroute [on|off|status|budget <amount>] - Smart routing controls\n" +
@@ -438,6 +439,18 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			return
 		}
 		sendResponse(formatContextUsage(session))
+
+	case text == "/cost" || strings.HasPrefix(text, "/cost "):
+		if sessionKey == "" {
+			sendResponse("No active session.")
+			return
+		}
+		session, err := g.sessions.GetSession(sessionKey)
+		if err != nil {
+			sendResponse("Could not retrieve session info.")
+			return
+		}
+		sendResponse(formatCostResponse(session, g.ai.GetUsageTracker()))
 
 	case text == "/provider" || strings.HasPrefix(text, "/provider "):
 		parts := strings.Fields(text)

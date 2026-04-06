@@ -70,6 +70,12 @@ func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessa
 		return true
 	}
 
+	// Check for /cost command
+	if text == "/cost" || strings.HasPrefix(text, "/cost ") {
+		g.sendCommandResponse(msg, formatCostResponse(session, g.ai.GetUsageTracker()))
+		return true
+	}
+
 	// Check for /stop command
 	if text == "/stop" {
 		g.activeRequestsMu.RLock()
@@ -152,6 +158,7 @@ func (g *Gateway) handleHelpCommand(msg *protocol.IncomingMessage) {
 /model - View/switch model (use /model reset to clear override)
 /provider - View/switch provider
 /context - Show context window usage
+/cost - Show detailed cost breakdown
 /compact - Compact context by summarizing older messages
 /stop - Stop current operation
 /ring - Show debug ring buffer activity
