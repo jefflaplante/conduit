@@ -17,7 +17,7 @@ func TestNewFactory(t *testing.T) {
 
 func TestNewFactoryWithDB(t *testing.T) {
 	// nil db is allowed
-	factory := NewFactoryWithDB(nil)
+	factory := NewFactoryWithDB(nil, nil)
 	assert.NotNil(t, factory)
 	assert.Nil(t, factory.db)
 }

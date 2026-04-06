@@ -35,6 +35,7 @@ import (
 	"conduit/internal/searchdb"
 	"conduit/internal/sessions"
 	"conduit/internal/skills"
+	"conduit/internal/stt"
 	internalssh "conduit/internal/ssh"
 	"conduit/internal/tools"
 	"conduit/internal/tools/debuglog"
@@ -481,7 +482,11 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 	// Initialize channel manager and register factories
 	gw.channelManager = channels.NewManager()
-	gw.channelManager.RegisterFactory(telegram.NewFactoryWithDB(sessionStore.DB()))
+	var transcriber stt.Transcriber
+	if gw.config.STT.Enabled && gw.config.STT.APIKey != "" {
+		transcriber = stt.NewWhisperTranscriber(gw.config.STT.APIKey, gw.config.STT.Model)
+	}
+	gw.channelManager.RegisterFactory(telegram.NewFactoryWithDB(sessionStore.DB(), transcriber))
 	gw.channelManager.RegisterFactory(tuiAdapter.NewFactory(nil)) // TUI factory for dynamic adapter creation
 
 	// Now inject dependencies into tools registry to break the cycle

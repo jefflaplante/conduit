@@ -44,6 +44,7 @@ type Config struct {
 	Auth           AuthTokenConfig      `json:"auth,omitempty"`
 	Logging        LoggingConfig        `json:"logging,omitempty"`
 	Brain          BrainConfig          `json:"brain,omitempty"`
+	STT            STTConfig            `json:"stt,omitempty"`
 }
 
 // AuthTokenConfig holds configuration for the token authentication system
@@ -94,6 +95,14 @@ type VectorConfig struct {
 	EmbedDims     int                `json:"embed_dims,omitempty"`     // Embedding dimensions (default 4096 for TF-IDF, 1536 for OpenAI)
 	EmbedProvider string             `json:"embed_provider,omitempty"` // "tfidf" (default), "openai"
 	OpenAI        *OpenAIEmbedConfig `json:"openai,omitempty"`
+}
+
+// STTConfig holds configuration for speech-to-text transcription.
+type STTConfig struct {
+	Enabled  bool   `json:"enabled"`
+	Provider string `json:"provider,omitempty"` // "whisper" (default)
+	APIKey   string `json:"api_key,omitempty" cfg:"env"`
+	Model    string `json:"model,omitempty"` // Default: "whisper-1"
 }
 
 // OpenAIEmbedConfig holds configuration for OpenAI embedding provider.
