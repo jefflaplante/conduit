@@ -79,6 +79,7 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **Smart Routing** — Automatic model selection based on task complexity (haiku/sonnet/opus)
 - **Context Compaction** — Automatic summarization of long sessions to free context space
 - **Tool Registry** — 18 built-in tools with sandbox execution
+- **Tool SelfTest** — All built-in tools expose a `SelfTest` capability, allowing the gateway to programmatically verify tool health at startup or on demand
 
 ### Access Methods
 - **Terminal UI (TUI)** — Full-featured chat client with streaming responses
@@ -88,6 +89,7 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 
 ### Search & Memory
 - **[Brain (Cognitive Memory)](reference/configuration.md#brain-cognitive-memory)** — Tiered memory system: long-term (SQLite), working (per-session), and scratchpad (LIFO stack). Salience-scored with configurable weights, auto-promotion, and sub-agent working memory sharing. **Eliminates context window poisoning** — instead of dumping entire files into the prompt to retrieve a single fact, Brain returns just the fact (30 bytes vs. 12KB+). This dramatically reduces token waste, lowers cost, and keeps the context window clear for actual reasoning — especially critical for smaller models (Haiku, local quantized) where every token counts
+- **[REM Sleep Cycle](reference/configuration.md#rem-sleep)** — A 5-phase memory consolidation process inspired by biological sleep. Phases: **Triage** (identify valuable working memory), **Consolidation** (promote high-value entries to LTM), **Pruning** (evict stale/low-value entries), **Integration** (cross-reference with workspace files), and **Grooming** (staleness tracking across all sources). Runs on a configurable schedule to keep long-term memory lean and relevant
 - **FTS5 Full-Text Search** — SQLite-based document, message, and brain LTM search
 - **Memory Search** — Semantic search across MEMORY.md, session history, and brain entries
 - **Web Search** — Hybrid Anthropic native + Brave API fallback
