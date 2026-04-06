@@ -24,6 +24,17 @@ Complete reference for every `config.json` option, how each option behaves, how 
 - [vector](#vector)
 - [debug](#debug)
 - [stt](#stt)
+- [brain](#brain)
+- [mqtt](#mqtt)
+- [kubernetes](#kubernetes)
+- [pagerduty](#pagerduty)
+- [datadog](#datadog)
+- [remote_ssh](#remote_ssh)
+- [websocket](#websocket)
+- [diagnostics](#diagnostics)
+- [logging](#logging)
+- [auth](#auth-1)
+- [tui](#tui)
 - [Use-Case Recipes](#use-case-recipes)
 
 ---
@@ -291,6 +302,66 @@ Aliases let you reference models by short names. The defaults above are built-in
 }
 ```
 
+### Context compaction
+
+Automatic context compaction for long sessions. When context window usage exceeds the threshold, older messages are summarized to free up context space. Nested under `ai`.
+
+```json
+{
+  "ai": {
+    "compaction": {
+      "enabled": true,
+      "threshold": 0.70,
+      "model": "claude-haiku-4-5-20251001",
+      "recent_messages_to_keep": 10
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `compaction.enabled` | bool | `false` | Enable automatic context compaction |
+| `compaction.threshold` | float | `0.70` | Context window usage fraction that triggers compaction |
+| `compaction.model` | string | `"claude-haiku-4-5-20251001"` | Model for generating summaries |
+| `compaction.recent_messages_to_keep` | int | `10` | Most recent messages to preserve without summarization |
+
+### Prompt caching
+
+Anthropic prompt caching to reduce costs on repeated requests. Nested under `ai`.
+
+```json
+{
+  "ai": {
+    "prompt_caching": {
+      "enabled": true,
+      "extended_ttl": true,
+      "cache_tools": true,
+      "cache_system": true,
+      "cache_history": true,
+      "history_breakpoint_interval": 10
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `prompt_caching.enabled` | bool | `false` | Master switch for prompt caching |
+| `prompt_caching.extended_ttl` | bool | `false` | Use 1-hour cache TTL instead of 5-minute default |
+| `prompt_caching.cache_tools` | bool | `false` | Cache tool definitions |
+| `prompt_caching.cache_system` | bool | `false` | Cache system prompt |
+| `prompt_caching.cache_history` | bool | `false` | Cache conversation history |
+| `prompt_caching.history_breakpoint_interval` | int | `0` | Messages between history cache breakpoints |
+
+### Provider context window override
+
+Override the auto-detected context window size for a provider:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `context_window` | int | `0` (auto-detect) | Override context window size in tokens per provider entry |
+
 ---
 
 ## `agent`
@@ -300,7 +371,7 @@ Controls the AI agent's personality, identity, and capabilities. Optional — if
 ```json
 {
   "agent": {
-    "name": "Jules",
+    "name": "Conduit",
     "personality": "conduit",
     "identity": {
       "oauth_identity": "You are Claude Code, Anthropic's official CLI for Claude.",
@@ -376,6 +447,45 @@ Controls dynamic system prompt scaling for small-context models.
 | `prompt_scaling.chars_per_token` | int | `4` | Estimated characters per token for budget math |
 
 **Interaction with `workspace`:** When `memory_recall` is true, the agent loads MEMORY.md and `memory/*.md` files from `workspace.context_dir`. When `heartbeats` is true, the agent reads HEARTBEAT.md from the same directory.
+
+### Agent email identity
+
+```json
+{
+  "agent": {
+    "email": {
+      "address": "conduit@example.com",
+      "aliases": ["assistant@example.com"],
+      "display_name": "Conduit AI"
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `email.address` | string | `""` | Primary email address for the agent |
+| `email.aliases` | string array | `[]` | Additional email addresses the agent responds to |
+| `email.display_name` | string | `""` | Display name in email headers |
+
+### Operating principles override
+
+Override the default operating principles injected into the system prompt:
+
+```json
+{
+  "agent": {
+    "identity": {
+      "operating_principles": [
+        "Be concise and direct",
+        "Always verify before acting"
+      ]
+    }
+  }
+}
+```
+
+When omitted, the agent uses built-in defaults. Setting this replaces them entirely.
 
 ---
 
@@ -464,6 +574,34 @@ Session types: `"main"` (direct/private conversations), `"shared"` (group chats)
 
 If you want the agent to be able to read and write its own context files, both should point to the same directory (or `context_dir` should be within `allowed_paths`).
 
+### Workspace summarization
+
+AI-powered summarization of workspace files for small-context models. When context budget is tight, files are summarized instead of included in full.
+
+```json
+{
+  "workspace": {
+    "summary": {
+      "enabled": true,
+      "model": "claude-haiku-4-5-20251001",
+      "target_ratio": 0.25,
+      "cache_dir": ".summaries",
+      "cache_ttl_hours": 168,
+      "fallback_to_truncate": true
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `summary.enabled` | bool | `false` | Enable AI-powered summarization |
+| `summary.model` | string | `"claude-haiku-4-5-20251001"` | Model for summarization |
+| `summary.target_ratio` | float | `0.25` | Default compression ratio (0.25 = keep 25%) |
+| `summary.cache_dir` | string | `".summaries"` | Directory for persisted summaries |
+| `summary.cache_ttl_hours` | int | `168` | How long cached summaries are valid (7 days) |
+| `summary.fallback_to_truncate` | bool | `true` | Use truncation if AI summarization fails |
+
 ---
 
 ## `tools`
@@ -504,6 +642,7 @@ Controls which tools are available to the AI and how they're sandboxed.
 |-------|------|---------|-------------|
 | `enabled_tools` | string array | `[]` | Tool names to enable. Only enabled tools are presented to the AI |
 | `max_tool_chains` | int | `25` | Maximum tool calls per single conversation turn |
+| `max_tool_result_chars` | int | `8192` | Maximum characters in tool result content. Outputs exceeding this are truncated |
 
 ### Available tools
 
@@ -927,6 +1066,315 @@ If STT is not enabled, voice messages receive an automatic reply: *"Voice messag
 
 ---
 
+## `brain`
+
+Tiered cognitive memory: long-term memory (SQLite-persisted), working memory (in-process per-user), and scratchpad (LIFO stack). Includes REM sleep cycle for periodic memory consolidation. See [Brain Reference](reference/brain.md) for architecture details.
+
+```json
+{
+  "brain": {
+    "enabled": true,
+    "path": "./gateway.brain.db",
+    "max_ltm_entries": 10000,
+    "consolidate_threshold": 0.6,
+    "evict_threshold": 0.1,
+    "auto_promote": true,
+    "access_weight": 0.4,
+    "recency_weight": 0.4,
+    "tier_weight": 0.2,
+    "rem_enabled": true,
+    "rem_schedule": "0 2 * * *",
+    "rem_prune_age_days": 30,
+    "rem_groom_with_llm": true,
+    "rem_log_path": "memory/rem-log"
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable the brain subsystem |
+| `path` | string | derived | Brain database path. Defaults to `<gateway-db>.brain.db` |
+| `max_ltm_entries` | int | `10000` | Maximum long-term memory entries |
+| `wm_grace_period_seconds` | int | `300` | Seconds to keep working memory after session ends |
+| `auto_flush_seconds` | int | `600` | Auto-flush interval for WM to LTM |
+| `consolidate_threshold` | float | `0.6` | Salience threshold for auto-promoting WM to LTM |
+| `evict_threshold` | float | `0.1` | Salience threshold below which LTM entries are evicted |
+| `auto_promote` | bool | `true` | Auto-promote high-salience WM entries |
+| `access_weight` | float | `0.4` | Salience weight for access frequency |
+| `recency_weight` | float | `0.4` | Salience weight for recency |
+| `tier_weight` | float | `0.2` | Salience weight for memory tier |
+| `recency_decay_rate` | float | `1.0` | Decay rate for recency scoring |
+| `access_count_cap` | int | `100` | Normalization cap for access counts |
+
+### REM sleep cycle
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `rem_enabled` | bool | `true` | Enable REM sleep (requires brain `enabled`) |
+| `rem_schedule` | string | `"0 2 * * *"` | Cron schedule for REM cycle |
+| `rem_integration_day` | int | `0` | Day of week for deep integration (0=Sunday) |
+| `rem_prune_age_days` | int | `30` | Evict memories not accessed in this many days |
+| `rem_salience_decay_rate` | float | `0.1` | Salience decay per REM cycle |
+| `rem_groom_with_llm` | bool | `true` | Use LLM to consolidate memories during REM |
+| `rem_log_path` | string | `"memory/rem-log"` | Directory for REM cycle logs |
+
+---
+
+## `mqtt`
+
+MQTT event ingest. Subscribes to topics and buffers events for the MQTT tool. See [MQTT Reference](reference/mqtt.md).
+
+```json
+{
+  "mqtt": {
+    "enabled": true,
+    "broker_url": "tcp://192.168.1.10:1883",
+    "client_id": "conduit",
+    "username": "${MQTT_USERNAME}",
+    "password": "${MQTT_PASSWORD}",
+    "topics": ["zigbee2mqtt/#"],
+    "qos": 0,
+    "buffer_max_age_seconds": 3600,
+    "buffer_max_events": 1000,
+    "publish_allowed": false
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable MQTT event ingest |
+| `broker_url` | string | — | MQTT broker URL. Required. Supports `${ENV_VAR}` |
+| `client_id` | string | `"conduit"` | MQTT client identifier |
+| `username` | string | `""` | MQTT username. Supports `${ENV_VAR}` |
+| `password` | string | `""` | MQTT password. Supports `${ENV_VAR}` |
+| `topics` | string array | — | Topic subscriptions (wildcards supported). Required |
+| `qos` | int | `0` | QoS level: 0, 1, or 2 |
+| `publish_allowed` | bool | `false` | Allow MQTT tool to publish messages |
+| `buffer_max_age_seconds` | int | `3600` | Max event age in buffer |
+| `buffer_max_events` | int | `1000` | Max events per topic |
+| `buffer_max_topics` | int | `500` | Max tracked topics |
+
+---
+
+## `kubernetes`
+
+Kubernetes cluster management. See [Kubernetes Reference](reference/kubernetes.md).
+
+```json
+{
+  "kubernetes": {
+    "enabled": true,
+    "clusters": [
+      {
+        "name": "prod",
+        "kubeconfig_path": "~/.kube/config",
+        "context": "prod-context",
+        "allowed_namespaces": ["default", "app"],
+        "safety_level": "read"
+      }
+    ],
+    "defaults": { "namespace": "default", "safety_level": "read" }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable Kubernetes tools |
+| `clusters[].name` | string | required | Unique cluster identifier |
+| `clusters[].kubeconfig_path` | string | required | Path to kubeconfig. Supports `~/` |
+| `clusters[].context` | string | `""` | Kubeconfig context (empty = current) |
+| `clusters[].allowed_namespaces` | string array | `[]` | Restrict to these namespaces (empty = all) |
+| `clusters[].safety_level` | string | `"read"` | `"read"`, `"modify"`, or `"dangerous"` |
+
+---
+
+## `pagerduty`
+
+PagerDuty integration. See [SRE Tools Reference](reference/sre-tools.md).
+
+```json
+{
+  "pagerduty": {
+    "enabled": true,
+    "api_token": "${PAGERDUTY_API_TOKEN}",
+    "default_service_id": "PXXXXXX",
+    "default_escalation_policy_id": "PXXXXXX",
+    "rate_limit_rps": 5.0
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable PagerDuty integration |
+| `api_token` | string | — | PagerDuty API token. Required. Supports `${ENV_VAR}` |
+| `default_service_id` | string | `""` | Default service for creating incidents |
+| `default_escalation_policy_id` | string | `""` | Default escalation policy |
+| `base_url` | string | `"https://api.pagerduty.com"` | API base URL |
+| `rate_limit_rps` | float | `5.0` | Max API requests per second |
+
+---
+
+## `datadog`
+
+Datadog integration. See [SRE Tools Reference](reference/sre-tools.md).
+
+```json
+{
+  "datadog": {
+    "enabled": true,
+    "api_key": "${DD_API_KEY}",
+    "app_key": "${DD_APP_KEY}",
+    "site": "datadoghq.com",
+    "rate_limit_rps": 5.0
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable Datadog integration |
+| `api_key` | string | — | Datadog API key. Required. Supports `${ENV_VAR}` |
+| `app_key` | string | — | Datadog app key. Required. Supports `${ENV_VAR}` |
+| `site` | string | `"datadoghq.com"` | Datadog site |
+| `rate_limit_rps` | float | `5.0` | Max API requests per second |
+
+---
+
+## `remote_ssh`
+
+Remote SSH execution with security tiers. See [Remote SSH Reference](reference/remote-ssh.md).
+
+```json
+{
+  "remote_ssh": {
+    "enabled": true,
+    "hosts": [
+      {
+        "name": "web-1",
+        "hostname": "10.0.1.10",
+        "user": "deploy",
+        "identity_file": "~/.ssh/id_ed25519",
+        "groups": ["web-servers"],
+        "security_tier": "modify"
+      }
+    ],
+    "defaults": { "port": 22, "user": "deploy", "connect_timeout": "30s" },
+    "security": { "default_tier": "dangerous", "allow_subshells": false },
+    "audit": { "enabled": true, "log_path": "logs/ssh_audit.jsonl" }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable remote SSH |
+| `hosts[].name` | string | required | Unique host identifier |
+| `hosts[].hostname` | string | required | DNS name or IP |
+| `hosts[].security_tier` | string | `""` | `"read"`, `"modify"`, `"dangerous"`, `"blocked"` |
+| `security.default_tier` | string | `"dangerous"` | Tier for unclassified commands |
+| `security.allow_subshells` | bool | `false` | Permit `$()` substitution |
+| `audit.enabled` | bool | `true` | Enable command audit logging |
+
+See [Remote SSH Reference](reference/remote-ssh.md) for the complete field list.
+
+---
+
+## `websocket`
+
+```json
+{ "websocket": { "max_message_size": 1048576 } }
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_message_size` | int64 | `1048576` (1 MB) | Max incoming WebSocket message size in bytes |
+
+---
+
+## `diagnostics`
+
+```json
+{ "diagnostics": { "require_auth": true, "health_public": true } }
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `require_auth` | bool | `true` | Require auth for `/metrics`, `/diagnostics`, `/prometheus` |
+| `health_public` | bool | `true` | Allow unauthenticated `/health` access |
+
+---
+
+## `logging`
+
+```json
+{ "logging": { "level": "info", "format": "text" } }
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `level` | string | `"info"` | Min log level: `"debug"`, `"info"`, `"warn"`, `"error"` |
+| `format` | string | `"text"` | Output format: `"text"` or `"json"` |
+
+---
+
+## `auth`
+
+Token authentication. Separate from `rateLimiting.auth`.
+
+```json
+{ "auth": { "token_secret": "${CONDUIT_TOKEN_SECRET}" } }
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `token_secret` | string | random | HMAC key for hashing auth tokens. If empty, a random key is generated at startup and tokens won't survive restarts. Generate with: `openssl rand -hex 32` |
+
+---
+
+## `tui`
+
+Terminal UI shell escape configuration.
+
+```json
+{
+  "tui": {
+    "shell_escape": {
+      "enabled": true,
+      "allow_ssh": false,
+      "command_allowlist": ["git ", "ls", "cat "],
+      "command_blocklist": [],
+      "use_default_blocklist": true
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `shell_escape.enabled` | bool | `true` (local), `false` (SSH) | Enable `!` shell escape in TUI |
+| `shell_escape.allow_ssh` | bool | `false` | Allow shell escape over SSH |
+| `shell_escape.command_allowlist` | string array | `[]` | If non-empty, only matching prefixes allowed |
+| `shell_escape.command_blocklist` | string array | `[]` | Blocked command prefixes |
+| `shell_escape.use_default_blocklist` | bool | `true` | Include default dangerous command blocklist |
+
+---
+
+## `allowed_origins`
+
+Top-level WebSocket CORS setting.
+
+```json
+{ "allowed_origins": ["https://chat.example.com"] }
+```
+
+When empty (default), only same-origin and localhost connections are permitted.
+
+---
+
 ## Use-Case Recipes
 
 ### Headless AI chatbot (no tools, no channels)
@@ -969,7 +1417,7 @@ Add workspace context and file tools so the agent has a personality and can read
     }]
   },
   "agent": {
-    "name": "Jules",
+    "name": "Conduit",
     "personality": "conduit",
     "capabilities": { "memory_recall": true, "tool_chaining": true, "heartbeats": false, "skills_integration": false, "silent_replies": true }
   },

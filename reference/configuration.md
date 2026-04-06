@@ -663,6 +663,34 @@ After a skill executes successfully, matching keys from the result data are auto
 
 When both Brain and SearchDB are enabled, brain LTM entries are indexed into an FTS5 virtual table (`brain_ltm_fts` in search.db) for BM25-ranked full-text search via MemorySearch. This provides better recall quality than the default LIKE-based search.
 
+#### REM Sleep Cycle
+
+The REM (Replay, Evaluate, Maintain) Sleep cycle runs offline to consolidate, prune, and groom memory. See [Brain & REM Sleep Reference](brain.md#rem-sleep-cycle) for full architecture details.
+
+```json
+{
+  "brain": {
+    "rem_enabled": true,
+    "rem_schedule": "0 2 * * *",
+    "rem_integration_day": 0,
+    "rem_prune_age_days": 30,
+    "rem_salience_decay_rate": 0.1,
+    "rem_groom_with_llm": true,
+    "rem_log_path": "memory/rem-log"
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `rem_enabled` | bool | `true` | Enable REM sleep cycle scheduling |
+| `rem_schedule` | string | `"0 2 * * *"` | Cron schedule (default: 2 AM daily) |
+| `rem_integration_day` | int | `0` | Day of week for integration phase (0=Sunday) |
+| `rem_prune_age_days` | int | `30` | Days without access before entry becomes prune candidate |
+| `rem_salience_decay_rate` | float | `0.1` | Salience subtracted during consolidation decay |
+| `rem_groom_with_llm` | bool | `true` | Use LLM for re-extraction during grooming (reserved) |
+| `rem_log_path` | string | `"memory/rem-log"` | Directory for REM cycle report logs |
+
 ### Kubernetes
 
 Multi-cluster Kubernetes configuration for the K8s tool. Kubeconfig paths support environment variable expansion.
@@ -843,3 +871,12 @@ Copy and customize:
 cp configs/config.example.json config.json
 # Edit config.json with your settings
 ```
+
+## See Also
+
+- [Brain & REM Sleep](brain.md) — Full architecture reference for cognitive memory
+- [SRE Tools](sre-tools.md) — PagerDuty, Datadog, and incident correlation
+- [Google Workspace](google-workspace.md) — Gmail and Calendar integration
+- [Remote SSH](remote-ssh.md) — Multi-host SSH execution
+- [Advanced Features](advanced-features.md) — SearchDB, prompt caching, context compaction
+- [Tools Reference](tools-reference.md) — All built-in tool documentation

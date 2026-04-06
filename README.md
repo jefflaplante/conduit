@@ -78,7 +78,7 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **AI Provider Routing** — Anthropic and OpenAI with automatic fallback
 - **Smart Routing** — Automatic model selection based on task complexity (haiku/sonnet/opus)
 - **Context Compaction** — Automatic summarization of long sessions to free context space
-- **Tool Registry** — 18 built-in tools with sandbox execution
+- **Tool Registry** — 34 built-in tools (24 core + 10 optional) with sandbox execution
 - **Tool SelfTest** — All built-in tools expose a `SelfTest` capability, allowing the gateway to programmatically verify tool health at startup or on demand
 
 ### Access Methods
@@ -88,11 +88,17 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **WebSocket API** — Real-time bidirectional communication
 
 ### Search & Memory
-- **[Brain (Cognitive Memory)](reference/configuration.md#brain-cognitive-memory)** — Tiered memory system: long-term (SQLite), working (per-session), and scratchpad (LIFO stack). Salience-scored with configurable weights, auto-promotion, and sub-agent working memory sharing. **Eliminates context window poisoning** — instead of dumping entire files into the prompt to retrieve a single fact, Brain returns just the fact (30 bytes vs. 12KB+). This dramatically reduces token waste, lowers cost, and keeps the context window clear for actual reasoning — especially critical for smaller models (Haiku, local quantized) where every token counts
-- **[REM Sleep Cycle](reference/configuration.md#rem-sleep)** — A 5-phase memory consolidation process inspired by biological sleep. Phases: **Triage** (identify valuable working memory), **Consolidation** (promote high-value entries to LTM), **Pruning** (evict stale/low-value entries), **Integration** (cross-reference with workspace files), and **Grooming** (staleness tracking across all sources). Runs on a configurable schedule to keep long-term memory lean and relevant
+- **[Brain (Cognitive Memory)](reference/brain.md)** — Tiered memory system: long-term (SQLite), working (per-session), and scratchpad (LIFO stack). Salience-scored with configurable weights, auto-promotion, and sub-agent working memory sharing. **Eliminates context window poisoning** — instead of dumping entire files into the prompt to retrieve a single fact, Brain returns just the fact (30 bytes vs. 12KB+). This dramatically reduces token waste, lowers cost, and keeps the context window clear for actual reasoning — especially critical for smaller models (Haiku, local quantized) where every token counts
+- **[REM Sleep Cycle](reference/brain.md#rem-sleep-cycle)** — A 5-phase memory consolidation process inspired by biological sleep. Phases: **Triage** (identify valuable working memory), **Consolidation** (promote high-value entries to LTM), **Pruning** (evict stale/low-value entries), **Integration** (cross-reference with workspace files), and **Grooming** (staleness tracking across all sources). Runs on a configurable schedule to keep long-term memory lean and relevant
 - **FTS5 Full-Text Search** — SQLite-based document, message, and brain LTM search
 - **Memory Search** — Semantic search across MEMORY.md, session history, and brain entries
 - **Web Search** — Hybrid Anthropic native + Brave API fallback
+
+### Communication & Vision
+- **Telegram Photo Vision** — Send photos to the Telegram bot for LLM image analysis (JPEG, PNG, GIF, WebP up to 20MB)
+- **[Google Workspace](reference/google-workspace.md)** — Gmail search/send and Calendar management via gws CLI
+- **Text-to-Speech** — TTS synthesis for voice responses
+- **[Remote SSH](reference/remote-ssh.md)** — Multi-host SSH execution with security tiers, persistent sessions, tunnels, and SCP
 
 ### Automation
 - **Chain Workflows** — Multi-tool sequences with dependencies and variables
@@ -107,8 +113,9 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 
 ### SRE & Infrastructure
 - **[Kubernetes Tool](reference/kubernetes.md)** — Native client-go integration with multi-cluster support, security tiers, pod exec, port forwarding, resource watch
-- **PagerDuty** — REST API v2 client with rate limiting for incident management (config ready)
-- **Datadog** — Metrics/logs/monitors API client (config ready)
+- **[PagerDuty](reference/sre-tools.md#pagerduty-tool)** — REST API v2 tool for incident management, services, and on-call queries
+- **[Datadog](reference/sre-tools.md#datadog-tool)** — Metrics, logs, and monitors tool with separate monitor management
+- **[SRE Incident Correlation](reference/sre-tools.md#sre-incident-correlation-tool)** — Cross-references PagerDuty incidents with Datadog metrics for root-cause analysis
 
 ## Providers
 
@@ -203,8 +210,14 @@ Use `/model <alias>` to switch models. The provider auto-resolves based on the m
 | [API & Protocol](reference/api-protocol.md) | HTTP endpoints and WebSocket protocol |
 | [Skills System](reference/skills.md) | Creating and using skills |
 | [Authentication](reference/authentication.md) | Token and OAuth setup |
+| [Brain & REM Sleep](reference/brain.md) | Cognitive memory system with tiered storage and offline consolidation |
+| [SRE Tools](reference/sre-tools.md) | PagerDuty, Datadog, and incident correlation tools |
+| [Google Workspace](reference/google-workspace.md) | Gmail and Calendar integration via gws CLI |
+| [Remote SSH](reference/remote-ssh.md) | Multi-host SSH execution with security tiers |
 | [Kubernetes](reference/kubernetes.md) | Multi-cluster K8s tool with security tiers |
 | [MQTT Integration](reference/mqtt.md) | MQTT event ingest for IoT/home automation |
+| [Advanced Features](reference/advanced-features.md) | SearchDB, prompt caching, and context compaction |
+| [Internal Subsystems](reference/internals.md) | Learning, orchestration, NLI, plugins, briefing (experimental) |
 | [Security](reference/security.md) | Security considerations |
 
 ### Guides
