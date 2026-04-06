@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"conduit/internal/tools/schema"
 	"conduit/internal/tools/types"
@@ -191,6 +192,79 @@ func (t *ReadFileTool) GetUsageExamples() []types.ToolExample {
 			Expected: "Returns the main memory file with historical context",
 		},
 	}
+}
+
+// SelfTest implements types.SelfTester for ReadFileTool.
+func (t *ReadFileTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Message:      "Read tool is functional",
+		Capabilities: []string{"read_file", "resolve_relative_paths", "sandbox_enforcement"},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check registry availability (for sandbox config)
+	registryStatus := types.DependencyStatus{
+		Name:     "Registry",
+		Required: true,
+	}
+	if t.registry != nil {
+		registryStatus.Available = true
+		registryStatus.Status = "ready"
+	} else {
+		registryStatus.Available = false
+		registryStatus.Status = "not_configured"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Registry not available"
+		result.Suggestions = []string{"Ensure ReadFileTool is registered with a valid Registry"}
+	}
+	deps = append(deps, registryStatus)
+
+	// Check workspace directory existence
+	workspaceStatus := types.DependencyStatus{
+		Name:     "WorkspaceDir",
+		Required: false,
+	}
+	if t.registry != nil {
+		workspaceDir := t.registry.sandboxCfg.WorkspaceDir
+		if workspaceDir != "" {
+			if info, err := os.Stat(workspaceDir); err == nil && info.IsDir() {
+				workspaceStatus.Available = true
+				workspaceStatus.Status = "exists"
+				workspaceStatus.Message = workspaceDir
+			} else {
+				workspaceStatus.Available = false
+				workspaceStatus.Status = "not_found"
+				workspaceStatus.Message = workspaceDir
+				if result.Status == types.SelfTestStatusOK {
+					result.Status = types.SelfTestStatusDegraded
+					result.Message = "Read tool functional but workspace directory not found"
+				}
+				result.Suggestions = append(result.Suggestions, "Create workspace directory or update sandbox configuration")
+			}
+		} else {
+			workspaceStatus.Available = false
+			workspaceStatus.Status = "not_configured"
+		}
+	}
+	deps = append(deps, workspaceStatus)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = t.GetUsageExamples()
+	}
+
+	return result
 }
 
 // WriteFileTool implements file writing functionality
@@ -426,6 +500,93 @@ func (t *WriteFileTool) GetUsageExamples() []types.ToolExample {
 	}
 }
 
+// SelfTest implements types.SelfTester for WriteFileTool.
+func (t *WriteFileTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Message:      "Write tool is functional",
+		Capabilities: []string{"write_file", "create_directories", "resolve_relative_paths", "sandbox_enforcement"},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check registry availability (for sandbox config)
+	registryStatus := types.DependencyStatus{
+		Name:     "Registry",
+		Required: true,
+	}
+	if t.registry != nil {
+		registryStatus.Available = true
+		registryStatus.Status = "ready"
+	} else {
+		registryStatus.Available = false
+		registryStatus.Status = "not_configured"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Registry not available"
+		result.Suggestions = []string{"Ensure WriteFileTool is registered with a valid Registry"}
+	}
+	deps = append(deps, registryStatus)
+
+	// Check workspace directory existence and writability
+	workspaceStatus := types.DependencyStatus{
+		Name:     "WorkspaceDir",
+		Required: false,
+	}
+	if t.registry != nil {
+		workspaceDir := t.registry.sandboxCfg.WorkspaceDir
+		if workspaceDir != "" {
+			if info, err := os.Stat(workspaceDir); err == nil && info.IsDir() {
+				workspaceStatus.Available = true
+				workspaceStatus.Status = "exists"
+				workspaceStatus.Message = workspaceDir
+
+				// Check if writable by attempting to create a temp file
+				testFile := filepath.Join(workspaceDir, ".selftest_write_check")
+				if err := os.WriteFile(testFile, []byte("test"), 0644); err == nil {
+					os.Remove(testFile)
+					workspaceStatus.Status = "writable"
+				} else {
+					workspaceStatus.Status = "read_only"
+					if result.Status == types.SelfTestStatusOK {
+						result.Status = types.SelfTestStatusDegraded
+						result.Message = "Write tool functional but workspace directory is not writable"
+					}
+					result.Suggestions = append(result.Suggestions, "Check write permissions on workspace directory")
+				}
+			} else {
+				workspaceStatus.Available = false
+				workspaceStatus.Status = "not_found"
+				workspaceStatus.Message = workspaceDir
+				if result.Status == types.SelfTestStatusOK {
+					result.Status = types.SelfTestStatusDegraded
+					result.Message = "Write tool functional but workspace directory not found"
+				}
+				result.Suggestions = append(result.Suggestions, "Create workspace directory or update sandbox configuration")
+			}
+		} else {
+			workspaceStatus.Available = false
+			workspaceStatus.Status = "not_configured"
+		}
+	}
+	deps = append(deps, workspaceStatus)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = t.GetUsageExamples()
+	}
+
+	return result
+}
+
 // ListFilesTool implements directory listing functionality
 type ListFilesTool struct {
 	registry *Registry
@@ -525,6 +686,79 @@ func (t *ListFilesTool) GetUsageExamples() []types.ToolExample {
 			Expected: "Returns all files and directories in the project root",
 		},
 	}
+}
+
+// SelfTest implements types.SelfTester for ListFilesTool (Glob).
+func (t *ListFilesTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Message:      "Glob tool is functional",
+		Capabilities: []string{"list_directory", "file_metadata", "sandbox_enforcement"},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check registry availability (for sandbox config)
+	registryStatus := types.DependencyStatus{
+		Name:     "Registry",
+		Required: true,
+	}
+	if t.registry != nil {
+		registryStatus.Available = true
+		registryStatus.Status = "ready"
+	} else {
+		registryStatus.Available = false
+		registryStatus.Status = "not_configured"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Registry not available"
+		result.Suggestions = []string{"Ensure ListFilesTool is registered with a valid Registry"}
+	}
+	deps = append(deps, registryStatus)
+
+	// Check workspace directory existence
+	workspaceStatus := types.DependencyStatus{
+		Name:     "WorkspaceDir",
+		Required: false,
+	}
+	if t.registry != nil {
+		workspaceDir := t.registry.sandboxCfg.WorkspaceDir
+		if workspaceDir != "" {
+			if info, err := os.Stat(workspaceDir); err == nil && info.IsDir() {
+				workspaceStatus.Available = true
+				workspaceStatus.Status = "exists"
+				workspaceStatus.Message = workspaceDir
+			} else {
+				workspaceStatus.Available = false
+				workspaceStatus.Status = "not_found"
+				workspaceStatus.Message = workspaceDir
+				if result.Status == types.SelfTestStatusOK {
+					result.Status = types.SelfTestStatusDegraded
+					result.Message = "Glob tool functional but workspace directory not found"
+				}
+				result.Suggestions = append(result.Suggestions, "Create workspace directory or update sandbox configuration")
+			}
+		} else {
+			workspaceStatus.Available = false
+			workspaceStatus.Status = "not_configured"
+		}
+	}
+	deps = append(deps, workspaceStatus)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = t.GetUsageExamples()
+	}
+
+	return result
 }
 
 // getFileType returns the type of a directory entry

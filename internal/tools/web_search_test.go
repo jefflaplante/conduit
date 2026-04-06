@@ -469,3 +469,208 @@ func containsInMiddle(s, substr string) bool {
 	}
 	return false
 }
+
+func TestWebSearchTool_SelfTest_OK(t *testing.T) {
+	// Create tool with Brave configured
+	services := &types.ToolServices{
+		ConfigMgr: &config.Config{
+			Tools: config.ToolsConfig{
+				Services: map[string]map[string]interface{}{
+					"brave": {
+						"api_key": "test_brave_key",
+					},
+				},
+			},
+		},
+	}
+
+	tool := NewWebSearchTool(services)
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result == nil {
+		t.Fatal("Expected result, got nil")
+	}
+
+	// Should be OK or degraded depending on router init
+	if result.Status == types.SelfTestStatusFailed {
+		t.Errorf("Expected OK or Degraded status, got Failed: %s", result.Message)
+	}
+
+	if len(result.Dependencies) == 0 {
+		t.Error("Expected dependencies to be listed")
+	}
+
+	if result.TestDuration <= 0 {
+		t.Error("Expected positive test duration")
+	}
+
+	if result.TestedAt.IsZero() {
+		t.Error("Expected TestedAt to be set")
+	}
+
+	if len(result.Capabilities) == 0 {
+		t.Error("Expected capabilities to be listed")
+	}
+}
+
+func TestWebSearchTool_SelfTest_NoProviders(t *testing.T) {
+	// Create tool without any configured providers
+	// Note: Anthropic is enabled by default (API key comes from request context)
+	// So we need to test for degraded status when Brave is missing but Anthropic fallback exists
+	services := &types.ToolServices{
+		ConfigMgr: &config.Config{
+			Tools: config.ToolsConfig{
+				Services: map[string]map[string]interface{}{
+					"brave": {
+						"api_key": "", // Empty key
+					},
+				},
+			},
+		},
+	}
+
+	tool := NewWebSearchTool(services)
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result == nil {
+		t.Fatal("Expected result, got nil")
+	}
+
+	// When Brave is not configured but Anthropic fallback exists, expect degraded
+	// (Anthropic is enabled by default with API key from request context)
+	if result.Status == types.SelfTestStatusOK {
+		// If it's OK, then the router was fully initialized
+		// which is also acceptable
+	} else if result.Status == types.SelfTestStatusFailed {
+		// If failed, there should be suggestions
+		if len(result.Suggestions) == 0 {
+			t.Error("Expected suggestions when failed")
+		}
+	}
+	// Degraded is also acceptable when running in fallback mode
+
+	// Check for Brave dependency
+	var braveDep *types.DependencyStatus
+	for i := range result.Dependencies {
+		if result.Dependencies[i].Name == "BraveSearch" {
+			braveDep = &result.Dependencies[i]
+			break
+		}
+	}
+
+	if braveDep == nil {
+		t.Error("Expected BraveSearch dependency to be listed")
+	} else if braveDep.Available {
+		t.Error("Expected BraveSearch to be unavailable without API key")
+	}
+}
+
+func TestWebSearchTool_SelfTest_WithExamples(t *testing.T) {
+	services := &types.ToolServices{
+		ConfigMgr: &config.Config{
+			Tools: config.ToolsConfig{
+				Services: map[string]map[string]interface{}{
+					"brave": {
+						"api_key": "test_key",
+					},
+				},
+			},
+		},
+	}
+
+	tool := NewWebSearchTool(services)
+
+	opts := &types.SelfTestOptions{
+		IncludeExamples: true,
+	}
+
+	result := tool.SelfTest(context.Background(), opts)
+
+	if result == nil {
+		t.Fatal("Expected result, got nil")
+	}
+
+	if result.IsFunctional() && len(result.Examples) == 0 {
+		t.Error("Expected examples when functional and IncludeExamples=true")
+	}
+
+	if len(result.Examples) > 0 {
+		example := result.Examples[0]
+		if example.Name == "" {
+			t.Error("Expected example to have name")
+		}
+		if example.Args == nil {
+			t.Error("Expected example to have args")
+		}
+	}
+}
+
+func TestWebSearchTool_SelfTest_Verbose(t *testing.T) {
+	services := &types.ToolServices{
+		ConfigMgr: &config.Config{
+			Tools: config.ToolsConfig{
+				Services: map[string]map[string]interface{}{
+					"brave": {
+						"api_key": "test_key",
+					},
+				},
+			},
+		},
+	}
+
+	tool := NewWebSearchTool(services)
+
+	opts := &types.SelfTestOptions{
+		Verbose: true,
+	}
+
+	result := tool.SelfTest(context.Background(), opts)
+
+	if result == nil {
+		t.Fatal("Expected result, got nil")
+	}
+
+	if result.Details == nil {
+		t.Error("Expected details when verbose=true")
+	}
+
+	// Check for expected verbose detail fields
+	if result.Details != nil {
+		if _, exists := result.Details["config_enabled"]; !exists {
+			t.Error("Expected config_enabled in verbose details")
+		}
+		if _, exists := result.Details["available_providers"]; !exists {
+			t.Error("Expected available_providers in verbose details")
+		}
+	}
+}
+
+func TestWebSearchTool_SelfTest_NilOptions(t *testing.T) {
+	services := &types.ToolServices{
+		ConfigMgr: &config.Config{
+			Tools: config.ToolsConfig{
+				Services: map[string]map[string]interface{}{
+					"brave": {
+						"api_key": "test_key",
+					},
+				},
+			},
+		},
+	}
+
+	tool := NewWebSearchTool(services)
+
+	// Should not panic with nil options
+	result := tool.SelfTest(context.Background(), nil)
+
+	if result == nil {
+		t.Fatal("Expected result, got nil")
+	}
+
+	// Default options should include examples
+	if result.IsFunctional() && len(result.Examples) == 0 {
+		t.Error("Expected examples with default options")
+	}
+}

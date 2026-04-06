@@ -827,3 +827,139 @@ func TestWebSearchTool_Execute_CountFromFloat64(t *testing.T) {
 		"count": float64(5),
 	})
 }
+
+func TestWebSearchTool_SelfTest_OK(t *testing.T) {
+	tool := &WebSearchTool{
+		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		braveAPIKey: "test-api-key",
+	}
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	require.NotNil(t, result)
+	assert.Equal(t, types.SelfTestStatusOK, result.Status)
+	assert.Contains(t, result.Message, "functional")
+	assert.NotEmpty(t, result.Capabilities)
+	assert.Contains(t, result.Capabilities, "web_search")
+	assert.NotZero(t, result.TestDuration)
+	assert.False(t, result.TestedAt.IsZero())
+
+	// Check dependencies
+	assert.Len(t, result.Dependencies, 2)
+
+	// Find HTTPClient dependency
+	var httpDep *types.DependencyStatus
+	var braveDep *types.DependencyStatus
+	for i := range result.Dependencies {
+		if result.Dependencies[i].Name == "HTTPClient" {
+			httpDep = &result.Dependencies[i]
+		}
+		if result.Dependencies[i].Name == "BraveAPIKey" {
+			braveDep = &result.Dependencies[i]
+		}
+	}
+
+	require.NotNil(t, httpDep)
+	assert.True(t, httpDep.Available)
+	assert.True(t, httpDep.Required)
+
+	require.NotNil(t, braveDep)
+	assert.True(t, braveDep.Available)
+	assert.True(t, braveDep.Required)
+}
+
+func TestWebSearchTool_SelfTest_NoHTTPClient(t *testing.T) {
+	tool := &WebSearchTool{
+		httpClient:  nil,
+		braveAPIKey: "test-api-key",
+	}
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	require.NotNil(t, result)
+	assert.Equal(t, types.SelfTestStatusFailed, result.Status)
+	assert.Contains(t, result.Message, "HTTP client")
+	assert.NotEmpty(t, result.Suggestions)
+}
+
+func TestWebSearchTool_SelfTest_NoAPIKey(t *testing.T) {
+	tool := &WebSearchTool{
+		httpClient:  &http.Client{},
+		braveAPIKey: "",
+	}
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	require.NotNil(t, result)
+	assert.Equal(t, types.SelfTestStatusFailed, result.Status)
+	assert.Contains(t, result.Message, "API key")
+	assert.NotEmpty(t, result.Suggestions)
+
+	// Verify API key dependency shows as missing
+	var braveDep *types.DependencyStatus
+	for i := range result.Dependencies {
+		if result.Dependencies[i].Name == "BraveAPIKey" {
+			braveDep = &result.Dependencies[i]
+			break
+		}
+	}
+
+	require.NotNil(t, braveDep)
+	assert.False(t, braveDep.Available)
+	assert.Equal(t, "missing", braveDep.Status)
+}
+
+func TestWebSearchTool_SelfTest_WithExamples(t *testing.T) {
+	tool := &WebSearchTool{
+		httpClient:  &http.Client{},
+		braveAPIKey: "test-key",
+	}
+
+	opts := &types.SelfTestOptions{
+		IncludeExamples: true,
+	}
+
+	result := tool.SelfTest(context.Background(), opts)
+
+	require.NotNil(t, result)
+	assert.Equal(t, types.SelfTestStatusOK, result.Status)
+	assert.NotEmpty(t, result.Examples)
+	assert.GreaterOrEqual(t, len(result.Examples), 1)
+
+	// Check first example has required fields
+	example := result.Examples[0]
+	assert.NotEmpty(t, example.Name)
+	assert.NotEmpty(t, example.Description)
+	assert.NotNil(t, example.Args)
+}
+
+func TestWebSearchTool_SelfTest_NoExamples(t *testing.T) {
+	tool := &WebSearchTool{
+		httpClient:  &http.Client{},
+		braveAPIKey: "test-key",
+	}
+
+	opts := &types.SelfTestOptions{
+		IncludeExamples: false,
+	}
+
+	result := tool.SelfTest(context.Background(), opts)
+
+	require.NotNil(t, result)
+	assert.Equal(t, types.SelfTestStatusOK, result.Status)
+	assert.Empty(t, result.Examples)
+}
+
+func TestWebSearchTool_SelfTest_NilOptions(t *testing.T) {
+	tool := &WebSearchTool{
+		httpClient:  &http.Client{},
+		braveAPIKey: "test-key",
+	}
+
+	result := tool.SelfTest(context.Background(), nil)
+
+	require.NotNil(t, result)
+	assert.Equal(t, types.SelfTestStatusOK, result.Status)
+	// Default options include examples
+	assert.NotEmpty(t, result.Examples)
+}

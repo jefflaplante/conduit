@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"conduit/internal/tools/types"
 )
@@ -355,4 +356,113 @@ func normalizePhase(phase string) string {
 	default:
 		return phase // pass through — REMCycle.Run will error on unknown phases
 	}
+}
+
+// SelfTest implements types.SelfTester for BrainTool.
+func (t *BrainTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check Brain service
+	brainDep := types.DependencyStatus{
+		Name:     "BrainService",
+		Required: true,
+	}
+
+	if t.services == nil || t.services.Brain == nil {
+		brainDep.Available = false
+		brainDep.Status = "not_configured"
+		brainDep.Message = "Brain service not available in ToolServices"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Brain service is not enabled"
+		result.Suggestions = []string{
+			"Enable brain in config.json",
+			"Check that brain database path is configured",
+		}
+	} else {
+		brainDep.Available = true
+		brainDep.Status = "connected"
+		result.Capabilities = []string{"store", "get", "recall", "list", "delete", "push", "pop", "peek", "promote", "consolidate", "status"}
+
+		// Check REM cycle availability
+		remDep := types.DependencyStatus{
+			Name:     "REMCycle",
+			Required: false,
+		}
+		if t.services.REMCycle != nil {
+			remDep.Available = true
+			remDep.Status = "available"
+			result.Capabilities = append(result.Capabilities, "rem_cycle")
+		} else {
+			remDep.Available = false
+			remDep.Status = "not_configured"
+			remDep.Message = "REM cycle scheduling not enabled"
+			result.UnavailableCapabilities = []string{"rem_cycle"}
+		}
+		deps = append(deps, remDep)
+
+		// Get status for verbose output
+		if opts.Verbose {
+			status, err := t.services.Brain.Status(ctx)
+			if err == nil {
+				result.Details = map[string]interface{}{
+					"brain_status": status,
+				}
+			}
+		}
+
+		result.Status = types.SelfTestStatusOK
+		result.Message = "Brain tool is fully functional"
+	}
+	deps = append(deps, brainDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Store a fact",
+				Description: "Store a key-value fact in working memory",
+				Args: map[string]interface{}{
+					"action": "store",
+					"key":    "user.preference.language",
+					"value":  "Go",
+					"tier":   "working",
+				},
+				Expected: "Fact stored in working memory",
+			},
+			{
+				Name:        "Recall facts",
+				Description: "Search for facts by query",
+				Args: map[string]interface{}{
+					"action": "recall",
+					"query":  "user preferences",
+					"limit":  10,
+				},
+				Expected: "Returns matching facts ranked by salience",
+			},
+			{
+				Name:        "Check status",
+				Description: "Get brain status including entry counts",
+				Args: map[string]interface{}{
+					"action": "status",
+				},
+				Expected: "Returns entry counts and hottest keys",
+			},
+		}
+	}
+
+	return result
 }

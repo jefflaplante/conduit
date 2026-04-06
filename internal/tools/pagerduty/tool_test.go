@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	"conduit/internal/tools/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -520,4 +521,106 @@ func TestPagerDutyTool_APIError(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, result.Error, "500")
+}
+
+// --- SelfTest Tests ---
+
+func TestPagerDutyTool_SelfTest_NotConfigured(t *testing.T) {
+	tool := &PagerDutyTool{
+		config: nil,
+	}
+
+	result := tool.SelfTest(context.Background(), nil)
+	assert.Equal(t, types.SelfTestStatusFailed, result.Status)
+	assert.Contains(t, result.Message, "not configured")
+	assert.Len(t, result.Dependencies, 1)
+	assert.Equal(t, "not_configured", result.Dependencies[0].Status)
+}
+
+func TestPagerDutyTool_SelfTest_MissingToken(t *testing.T) {
+	tool := &PagerDutyTool{
+		config: &config.PagerDutyConfig{
+			APIToken: "", // Missing
+		},
+	}
+
+	result := tool.SelfTest(context.Background(), nil)
+	assert.Equal(t, types.SelfTestStatusFailed, result.Status)
+	assert.Contains(t, result.Message, "not configured")
+}
+
+func TestPagerDutyTool_SelfTest_Connected(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/abilities" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"abilities": []string{"teams", "schedules"},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}
+
+	tool, server := setupTestTool(t, handler)
+	defer server.Close()
+
+	result := tool.SelfTest(context.Background(), nil)
+	assert.Equal(t, types.SelfTestStatusOK, result.Status)
+	assert.Contains(t, result.Message, "connected")
+	assert.True(t, len(result.Capabilities) > 0)
+	assert.Contains(t, result.Capabilities, "list_incidents")
+}
+
+func TestPagerDutyTool_SelfTest_Degraded_InvalidToken(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/abilities" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}
+
+	tool, server := setupTestTool(t, handler)
+	defer server.Close()
+
+	result := tool.SelfTest(context.Background(), nil)
+	assert.Equal(t, types.SelfTestStatusDegraded, result.Status)
+	assert.Contains(t, result.Message, "not connected")
+	assert.True(t, len(result.UnavailableCapabilities) > 0)
+}
+
+func TestPagerDutyTool_SelfTest_WithVerbose(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/abilities" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"abilities": []string{}})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}
+
+	tool, server := setupTestTool(t, handler)
+	defer server.Close()
+
+	opts := &types.SelfTestOptions{
+		Verbose:         true,
+		IncludeExamples: true,
+	}
+	result := tool.SelfTest(context.Background(), opts)
+	assert.Equal(t, types.SelfTestStatusOK, result.Status)
+	assert.NotNil(t, result.Details)
+	assert.True(t, len(result.Examples) > 0)
+}
+
+func TestPagerDutyTool_SelfTest_NoExamplesOnFailure(t *testing.T) {
+	tool := &PagerDutyTool{
+		config: nil,
+	}
+
+	opts := &types.SelfTestOptions{
+		IncludeExamples: true,
+	}
+	result := tool.SelfTest(context.Background(), opts)
+	assert.Equal(t, types.SelfTestStatusFailed, result.Status)
+	assert.Len(t, result.Examples, 0) // No examples when failed
 }

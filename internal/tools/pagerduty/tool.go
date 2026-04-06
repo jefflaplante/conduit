@@ -4,6 +4,7 @@ package pagerduty
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"conduit/internal/config"
 	toolargs "conduit/internal/tools/args"
@@ -233,5 +234,147 @@ func ClassifyAction(action string) SecurityTier {
 		return tier
 	}
 	return TierDangerous // Unknown actions are dangerous by default
+}
+
+// SelfTest implements types.SelfTester for PagerDutyTool.
+func (t *PagerDutyTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:   types.SelfTestStatusOK,
+		TestedAt: time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check PagerDuty API configuration
+	apiDep := types.DependencyStatus{
+		Name:     "PagerDutyAPI",
+		Required: true,
+	}
+
+	if t.config == nil || t.config.APIToken == "" {
+		apiDep.Available = false
+		apiDep.Status = "not_configured"
+		apiDep.Message = "PagerDuty API token not configured"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "PagerDuty API is not configured"
+		result.Suggestions = []string{
+			"Set PAGERDUTY_API_TOKEN environment variable",
+			"Configure api_token in pagerduty config section",
+		}
+		deps = append(deps, apiDep)
+		result.Dependencies = deps
+		result.TestDuration = time.Since(start)
+		return result
+	}
+
+	apiDep.Available = true
+	apiDep.Status = "configured"
+
+	// Test API connectivity using the abilities endpoint (lightweight, read-only)
+	validationErr := t.validateAPIConnection(ctx)
+
+	if validationErr != nil {
+		apiDep.Status = "connection_failed"
+		apiDep.Message = validationErr.Error()
+		result.Status = types.SelfTestStatusDegraded
+		result.Message = "PagerDuty API configured but not connected"
+		result.Capabilities = []string{}
+		result.UnavailableCapabilities = []string{
+			"list_incidents", "get_incident",
+			"acknowledge", "resolve", "snooze",
+			"add_note", "trigger",
+		}
+		result.Suggestions = []string{
+			"Check network connectivity to PagerDuty API",
+			"Verify API token is valid",
+			"Ensure token has not been revoked",
+		}
+	} else {
+		apiDep.Status = "connected"
+		apiDep.Message = "API token validated successfully"
+		result.Status = types.SelfTestStatusOK
+		result.Message = "PagerDuty API connected and ready"
+		result.Capabilities = []string{
+			"list_incidents", "get_incident",
+			"acknowledge", "resolve", "snooze",
+			"add_note", "trigger",
+		}
+
+		if opts.Verbose {
+			result.Details = map[string]interface{}{
+				"base_url":           t.config.EffectiveBaseURL(),
+				"default_service_id": t.config.DefaultServiceID,
+			}
+		}
+	}
+
+	deps = append(deps, apiDep)
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "List active incidents",
+				Description: "List all triggered and acknowledged incidents",
+				Args: map[string]interface{}{
+					"action": "list_incidents",
+					"status": "triggered",
+				},
+				Expected: "Returns list of active incidents with IDs and titles",
+			},
+			{
+				Name:        "Acknowledge incident",
+				Description: "Acknowledge an incident to stop escalation",
+				Args: map[string]interface{}{
+					"action":      "acknowledge",
+					"incident_id": "P1234567",
+				},
+				Expected: "Incident status updated to acknowledged",
+			},
+			{
+				Name:        "Add incident note",
+				Description: "Add investigation notes to an incident",
+				Args: map[string]interface{}{
+					"action":      "add_note",
+					"incident_id": "P1234567",
+					"note":        "Investigating root cause...",
+				},
+				Expected: "Note added to incident timeline",
+			},
+		}
+	}
+
+	return result
+}
+
+// validateAPIConnection tests connectivity to the PagerDuty API.
+func (t *PagerDutyTool) validateAPIConnection(ctx context.Context) error {
+	// Use the /abilities endpoint - it's lightweight and always accessible with valid token
+	resp, err := t.client.Do(ctx, "GET", "/abilities", nil)
+	if err != nil {
+		return fmt.Errorf("failed to connect: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 200 {
+		return nil
+	}
+
+	if resp.StatusCode == 401 {
+		return fmt.Errorf("invalid API token (HTTP 401)")
+	}
+
+	if resp.StatusCode == 403 {
+		return fmt.Errorf("forbidden - check API token permissions (HTTP 403)")
+	}
+
+	return fmt.Errorf("unexpected response (HTTP %d)", resp.StatusCode)
 }
 

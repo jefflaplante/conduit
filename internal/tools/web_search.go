@@ -367,3 +367,150 @@ func (t *WebSearchTool) getAvailableProviders() []string {
 	return providers
 }
 
+// SelfTest implements types.SelfTester for WebSearchTool.
+func (t *WebSearchTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Message:      "WebSearch tool is functional",
+		Capabilities: []string{"web_search", "region_filtering", "freshness_filtering", "language_filtering"},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check search router
+	routerStatus := types.DependencyStatus{
+		Name:     "SearchRouter",
+		Required: false, // Not strictly required - tool has fallback
+	}
+
+	if t.router != nil {
+		routerStatus.Available = true
+		routerStatus.Status = "initialized"
+		providers := t.router.GetAvailableProviders()
+		if len(providers) > 0 {
+			routerStatus.Message = fmt.Sprintf("providers: %s", strings.Join(providers, ", "))
+		}
+		result.Capabilities = append(result.Capabilities, "intelligent_routing", "provider_fallback", "result_caching")
+	} else {
+		routerStatus.Available = false
+		routerStatus.Status = "not_initialized"
+		routerStatus.Message = "using fallback mode"
+	}
+	deps = append(deps, routerStatus)
+
+	// Check Brave provider
+	braveStatus := types.DependencyStatus{
+		Name:     "BraveSearch",
+		Required: false, // At least one provider needed
+	}
+
+	if t.config.IsBraveEnabled() {
+		braveStatus.Available = true
+		braveStatus.Status = "configured"
+	} else {
+		braveStatus.Available = false
+		if braveProvider, exists := t.config.Providers["brave"]; exists && braveProvider.Enabled {
+			braveStatus.Status = "missing_api_key"
+		} else {
+			braveStatus.Status = "disabled"
+		}
+	}
+	deps = append(deps, braveStatus)
+
+	// Check Anthropic provider
+	anthropicStatus := types.DependencyStatus{
+		Name:     "AnthropicSearch",
+		Required: false, // At least one provider needed
+	}
+
+	if t.config.IsAnthropicEnabled() {
+		anthropicStatus.Available = true
+		anthropicStatus.Status = "enabled"
+		anthropicStatus.Message = "API key set dynamically from request context"
+	} else {
+		anthropicStatus.Available = false
+		anthropicStatus.Status = "disabled"
+	}
+	deps = append(deps, anthropicStatus)
+
+	// Determine overall status based on provider availability
+	availableProviders := t.getAvailableProviders()
+	if len(availableProviders) == 0 {
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "No search providers available"
+		result.Suggestions = []string{
+			"Set BRAVE_API_KEY environment variable for Brave Search",
+			"Or configure tools.services.brave.api_key in config",
+			"Enable Anthropic search provider for fallback",
+		}
+	} else if t.router == nil {
+		result.Status = types.SelfTestStatusDegraded
+		result.Message = fmt.Sprintf("WebSearch operational in fallback mode (providers: %s)", strings.Join(availableProviders, ", "))
+		result.UnavailableCapabilities = []string{"intelligent_routing", "provider_fallback", "result_caching"}
+		result.Suggestions = []string{"Check search router initialization logs for errors"}
+	} else {
+		result.Message = fmt.Sprintf("WebSearch fully functional with %d providers (%s)",
+			len(availableProviders), strings.Join(availableProviders, ", "))
+	}
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	// Add verbose details if requested
+	if opts.Verbose {
+		result.Details = map[string]interface{}{
+			"config_enabled":     t.config.Enabled,
+			"default_provider":   t.config.DefaultProvider,
+			"cache_enabled":      t.config.CacheEnabled,
+			"cache_ttl_minutes":  t.config.CacheTTLMinutes,
+			"enable_fallback":    t.config.EnableFallback,
+			"available_providers": availableProviders,
+		}
+		if t.router != nil {
+			result.Details["usage_stats"] = t.router.GetUsageStats()
+		}
+	}
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "Basic search",
+				Description: "Search the web for a query",
+				Args: map[string]interface{}{
+					"query": "golang best practices",
+					"count": 5,
+				},
+				Expected: "Returns up to 5 search results with intelligent provider selection",
+			},
+			{
+				Name:        "Region-specific search",
+				Description: "Search with region filtering",
+				Args: map[string]interface{}{
+					"query":   "local news",
+					"country": "DE",
+					"count":   10,
+				},
+				Expected: "Returns results localized to Germany",
+			},
+			{
+				Name:        "Recent results search",
+				Description: "Search for recent content only",
+				Args: map[string]interface{}{
+					"query":     "breaking news",
+					"freshness": "pd",
+				},
+				Expected: "Returns only results from the past day",
+			},
+		}
+	}
+
+	return result
+}
+

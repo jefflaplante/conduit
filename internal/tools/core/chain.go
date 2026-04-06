@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"conduit/internal/chain"
 	"conduit/internal/config"
@@ -331,4 +332,142 @@ func (v *validationToolExecutor) ExecuteTool(toolName string, params map[string]
 func (v *validationToolExecutor) ToolExists(toolName string) bool {
 	_, ok := v.tools[toolName]
 	return ok
+}
+
+// SelfTest implements types.SelfTester for ChainTool.
+func (t *ChainTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check ToolRegistry (required for validation and execution)
+	registryDep := types.DependencyStatus{
+		Name:     "ToolRegistry",
+		Required: true,
+	}
+
+	if t.executor == nil {
+		registryDep.Available = false
+		registryDep.Status = "not_configured"
+		registryDep.Message = "ToolRegistry not provided"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "ToolRegistry is required but not available"
+		result.Suggestions = []string{
+			"Ensure ChainTool is initialized with a ToolRegistry",
+		}
+	} else {
+		registryDep.Available = true
+		registryDep.Status = "connected"
+
+		// Count available tools
+		tools := t.executor.GetAvailableTools()
+		if opts.Verbose {
+			if result.Details == nil {
+				result.Details = map[string]interface{}{}
+			}
+			result.Details["available_tools"] = len(tools)
+		}
+	}
+	deps = append(deps, registryDep)
+
+	// Check workspace/chains directory
+	chainsDirDep := types.DependencyStatus{
+		Name:     "ChainsDirectory",
+		Required: false, // chains can be empty
+	}
+
+	chainsDir := t.chainsDir()
+	summaries, err := chain.ListChains(chainsDir)
+	if err != nil {
+		chainsDirDep.Available = false
+		chainsDirDep.Status = "inaccessible"
+		chainsDirDep.Message = fmt.Sprintf("Cannot read chains directory: %v", err)
+		// This is degraded, not failed - the directory might not exist yet
+		if result.Status == types.SelfTestStatusOK {
+			result.Status = types.SelfTestStatusDegraded
+			result.UnavailableCapabilities = append(result.UnavailableCapabilities, "run", "validate", "show")
+			result.Suggestions = append(result.Suggestions, fmt.Sprintf("Create chains directory at %s", chainsDir))
+		}
+	} else {
+		chainsDirDep.Available = true
+		chainsDirDep.Status = "accessible"
+		chainsDirDep.Message = fmt.Sprintf("%d chain(s) available", len(summaries))
+
+		if opts.Verbose {
+			if result.Details == nil {
+				result.Details = map[string]interface{}{}
+			}
+			result.Details["chains_dir"] = chainsDir
+			result.Details["chain_count"] = len(summaries)
+			if len(summaries) > 0 {
+				names := make([]string, len(summaries))
+				for i, s := range summaries {
+					names[i] = s.Name
+				}
+				result.Details["chain_names"] = names
+			}
+		}
+	}
+	deps = append(deps, chainsDirDep)
+
+	result.Dependencies = deps
+
+	// Determine capabilities based on dependency status
+	if result.Status != types.SelfTestStatusFailed {
+		result.Capabilities = []string{"list"}
+		if chainsDirDep.Available {
+			result.Capabilities = append(result.Capabilities, "show", "validate", "run")
+		}
+		if result.Status == types.SelfTestStatusOK {
+			result.Message = "Chain tool is fully functional"
+		} else {
+			result.Message = "Chain tool is partially functional (chains directory unavailable)"
+		}
+	}
+
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "List chains",
+				Description: "Show all available chains",
+				Args: map[string]interface{}{
+					"action": "list",
+				},
+				Expected: "List of available chains with descriptions",
+			},
+			{
+				Name:        "Show chain details",
+				Description: "Display full details of a specific chain",
+				Args: map[string]interface{}{
+					"action": "show",
+					"name":   "my-chain",
+				},
+				Expected: "JSON representation of the chain definition",
+			},
+			{
+				Name:        "Run chain with variables",
+				Description: "Execute a chain, substituting variables",
+				Args: map[string]interface{}{
+					"action":    "run",
+					"name":      "deploy",
+					"variables": map[string]interface{}{"env": "staging"},
+				},
+				Expected: "Execution results for each step",
+			},
+		}
+	}
+
+	return result
 }

@@ -735,3 +735,78 @@ func TestImageAnalysisResult_Metadata(t *testing.T) {
 	assert.Contains(t, analysisResult.Metadata, "source")
 	assert.Contains(t, analysisResult.Metadata, "path")
 }
+
+func TestImageTool_SelfTest(t *testing.T) {
+	t.Run("with nil services", func(t *testing.T) {
+		tool := NewImageTool(nil)
+		result := tool.SelfTest(context.Background(), nil)
+
+		require.NotNil(t, result)
+		assert.True(t, result.IsFunctional())
+		assert.NotEmpty(t, result.Message)
+		assert.NotZero(t, result.TestedAt)
+		assert.NotZero(t, result.TestDuration)
+	})
+
+	t.Run("with services", func(t *testing.T) {
+		services := &types.ToolServices{
+			WebClient: &http.Client{Timeout: 30 * time.Second},
+		}
+		tool := NewImageTool(services)
+		result := tool.SelfTest(context.Background(), nil)
+
+		require.NotNil(t, result)
+		assert.Equal(t, types.SelfTestStatusOK, result.Status)
+		assert.Contains(t, result.Capabilities, "load_from_file")
+		assert.Contains(t, result.Capabilities, "load_from_url")
+		assert.Contains(t, result.Capabilities, "load_from_data_url")
+		assert.Contains(t, result.Capabilities, "format_detection")
+	})
+
+	t.Run("with verbose option", func(t *testing.T) {
+		tool := NewImageTool(nil)
+		opts := &types.SelfTestOptions{
+			Verbose: true,
+		}
+		result := tool.SelfTest(context.Background(), opts)
+
+		require.NotNil(t, result)
+		assert.NotNil(t, result.Details)
+		assert.Contains(t, result.Details, "workspace_dir")
+		assert.Contains(t, result.Details, "supported_formats")
+	})
+
+	t.Run("with examples option", func(t *testing.T) {
+		tool := NewImageTool(nil)
+		opts := &types.SelfTestOptions{
+			IncludeExamples: true,
+		}
+		result := tool.SelfTest(context.Background(), opts)
+
+		require.NotNil(t, result)
+		assert.NotEmpty(t, result.Examples)
+		assert.GreaterOrEqual(t, len(result.Examples), 3)
+
+		// Check first example has required fields
+		ex := result.Examples[0]
+		assert.NotEmpty(t, ex.Name)
+		assert.NotEmpty(t, ex.Description)
+		assert.NotNil(t, ex.Args)
+	})
+
+	t.Run("dependencies reported", func(t *testing.T) {
+		tool := NewImageTool(nil)
+		result := tool.SelfTest(context.Background(), nil)
+
+		require.NotNil(t, result)
+		assert.NotEmpty(t, result.Dependencies)
+
+		// Should have HTTPClient and ToolServices dependencies
+		depNames := make([]string, 0, len(result.Dependencies))
+		for _, dep := range result.Dependencies {
+			depNames = append(depNames, dep.Name)
+		}
+		assert.Contains(t, depNames, "HTTPClient")
+		assert.Contains(t, depNames, "ToolServices")
+	})
+}

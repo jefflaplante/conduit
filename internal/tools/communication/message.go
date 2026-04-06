@@ -1003,3 +1003,101 @@ func (t *MessageTool) GetSchemaHints() map[string]schema.SchemaHints {
 		},
 	}
 }
+
+// SelfTest implements types.SelfTester for MessageTool.
+func (t *MessageTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check ChannelSender service
+	channelSenderDep := types.DependencyStatus{
+		Name:     "ChannelSender",
+		Required: true,
+	}
+
+	if t.services == nil || t.services.ChannelSender == nil {
+		channelSenderDep.Available = false
+		channelSenderDep.Status = "not_configured"
+		channelSenderDep.Message = "ChannelSender service not available in ToolServices"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Message service is not configured"
+		result.Suggestions = []string{
+			"Verify gateway is running",
+			"Check channel configuration in config.json",
+		}
+	} else {
+		channelSenderDep.Available = true
+		channelSenderDep.Status = "connected"
+
+		// Get channel status to determine capabilities
+		channelStatus := t.services.ChannelSender.GetChannelStatusMap()
+		availableTargets := t.services.ChannelSender.GetAvailableTargets()
+
+		if len(channelStatus) == 0 {
+			result.Status = types.SelfTestStatusDegraded
+			result.Message = "Message service available but no channels configured"
+			result.Suggestions = []string{
+				"Configure at least one channel (Telegram, Discord, etc.)",
+				"Use Message with action='status' to verify channel setup",
+			}
+			result.UnavailableCapabilities = []string{"send", "broadcast"}
+			result.Capabilities = []string{"status"}
+		} else {
+			// Count online channels
+			onlineCount := 0
+			var offlineChannels []string
+			for channel, status := range channelStatus {
+				if status == "online" || status == "connected" {
+					onlineCount++
+				} else {
+					offlineChannels = append(offlineChannels, channel)
+				}
+			}
+
+			if onlineCount == 0 {
+				result.Status = types.SelfTestStatusDegraded
+				result.Message = fmt.Sprintf("Channels configured but none online (found %d)", len(channelStatus))
+				result.UnavailableCapabilities = []string{"send", "broadcast"}
+				result.Capabilities = []string{"status"}
+				result.Suggestions = []string{
+					"Check channel connectivity",
+					fmt.Sprintf("Offline channels: %s", strings.Join(offlineChannels, ", ")),
+				}
+			} else {
+				result.Status = types.SelfTestStatusOK
+				result.Message = fmt.Sprintf("Message tool fully functional (%d/%d channels online)",
+					onlineCount, len(channelStatus))
+				result.Capabilities = []string{"send", "broadcast", "status"}
+
+				if opts.Verbose {
+					result.Details = map[string]interface{}{
+						"channel_count":     len(channelStatus),
+						"online_count":      onlineCount,
+						"available_targets": availableTargets,
+					}
+				}
+			}
+		}
+	}
+	deps = append(deps, channelSenderDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = t.GetUsageExamples()
+	}
+
+	return result
+}

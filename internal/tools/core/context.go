@@ -1072,3 +1072,100 @@ func (t *ContextTool) GetUsageExamples() []types.ToolExample {
 		},
 	}
 }
+
+// SelfTest implements types.SelfTester for ContextTool.
+func (t *ContextTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{"workspace", "project", "session", "gateway", "channels", "tools", "beads"},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check ConfigMgr
+	configDep := types.DependencyStatus{
+		Name:     "ConfigMgr",
+		Required: false,
+	}
+	if t.services != nil && t.services.ConfigMgr != nil {
+		configDep.Available = true
+		configDep.Status = "available"
+	} else {
+		configDep.Available = false
+		configDep.Status = "not_configured"
+	}
+	deps = append(deps, configDep)
+
+	// Check workspace directory
+	workspaceDep := types.DependencyStatus{
+		Name:     "WorkspaceDir",
+		Required: false,
+	}
+	workDir := t.getWorkspaceDir()
+	if info, err := os.Stat(workDir); err == nil && info.IsDir() {
+		workspaceDep.Available = true
+		workspaceDep.Status = "exists"
+	} else {
+		workspaceDep.Available = false
+		workspaceDep.Status = "not_found"
+		workspaceDep.Message = "Workspace directory does not exist"
+	}
+	deps = append(deps, workspaceDep)
+
+	// Check git availability
+	gitDep := types.DependencyStatus{
+		Name:     "Git",
+		Required: false,
+	}
+	if _, err := t.runGit(workDir, "rev-parse", "--is-inside-work-tree"); err == nil {
+		gitDep.Available = true
+		gitDep.Status = "available"
+	} else {
+		gitDep.Available = false
+		gitDep.Status = "not_available"
+		gitDep.Message = "Not a git repository or git not installed"
+	}
+	deps = append(deps, gitDep)
+
+	// Check Gateway service
+	gatewayDep := types.DependencyStatus{
+		Name:     "Gateway",
+		Required: false,
+	}
+	if t.services != nil && t.services.Gateway != nil {
+		gatewayDep.Available = true
+		gatewayDep.Status = "available"
+	} else {
+		gatewayDep.Available = false
+		gatewayDep.Status = "not_configured"
+	}
+	deps = append(deps, gatewayDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	// Determine overall status
+	result.Status = types.SelfTestStatusOK
+	result.Message = "Context tool is fully functional"
+
+	if opts.Verbose {
+		result.Details = map[string]interface{}{
+			"workspace_dir":  workDir,
+			"cache_entries":  len(t.cache.entries),
+			"config_present": t.services != nil && t.services.ConfigMgr != nil,
+		}
+	}
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = t.GetUsageExamples()
+	}
+
+	return result
+}

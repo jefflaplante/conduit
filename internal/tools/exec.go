@@ -311,3 +311,128 @@ func getExitCode(err error) int {
 	}
 	return -1
 }
+
+// SelfTest implements types.SelfTester for ExecTool.
+func (t *ExecTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Message:      "Bash tool is functional",
+		Capabilities: []string{"execute_commands", "working_directory", "command_denylist"},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check shell availability by running a simple command
+	shellStatus := types.DependencyStatus{
+		Name:     "Shell",
+		Required: true,
+	}
+
+	testCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(testCtx, "sh", "-c", "echo ok")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		shellStatus.Available = false
+		shellStatus.Status = "unavailable"
+		shellStatus.Message = fmt.Sprintf("shell test failed: %v", err)
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "Shell is not available"
+		result.Suggestions = []string{
+			"Verify that /bin/sh is accessible",
+			"Check system PATH configuration",
+		}
+	} else if strings.TrimSpace(string(output)) == "ok" {
+		shellStatus.Available = true
+		shellStatus.Status = "ready"
+	} else {
+		shellStatus.Available = false
+		shellStatus.Status = "unexpected_output"
+		shellStatus.Message = fmt.Sprintf("expected 'ok', got: %s", strings.TrimSpace(string(output)))
+		result.Status = types.SelfTestStatusDegraded
+		result.Message = "Shell returned unexpected output"
+	}
+	deps = append(deps, shellStatus)
+
+	// Check sandbox configuration
+	sandboxStatus := types.DependencyStatus{
+		Name:     "SandboxConfig",
+		Required: false,
+	}
+
+	if t.registry != nil && t.registry.sandboxCfg.WorkspaceDir != "" {
+		sandboxStatus.Available = true
+		sandboxStatus.Status = "configured"
+		sandboxStatus.Message = fmt.Sprintf("workspace: %s", t.registry.sandboxCfg.WorkspaceDir)
+
+		// Add sandbox details in verbose mode
+		if opts.Verbose {
+			if result.Details == nil {
+				result.Details = make(map[string]interface{})
+			}
+			result.Details["workspace_dir"] = t.registry.sandboxCfg.WorkspaceDir
+			result.Details["allowed_paths"] = t.registry.sandboxCfg.AllowedPaths
+			result.Details["denylist_patterns"] = len(t.getEffectiveDenylist())
+		}
+	} else {
+		sandboxStatus.Available = false
+		sandboxStatus.Status = "not_configured"
+		sandboxStatus.Message = "no workspace directory configured"
+		result.UnavailableCapabilities = append(result.UnavailableCapabilities, "path_restrictions")
+	}
+	deps = append(deps, sandboxStatus)
+
+	// Check command denylist
+	denylistStatus := types.DependencyStatus{
+		Name:     "CommandDenylist",
+		Required: false,
+	}
+
+	denylist := t.getEffectiveDenylist()
+	if len(denylist) > 0 {
+		denylistStatus.Available = true
+		denylistStatus.Status = "active"
+		denylistStatus.Message = fmt.Sprintf("%d patterns configured", len(denylist))
+	} else {
+		denylistStatus.Available = false
+		denylistStatus.Status = "empty"
+		denylistStatus.Message = "no denylist patterns configured"
+		result.UnavailableCapabilities = append(result.UnavailableCapabilities, "command_filtering")
+	}
+	deps = append(deps, denylistStatus)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = []types.ToolExample{
+			{
+				Name:        "List directory contents",
+				Description: "Get a detailed listing of files in the current directory",
+				Args: map[string]interface{}{
+					"command": "ls -la",
+				},
+				Expected: "Returns detailed file listing with permissions, sizes, and dates",
+			},
+			{
+				Name:        "Run command in specific directory",
+				Description: "Execute a command with a custom working directory",
+				Args: map[string]interface{}{
+					"command": "pwd",
+					"cwd":     "/tmp",
+				},
+				Expected: "Returns /tmp as the working directory",
+			},
+		}
+	}
+
+	return result
+}

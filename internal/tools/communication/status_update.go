@@ -3,6 +3,7 @@ package communication
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"conduit/internal/tools/types"
 )
@@ -119,4 +120,96 @@ func (t *StatusUpdateTool) GetUsageExamples() []types.ToolExample {
 			Expected: "Sends update to user's chat",
 		},
 	}
+}
+
+// SelfTest implements types.SelfTester for StatusUpdateTool.
+func (t *StatusUpdateTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
+	start := time.Now()
+
+	if opts == nil {
+		opts = types.DefaultSelfTestOptions()
+	}
+
+	result := &types.SelfTestResult{
+		Status:       types.SelfTestStatusOK,
+		Capabilities: []string{},
+		TestedAt:     time.Now(),
+	}
+
+	deps := []types.DependencyStatus{}
+
+	// Check ChannelSender service
+	channelSenderDep := types.DependencyStatus{
+		Name:     "ChannelSender",
+		Required: true,
+	}
+
+	if t.services == nil || t.services.ChannelSender == nil {
+		channelSenderDep.Available = false
+		channelSenderDep.Status = "not_configured"
+		channelSenderDep.Message = "ChannelSender service not available in ToolServices"
+		result.Status = types.SelfTestStatusFailed
+		result.Message = "StatusUpdate service is not configured"
+		result.Suggestions = []string{
+			"Verify gateway is running",
+			"Check channel configuration in config.json",
+		}
+	} else {
+		channelSenderDep.Available = true
+		channelSenderDep.Status = "connected"
+
+		// Check if there are any channels available
+		channelStatus := t.services.ChannelSender.GetChannelStatusMap()
+
+		if len(channelStatus) == 0 {
+			result.Status = types.SelfTestStatusDegraded
+			result.Message = "StatusUpdate service available but no channels configured"
+			result.Suggestions = []string{
+				"Configure at least one channel (Telegram, Discord, etc.)",
+				"StatusUpdate requires an active channel to send updates",
+			}
+			result.UnavailableCapabilities = []string{"send-update"}
+			result.Capabilities = []string{}
+		} else {
+			// Count online channels
+			onlineCount := 0
+			for _, status := range channelStatus {
+				if status == "online" || status == "connected" {
+					onlineCount++
+				}
+			}
+
+			if onlineCount == 0 {
+				result.Status = types.SelfTestStatusDegraded
+				result.Message = fmt.Sprintf("Channels configured but none online (found %d)", len(channelStatus))
+				result.UnavailableCapabilities = []string{"send-update"}
+				result.Suggestions = []string{
+					"Check channel connectivity",
+					"StatusUpdate requires at least one online channel",
+				}
+			} else {
+				result.Status = types.SelfTestStatusOK
+				result.Message = fmt.Sprintf("StatusUpdate tool fully functional (%d/%d channels online)",
+					onlineCount, len(channelStatus))
+				result.Capabilities = []string{"send-update"}
+
+				if opts.Verbose {
+					result.Details = map[string]interface{}{
+						"channel_count": len(channelStatus),
+						"online_count":  onlineCount,
+					}
+				}
+			}
+		}
+	}
+	deps = append(deps, channelSenderDep)
+
+	result.Dependencies = deps
+	result.TestDuration = time.Since(start)
+
+	if opts.IncludeExamples && result.IsFunctional() {
+		result.Examples = t.GetUsageExamples()
+	}
+
+	return result
 }
