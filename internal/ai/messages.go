@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -48,8 +49,9 @@ func (r *Router) buildChatMessages(session *sessions.Session, userMessage string
 	return messages, nil
 }
 
-// buildChatMessagesWithSystemPrompt constructs messages with agent system prompt
-func (r *Router) buildChatMessagesWithSystemPrompt(session *sessions.Session, userMessage string, systemBlocks []SystemBlock) ([]ChatMessage, error) {
+// buildChatMessagesWithSystemPrompt constructs messages with agent system prompt.
+// Attachments from the context (via WithAttachments) are set on the final user message.
+func (r *Router) buildChatMessagesWithSystemPrompt(ctx context.Context, session *sessions.Session, userMessage string, systemBlocks []SystemBlock) ([]ChatMessage, error) {
 	var messages []ChatMessage
 
 	// Build system message from system blocks
@@ -85,11 +87,15 @@ func (r *Router) buildChatMessagesWithSystemPrompt(session *sessions.Session, us
 		})
 	}
 
-	// Add current user message
-	messages = append(messages, ChatMessage{
+	// Add current user message with any attachments from context
+	userMsg := ChatMessage{
 		Role:    "user",
 		Content: userMessage,
-	})
+	}
+	if attachments := AttachmentsFromContext(ctx); len(attachments) > 0 {
+		userMsg.Attachments = attachments
+	}
+	messages = append(messages, userMsg)
 
 	return messages, nil
 }
