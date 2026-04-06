@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"conduit/internal/ai"
 	"conduit/internal/sessions"
@@ -124,6 +125,138 @@ func formatStatusResponse(session *sessions.Session, messageCount int, usageTrac
 	}
 
 	return sb.String()
+}
+
+// formatCostResponse builds a detailed cost breakdown showing session cost,
+// per-provider token usage, per-model summary, and cache efficiency.
+func formatCostResponse(session *sessions.Session, usageTracker *ai.UsageTracker) string {
+	var sb strings.Builder
+
+	sb.WriteString("Cost Report\n")
+
+	// Session cost
+	if session != nil && session.Context != nil {
+		costStr := session.Context["session_total_cost"]
+		countStr := session.Context["session_request_count"]
+		cost, _ := strconv.ParseFloat(costStr, 64)
+		count, _ := strconv.Atoi(countStr)
+		sb.WriteString("\nSession Cost\n")
+		sb.WriteString(fmt.Sprintf("  Requests: %d\n", count))
+		sb.WriteString(fmt.Sprintf("  Cost:     $%.4f\n", cost))
+	}
+
+	// Global usage
+	if usageTracker == nil {
+		sb.WriteString("\nNo global usage data yet.")
+		return sb.String()
+	}
+
+	snapshot := usageTracker.GetSnapshot()
+	if len(snapshot.Providers) == 0 {
+		sb.WriteString("\nNo global usage data yet.")
+		return sb.String()
+	}
+
+	uptime := formatDuration(snapshot.Snapshot.Sub(snapshot.Since))
+	sb.WriteString(fmt.Sprintf("\nGlobal Cost (uptime: %s)\n", uptime))
+
+	// Per-provider breakdown, sorted alphabetically
+	providerNames := make([]string, 0, len(snapshot.Providers))
+	for name := range snapshot.Providers {
+		providerNames = append(providerNames, name)
+	}
+	sort.Strings(providerNames)
+
+	var totalCost float64
+	for _, name := range providerNames {
+		pr := snapshot.Providers[name]
+		totalCost += pr.TotalCost
+
+		sb.WriteString(fmt.Sprintf("\n  Provider: %s\n", name))
+		sb.WriteString("  ──────────────────────────────────\n")
+		sb.WriteString(fmt.Sprintf("  Requests:      %s\n", formatNumber(int(pr.TotalRequests))))
+		sb.WriteString(fmt.Sprintf("  Input tokens:  %s\n", formatNumber(int(pr.TotalInputTokens))))
+		sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", formatNumber(int(pr.TotalOutputTokens))))
+
+		// Cache lines only when there is cache activity
+		if pr.TotalCacheWriteTokens > 0 || pr.TotalCacheReadTokens > 0 {
+			sb.WriteString(fmt.Sprintf("  Cache writes:  %s\n", formatNumber(int(pr.TotalCacheWriteTokens))))
+			sb.WriteString(fmt.Sprintf("  Cache reads:   %s\n", formatNumber(int(pr.TotalCacheReadTokens))))
+			if pr.CacheSavings > 0 {
+				sb.WriteString(fmt.Sprintf("  Cache savings: $%.2f\n", pr.CacheSavings))
+			}
+		}
+
+		if pr.ErrorCount > 0 {
+			sb.WriteString(fmt.Sprintf("  Errors:        %s\n", formatNumber(int(pr.ErrorCount))))
+		}
+
+		sb.WriteString(fmt.Sprintf("  Cost:          $%.4f\n", pr.TotalCost))
+	}
+
+	// Per-model summary sorted by cost descending
+	if len(snapshot.Models) > 0 {
+		type modelEntry struct {
+			name         string
+			requests     int64
+			cost         float64
+			cacheHitRate float64
+		}
+		models := make([]modelEntry, 0, len(snapshot.Models))
+		for _, mr := range snapshot.Models {
+			models = append(models, modelEntry{
+				name:         mr.Model,
+				requests:     mr.TotalRequests,
+				cost:         mr.TotalCost,
+				cacheHitRate: mr.CacheHitRate,
+			})
+		}
+		sort.Slice(models, func(i, j int) bool {
+			return models[i].cost > models[j].cost
+		})
+
+		sb.WriteString("\n  Models\n")
+		for _, m := range models {
+			line := fmt.Sprintf("    %-36s %4d reqs  $%.4f", m.name, m.requests, m.cost)
+			if m.cacheHitRate > 0 {
+				line += fmt.Sprintf("  cache: %.1f%%", m.cacheHitRate*100)
+			}
+			sb.WriteString(line + "\n")
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf("\n  Total: $%.4f", totalCost))
+
+	return sb.String()
+}
+
+// formatDuration formats a duration as a human-friendly string like "3h 27m" or "2d 5h".
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		m := int(d.Minutes())
+		s := int(d.Seconds()) % 60
+		if s == 0 {
+			return fmt.Sprintf("%dm", m)
+		}
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	if d < 24*time.Hour {
+		h := int(d.Hours())
+		m := int(d.Minutes()) % 60
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh %dm", h, m)
+	}
+	days := int(d.Hours()) / 24
+	h := int(d.Hours()) % 24
+	if h == 0 {
+		return fmt.Sprintf("%dd", days)
+	}
+	return fmt.Sprintf("%dd %dh", days, h)
 }
 
 // contextWarningThresholds defines the percentage levels at which proactive warnings fire.

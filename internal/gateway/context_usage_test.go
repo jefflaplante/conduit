@@ -3,6 +3,7 @@ package gateway
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"conduit/internal/ai"
 	"conduit/internal/sessions"
@@ -237,5 +238,133 @@ func TestContextWarningIfNeeded_ZeroTokens(t *testing.T) {
 	warning := contextWarningIfNeeded(session, 0, "claude-sonnet-4-20250514")
 	if warning.Text != "" {
 		t.Error("Expected no warning for zero tokens")
+	}
+}
+
+func TestFormatCostResponse_SessionCostOnly(t *testing.T) {
+	session := &sessions.Session{
+		Key:    "cost-test-1",
+		UserID: "jeff",
+		Context: map[string]string{
+			"session_total_cost":    "0.123400",
+			"session_request_count": "7",
+		},
+	}
+
+	result := formatCostResponse(session, nil)
+
+	if !strings.Contains(result, "Cost Report") {
+		t.Error("Expected 'Cost Report' header")
+	}
+	if !strings.Contains(result, "Requests: 7") {
+		t.Error("Expected session request count")
+	}
+	if !strings.Contains(result, "$0.1234") {
+		t.Error("Expected session cost")
+	}
+	if !strings.Contains(result, "No global usage data yet.") {
+		t.Error("Expected 'no global usage' message when tracker is nil")
+	}
+}
+
+func TestFormatCostResponse_WithProviders(t *testing.T) {
+	session := &sessions.Session{
+		Key:    "cost-test-2",
+		UserID: "jeff",
+		Context: map[string]string{
+			"session_total_cost":    "0.050000",
+			"session_request_count": "3",
+		},
+	}
+
+	tracker := ai.NewUsageTracker()
+	tracker.RecordUsage("anthropic", "claude-sonnet-4-20250514", 10000, 2000, 5000, 8000, 800)
+	tracker.RecordUsage("anthropic", "claude-opus-4-20250514", 5000, 1000, 0, 0, 1500)
+	tracker.RecordUsage("openai", "gpt-4o", 3000, 500, 0, 0, 600)
+
+	result := formatCostResponse(session, tracker)
+
+	// Provider sections
+	if !strings.Contains(result, "Provider: anthropic") {
+		t.Error("Expected anthropic provider section")
+	}
+	if !strings.Contains(result, "Provider: openai") {
+		t.Error("Expected openai provider section")
+	}
+
+	// Cache lines should appear for anthropic (has cache tokens)
+	if !strings.Contains(result, "Cache writes:") {
+		t.Error("Expected cache writes line for anthropic")
+	}
+	if !strings.Contains(result, "Cache reads:") {
+		t.Error("Expected cache reads line for anthropic")
+	}
+
+	// Model breakdown
+	if !strings.Contains(result, "claude-sonnet-4-20250514") {
+		t.Error("Expected sonnet model in breakdown")
+	}
+	if !strings.Contains(result, "claude-opus-4-20250514") {
+		t.Error("Expected opus model in breakdown")
+	}
+	if !strings.Contains(result, "gpt-4o") {
+		t.Error("Expected gpt-4o model in breakdown")
+	}
+
+	// Total line
+	if !strings.Contains(result, "Total:") {
+		t.Error("Expected total cost line")
+	}
+}
+
+func TestFormatCostResponse_EmptyTracker(t *testing.T) {
+	session := &sessions.Session{
+		Key:     "cost-test-3",
+		UserID:  "jeff",
+		Context: map[string]string{},
+	}
+
+	tracker := ai.NewUsageTracker()
+	result := formatCostResponse(session, tracker)
+
+	if !strings.Contains(result, "No global usage data yet.") {
+		t.Error("Expected 'no global usage' for empty tracker")
+	}
+}
+
+func TestFormatCostResponse_NilSession(t *testing.T) {
+	tracker := ai.NewUsageTracker()
+	tracker.RecordUsage("anthropic", "claude-sonnet-4-20250514", 1000, 500, 0, 0, 800)
+
+	result := formatCostResponse(nil, tracker)
+
+	// Should still show global data without session section
+	if !strings.Contains(result, "Provider: anthropic") {
+		t.Error("Expected provider data even with nil session")
+	}
+	if strings.Contains(result, "Session Cost") {
+		t.Error("Should not show session cost for nil session")
+	}
+}
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		input    time.Duration
+		expected string
+	}{
+		{30 * time.Second, "30s"},
+		{5 * time.Minute, "5m"},
+		{5*time.Minute + 30*time.Second, "5m 30s"},
+		{2 * time.Hour, "2h"},
+		{3*time.Hour + 27*time.Minute, "3h 27m"},
+		{24 * time.Hour, "1d"},
+		{49*time.Hour + 30*time.Minute, "2d 1h"},
+	}
+
+	for _, tt := range tests {
+		result := formatDuration(tt.input)
+		if result != tt.expected {
+			t.Errorf("formatDuration(%v) = %q, want %q", tt.input, result, tt.expected)
+		}
 	}
 }
