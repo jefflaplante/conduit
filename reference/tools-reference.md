@@ -475,13 +475,88 @@ type Tool interface {
 
 Register in `internal/tools/registry.go` within `registerAllTools()`.
 
-## Upcoming Tools
+## SRE & Observability Tools
 
-The following integrations have config and auth infrastructure in place. Full tool implementations are planned:
+The following tools provide SRE observability capabilities. See the [SRE Tools Reference](sre-tools.md) for comprehensive documentation.
 
-| Integration | Config | Client | Tool Status |
-|-------------|--------|--------|-------------|
-| **PagerDuty** | `pagerduty` | REST v2 | Config + client ready, tool pending |
-| **Datadog** | `datadog` | REST v1/v2 | Config + client ready, tool pending |
+| Tool | Config Section | Description |
+|------|---------------|-------------|
+| **PagerDuty** | `pagerduty` | Incident management, services, on-call queries via REST API v2 |
+| **Datadog** | `datadog` | Metrics queries, log search, monitor management via REST API |
+| **Datadog Monitor** | `datadog` | Dedicated monitor CRUD operations (separate tool) |
+| **SRE** | requires both | Incident correlation across PagerDuty + Datadog |
 
-See [Configuration Reference](configuration.md) for setup details.
+See [Configuration Reference](configuration.md) and [SRE Tools Reference](sre-tools.md) for setup details.
+
+## Additional Tools
+
+### DebugLog
+
+Inspect the in-memory debug log of recent tool calls, LLM requests, and model thinking. Entries are kept in a rolling buffer and never written to disk. Requires the ring buffer to be enabled.
+
+| Action | Parameters | Description |
+|--------|-----------|-------------|
+| `dump` | `limit` (int, default 50, max 500), `filter` (enum) | Dump recent debug log entries |
+| `clear` | — | Clear the ring buffer |
+| `status` | — | Get buffer status (entry count, capacity) |
+
+**Filter values:** `tool_start`, `tool_complete`, `tool_error`, `thinking`, `llm_request`, `llm_response`
+
+### StatusUpdate
+
+Send a progress update to the user who initiated this request. Automatically resolves the originating channel and user from request context — no target parameter needed.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `message` | string | yes | Progress update to send (1-2 sentences) |
+
+### google_workspace
+
+Access Gmail and Calendar via the `gws` CLI. Requires `npm install -g @googleworkspace/cli` and `gws auth login`.
+
+| Action | Parameters | Description |
+|--------|-----------|-------------|
+| `email_search` | `query` (required), `limit` (default 10) | Search Gmail using Gmail query syntax |
+| `email_read` | `message_id` (required) | Read a specific email |
+| `email_send` | `to`, `subject`, `body` (all required), `cc`, `bcc`, `from_alias` | Send an email |
+| `email_trash` | `message_id` (required) | Move email to trash |
+| `calendar_list` | `calendar_id` (default `primary`), `days` (default 7), `limit` (default 10) | List upcoming events |
+| `calendar_create` | `title`, `start`, `end` (all required, ISO8601), `description`, `location`, `calendar_id` | Create a calendar event |
+| `calendar_delete` | `event_id` (required), `calendar_id` (default `primary`) | Delete a calendar event |
+
+**Configuration:** `tools.services.google_workspace.gws_path` (default `"gws"`), `tools.services.google_workspace.user_id` (default `"me"`). See [Google Workspace Guide](google-workspace.md).
+
+### Ssh
+
+Execute commands on remote hosts via SSH with security tiers and audit logging.
+
+| Action | Parameters | Description |
+|--------|-----------|-------------|
+| `exec` | `host` (required), `command` (required), `timeout` (default 30s) | Execute a command on a remote host |
+| `exec_group` | `group` (required), `command` (required), `timeout`, `max_parallel` | Fan-out execute across all hosts in a group |
+| `hosts` | — | List configured hosts and groups |
+| `status` | — | Show connection pool and security config |
+| `session_start` | `host` (required) | Start a persistent shell session |
+| `session_send` | `session_id` (required), `command` (required), `timeout` | Send command to persistent session |
+| `session_close` | `session_id` (required) | Close a persistent session |
+| `session_list` | — | List active sessions |
+| `tunnel_create` | `host`, `remote_host`, `remote_port` (required), `local_port` | Create SSH tunnel (localhost only) |
+| `tunnel_close` | `tunnel_id` (required) | Close a tunnel |
+| `tunnel_list` | — | List active tunnels |
+| `scp_upload` | `host`, `local_path`, `remote_path` (all required) | Upload file to remote host |
+| `scp_download` | `host`, `remote_path`, `local_path` (all required) | Download file from remote host |
+
+**Security tiers:** `read`, `modify`, `dangerous`, `blocked`. See [Remote SSH Reference](remote-ssh.md).
+
+### UniFi
+
+Interact with UniFi Network and Protect systems.
+
+| Action | Parameters | Description |
+|--------|-----------|-------------|
+| `snapshot` | `camera` (optional name/ID) | Capture JPEG snapshot from a camera |
+| `cameras` | — | List all UniFi Protect cameras |
+| `devices` | `system` (`network` or `protect`) | List network devices (not yet implemented) |
+| `status` | `system` (`network` or `protect`) | Show system status (not yet implemented) |
+
+**Environment variables:** `UNVR_URL` (controller URL), `UNVR_API_KEY` (bearer token), `UNIFI_INSECURE_TLS` (skip TLS verification).
