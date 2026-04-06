@@ -33,6 +33,8 @@ func TestConsolidate_SalienceDecay(t *testing.T) {
 
 	// Set decay rate
 	rem.config.SalienceDecayRate = 0.1
+	// Lower threshold so decay isn't skipped for small test datasets
+	rem.config.MaxLTMEntries = 1
 
 	result, err := rem.Consolidate(ctx, false)
 	require.NoError(t, err)
@@ -122,6 +124,8 @@ func TestConsolidate_DryRun(t *testing.T) {
 	require.NoError(t, err)
 
 	rem.config.SalienceDecayRate = 0.1
+	// Lower threshold so decay isn't skipped for small test datasets
+	rem.config.MaxLTMEntries = 1
 
 	// Run in dry-run mode
 	result, err := rem.Consolidate(ctx, true)

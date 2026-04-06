@@ -19,6 +19,7 @@ type REMConfig struct {
 	GroomWithLLM         bool
 	LogPath              string // Relative to WorkspaceDir if not absolute
 	WorkspaceDir         string // Absolute path to workspace root (e.g. /home/jules/ocgo/workspace)
+	MaxLTMEntries        int    // When LTM count is below this, skip pruning/decay (default 10000)
 }
 
 // REMCycle orchestrates offline memory consolidation

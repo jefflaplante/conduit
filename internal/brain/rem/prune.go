@@ -4,25 +4,60 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 )
 
-// Prune moves low-value entries to the archive (safe deletion)
+// isFilePath returns true if the source string looks like a filesystem path
+// (absolute path or file: prefixed). Non-path sources like "tool", "user:manual",
+// "llm:generated" etc. should NOT be checked with os.Stat.
+func isFilePath(source string) bool {
+	if source == "" {
+		return false
+	}
+	// Explicit file: prefix (used by groom.go convention)
+	if strings.HasPrefix(source, "file:") {
+		return true
+	}
+	// Absolute filesystem path
+	if strings.HasPrefix(source, "/") {
+		return true
+	}
+	return false
+}
+
+// Prune moves low-value entries to the archive (safe deletion).
+// When the LTM table is under MaxLTMEntries, pruning is skipped entirely —
+// there's no performance or quality reason to evict entries from a small table.
 func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error) {
 	result := &PruneResult{
 		Archived: []ArchiveRecord{},
 		Orphaned: []string{},
 	}
 
-	// Get evict threshold from brain config (default 0.1 if not available)
-	evictThreshold := 0.1
-	if r.brain != nil {
-		// The REMCycle has access to brain via the struct, but we need evictThreshold
-		// For now, use the default from the config field
-		// TODO: Consider passing BrainConfig to REMCycle if needed
+	// Guard: skip pruning when LTM is under the size threshold.
+	// A small table doesn't degrade performance or search quality.
+	maxEntries := r.config.MaxLTMEntries
+	if maxEntries <= 0 {
+		maxEntries = 10000 // safe default
 	}
 
+	var ltmCount int
+	if err := r.db.QueryRow("SELECT COUNT(*) FROM brain_ltm").Scan(&ltmCount); err != nil {
+		return nil, fmt.Errorf("count LTM entries: %w", err)
+	}
+
+	if ltmCount < maxEntries {
+		// Under threshold — only do orphan detection for entries whose source
+		// files have genuinely been deleted from disk. Skip salience-based eviction.
+		return r.pruneOrphansOnly(ctx, result, dryRun)
+	}
+
+	// Over threshold — run full salience-based eviction + orphan detection.
+
+	// Get evict threshold from brain config (default 0.1)
+	evictThreshold := 0.1
+
 	// 1. Find entries to evict based on salience and age
-	//    Query: salience < config.EvictThreshold AND accessed_at < (now - PruneAgeDays)
 	query := `
 		SELECT key, value, source, salience
 		FROM brain_ltm
@@ -58,7 +93,6 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 	// 2. Archive entries (move, don't delete)
 	for _, c := range candidates {
 		if !dryRun {
-			// Insert into archive (replace if already archived)
 			_, err := r.db.Exec(`
 				INSERT OR REPLACE INTO brain_archive (key, value, source, tier, salience, reason, archived_at)
 				VALUES (?, ?, ?, 'longterm', ?, 'low_salience', datetime('now'))
@@ -67,7 +101,6 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 				return nil, fmt.Errorf("archive entry %q: %w", c.key, err)
 			}
 
-			// Delete from LTM
 			_, err = r.db.Exec("DELETE FROM brain_ltm WHERE key = ?", c.key)
 			if err != nil {
 				return nil, fmt.Errorf("delete entry %q from LTM: %w", c.key, err)
@@ -80,10 +113,14 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 		})
 	}
 
-	// 3. Detect orphaned keys
-	//    - Entries with source pointing to non-existent files
-	//    - Check if source file exists using os.Stat()
-	//    - Archive with reason = 'orphaned'
+	// 3. Detect orphaned keys (file-path sources only)
+	return r.pruneOrphansOnly(ctx, result, dryRun)
+}
+
+// pruneOrphansOnly detects entries whose source files have been deleted.
+// Only checks entries with file-path sources (absolute paths or file: prefix).
+// Non-path sources like "tool", "user:manual", "llm:generated" are skipped.
+func (r *REMCycle) pruneOrphansOnly(ctx context.Context, result *PruneResult, dryRun bool) (*PruneResult, error) {
 	orphanQuery := `
 		SELECT key, value, source, salience
 		FROM brain_ltm
@@ -110,8 +147,19 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 			return nil, fmt.Errorf("scan orphan candidate: %w", err)
 		}
 
-		// Check if source file exists
-		if _, err := os.Stat(o.source); os.IsNotExist(err) {
+		// Only check sources that are filesystem paths.
+		// "tool", "user:manual", "llm:generated" etc. are NOT file paths.
+		if !isFilePath(o.source) {
+			continue
+		}
+
+		// Resolve the actual path to stat.
+		pathToCheck := o.source
+		if strings.HasPrefix(pathToCheck, "file:") {
+			pathToCheck = strings.TrimPrefix(pathToCheck, "file:")
+		}
+
+		if _, err := os.Stat(pathToCheck); os.IsNotExist(err) {
 			orphans = append(orphans, o)
 		}
 	}
@@ -122,7 +170,6 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 	// Archive orphaned entries
 	for _, o := range orphans {
 		if !dryRun {
-			// Insert into archive (replace if already archived)
 			_, err := r.db.Exec(`
 				INSERT OR REPLACE INTO brain_archive (key, value, source, tier, salience, reason, archived_at)
 				VALUES (?, ?, ?, 'longterm', ?, 'orphaned', datetime('now'))
@@ -131,7 +178,6 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 				return nil, fmt.Errorf("archive orphaned entry %q: %w", o.key, err)
 			}
 
-			// Delete from LTM
 			_, err = r.db.Exec("DELETE FROM brain_ltm WHERE key = ?", o.key)
 			if err != nil {
 				return nil, fmt.Errorf("delete orphaned entry %q from LTM: %w", o.key, err)

@@ -35,6 +35,7 @@ func TestCycle_FullRun(t *testing.T) {
 	rem.config.PruneAgeDays = 30
 	rem.config.SalienceDecayRate = 0.1
 	rem.config.IntegrationDay = int(time.Now().Weekday())
+	rem.config.MaxLTMEntries = 1 // lower threshold so pruning runs on small test data
 	logDir := filepath.Join(tmpDir, "rem-logs")
 	require.NoError(t, os.MkdirAll(logDir, 0755))
 	rem.config.LogPath = logDir
@@ -42,7 +43,7 @@ func TestCycle_FullRun(t *testing.T) {
 	// Create memory directory and daily log
 	memoryDir := filepath.Join(tmpDir, "memory")
 	require.NoError(t, os.MkdirAll(memoryDir, 0755))
-	today := "2026-04-05"
+	today := time.Now().Format("2006-01-02")
 	dailyLogPath := filepath.Join(memoryDir, today+".md")
 	logContent := `# Daily Log
 - Learned: New solar fact

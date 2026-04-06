@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"conduit/internal/brain"
 
@@ -45,9 +46,9 @@ func TestTriage_WithDailyLog(t *testing.T) {
 	rem.config.LogPath = filepath.Join(tmpDir, "rem-logs")
 
 	// Create today's daily log with facts
-	today := "2026-04-05" // Use current date from context
+	today := time.Now().Format("2006-01-02")
 	dailyLogPath := filepath.Join(memoryDir, today+".md")
-	logContent := `# Daily Log - 2026-04-05
+	logContent := `# Daily Log - ` + today + `
 
 ## Activities
 - Learned: Jeff's favorite bourbon is Maker's Mark
@@ -91,9 +92,9 @@ func TestTriage_WithWorkingMemory(t *testing.T) {
 	require.NoError(t, os.MkdirAll(memoryDir, 0755))
 	rem.config.LogPath = filepath.Join(tmpDir, "rem-logs")
 
-	today := "2026-04-05"
+	today := time.Now().Format("2006-01-02")
 	dailyLogPath := filepath.Join(memoryDir, today+".md")
-	logContent := `# Daily Log - 2026-04-05
+	logContent := `# Daily Log - ` + today + `
 
 - Learned: solar.production reached new high
 - Updated: bourbon.favorite confirmed
@@ -153,7 +154,7 @@ func TestTriage_DryRun(t *testing.T) {
 	require.NoError(t, os.MkdirAll(memoryDir, 0755))
 	rem.config.LogPath = filepath.Join(tmpDir, "rem-logs")
 
-	today := "2026-04-05"
+	today := time.Now().Format("2006-01-02")
 	dailyLogPath := filepath.Join(memoryDir, today+".md")
 	logContent := `# Daily Log
 - Learned: test fact

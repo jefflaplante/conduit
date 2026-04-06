@@ -19,230 +19,207 @@ func TestPrune_LowSalienceEntries(t *testing.T) {
 
 	ctx := brain.WithUserID(context.Background(), "testuser")
 
-	// Insert low-salience old entries
-	oldTime := time.Now().Add(-40 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
-	_, err := rem.db.Exec(`
-		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, "low.key1", "value1", "test", oldTime, oldTime, 1, 0.05)
+	// Store a low-salience entry with old access time
+	err := b.Store(ctx, "old.key", "old value", brain.TierLongTerm, "")
 	require.NoError(t, err)
 
-	_, err = rem.db.Exec(`
-		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, "low.key2", "value2", "test", oldTime, oldTime, 1, 0.08)
+	// Manually set low salience and old accessed_at
+	oldTime := time.Now().Add(-60 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+	_, err = rem.db.Exec("UPDATE brain_ltm SET salience = 0.01, accessed_at = ?", oldTime)
 	require.NoError(t, err)
 
-	rem.config.PruneAgeDays = 30
-
+	// With default MaxLTMEntries=10000, table has 1 entry → under threshold → skip eviction
 	result, err := rem.Prune(ctx, false)
 	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	// Should have archived low-salience entries
-	assert.GreaterOrEqual(t, len(result.Archived), 2)
-
-	// Verify entries were moved to archive
-	var count int
-	err = rem.db.QueryRow(`SELECT COUNT(*) FROM brain_archive WHERE reason = 'low_salience'`).Scan(&count)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, count, 2)
-
-	// Verify entries were deleted from LTM
-	err = rem.db.QueryRow(`SELECT COUNT(*) FROM brain_ltm WHERE key IN ('low.key1', 'low.key2')`).Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 0, count)
+	assert.Empty(t, result.Archived, "should NOT evict when under MaxLTMEntries threshold")
 }
 
-func TestPrune_OrphanedEntries(t *testing.T) {
+func TestPrune_LowSalienceEntries_OverThreshold(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	// Set threshold very low so our small test data triggers eviction
+	rem.config.MaxLTMEntries = 1
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+
+	// Store two entries (over threshold of 1)
+	err := b.Store(ctx, "keep.key", "keep value", brain.TierLongTerm, "")
+	require.NoError(t, err)
+	err = b.Store(ctx, "evict.key", "evict value", brain.TierLongTerm, "")
+	require.NoError(t, err)
+
+	// Make evict.key low-salience and old
+	oldTime := time.Now().Add(-60 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+	_, err = rem.db.Exec("UPDATE brain_ltm SET salience = 0.01, accessed_at = ? WHERE key = 'evict.key'", oldTime)
+	require.NoError(t, err)
+
+	// keep.key stays recent — won't match the salience+age filter
+	result, err := rem.Prune(ctx, false)
+	require.NoError(t, err)
+
+	// evict.key should be archived
+	found := false
+	for _, a := range result.Archived {
+		if a.Key == "evict.key" && a.Reason == "low_salience" {
+			found = true
+		}
+	}
+	assert.True(t, found, "evict.key should be archived when over threshold")
+}
+
+func TestPrune_OrphanedFileSource(t *testing.T) {
 	rem, b, tmpDir := setupTestREMCycle(t)
 	defer b.Close()
 
 	ctx := brain.WithUserID(context.Background(), "testuser")
 
-	// Create a temporary file that we'll delete
-	testFile := filepath.Join(tmpDir, "test.md")
+	// Create and then delete a file to make a genuine orphan
+	testFile := filepath.Join(tmpDir, "temp.md")
 	require.NoError(t, os.WriteFile(testFile, []byte("test content"), 0644))
-
-	// Store an entry with this file as source
 	require.NoError(t, b.Store(ctx, "orphan.key", "value", brain.TierLongTerm, testFile))
-
-	// Delete the file to make the entry orphaned
 	require.NoError(t, os.Remove(testFile))
-
-	rem.config.PruneAgeDays = 30
 
 	result, err := rem.Prune(ctx, false)
 	require.NoError(t, err)
-	require.NotNil(t, result)
 
-	// Should detect orphaned entries
-	assert.GreaterOrEqual(t, len(result.Orphaned), 1)
+	// The entry with a deleted file should be orphaned
 	assert.Contains(t, result.Orphaned, "orphan.key")
 
-	// Verify entry was archived
+	// Verify it was archived
 	var count int
-	err = rem.db.QueryRow(`SELECT COUNT(*) FROM brain_archive WHERE key = ? AND reason = 'orphaned'`, "orphan.key").Scan(&count)
+	err = rem.db.QueryRow("SELECT COUNT(*) FROM brain_archive WHERE key = 'orphan.key'").Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
+}
 
-	// Verify entry was deleted from LTM
-	err = rem.db.QueryRow(`SELECT COUNT(*) FROM brain_ltm WHERE key = ?`, "orphan.key").Scan(&count)
+func TestPrune_NonPathSourcesNotOrphaned(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+
+	// Store entries with non-path sources — these should NEVER be treated as orphaned
+	require.NoError(t, b.Store(ctx, "tool.key", "value", brain.TierLongTerm, "tool"))
+	require.NoError(t, b.Store(ctx, "user.key", "value1", brain.TierLongTerm, "user:manual"))
+	require.NoError(t, b.Store(ctx, "llm.key", "value2", brain.TierLongTerm, "llm:generated"))
+	require.NoError(t, b.Store(ctx, "skill.key", "value3", brain.TierLongTerm, "skill:profile"))
+	require.NoError(t, b.Store(ctx, "sub.key", "value4", brain.TierLongTerm, "sub-agent:abc"))
+
+	result, err := rem.Prune(ctx, false)
 	require.NoError(t, err)
-	assert.Equal(t, 0, count)
+
+	// None of these should be orphaned
+	assert.Empty(t, result.Orphaned, "non-path sources should not be treated as orphaned")
+	assert.Empty(t, result.Archived, "nothing should be archived when under threshold and no real orphans")
 }
 
 func TestPrune_DryRun(t *testing.T) {
 	rem, b, _ := setupTestREMCycle(t)
 	defer b.Close()
 
+	// Set threshold low to trigger eviction logic
+	rem.config.MaxLTMEntries = 1
+
 	ctx := brain.WithUserID(context.Background(), "testuser")
 
-	// Insert low-salience old entry
-	oldTime := time.Now().Add(-40 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
-	_, err := rem.db.Exec(`
-		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, "prune.key", "value", "test", oldTime, oldTime, 1, 0.05)
+	err := b.Store(ctx, "dry.key1", "value", brain.TierLongTerm, "")
+	require.NoError(t, err)
+	err = b.Store(ctx, "dry.key2", "value", brain.TierLongTerm, "")
 	require.NoError(t, err)
 
-	rem.config.PruneAgeDays = 30
-
-	// Run in dry-run mode
-	result, err := rem.Prune(ctx, true)
+	oldTime := time.Now().Add(-60 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+	_, err = rem.db.Exec("UPDATE brain_ltm SET salience = 0.01, accessed_at = ? WHERE key = 'dry.key2'", oldTime)
 	require.NoError(t, err)
-	require.NotNil(t, result)
 
-	// Should report what would be archived
-	assert.GreaterOrEqual(t, len(result.Archived), 1)
-
-	// Verify entry was NOT archived (dry run)
-	var count int
-	err = rem.db.QueryRow(`SELECT COUNT(*) FROM brain_archive`).Scan(&count)
+	result, err := rem.Prune(ctx, true) // dry run
 	require.NoError(t, err)
-	assert.Equal(t, 0, count)
 
-	// Verify entry still exists in LTM
-	err = rem.db.QueryRow(`SELECT COUNT(*) FROM brain_ltm WHERE key = ?`, "prune.key").Scan(&count)
+	// Should identify candidate but not actually archive
+	var ltmCount int
+	err = rem.db.QueryRow("SELECT COUNT(*) FROM brain_ltm").Scan(&ltmCount)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count)
+	assert.Equal(t, 2, ltmCount, "dry run should not delete entries")
+
+	// But result should still report what would happen
+	assert.NotEmpty(t, result.Archived)
 }
 
-func TestPrune_PreservesRecentEntries(t *testing.T) {
+func TestPrune_RecentEntriesKept(t *testing.T) {
 	rem, b, _ := setupTestREMCycle(t)
 	defer b.Close()
 
+	// Set threshold low
+	rem.config.MaxLTMEntries = 1
+
 	ctx := brain.WithUserID(context.Background(), "testuser")
 
-	// Store recent entry even with low salience
-	// Note: source is empty, so it won't be checked for orphans
+	// Store entries — both recent
 	require.NoError(t, b.Store(ctx, "recent.key", "value", brain.TierLongTerm, ""))
+	require.NoError(t, b.Store(ctx, "recent.key2", "value2", brain.TierLongTerm, ""))
 
-	// Update salience to be low (but accessed_at is recent)
-	_, err := rem.db.Exec(`UPDATE brain_ltm SET salience = 0.05 WHERE key = ?`, "recent.key")
+	// Make salience low but keep accessed_at recent (within PruneAgeDays)
+	_, err := rem.db.Exec("UPDATE brain_ltm SET salience = 0.01")
 	require.NoError(t, err)
-
-	rem.config.PruneAgeDays = 30
 
 	result, err := rem.Prune(ctx, false)
 	require.NoError(t, err)
-	require.NotNil(t, result)
 
-	// Recent entry should not be archived (accessed_at is within PruneAgeDays)
-	var count int
-	err = rem.db.QueryRow(`SELECT COUNT(*) FROM brain_ltm WHERE key = ?`, "recent.key").Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 1, count, "recent entry should be preserved")
+	// Recent entries should NOT be evicted even with low salience
+	assert.Empty(t, result.Archived, "recent entries should not be evicted")
 }
 
-func TestPrune_PreservesHighSalienceEntries(t *testing.T) {
-	rem, b, _ := setupTestREMCycle(t)
+func TestPrune_FileColonSourceOrphaned(t *testing.T) {
+	rem, b, tmpDir := setupTestREMCycle(t)
 	defer b.Close()
 
 	ctx := brain.WithUserID(context.Background(), "testuser")
 
-	// Insert old entry with high salience and empty source (so it won't be orphan-checked)
-	oldTime := time.Now().Add(-40 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
-	_, err := rem.db.Exec(`
-		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, "important.key", "value", "", oldTime, oldTime, 1, 0.8)
-	require.NoError(t, err)
-
-	rem.config.PruneAgeDays = 30
+	// Create file, store with file: prefix, then delete
+	testFile := filepath.Join(tmpDir, "gone.md")
+	require.NoError(t, os.WriteFile(testFile, []byte("content"), 0644))
+	require.NoError(t, b.Store(ctx, "file.orphan", "value", brain.TierLongTerm, "file:"+testFile))
+	require.NoError(t, os.Remove(testFile))
 
 	result, err := rem.Prune(ctx, false)
 	require.NoError(t, err)
-	require.NotNil(t, result)
 
-	// High salience entry should not be archived even if old
-	var count int
-	err = rem.db.QueryRow(`SELECT COUNT(*) FROM brain_ltm WHERE key = ?`, "important.key").Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 1, count)
+	assert.Contains(t, result.Orphaned, "file.orphan")
 }
 
-func TestPrune_EmptyLTM(t *testing.T) {
-	rem, b, _ := setupTestREMCycle(t)
+func TestPrune_ExistingFileNotOrphaned(t *testing.T) {
+	rem, b, tmpDir := setupTestREMCycle(t)
 	defer b.Close()
 
 	ctx := brain.WithUserID(context.Background(), "testuser")
 
-	rem.config.PruneAgeDays = 30
+	// Create file and keep it
+	testFile := filepath.Join(tmpDir, "exists.md")
+	require.NoError(t, os.WriteFile(testFile, []byte("content"), 0644))
+	require.NoError(t, b.Store(ctx, "file.exists", "value", brain.TierLongTerm, testFile))
 
 	result, err := rem.Prune(ctx, false)
 	require.NoError(t, err)
-	require.NotNil(t, result)
 
-	// Should complete without errors
-	assert.Empty(t, result.Archived)
-	assert.Empty(t, result.Orphaned)
-}
-
-func TestPrune_NonFileSource(t *testing.T) {
-	rem, b, _ := setupTestREMCycle(t)
-	defer b.Close()
-
-	ctx := brain.WithUserID(context.Background(), "testuser")
-
-	// Store entries with non-file sources that will fail os.Stat
-	require.NoError(t, b.Store(ctx, "user.key", "value1", brain.TierLongTerm, "user:manual"))
-	require.NoError(t, b.Store(ctx, "llm.key", "value2", brain.TierLongTerm, "llm:generated"))
-
-	rem.config.PruneAgeDays = 30
-
-	result, err := rem.Prune(ctx, false)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	// Non-file sources will be treated as orphaned (os.Stat fails)
-	// This is expected behavior - prune checks all non-empty sources
-	assert.GreaterOrEqual(t, len(result.Orphaned), 2)
-	assert.Contains(t, result.Orphaned, "user.key")
-	assert.Contains(t, result.Orphaned, "llm.key")
-
-	// Entries should be archived and removed from LTM
-	var count int
-	err = rem.db.QueryRow(`SELECT COUNT(*) FROM brain_ltm WHERE key IN ('user.key', 'llm.key')`).Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 0, count)
+	assert.Empty(t, result.Orphaned, "existing file should not be orphaned")
 }
 
 func TestPrune_ArchivePreservesMetadata(t *testing.T) {
-	rem, b, _ := setupTestREMCycle(t)
+	rem, b, tmpDir := setupTestREMCycle(t)
 	defer b.Close()
 
 	ctx := brain.WithUserID(context.Background(), "testuser")
 
-	// Insert low-salience old entry with specific metadata
-	oldTime := time.Now().Add(-40 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
-	_, err := rem.db.Exec(`
-		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, "archive.key", "archive value", "test:source", oldTime, oldTime, 5, 0.05)
+	// Create a file, store entry, then delete to trigger orphan archival
+	testFile := filepath.Join(tmpDir, "meta.md")
+	require.NoError(t, os.WriteFile(testFile, []byte("content"), 0644))
+	require.NoError(t, b.Store(ctx, "archive.key", "archive value", brain.TierLongTerm, testFile))
+
+	// Set specific salience
+	_, err := rem.db.Exec("UPDATE brain_ltm SET salience = 0.05 WHERE key = 'archive.key'")
 	require.NoError(t, err)
 
-	rem.config.PruneAgeDays = 30
+	require.NoError(t, os.Remove(testFile))
 
 	result, err := rem.Prune(ctx, false)
 	require.NoError(t, err)
@@ -259,6 +236,30 @@ func TestPrune_ArchivePreservesMetadata(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "archive.key", key)
 	assert.Equal(t, "archive value", value)
-	assert.Equal(t, "test:source", source)
+	assert.Equal(t, testFile, source)
 	assert.Equal(t, 0.05, salience)
+}
+
+func TestIsFilePath(t *testing.T) {
+	tests := []struct {
+		source   string
+		expected bool
+	}{
+		{"", false},
+		{"tool", false},
+		{"user:manual", false},
+		{"llm:generated", false},
+		{"skill:profile", false},
+		{"sub-agent:abc", false},
+		{"/home/jules/file.md", true},
+		{"/tmp/test", true},
+		{"file:MEMORY.md", true},
+		{"file:/home/jules/workspace/test.md", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.source, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isFilePath(tt.source))
+		})
+	}
 }

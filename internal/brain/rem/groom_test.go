@@ -38,6 +38,7 @@ func setupTestREMCycle(t *testing.T) (*REMCycle, *brain.Brain, string) {
 		GroomWithLLM:         false,
 		LogPath:              "",
 		WorkspaceDir:         tmpDir,
+		MaxLTMEntries:        10000,
 	}
 
 	rem := NewREMCycle(b, db, config)
