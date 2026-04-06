@@ -23,6 +23,7 @@ Complete reference for every `config.json` option, how each option behaves, how 
 - [ssh](#ssh)
 - [vector](#vector)
 - [debug](#debug)
+- [stt](#stt)
 - [Use-Case Recipes](#use-case-recipes)
 
 ---
@@ -874,6 +875,46 @@ The `--verbose` / `-v` CLI flag also enables verbose logging and can be used ins
 
 ---
 
+## `stt`
+
+Speech-to-text configuration for transcribing incoming voice messages (e.g., Telegram voice notes) into text before passing them to the AI.
+
+```json
+{
+  "stt": {
+    "enabled": true,
+    "provider": "whisper",
+    "api_key": "${OPENAI_API_KEY}",
+    "model": "whisper-1"
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable speech-to-text transcription |
+| `provider` | string | `"whisper"` | STT provider. Currently only `"whisper"` (OpenAI Whisper API) is supported |
+| `api_key` | string | — | OpenAI API key (supports `${ENV_VAR}` expansion) |
+| `model` | string | `"whisper-1"` | Whisper model to use for transcription |
+
+### How it works
+
+When a Telegram user sends a voice message:
+
+1. The adapter downloads the OGG/OPUS audio from Telegram
+2. The audio is sent to the OpenAI Whisper API for transcription
+3. The transcribed text is passed to the AI as a normal message with `type=voice` metadata
+
+If STT is not enabled, voice messages receive an automatic reply: *"Voice messages are not supported (speech-to-text not configured)."*
+
+### Requirements
+
+- An OpenAI API key with access to the Whisper API
+- A Telegram channel configured in `channels`
+- Telegram voice messages are OGG/OPUS format and up to 20 MB (within Whisper's 25 MB limit)
+
+---
+
 ## Use-Case Recipes
 
 ### Headless AI chatbot (no tools, no channels)
@@ -956,6 +997,18 @@ Add a Telegram channel to the above:
 ```
 
 Requires: `TELEGRAM_BOT_TOKEN` environment variable. Create a bot via @BotFather on Telegram.
+
+To enable voice message transcription, add the [`stt`](#stt) section alongside channels:
+
+```json
+{
+  "stt": {
+    "enabled": true,
+    "api_key": "${OPENAI_API_KEY}",
+    "model": "whisper-1"
+  }
+}
+```
 
 To restrict which groups the bot responds in:
 
