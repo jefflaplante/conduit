@@ -382,6 +382,31 @@ The tool requires `gws` to be installed separately (`npm install -g @googleworks
 }
 ```
 
+#### Telegram Photo Vision
+
+When a Telegram channel is enabled, incoming photos are automatically downloaded and sent to the AI as image content blocks for vision analysis. No additional configuration is required — the feature works out of the box with any vision-capable model.
+
+**How it works:**
+- User sends a photo in Telegram (with or without a caption)
+- Conduit downloads the highest-resolution version from Telegram's servers
+- The image is base64-encoded and sent inline to the AI provider as an image content block
+- The AI describes or analyzes what it sees in the image
+
+**Supported providers:**
+- **Anthropic** — Native `image` content blocks (Claude 3+ models with vision)
+- **OpenAI / Ollama / compatible** — `image_url` content blocks with base64 data URIs (GPT-4o, LLaVA, etc.)
+
+**Constraints:**
+- Maximum photo size: 20 MB (Telegram's file size limit)
+- Supported formats: JPEG, PNG, GIF, WebP
+- Images are carried in-memory only and are **never persisted** to the database. Session history stores a text marker (`[Photo] caption` or `[Sent a photo]`) so the AI knows an image was shared earlier in conversation, even though it can no longer see it.
+- Unsupported formats or download failures result in a user-facing error message in Telegram
+
+**Prerequisites:**
+- A Telegram channel must be enabled (see above)
+- The configured AI provider/model must support vision (e.g., `claude-sonnet-4-20250514`, `gpt-4o`, `llava`)
+- Text-only models will receive the caption but not the image data
+
 ### SSH Server
 
 ```json
