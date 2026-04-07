@@ -110,14 +110,21 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 		})
 	}
 
-	// Check if first message is system and convert to block format
-	if len(messages) > 0 && messages[0].Role == "system" {
-		systemBlocks = append(systemBlocks, map[string]interface{}{
-			"type": "text",
-			"text": messages[0].Content,
-		})
-		messages = messages[1:] // Remove system from messages array
+	// Extract ALL system messages from the array and consolidate into system blocks.
+	// This handles cases where system messages are injected mid-conversation
+	// (e.g., goal refocus during tool execution chains).
+	var filteredMessages []ChatMessage
+	for _, msg := range messages {
+		if msg.Role == "system" {
+			systemBlocks = append(systemBlocks, map[string]interface{}{
+				"type": "text",
+				"text": msg.Content,
+			})
+		} else {
+			filteredMessages = append(filteredMessages, msg)
+		}
 	}
+	messages = filteredMessages
 
 	// Convert messages to Anthropic format (handles tool results)
 	anthropicMessages := a.convertMessagesToAnthropic(messages)
