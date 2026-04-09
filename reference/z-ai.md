@@ -1,6 +1,6 @@
-# z.ai Provider Setup
+# z.ai / Zhipu AI (GLM) Provider Setup
 
-z.ai is an AI inference platform from Zhipu AI, China's leading independent LLM company. It provides OpenAI-compatible APIs for the GLM (General Language Model) series.
+z.ai is the international platform for Zhipu AI, China's leading independent LLM company. It provides OpenAI-compatible APIs for the GLM (General Language Model) series.
 
 ## Quick Start
 
@@ -19,6 +19,7 @@ Or add to your secrets file.
 
 ### 3. Add Provider to Config
 
+**GLM Coding Plan (recommended):**
 ```json
 {
   "ai": {
@@ -26,12 +27,19 @@ Or add to your secrets file.
       {
         "name": "z-ai",
         "type": "openai",
-        "base_url": "https://api.z.ai/api/paas/v4",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
         "api_key": "${Z_AI_API_KEY}",
-        "model": "glm-5-turbo"
+        "model": "glm-4-flash"
       }
     ]
   }
+}
+```
+
+**Standard API (pay-as-you-go):**
+```json
+{
+  "base_url": "https://api.z.ai/api/paas/v4"
 }
 ```
 
@@ -41,41 +49,41 @@ Or add to your secrets file.
 {
   "ai": {
     "model_aliases": {
-      "glm": "z-ai/glm-5-turbo",
-      "glm-vision": "z-ai/glm-5v-turbo",
-      "glm-flagship": "z-ai/glm-5.1"
+      "glm": "z-ai/glm-4-flash",
+      "glm-plus": "z-ai/glm-4-plus",
+      "glm-vision": "z-ai/glm-4v-flash"
     }
   }
 }
 ```
 
-## API Details
+## API Endpoints
 
-| Setting | Value |
-|---------|-------|
-| Base URL | `https://api.z.ai/api/paas/v4` |
-| Coding Endpoint | `https://api.z.ai/api/coding/paas/v4` (requires GLM Coding Plan, $10/month) |
-| Authentication | Bearer token via API key |
-| Format | OpenAI-compatible |
+| Plan | Base URL |
+|------|----------|
+| GLM Coding Plan ($10/mo) | `https://api.z.ai/api/coding/paas/v4` |
+| Standard (pay-as-you-go) | `https://api.z.ai/api/paas/v4` |
+
+**Important:** Use the endpoint that matches your subscription. Using the wrong endpoint results in error 1113 ("Insufficient balance").
 
 ## Available Models
 
 | Model | Description | Use Case |
 |-------|-------------|----------|
-| `glm-5.1` | Flagship foundation model | Complex reasoning, analysis |
-| `glm-5-turbo` | Optimized turbo variant | General purpose, fast |
-| `glm-5v-turbo` | Multimodal (vision + text) | Image analysis |
-| `glm-5` | Base model | Standard tasks |
-| `glm-4.6v` | Vision reasoning (100B-class) | Advanced vision |
-| `glm-image` | Text-to-image generation | Image creation |
-| `glm-ocr` | Optical character recognition | Document processing |
+| `glm-4-flash` | Fast, cost-effective | General purpose, high throughput |
+| `glm-4-plus` | Enhanced capabilities | Complex reasoning |
+| `glm-4-air` | Balanced performance | Standard tasks |
+| `glm-4v-flash` | Vision + text (fast) | Image analysis |
+| `glm-4v-plus` | Vision + text (enhanced) | Advanced vision |
+| `glm-4-long` | Long context (1M tokens) | Document processing |
+| `cogview-3-flash` | Text-to-image | Image generation |
 
 ## Usage
 
 Switch to z.ai model:
 
 ```
-/model z-ai/glm-5-turbo
+/model z-ai/glm-4-flash
 ```
 
 Or using an alias:
@@ -100,17 +108,17 @@ Or using an alias:
       {
         "name": "z-ai",
         "type": "openai",
-        "base_url": "https://api.z.ai/api/paas/v4",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
         "api_key": "${Z_AI_API_KEY}",
-        "model": "glm-5-turbo"
+        "model": "glm-4-flash"
       }
     ],
     "model_aliases": {
       "haiku": "claude-haiku-4-5-20251001",
       "sonnet": "claude-sonnet-4-6",
       "opus": "claude-opus-4-6",
-      "glm": "z-ai/glm-5-turbo",
-      "glm-vision": "z-ai/glm-5v-turbo"
+      "glm": "z-ai/glm-4-flash",
+      "glm-plus": "z-ai/glm-4-plus"
     }
   }
 }
@@ -122,12 +130,17 @@ Or using an alias:
 - Verify `Z_AI_API_KEY` is set correctly
 - Check API key hasn't expired in z.ai dashboard
 
+**"Insufficient balance" (error 1113):**
+- You're using the wrong endpoint for your subscription
+- Coding Plan subscribers: use `/api/coding/paas/v4`
+- Pay-as-you-go: use `/api/paas/v4` and add credits
+
 **Model not found:**
 - Use explicit provider prefix: `z-ai/model-name`
-- Check model name spelling matches z.ai documentation
+- Check model name spelling
 
 **Timeout errors:**
-- z.ai servers are in China; latency may be higher from other regions
+- z.ai servers may have higher latency from some regions
 - Consider increasing timeout settings if needed
 
 ## See Also
