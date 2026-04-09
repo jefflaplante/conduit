@@ -203,12 +203,13 @@ Origins are compared case-insensitively. Include scheme and port (if non-standar
 
 Supported provider types:
 - `anthropic` - Claude models
-- `openai` - GPT models
+- `openai` - GPT models and OpenAI-compatible APIs (z.ai, vLLM, Ollama, etc.)
 
 Model aliases (for `/model` command):
 - `haiku` - claude-haiku-4-5-20251001
 - `sonnet` - claude-sonnet-4-6
 - `opus` - claude-opus-4-6
+- `glm` - z-ai/glm-5-turbo (requires [z.ai setup](z-ai.md))
 
 ### Smart Routing
 
@@ -874,6 +875,7 @@ cp configs/config.example.json config.json
 
 ## See Also
 
+- [z.ai Provider](z-ai.md) — Setup guide for Zhipu AI's GLM models
 - [Brain & REM Sleep](brain.md) — Full architecture reference for cognitive memory
 - [SRE Tools](sre-tools.md) — PagerDuty, Datadog, and incident correlation
 - [Google Workspace](google-workspace.md) — Gmail and Calendar integration
