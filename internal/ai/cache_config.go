@@ -1,6 +1,9 @@
 package ai
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // CacheMinTokens maps model prefixes to minimum cacheable tokens
 // Based on Anthropic's prompt caching documentation
@@ -16,14 +19,27 @@ var CacheMinTokens = map[string]int{
 	"claude-haiku-3":    2048,
 }
 
+// cacheMinTokensPrefixes is sorted by length (longest first) for correct prefix matching
+var cacheMinTokensPrefixes []string
+
+func init() {
+	cacheMinTokensPrefixes = make([]string, 0, len(CacheMinTokens))
+	for prefix := range CacheMinTokens {
+		cacheMinTokensPrefixes = append(cacheMinTokensPrefixes, prefix)
+	}
+	sort.Slice(cacheMinTokensPrefixes, func(i, j int) bool {
+		return len(cacheMinTokensPrefixes[i]) > len(cacheMinTokensPrefixes[j])
+	})
+}
+
 // DefaultCacheMinTokens for unknown models
 const DefaultCacheMinTokens = 2048
 
 // GetCacheMinTokens returns the minimum tokens needed for caching a given model
 func GetCacheMinTokens(model string) int {
-	for prefix, minTokens := range CacheMinTokens {
+	for _, prefix := range cacheMinTokensPrefixes {
 		if strings.HasPrefix(model, prefix) {
-			return minTokens
+			return CacheMinTokens[prefix]
 		}
 	}
 	return DefaultCacheMinTokens

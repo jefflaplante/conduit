@@ -727,6 +727,17 @@ func (r *Router) getConversationalProgress(toolCalls []ToolCall) string {
 // The onDelta callback is called with each text delta, and done=true when complete.
 // Any provider implementing StreamingProvider will stream; others fall back to non-streaming.
 func (r *Router) GenerateResponseStreaming(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onDelta StreamCallback) (ConversationResponse, error) {
+	chainStart := time.Now()
+	log.Printf("[Router] >>> LLM CHAIN START (streaming)")
+	var chainErr error
+	defer func() {
+		if chainErr != nil {
+			log.Printf("[Router] <<< LLM CHAIN END (%s) ERROR", time.Since(chainStart))
+		} else {
+			log.Printf("[Router] <<< LLM CHAIN END (%s)", time.Since(chainStart))
+		}
+	}()
+
 	// Handle bare provider name used as model (e.g., model="ghost" where "ghost" is a provider)
 	if modelOverride != "" && !strings.Contains(modelOverride, "/") {
 		resolved := r.ResolveProviderForModel(modelOverride)
@@ -755,7 +766,8 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 
 	provider, exists := r.getProvider(providerName)
 	if !exists {
-		return nil, fmt.Errorf("provider not found: %s", providerName)
+		chainErr = fmt.Errorf("provider not found: %s", providerName)
+		return nil, chainErr
 	}
 
 	contextWindow := r.contextWindowForProvider(providerName)
@@ -773,7 +785,8 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	if r.agentSystem != nil {
 		blocks, err := r.agentSystem.BuildSystemPrompt(ctx, session)
 		if err != nil {
-			return nil, fmt.Errorf("failed to build system prompt: %w", err)
+			chainErr = fmt.Errorf("failed to build system prompt: %w", err)
+			return nil, chainErr
 		}
 		systemBlocks = blocks
 	}
@@ -781,7 +794,8 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	// Build chat messages
 	messages, err := r.buildChatMessagesWithSystemPrompt(ctx, session, userMessage, systemBlocks)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build messages: %w", err)
+		chainErr = fmt.Errorf("failed to build messages: %w", err)
+		return nil, chainErr
 	}
 
 	// Get tools
@@ -801,14 +815,16 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	// Call streaming API via the provider-agnostic interface
 	response, err := streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
 	if err != nil {
-		return nil, err
+		chainErr = err
+		return nil, chainErr
 	}
 
 	// Process response through agent system (same as non-streaming path)
 	if r.agentSystem != nil {
 		processed, err := r.agentSystem.ProcessResponse(ctx, response)
 		if err != nil {
-			return nil, fmt.Errorf("failed to process streaming response: %w", err)
+			chainErr = fmt.Errorf("failed to process streaming response: %w", err)
+			return nil, chainErr
 		}
 		if processed.Modified {
 			response.Content = processed.Content
@@ -825,7 +841,8 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	if len(response.ToolCalls) > 0 && r.executionEngine != nil {
 		convResponse, err := r.executionEngine.HandleToolCallFlow(ctx, provider, req, response)
 		if err != nil {
-			return nil, err
+			chainErr = err
+			return nil, chainErr
 		}
 		// Post-process for silent response patterns (HEARTBEAT_OK, NO_REPLY)
 		return r.processSilentPatterns(convResponse), nil
