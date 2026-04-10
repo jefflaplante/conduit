@@ -551,6 +551,17 @@ func (r *Router) GenerateResponseWithTools(ctx context.Context, session *session
 
 // GenerateResponseWithToolsAndProgress is like GenerateResponseWithTools but with progress callbacks
 func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onProgress ProgressCallback) (ConversationResponse, error) {
+	chainStart := time.Now()
+	log.Printf("[Router] >>> LLM CHAIN START")
+	var chainErr error
+	defer func() {
+		if chainErr != nil {
+			log.Printf("[Router] <<< LLM CHAIN END (%s) ERROR", time.Since(chainStart))
+		} else {
+			log.Printf("[Router] <<< LLM CHAIN END (%s)", time.Since(chainStart))
+		}
+	}()
+
 	// Handle bare provider name used as model (e.g., model="ghost" where "ghost" is a provider)
 	if modelOverride != "" && !strings.Contains(modelOverride, "/") {
 		resolved := r.ResolveProviderForModel(modelOverride)
@@ -579,7 +590,8 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 
 	provider, exists := r.getProvider(providerName)
 	if !exists {
-		return nil, fmt.Errorf("provider not found: %s", providerName)
+		chainErr = fmt.Errorf("provider not found: %s", providerName)
+		return nil, chainErr
 	}
 
 	contextWindow := r.contextWindowForProvider(providerName)
@@ -590,7 +602,8 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 	if r.agentSystem != nil {
 		blocks, err := r.agentSystem.BuildSystemPrompt(ctx, session)
 		if err != nil {
-			return nil, fmt.Errorf("failed to build system prompt: %w", err)
+			chainErr = fmt.Errorf("failed to build system prompt: %w", err)
+			return nil, chainErr
 		}
 		systemBlocks = blocks
 	}
@@ -598,7 +611,8 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 	// Build chat messages from session history with agent system prompt
 	messages, err := r.buildChatMessagesWithSystemPrompt(ctx, session, userMessage, systemBlocks)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build chat messages: %w", err)
+		chainErr = fmt.Errorf("failed to build chat messages: %w", err)
+		return nil, chainErr
 	}
 
 	// Include tool definitions from agent system
@@ -623,7 +637,8 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 		if r.usageTracker != nil {
 			r.usageTracker.RecordError(providerName, modelOverride)
 		}
-		return nil, fmt.Errorf("AI provider error: %w", err)
+		chainErr = fmt.Errorf("AI provider error: %w", err)
+		return nil, chainErr
 	}
 	if r.usageTracker != nil {
 		r.usageTracker.RecordUsage(providerName, modelOverride, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, latencyMs)
@@ -633,7 +648,8 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 	if r.agentSystem != nil {
 		processed, err := r.agentSystem.ProcessResponse(ctx, response)
 		if err != nil {
-			return nil, fmt.Errorf("failed to process response: %w", err)
+			chainErr = fmt.Errorf("failed to process response: %w", err)
+			return nil, chainErr
 		}
 
 		// Update response based on agent processing
@@ -659,7 +675,8 @@ func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, sessi
 		}
 		convResponse, err := r.executionEngine.HandleToolCallFlow(ctx, provider, req, response)
 		if err != nil {
-			return nil, err
+			chainErr = err
+			return nil, chainErr
 		}
 		// Post-process for silent response patterns (HEARTBEAT_OK, NO_REPLY)
 		// This applies the same logic as ProcessResponse but after tool execution

@@ -244,7 +244,7 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 	start := time.Now()
 
 	// Log tool name only to journal (never args at INFO)
-	log.Printf("[ExecutionEngine] Executing tool: %s", call.Name)
+	log.Printf("[ExecutionEngine] > Tool: %s", call.Name)
 
 	// Capture full details in ring buffer (private, in-memory only)
 	if e.debugBuffer != nil {
@@ -297,6 +297,7 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 
 	// Handle execution errors gracefully
 	if err != nil {
+		log.Printf("[ExecutionEngine] < Tool: %s (%s) ERROR", call.Name, execResult.Duration)
 		log.Printf("Tool execution failed: tool=%s error=%v", call.Name, err)
 		// Record error in ring buffer
 		if e.debugBuffer != nil {
@@ -324,6 +325,7 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 			})
 		}
 	} else {
+		log.Printf("[ExecutionEngine] < Tool: %s (%s)", call.Name, execResult.Duration)
 		// Record completion in ring buffer (truncated result)
 		if e.debugBuffer != nil {
 			summary := ""
