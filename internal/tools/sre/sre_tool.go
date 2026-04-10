@@ -1,3 +1,5 @@
+//go:build with_sre
+
 // Package sre implements the SRE Incident Correlation Engine for cross-tool orchestration.
 // It correlates data from PagerDuty incidents, Datadog metrics/logs, Kubernetes,
 // and SSH to provide unified incident triage and investigation.

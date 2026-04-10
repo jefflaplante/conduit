@@ -1,3 +1,5 @@
+//go:build with_ssh
+
 // Package ssh implements the SSH remote execution tool with security controls.
 package ssh
 

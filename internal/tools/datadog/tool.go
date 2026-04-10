@@ -1,3 +1,5 @@
+//go:build with_datadog
+
 // Package datadog implements the Datadog observability tool for metrics and logs.
 package datadog
 

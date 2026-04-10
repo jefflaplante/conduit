@@ -1,4 +1,6 @@
-package tools
+//go:build with_unifi
+
+package unifi
 
 import (
 	"context"
@@ -37,7 +39,12 @@ func unifiHTTPClient() *http.Client {
 
 // UniFiTool implements UniFi Network/Protect API functionality
 type UniFiTool struct {
-	registry *Registry
+	services *types.ToolServices
+}
+
+// NewUniFiTool creates a new UniFi tool instance
+func NewUniFiTool(services *types.ToolServices) *UniFiTool {
+	return &UniFiTool{services: services}
 }
 
 func (t *UniFiTool) Name() string {

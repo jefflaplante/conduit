@@ -1,3 +1,5 @@
+//go:build with_datadog
+
 package datadog
 
 import (

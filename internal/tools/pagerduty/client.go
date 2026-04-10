@@ -1,3 +1,5 @@
+//go:build with_pagerduty
+
 package pagerduty
 
 import (

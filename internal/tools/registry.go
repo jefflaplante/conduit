@@ -12,18 +12,33 @@ import (
 	"conduit/internal/skills"
 	"conduit/internal/tools/communication"
 	"conduit/internal/tools/core"
-	datadogTool "conduit/internal/tools/datadog"
-	k8s "conduit/internal/tools/k8s"
-	mqttTool "conduit/internal/tools/mqtt"
-	pagerdutyTool "conduit/internal/tools/pagerduty"
 	"conduit/internal/tools/scheduling"
 	"conduit/internal/tools/schema"
-	sreTool "conduit/internal/tools/sre"
-	"conduit/internal/tools/ssh"
 	"conduit/internal/tools/types"
 	"conduit/internal/tools/vision"
 	"conduit/internal/tools/web"
 )
+
+// optionalFactories holds factories for optional tools registered via init().
+// Tools register here using build tags; the registry instantiates them at startup.
+var optionalFactories = make(map[string]types.OptionalToolFactory)
+
+// globalRegistry holds a reference to the active registry for tools that need ToolExecutor.
+// Set by SetServices() after the registry is fully initialized.
+var globalRegistry *Registry
+
+// GetRegistryAsExecutor returns the global registry as a ToolExecutor.
+// Used by tools like SRE that need to orchestrate other tools.
+func GetRegistryAsExecutor() types.ToolExecutor {
+	return globalRegistry
+}
+
+// RegisterOptional registers an optional tool factory.
+// Called from init() functions in optional tool packages with build tags.
+// The factory will be invoked during SetServices() to instantiate the tool.
+func RegisterOptional(name string, factory types.OptionalToolFactory) {
+	optionalFactories[name] = factory
+}
 
 // Registry manages available tools and their execution
 type Registry struct {
@@ -109,6 +124,9 @@ func NewRegistry(cfg config.ToolsConfig) *Registry {
 // SetServices sets the service dependencies and registers tools
 func (r *Registry) SetServices(services *types.ToolServices) {
 	r.services = services
+
+	// Set global registry reference for tools that need ToolExecutor
+	globalRegistry = r
 
 	// Initialize schema builder with discovery providers
 	r.initializeSchemaBuilder()
@@ -205,76 +223,9 @@ func (r *Registry) registerAllTools() {
 		vision.NewImageTool(r.services),
 	}...)
 
-	// Infrastructure/Network tools
-	allTools = append(allTools, []types.Tool{
-		&UniFiTool{registry: r},
-	}...)
-
-	// MQTT/IoT tools (optional - requires configuration)
-	if r.services.MQTTService != nil {
-		allTools = append(allTools, mqttTool.NewMQTTTool(r.services))
-	}
-
-	// SSH remote execution tool (optional - requires configuration)
-	if r.services.ConfigMgr != nil && r.services.ConfigMgr.RemoteSSH.Enabled {
-		sshTool, err := ssh.NewSSHTool(r.services, &r.services.ConfigMgr.RemoteSSH)
-		if err != nil {
-			log.Printf("Failed to create SSH tool: %v", err)
-		} else {
-			allTools = append(allTools, sshTool)
-		}
-	}
-
-	// Kubernetes tool (optional - requires configuration)
-	if r.services.ConfigMgr != nil && r.services.ConfigMgr.Kubernetes.Enabled {
-		k8sTool, err := k8s.NewK8sTool(r.services, &r.services.ConfigMgr.Kubernetes)
-		if err != nil {
-			log.Printf("Failed to create Kubernetes tool: %v", err)
-		} else {
-			allTools = append(allTools, k8sTool)
-		}
-	}
-
-	// PagerDuty tool (optional - requires configuration)
-	if r.services.ConfigMgr != nil && r.services.ConfigMgr.PagerDuty.Enabled {
-		pdTool, err := pagerdutyTool.NewPagerDutyTool(r.services, &r.services.ConfigMgr.PagerDuty)
-		if err != nil {
-			log.Printf("Failed to create PagerDuty tool: %v", err)
-		} else {
-			allTools = append(allTools, pdTool)
-		}
-	}
-
-	// Datadog tool (optional - requires configuration)
-	if r.services.ConfigMgr != nil && r.services.ConfigMgr.Datadog.Enabled {
-		ddTool, err := datadogTool.NewDatadogTool(r.services, &r.services.ConfigMgr.Datadog)
-		if err != nil {
-			log.Printf("Failed to create Datadog tool: %v", err)
-		} else {
-			allTools = append(allTools, ddTool)
-		}
-
-		// Datadog Monitor tool (separate tool for monitor management)
-		monitorTool, err := datadogTool.NewMonitorTool(r.services, &r.services.ConfigMgr.Datadog)
-		if err != nil {
-			log.Printf("Failed to create Datadog Monitor tool: %v", err)
-		} else {
-			allTools = append(allTools, monitorTool)
-		}
-	}
-
-	// SRE Incident Correlation tool (requires both PagerDuty and Datadog)
-	if r.services.ConfigMgr != nil &&
-		r.services.ConfigMgr.PagerDuty.Enabled &&
-		r.services.ConfigMgr.Datadog.Enabled {
-		// Registry implements types.ToolExecutor directly
-		sre, err := sreTool.NewSRETool(r.services, r)
-		if err != nil {
-			log.Printf("Failed to create SRE tool: %v", err)
-		} else {
-			allTools = append(allTools, sre)
-		}
-	}
+	// NOTE: Optional tools (Datadog, K8s, PagerDuty, MQTT, SSH, UniFi, SRE)
+	// are now registered via build tags and RegisterOptional().
+	// See internal/tools/<tool>/register.go for each tool's registration.
 
 	// Debug log tool (optional - requires ring buffer)
 	if r.services.DebugLog != nil {
@@ -299,13 +250,36 @@ func (r *Registry) registerAllTools() {
 		}
 	}
 
+	// Instantiate optional tools from registered factories (build-tag gated)
+	r.registerOptionalTools()
+
 	// Register skill-based tools (written directly to r.tools/r.enabledTools)
 	r.registerSkillTools()
+
+	// Warn about config/build mismatches
+	r.warnMismatchedOptionalTools()
 }
 
 // GetServices returns the service dependencies for tools that need them
 func (r *Registry) GetServices() *types.ToolServices {
 	return r.services
+}
+
+// HasTool returns true if a tool is registered (compiled in and instantiated).
+// Used by optional tools to check for dependencies (e.g., SRE checks for Datadog).
+func (r *Registry) HasTool(name string) bool {
+	_, exists := r.tools[name]
+	return exists
+}
+
+// ListAvailableOptionalTools returns names of optional tools that were compiled in.
+// This reflects what factories are registered, not what tools are enabled.
+func ListAvailableOptionalTools() []string {
+	names := make([]string, 0, len(optionalFactories))
+	for name := range optionalFactories {
+		names = append(names, name)
+	}
+	return names
 }
 
 // normalizeToolName converts a tool name to a canonical form for case-insensitive matching.
@@ -337,6 +311,53 @@ func (r *Registry) registerSkillTools() {
 	}
 	if len(skillAdapters) > 0 {
 		log.Printf("Registered and enabled %d skill-based tools", len(skillAdapters))
+	}
+}
+
+// registerOptionalTools instantiates optional tools from registered factories.
+// Factories are registered via RegisterOptional() from init() functions with build tags.
+func (r *Registry) registerOptionalTools() {
+	for name, factory := range optionalFactories {
+		tool, err := factory(r.services, r.services.ConfigMgr)
+		if err != nil {
+			log.Printf("Failed to create optional tool %s: %v", name, err)
+			continue
+		}
+		if tool == nil {
+			// Tool is compiled in but disabled via config - this is expected
+			log.Printf("Optional tool %s: compiled but disabled via config", name)
+			continue
+		}
+		r.tools[tool.Name()] = tool
+		log.Printf("Registered optional tool: %s", tool.Name())
+	}
+}
+
+// warnMismatchedOptionalTools logs warnings for tools enabled in config but not compiled.
+func (r *Registry) warnMismatchedOptionalTools() {
+	if r.services.ConfigMgr == nil {
+		return
+	}
+	cfg := r.services.ConfigMgr
+
+	// Check each optional tool config against registered tools
+	checks := []struct {
+		name    string
+		enabled bool
+	}{
+		{"Datadog", cfg.Datadog.Enabled},
+		{"DatadogMonitor", cfg.Datadog.Enabled},
+		{"Kubernetes", cfg.Kubernetes.Enabled},
+		{"PagerDuty", cfg.PagerDuty.Enabled},
+		{"SSH", cfg.RemoteSSH.Enabled},
+		// MQTT is checked via service, not config
+		// UniFi has no config enable flag
+	}
+
+	for _, check := range checks {
+		if check.enabled && !r.HasTool(check.name) {
+			log.Printf("Warning: %s is enabled in config but not compiled (missing build tag)", check.name)
+		}
 	}
 }
 

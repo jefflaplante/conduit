@@ -1,3 +1,5 @@
+//go:build with_mqtt
+
 package mqtt
 
 import (

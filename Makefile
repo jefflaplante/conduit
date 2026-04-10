@@ -1,6 +1,8 @@
 # Conduit Gateway Makefile
 
-.PHONY: build run test clean deps format lint install-deps channel-deps install
+.PHONY: build build-prod build-full build-prod-full build-sre build-iot build-custom \
+        run test test-full test-coverage clean deps format lint \
+        install-deps channel-deps install init dev health help
 
 # Build configuration
 BINARY_NAME=conduit
@@ -48,6 +50,65 @@ build-prod:
 	@mkdir -p $(BUILD_DIR)
 	$(GOBUILD) -buildvcs=false -ldflags="$(LDFLAGS) -s -w" -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PATH)
 	@echo "Built $(BUILD_DIR)/$(BINARY_NAME)"
+
+# =============================================================================
+# Optional Tool Build Variants
+# =============================================================================
+# Build tags for optional tools
+OPTIONAL_TOOLS := datadog k8s pagerduty sre mqtt ssh unifi
+SRE_TOOLS := datadog pagerduty sre
+IOT_TOOLS := mqtt unifi
+
+# Convert tool names to build tags: "datadog k8s" -> "with_datadog,with_k8s"
+define tags_for
+$(shell echo $(1) | tr ' ' '\n' | sed 's/^/with_/' | tr '\n' ',' | sed 's/,$$//')
+endef
+
+# Build with all optional tools included
+build-full:
+	@echo "Building $(BINARY_NAME) with all optional tools..."
+	@echo "Tags: $(call tags_for,$(OPTIONAL_TOOLS))"
+	@mkdir -p $(BUILD_DIR)
+	$(GOBUILD) -buildvcs=false -tags "$(call tags_for,$(OPTIONAL_TOOLS))" -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PATH)
+	@echo "Built $(BUILD_DIR)/$(BINARY_NAME) (full)"
+
+# Build production binary with all optional tools
+build-prod-full:
+	@echo "Building $(BINARY_NAME) for production with all optional tools..."
+	@mkdir -p $(BUILD_DIR)
+	$(GOBUILD) -buildvcs=false -tags "$(call tags_for,$(OPTIONAL_TOOLS))" -ldflags="$(LDFLAGS) -s -w" -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PATH)
+	@echo "Built $(BUILD_DIR)/$(BINARY_NAME) (full, production)"
+
+# Build SRE-focused variant (Datadog + PagerDuty + SRE)
+build-sre:
+	@echo "Building $(BINARY_NAME) with SRE tools..."
+	@echo "Tags: $(call tags_for,$(SRE_TOOLS))"
+	@mkdir -p $(BUILD_DIR)
+	$(GOBUILD) -buildvcs=false -tags "$(call tags_for,$(SRE_TOOLS))" -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-sre $(MAIN_PATH)
+	@echo "Built $(BUILD_DIR)/$(BINARY_NAME)-sre"
+
+# Build IoT-focused variant (MQTT + UniFi)
+build-iot:
+	@echo "Building $(BINARY_NAME) with IoT tools..."
+	@echo "Tags: $(call tags_for,$(IOT_TOOLS))"
+	@mkdir -p $(BUILD_DIR)
+	$(GOBUILD) -buildvcs=false -tags "$(call tags_for,$(IOT_TOOLS))" -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-iot $(MAIN_PATH)
+	@echo "Built $(BUILD_DIR)/$(BINARY_NAME)-iot"
+
+# Build with custom tools: make build-custom TOOLS="datadog mqtt"
+build-custom:
+	@echo "Building $(BINARY_NAME) with custom tools: $(TOOLS)..."
+	@echo "Tags: $(call tags_for,$(TOOLS))"
+	@mkdir -p $(BUILD_DIR)
+	$(GOBUILD) -buildvcs=false -tags "$(call tags_for,$(TOOLS))" -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PATH)
+	@echo "Built $(BUILD_DIR)/$(BINARY_NAME) (custom)"
+
+# Run tests with all optional tools
+test-full:
+	@echo "Running tests with all optional tools..."
+	$(GOTEST) -v -tags "$(call tags_for,$(OPTIONAL_TOOLS))" ./...
+
+# =============================================================================
 
 # Install binary to $(BUILD_DIR) and manage service
 install: build
@@ -178,24 +239,35 @@ health:
 help:
 	@echo "Conduit Gateway - Available commands:"
 	@echo ""
-	@echo "  make build         Build the gateway binary"
-	@echo "  make build-prod    Build optimized production binary"
-	@echo "  make install       Build and install via install.sh"
-	@echo "  make run          Build and run the gateway"
-	@echo "  make test         Run tests"
-	@echo "  make test-coverage Run tests with coverage report"
-	@echo "  make clean        Clean build artifacts"
-	@echo "  make deps         Download Go dependencies"
-	@echo "  make channel-deps Install Node.js dependencies"
-	@echo "  make install-deps Install all dependencies"
-	@echo "  make format       Format Go code"
-	@echo "  make lint         Lint Go code"
-	@echo "  make init         Full initialization for new setup"
-	@echo "  make dev          Development mode with auto-restart"
-	@echo "  make health       Check if gateway is running"
-	@echo "  make help         Show this help"
+	@echo "Build Commands:"
+	@echo "  make build           Build core binary (minimal, no optional tools)"
+	@echo "  make build-prod      Build optimized core binary for production"
+	@echo "  make build-full      Build with all optional tools included"
+	@echo "  make build-prod-full Build production binary with all optional tools"
+	@echo "  make build-sre       Build with SRE tools (Datadog+PagerDuty+SRE)"
+	@echo "  make build-iot       Build with IoT tools (MQTT+UniFi)"
+	@echo "  make build-custom    Build with custom tools: TOOLS=\"datadog mqtt\""
+	@echo ""
+	@echo "Run & Test:"
+	@echo "  make run             Build and run the gateway"
+	@echo "  make test            Run core tests"
+	@echo "  make test-full       Run tests with all optional tools"
+	@echo "  make test-coverage   Run tests with coverage report"
+	@echo "  make dev             Development mode with auto-restart"
+	@echo "  make health          Check if gateway is running"
+	@echo ""
+	@echo "Setup & Maintenance:"
+	@echo "  make install         Build and install via install.sh"
+	@echo "  make deps            Download Go dependencies"
+	@echo "  make init            Full initialization for new setup"
+	@echo "  make clean           Clean build artifacts"
+	@echo "  make format          Format Go code"
+	@echo "  make lint            Lint Go code"
+	@echo ""
+	@echo "Optional Tools (build tags):"
+	@echo "  datadog, k8s, pagerduty, sre, mqtt, ssh, unifi"
 	@echo ""
 	@echo "Environment variables:"
-	@echo "  ANTHROPIC_API_KEY  Your Anthropic API key"
-	@echo "  TELEGRAM_BOT_TOKEN Your Telegram bot token"
+	@echo "  ANTHROPIC_API_KEY   Your Anthropic API key"
+	@echo "  TELEGRAM_BOT_TOKEN  Your Telegram bot token"
 	@echo ""
