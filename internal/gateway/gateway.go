@@ -1882,7 +1882,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 				ChannelID:  msg.ChannelID,
 				SessionKey: msg.SessionKey,
 				UserID:     msg.UserID,
-				Text:       "Sorry, I encountered an error processing your message.",
+				Text:       ai.GetUserMessage(err),
 			}
 
 			g.channelManager.SendMessage(errorMsg)
