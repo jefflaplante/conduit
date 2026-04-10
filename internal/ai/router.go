@@ -396,6 +396,13 @@ func (r *Router) getProvider(name string) (Provider, bool) {
 	return p, ok
 }
 
+// GetProvider returns the named provider. This is the exported variant of
+// getProvider, used by the gateway to access providers after initialization
+// (e.g. to wire a session mapper into the claude-code provider).
+func (r *Router) GetProvider(name string) (Provider, bool) {
+	return r.getProvider(name)
+}
+
 // providerMetaKeys returns the keys of the providerMeta map (for debugging).
 // Caller must hold r.mu.
 func (r *Router) providerMetaKeys() []string {

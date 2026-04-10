@@ -28,6 +28,7 @@ import (
 	"conduit/internal/fts"
 	"conduit/internal/heartbeat"
 	"conduit/internal/logging"
+	"conduit/internal/mcp"
 	"conduit/internal/middleware"
 	"conduit/internal/monitoring"
 	"conduit/internal/mqtt"
@@ -144,6 +145,10 @@ type Gateway struct {
 
 	// SSH server (optional)
 	sshServer *charmssh.Server
+
+	// MCP server for claude-code provider (optional)
+	mcpServer    *mcp.Server
+	mcpConfigMgr *mcp.MCPConfigManager
 
 	// Debug ring buffer (for /ring command)
 	ringBuffer *debuglog.RingBuffer
@@ -305,6 +310,42 @@ func New(cfg *config.Config) (*Gateway, error) {
 	aiRouter.SetHistoryConfig(&cfg.Agent.History)
 
 	logger.Debug("tool execution engine wired up")
+
+	// Initialize MCP server and session mapper if a claude-code provider is configured.
+	// The provider was created with a nil session mapper during router init; we wire it in now.
+	var mcpServer *mcp.Server
+	var mcpConfigMgr *mcp.MCPConfigManager
+	for _, provCfg := range cfg.AI.Providers {
+		if provCfg.Type == "claude-code" {
+			ccCfg := provCfg.ClaudeCodeOrDefault()
+
+			// Create session mapper for conversation continuity
+			ccSessionMapper := sessions.NewClaudeCodeSessionMapper(sessionStore.DB())
+			if err := ccSessionMapper.EnsureTable(); err != nil {
+				logger.Warn("failed to create claude code session table", "error", err)
+			}
+
+			// Wire session mapper into the provider
+			if provider, ok := aiRouter.GetProvider(provCfg.Name); ok {
+				if ccProvider, ok := provider.(*ai.ClaudeCodeProvider); ok {
+					ccProvider.SetSessionMapper(ccSessionMapper)
+				}
+			}
+
+			// Create MCP server to expose Conduit tools to Claude Code
+			mcpServer = mcp.NewServer(toolsRegistry, ccCfg.MCPPort)
+
+			// Create MCP config manager for .mcp.json lifecycle
+			if ccCfg.WorkingDir != "" {
+				mcpConfigMgr = mcp.NewMCPConfigManager(ccCfg.WorkingDir, ccCfg.MCPPort)
+			}
+
+			logger.Info("claude-code provider configured",
+				"mcp_port", ccCfg.MCPPort,
+				"working_dir", ccCfg.WorkingDir)
+			break // Only one claude-code provider supported
+		}
+	}
 
 	// Initialize summary manager for AI-powered workspace summarization (small-context models)
 	if cfg.Workspace.Summary.Enabled && workspaceContext != nil {
@@ -469,6 +510,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 		clients:             make(map[string]*Client),
 		activeRequests:      make(map[string]context.CancelFunc),
 		msgSemaphore:        make(chan struct{}, MaxConcurrentRequests),
+		mcpServer:           mcpServer,
+		mcpConfigMgr:        mcpConfigMgr,
 		ringBuffer:          debugBuffer,
 		upgrader: websocket.Upgrader{
 			CheckOrigin:  checkOrigin(cfg.AllowedOrigins),
@@ -1101,6 +1144,23 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}
 
+	// Start MCP server if configured (for claude-code provider)
+	if g.mcpServer != nil {
+		if err := g.mcpServer.Start(ctx); err != nil {
+			g.logger.Error("failed to start MCP server", "error", err)
+			// Non-fatal: gateway can still work without MCP
+		} else {
+			g.logger.Info("MCP server started")
+		}
+
+		// Write .mcp.json so Claude Code discovers the server
+		if g.mcpConfigMgr != nil {
+			if err := g.mcpConfigMgr.Setup(); err != nil {
+				g.logger.Warn("failed to write .mcp.json", "error", err)
+			}
+		}
+	}
+
 	// Start SSH server if configured
 	if g.config.SSH.Enabled {
 		// Build shell security config from gateway config (SSH mode)
@@ -1215,6 +1275,18 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Drain async message syncer before closing search DB
 	if g.asyncMsgSyncer != nil {
 		g.asyncMsgSyncer.Close()
+	}
+
+	// Stop MCP server and clean up .mcp.json
+	if g.mcpServer != nil {
+		if err := g.mcpServer.Stop(shutdownCtx); err != nil {
+			g.logger.Error("error stopping MCP server", "error", err)
+		}
+	}
+	if g.mcpConfigMgr != nil {
+		if err := g.mcpConfigMgr.Cleanup(); err != nil {
+			g.logger.Warn("failed to clean up .mcp.json", "error", err)
+		}
 	}
 
 	// Stop MQTT service
