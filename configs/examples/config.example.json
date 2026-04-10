@@ -36,6 +36,17 @@
         "base_url": "http://localhost:8000/v1",
         "model": "meta-llama/Llama-3.2-8B-Instruct",
         "context_window": 65536
+      },
+      {
+        "name": "claude-code",
+        "type": "claude-code",
+        "model": "claude-sonnet-4-6",
+        "claude_code": {
+          "working_dir": "./workspace",
+          "permission_mode": "bypassPermissions",
+          "max_turns": 25,
+          "timeout_seconds": 300
+        }
       }
     ]
   },
