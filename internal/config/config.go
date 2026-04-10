@@ -490,13 +490,67 @@ func DefaultModelAliases() map[string]string {
 
 // ProviderConfig contains settings for a specific AI provider
 type ProviderConfig struct {
-	Name          string      `json:"name"`
-	Type          string      `json:"type"`               // "anthropic", "openai", "ollama", etc.
-	APIKey        string      `json:"api_key,omitempty" cfg:"env"`  // Legacy API key
-	BaseURL       string      `json:"base_url,omitempty" cfg:"env"` // Custom API base URL (for local/compatible servers)
-	Model         string      `json:"model"`
-	Auth          *AuthConfig `json:"auth,omitempty"`           // OAuth configuration
-	ContextWindow int         `json:"context_window,omitempty"` // Override context window size (tokens); 0 = auto-detect from model name
+	Name          string            `json:"name"`
+	Type          string            `json:"type"`               // "anthropic", "openai", "ollama", "claude-code", etc.
+	APIKey        string            `json:"api_key,omitempty" cfg:"env"`  // Legacy API key
+	BaseURL       string            `json:"base_url,omitempty" cfg:"env"` // Custom API base URL (for local/compatible servers)
+	Model         string            `json:"model"`
+	Auth          *AuthConfig       `json:"auth,omitempty"`           // OAuth configuration
+	ContextWindow int               `json:"context_window,omitempty"` // Override context window size (tokens); 0 = auto-detect from model name
+	ClaudeCode    *ClaudeCodeConfig `json:"claude_code,omitempty"`    // Settings for type="claude-code"
+}
+
+// ClaudeCodeConfig holds settings for the claude-code provider type.
+// When Type is "claude-code", these fields configure how Conduit
+// shells out to the Claude Code CLI.
+type ClaudeCodeConfig struct {
+	ClaudePath     string   `json:"claude_path"`      // Path to claude binary; default: "claude"
+	MCPPort        int      `json:"mcp_port"`         // Conduit's MCP server port; default: 18790
+	AllowedTools   []string `json:"allowed_tools"`    // Claude Code native tools to enable
+	PermissionMode string   `json:"permission_mode"`  // default: "acceptEdits"
+	MaxTurns       int      `json:"max_turns"`        // default: 25
+	TimeoutSeconds int      `json:"timeout_seconds"`  // default: 300
+	WorkingDir     string   `json:"working_dir"`      // where claude -p runs
+}
+
+// DefaultClaudeCodeConfig returns sensible defaults for the claude-code provider.
+func DefaultClaudeCodeConfig() ClaudeCodeConfig {
+	return ClaudeCodeConfig{
+		ClaudePath:     "claude",
+		MCPPort:        18790,
+		AllowedTools:   []string{"Read", "Edit", "Bash", "Glob", "Grep", "Write"},
+		PermissionMode: "acceptEdits",
+		MaxTurns:       25,
+		TimeoutSeconds: 300,
+	}
+}
+
+// ClaudeCodeOrDefault returns the ClaudeCode config, falling back to defaults
+// for any zero-valued fields.
+func (p ProviderConfig) ClaudeCodeOrDefault() ClaudeCodeConfig {
+	if p.ClaudeCode != nil {
+		cfg := *p.ClaudeCode
+		if cfg.ClaudePath == "" {
+			cfg.ClaudePath = "claude"
+		}
+		if cfg.MCPPort == 0 {
+			cfg.MCPPort = 18790
+		}
+		if cfg.PermissionMode == "" {
+			cfg.PermissionMode = "acceptEdits"
+		}
+		if cfg.MaxTurns == 0 {
+			cfg.MaxTurns = 25
+		}
+		if cfg.TimeoutSeconds == 0 {
+			cfg.TimeoutSeconds = 300
+		}
+		if len(cfg.AllowedTools) == 0 {
+			cfg.AllowedTools = []string{"Read", "Edit", "Bash", "Glob", "Grep", "Write"}
+		}
+		return cfg
+	}
+	return DefaultClaudeCodeConfig()
 }
 
 // AuthConfig contains OAuth authentication settings
