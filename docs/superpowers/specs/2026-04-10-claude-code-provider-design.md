@@ -1,7 +1,7 @@
 # Claude Code Provider + MCP Bridge Design
 
 **Date:** 2026-04-10
-**Status:** Draft
+**Status:** Implemented (v0.21.0)
 
 ## Context
 
