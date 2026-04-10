@@ -1,3 +1,5 @@
+//go:build with_ssh
+
 package ssh
 
 import (

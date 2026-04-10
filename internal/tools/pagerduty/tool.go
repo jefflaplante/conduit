@@ -1,3 +1,5 @@
+//go:build with_pagerduty
+
 // Package pagerduty implements the PagerDuty incident management tool.
 package pagerduty
 

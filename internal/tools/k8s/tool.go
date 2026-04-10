@@ -1,3 +1,5 @@
+//go:build with_k8s
+
 // Package k8s implements the Kubernetes management tool with security controls.
 package k8s
 

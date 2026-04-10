@@ -1,3 +1,5 @@
+//go:build with_ssh
+
 // Package ssh implements Ansible inventory parsing for SSH host management.
 package ssh
 

@@ -1,4 +1,6 @@
-package tools
+//go:build with_unifi
+
+package unifi
 
 import (
 	"context"
@@ -76,7 +78,7 @@ func TestUniFiTool_SelfTest_NoCredentials(t *testing.T) {
 	os.Unsetenv("UNVR_URL")
 	os.Unsetenv("UNVR_API_KEY")
 
-	tool := &UniFiTool{}
+	tool := NewUniFiTool(nil)
 	result := tool.SelfTest(context.Background(), nil)
 
 	if result == nil {
@@ -125,7 +127,7 @@ func TestUniFiTool_SelfTest_WithCredentials(t *testing.T) {
 		os.Unsetenv("UNVR_API_KEY")
 	}()
 
-	tool := &UniFiTool{}
+	tool := NewUniFiTool(nil)
 
 	// Test without dependency check (won't try to connect)
 	opts := &types.SelfTestOptions{
@@ -162,7 +164,7 @@ func TestUniFiTool_SelfTest_VerboseMode(t *testing.T) {
 		os.Unsetenv("UNVR_API_KEY")
 	}()
 
-	tool := &UniFiTool{}
+	tool := NewUniFiTool(nil)
 	opts := &types.SelfTestOptions{
 		Verbose:           true,
 		CheckDependencies: false,
@@ -193,7 +195,7 @@ func TestUniFiTool_SelfTest_TLSStatus(t *testing.T) {
 		os.Unsetenv("UNIFI_INSECURE_TLS")
 	}()
 
-	tool := &UniFiTool{}
+	tool := NewUniFiTool(nil)
 	opts := &types.SelfTestOptions{CheckDependencies: false}
 	result := tool.SelfTest(context.Background(), opts)
 

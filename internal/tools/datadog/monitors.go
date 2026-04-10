@@ -1,3 +1,5 @@
+//go:build with_datadog
+
 // Package datadog implements the Datadog monitoring tool.
 package datadog
 

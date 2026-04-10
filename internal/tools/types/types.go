@@ -432,6 +432,12 @@ type Tool interface {
 	Execute(ctx context.Context, args map[string]interface{}) (*ToolResult, error)
 }
 
+// OptionalToolFactory creates an optional tool from services and config.
+// Returns (nil, nil) if the tool is compiled in but disabled via config.
+// Returns (nil, error) if the tool cannot be initialized due to missing dependencies.
+// This signature supports both internal build-tagged tools and future external modules.
+type OptionalToolFactory func(services *ToolServices, cfg *config.Config) (Tool, error)
+
 // EnhancedSchemaProvider is an optional interface for tools that provide
 // schema enhancement hints (examples, validation constraints, discovery).
 // Tools that don't implement this interface use their static Parameters() as-is.
