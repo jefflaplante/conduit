@@ -316,6 +316,9 @@ func (r *Router) initializeProviders(cfg config.AIConfig) error {
 				providerCfg.BaseURL = "http://localhost:11434/v1"
 			}
 			provider, err = NewOpenAIProvider(providerCfg)
+		case "claude-code":
+			// Session mapper is nil during init; set later via SetSessionMapper.
+			provider, err = NewClaudeCodeProvider(providerCfg, nil)
 		default:
 			return fmt.Errorf("unsupported provider type: %s", providerCfg.Type)
 		}
