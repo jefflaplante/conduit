@@ -40,14 +40,15 @@ func NewServer(registry types.ToolRegistry, port int) *Server {
 		nil,
 	)
 
-	// Register tools from the registry.
-	s.registerTools()
-
+	// Note: tools are registered lazily via RegisterTools() after the tool
+	// registry is fully populated (SetServices). The MCP server is created
+	// during gateway init but tools may not be available yet.
 	return s
 }
 
-// registerTools adds all MCP-eligible tools from the registry to the MCP server.
-func (s *Server) registerTools() {
+// RegisterTools adds all MCP-eligible tools from the registry to the MCP server.
+// Can be called multiple times to pick up tools registered after construction.
+func (s *Server) RegisterTools() {
 	filtered := FilterToolsForMCP(s.registry)
 	for name, tool := range filtered {
 		mcpTool := AdaptToolToMCP(tool)
@@ -100,7 +101,7 @@ func (s *Server) Start(ctx context.Context) error {
 	handler := sdkmcp.NewStreamableHTTPHandler(
 		func(_ *http.Request) *sdkmcp.Server { return s.mcpServer },
 		&sdkmcp.StreamableHTTPOptions{
-			Stateless: true, // Each request is independent, no session tracking needed.
+			// Stateful sessions required by Claude Code and most MCP clients.
 		},
 	)
 
