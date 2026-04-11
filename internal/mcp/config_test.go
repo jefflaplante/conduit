@@ -32,8 +32,8 @@ func TestSetup_CreatesNewFile(t *testing.T) {
 	if entry.Type != "http" {
 		t.Errorf("expected type 'http', got %q", entry.Type)
 	}
-	if entry.URL != "http://127.0.0.1:18790" {
-		t.Errorf("expected url 'http://127.0.0.1:18790', got %q", entry.URL)
+	if entry.URL != "http://127.0.0.1:18790/mcp" {
+		t.Errorf("expected url 'http://127.0.0.1:18790/mcp', got %q", entry.URL)
 	}
 }
 
@@ -75,8 +75,8 @@ func TestSetup_MergesIntoExistingFile(t *testing.T) {
 	if !ok {
 		t.Fatal("expected 'conduit' key after merge")
 	}
-	if conduit.URL != "http://127.0.0.1:18790" {
-		t.Errorf("expected conduit URL 'http://127.0.0.1:18790', got %q", conduit.URL)
+	if conduit.URL != "http://127.0.0.1:18790/mcp" {
+		t.Errorf("expected conduit URL 'http://127.0.0.1:18790/mcp', got %q", conduit.URL)
 	}
 }
 
@@ -188,7 +188,7 @@ func TestSetup_CustomPort(t *testing.T) {
 	var content mcpFileContent
 	json.Unmarshal(data, &content)
 
-	if content.MCPServers["conduit"].URL != "http://127.0.0.1:19999" {
+	if content.MCPServers["conduit"].URL != "http://127.0.0.1:19999/mcp" {
 		t.Errorf("expected port 19999 in URL, got %q", content.MCPServers["conduit"].URL)
 	}
 }

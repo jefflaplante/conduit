@@ -175,6 +175,7 @@ func TestIntegration_ToolsListReturnsCorrectTools(t *testing.T) {
 	)
 
 	srv := NewServer(registry, 0)
+	srv.RegisterTools()
 	ctx := context.Background()
 
 	t1, t2 := sdkmcp.NewInMemoryTransports()
@@ -219,6 +220,7 @@ func TestIntegration_ToolsCallExecutesTool(t *testing.T) {
 	}
 
 	srv := NewServer(registry, 0)
+	srv.RegisterTools()
 	ctx := context.Background()
 
 	t1, t2 := sdkmcp.NewInMemoryTransports()
@@ -259,6 +261,7 @@ func TestIntegration_ToolsCallWithToolError(t *testing.T) {
 		}
 
 		srv := NewServer(registry, 0)
+		srv.RegisterTools()
 		ctx := context.Background()
 
 		t1, t2 := sdkmcp.NewInMemoryTransports()
@@ -296,6 +299,7 @@ func TestIntegration_ToolsCallWithToolError(t *testing.T) {
 		}
 
 		srv := NewServer(registry, 0)
+		srv.RegisterTools()
 		ctx := context.Background()
 
 		t1, t2 := sdkmcp.NewInMemoryTransports()
@@ -347,6 +351,7 @@ func TestIntegration_ToolCallWithComplexArguments(t *testing.T) {
 	}
 
 	srv := NewServer(registry, 0)
+	srv.RegisterTools()
 	ctx := context.Background()
 
 	t1, t2 := sdkmcp.NewInMemoryTransports()
@@ -403,7 +408,7 @@ func TestIntegration_MCPConfigLifecycle(t *testing.T) {
 	entry, ok := content.MCPServers["conduit"]
 	require.True(t, ok, "conduit entry should exist")
 	assert.Equal(t, "http", entry.Type)
-	assert.Equal(t, "http://127.0.0.1:18790", entry.URL)
+	assert.Equal(t, "http://127.0.0.1:18790/mcp", entry.URL)
 
 	// Cleanup removes the file.
 	err = mgr.Cleanup()
@@ -449,7 +454,7 @@ func TestIntegration_MCPConfigMerge(t *testing.T) {
 	assert.Contains(t, merged.MCPServers, "remote-mcp")
 	conduit, ok := merged.MCPServers["conduit"]
 	require.True(t, ok)
-	assert.Equal(t, "http://127.0.0.1:18790", conduit.URL)
+	assert.Equal(t, "http://127.0.0.1:18790/mcp", conduit.URL)
 
 	// Cleanup should restore the original file exactly.
 	err = mgr.Cleanup()
@@ -511,6 +516,7 @@ func TestIntegration_MultipleToolCallsSequential(t *testing.T) {
 	}
 
 	srv := NewServer(registry, 0)
+	srv.RegisterTools()
 	ctx := context.Background()
 
 	t1, t2 := sdkmcp.NewInMemoryTransports()
@@ -607,6 +613,7 @@ func TestIntegration_ServerWithManyTools(t *testing.T) {
 	registry := newMockRegistry(tools...)
 
 	srv := NewServer(registry, 0)
+	srv.RegisterTools()
 	ctx := context.Background()
 
 	t1, t2 := sdkmcp.NewInMemoryTransports()
