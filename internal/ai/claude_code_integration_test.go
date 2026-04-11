@@ -591,3 +591,61 @@ func TestIntegration_SessionMapperCleanupWithDB(t *testing.T) {
 	got, _ = mapper.GetClaudeCodeSession("session-newest")
 	assert.Equal(t, "cc-newest", got)
 }
+
+// TestIntegration_SessionMappingPreservesCreatedAt verifies that repeated
+// requests in the same session update last_used_at without resetting created_at.
+func TestIntegration_SessionMappingPreservesCreatedAt(t *testing.T) {
+	mapper, db := newIntegrationSessionMapperWithDB(t)
+
+	// Mock script always returns the same session_id.
+	script := writeMockClaude(t, "claude", `
+echo '{"result":"ok","session_id":"cc-stable","usage":{"inputTokens":1,"outputTokens":1}}'
+`)
+
+	p, err := NewClaudeCodeProvider(config.ProviderConfig{
+		Name: "test-update-last-used",
+		Type: "claude-code",
+		ClaudeCode: &config.ClaudeCodeConfig{
+			ClaudePath:     script,
+			TimeoutSeconds: 10,
+		},
+	}, mapper)
+	require.NoError(t, err)
+
+	ctx := types.WithRequestContext(context.Background(), "ch-1", "user-1", "conduit-session-ts")
+	req := &GenerateRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}}
+
+	// First request — creates the mapping.
+	_, err = p.GenerateResponse(ctx, req)
+	require.NoError(t, err)
+
+	// Read created_at from the DB.
+	var createdAt1 string
+	err = db.QueryRow(`SELECT created_at FROM claude_code_sessions WHERE conduit_session_id = ?`,
+		"conduit-session-ts").Scan(&createdAt1)
+	require.NoError(t, err)
+	assert.NotEmpty(t, createdAt1)
+
+	// Backdate created_at so we can detect if it gets reset.
+	_, err = db.Exec(`UPDATE claude_code_sessions SET created_at = datetime('now', '-1 hour') WHERE conduit_session_id = ?`,
+		"conduit-session-ts")
+	require.NoError(t, err)
+
+	var backdatedCreatedAt string
+	db.QueryRow(`SELECT created_at FROM claude_code_sessions WHERE conduit_session_id = ?`,
+		"conduit-session-ts").Scan(&backdatedCreatedAt)
+
+	// Second request — should UpdateLastUsed, not SaveMapping.
+	_, err = p.GenerateResponse(ctx, req)
+	require.NoError(t, err)
+
+	var createdAt2, lastUsed2 string
+	err = db.QueryRow(`SELECT created_at, last_used_at FROM claude_code_sessions WHERE conduit_session_id = ?`,
+		"conduit-session-ts").Scan(&createdAt2, &lastUsed2)
+	require.NoError(t, err)
+
+	assert.Equal(t, backdatedCreatedAt, createdAt2,
+		"created_at should be preserved (not reset) on second call")
+	assert.NotEqual(t, backdatedCreatedAt, lastUsed2,
+		"last_used_at should be more recent than the backdated created_at")
+}

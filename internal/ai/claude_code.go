@@ -252,8 +252,17 @@ func (p *ClaudeCodeProvider) buildCommand(ctx context.Context, userMessage strin
 }
 
 // saveSessionMapping persists the Conduit→CC session mapping if possible.
+// If the mapping already exists with the same CC session ID, only the
+// last_used_at timestamp is updated (preserving created_at).
 func (p *ClaudeCodeProvider) saveSessionMapping(conduitSessionID, ccSessionID string) {
 	if p.sessionMapper == nil || conduitSessionID == "" || ccSessionID == "" {
+		return
+	}
+	existing, _ := p.sessionMapper.GetClaudeCodeSession(conduitSessionID)
+	if existing == ccSessionID {
+		if err := p.sessionMapper.UpdateLastUsed(conduitSessionID); err != nil {
+			log.Printf("[ClaudeCode] Warning: failed to update session last_used: %v", err)
+		}
 		return
 	}
 	if err := p.sessionMapper.SaveMapping(conduitSessionID, ccSessionID); err != nil {
