@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -14,6 +15,13 @@ import (
 	"conduit/internal/sessions"
 	"conduit/internal/tools/types"
 )
+
+// appendSystemPrompt controls whether the provider extracts system messages
+// from the request and passes them to claude via --append-system-prompt-file.
+// Set to false to revert to the previous behavior (system prompt discarded).
+// This exists as a kill-switch in case Anthropic gates --append-system-prompt
+// for agentic use cases (may manifest as 429 errors).
+const appendSystemPrompt = true
 
 // ClaudeCodeProvider routes LLM calls through the `claude` CLI in print mode.
 // It implements both Provider and StreamingProvider interfaces.
@@ -70,7 +78,12 @@ func (p *ClaudeCodeProvider) GenerateResponse(ctx context.Context, req *Generate
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := p.buildCommand(execCtx, userMessage, conduitSessionID, false)
+	systemContent := extractSystemContent(req.Messages)
+	cmd, cleanup, err := p.buildCommand(execCtx, userMessage, systemContent, conduitSessionID, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build command: %w", err)
+	}
+	defer cleanup()
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -112,7 +125,12 @@ func (p *ClaudeCodeProvider) GenerateResponseStreaming(ctx context.Context, req 
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := p.buildCommand(execCtx, userMessage, conduitSessionID, true)
+	systemContent := extractSystemContent(req.Messages)
+	cmd, cleanup, err := p.buildCommand(execCtx, userMessage, systemContent, conduitSessionID, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build command: %w", err)
+	}
+	defer cleanup()
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -157,7 +175,9 @@ func (p *ClaudeCodeProvider) GenerateResponseStreaming(ctx context.Context, req 
 }
 
 // buildCommand constructs the `claude -p` exec.Cmd with all configured flags.
-func (p *ClaudeCodeProvider) buildCommand(ctx context.Context, userMessage string, conduitSessionID string, streaming bool) *exec.Cmd {
+// Returns the command, a cleanup function (must be called to remove temp files),
+// and any error from temp file creation.
+func (p *ClaudeCodeProvider) buildCommand(ctx context.Context, userMessage string, systemContent string, conduitSessionID string, streaming bool) (*exec.Cmd, func(), error) {
 	args := []string{"-p"}
 
 	// Output format.
@@ -200,6 +220,27 @@ func (p *ClaudeCodeProvider) buildCommand(ctx context.Context, userMessage strin
 		args = append(args, "--max-turns", strconv.Itoa(p.config.MaxTurns))
 	}
 
+	// System prompt passthrough via temp file.
+	noop := func() {}
+	cleanupFn := noop
+
+	if appendSystemPrompt && systemContent != "" {
+		tmpFile, err := os.CreateTemp("", "conduit-sysprompt-*.txt")
+		if err != nil {
+			return nil, noop, fmt.Errorf("failed to create system prompt temp file: %w", err)
+		}
+		if _, err := tmpFile.WriteString(systemContent); err != nil {
+			tmpFile.Close()
+			os.Remove(tmpFile.Name())
+			return nil, noop, fmt.Errorf("failed to write system prompt temp file: %w", err)
+		}
+		tmpFile.Close()
+
+		log.Printf("[ClaudeCode] Appending system prompt (%d bytes) via %s", len(systemContent), tmpFile.Name())
+		args = append(args, "--append-system-prompt-file", tmpFile.Name())
+		cleanupFn = func() { os.Remove(tmpFile.Name()) }
+	}
+
 	// The prompt is the final argument.
 	args = append(args, userMessage)
 
@@ -207,7 +248,7 @@ func (p *ClaudeCodeProvider) buildCommand(ctx context.Context, userMessage strin
 	if p.config.WorkingDir != "" {
 		cmd.Dir = p.config.WorkingDir
 	}
-	return cmd
+	return cmd, cleanupFn, nil
 }
 
 // saveSessionMapping persists the Conduit→CC session mapping if possible.
@@ -228,6 +269,18 @@ func extractLastUserMessage(messages []ChatMessage) string {
 		}
 	}
 	return ""
+}
+
+// extractSystemContent concatenates all system-role messages from the request
+// into a single string. Returns empty string if no system messages exist.
+func extractSystemContent(messages []ChatMessage) string {
+	var parts []string
+	for _, msg := range messages {
+		if msg.Role == "system" && msg.Content != "" {
+			parts = append(parts, msg.Content)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // extractSessionID retrieves the Conduit session key from the request context.
