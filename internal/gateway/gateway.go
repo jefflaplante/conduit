@@ -782,6 +782,11 @@ func New(cfg *config.Config) (*Gateway, error) {
 	}
 	toolsRegistry.SetServices(toolServices)
 
+	// Register MCP tools now that the registry is fully populated.
+	if mcpServer != nil {
+		mcpServer.RegisterTools()
+	}
+
 	// NOW convert tools to AI format (after SetServices registered them)
 	// Note: skill tools are already included via the registry (registered by registerSkillTools).
 	// The agent's GetToolDefinitions() also adds skills dynamically for per-session filtering.
