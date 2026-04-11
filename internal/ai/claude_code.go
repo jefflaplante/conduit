@@ -343,7 +343,8 @@ func extractSessionID(ctx context.Context) string {
 }
 
 // classifyClaudeCodeError maps stderr output and exit codes from the Claude CLI
-// to Conduit's error categories, returning an appropriately classified error.
+// to Conduit's error categories, returning a CategorizedError for direct
+// classification without string re-matching.
 func classifyClaudeCodeError(stderr string, exitCode int, originalErr error) error {
 	lower := strings.ToLower(stderr)
 
@@ -364,32 +365,32 @@ func classifyClaudeCodeError(stderr string, exitCode int, originalErr error) err
 		strings.Contains(lower, "unauthorized") ||
 		strings.Contains(lower, "api key") ||
 		strings.Contains(lower, "401"):
-		return fmt.Errorf("authentication error: %s", msg)
+		return &CategorizedError{Category: CategoryAuthentication, Msg: msg}
 
 	case strings.Contains(lower, "rate_limit") ||
 		strings.Contains(lower, "rate limit") ||
 		strings.Contains(lower, "429") ||
 		strings.Contains(lower, "too many requests"):
-		return fmt.Errorf("rate limit: %s", msg)
+		return &CategorizedError{Category: CategoryRateLimit, Msg: msg}
 
 	case strings.Contains(lower, "overloaded") ||
 		strings.Contains(lower, "503") ||
 		strings.Contains(lower, "service unavailable"):
-		return fmt.Errorf("service unavailable: %s", msg)
+		return &CategorizedError{Category: CategoryServiceUnavailable, Msg: msg}
 
 	case strings.Contains(lower, "timeout") ||
 		strings.Contains(lower, "timed out") ||
 		strings.Contains(lower, "deadline exceeded"):
-		return fmt.Errorf("timeout: %s", msg)
+		return &CategorizedError{Category: CategoryTimeout, Msg: msg}
 	}
 
 	// Check if the original error itself is a context timeout/cancellation.
 	if originalErr != nil {
 		if ctx := originalErr.Error(); strings.Contains(ctx, "context deadline exceeded") ||
 			strings.Contains(ctx, "signal: killed") {
-			return fmt.Errorf("timeout: %s", msg)
+			return &CategorizedError{Category: CategoryTimeout, Msg: msg}
 		}
 	}
 
-	return fmt.Errorf("claude-code error: %s", msg)
+	return &CategorizedError{Category: CategoryUnknown, Msg: msg}
 }

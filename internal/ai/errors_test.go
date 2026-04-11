@@ -133,6 +133,31 @@ func TestClassifyError(t *testing.T) {
 			expected: CategoryRateLimit,
 		},
 		{
+			name:     "CategorizedError authentication",
+			err:      &CategorizedError{Category: CategoryAuthentication, Msg: "auth failed"},
+			expected: CategoryAuthentication,
+		},
+		{
+			name:     "CategorizedError rate limit",
+			err:      &CategorizedError{Category: CategoryRateLimit, Msg: "rate limited"},
+			expected: CategoryRateLimit,
+		},
+		{
+			name:     "CategorizedError timeout",
+			err:      &CategorizedError{Category: CategoryTimeout, Msg: "timed out"},
+			expected: CategoryTimeout,
+		},
+		{
+			name:     "CategorizedError service unavailable",
+			err:      &CategorizedError{Category: CategoryServiceUnavailable, Msg: "overloaded"},
+			expected: CategoryServiceUnavailable,
+		},
+		{
+			name:     "CategorizedError unknown",
+			err:      &CategorizedError{Category: CategoryUnknown, Msg: "something went wrong"},
+			expected: CategoryUnknown,
+		},
+		{
 			name:     "too many requests",
 			err:      errors.New("error: too many requests"),
 			expected: CategoryRateLimit,
