@@ -284,6 +284,9 @@ func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStre
 		case "rate_limit_event":
 			// Rate limit status notification — informational, skip
 
+		case "user":
+			// Claude Code echoes user/tool inputs as "user" events — skip
+
 		default:
 			// Check for JSON output mode result object (no "type" field, has "result")
 			if env.Type == "" && env.Result != nil {
