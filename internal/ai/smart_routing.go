@@ -71,6 +71,9 @@ func isRateLimitError(err error) bool {
 	if _, ok := err.(*RateLimitError); ok {
 		return true
 	}
+	if ce, ok := err.(*CategorizedError); ok {
+		return ce.Category == CategoryRateLimit
+	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "rate limit") ||
 		strings.Contains(msg, "429") ||

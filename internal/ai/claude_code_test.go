@@ -439,7 +439,7 @@ func TestClassifyClaudeCodeError(t *testing.T) {
 	}{
 		{"auth", "authentication failed", 1, CategoryAuthentication},
 		{"rate limit", "rate_limit: too many requests", 1, CategoryRateLimit},
-		{"overloaded", "service overloaded, try later", 1, CategoryRateLimit}, // "overloaded" -> rate limit via ClassifyError
+		{"overloaded", "service overloaded, try later", 1, CategoryServiceUnavailable},
 		{"timeout", "operation timed out", 1, CategoryTimeout},
 		{"unknown", "something unexpected", 1, CategoryUnknown},
 	}

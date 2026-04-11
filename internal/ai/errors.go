@@ -17,6 +17,17 @@ const (
 	CategoryContextExceeded
 )
 
+// CategorizedError carries an explicit error category alongside the message,
+// eliminating the need for string-matching re-classification.
+type CategorizedError struct {
+	Category AIErrorCategory
+	Msg      string
+}
+
+func (e *CategorizedError) Error() string {
+	return e.Msg
+}
+
 // userFriendlyMessages maps error categories to human-readable messages.
 var userFriendlyMessages = map[AIErrorCategory]string{
 	CategoryTimeout:            "The AI service took too long to respond. Please try again.",
@@ -33,7 +44,10 @@ func ClassifyError(err error) AIErrorCategory {
 		return CategoryUnknown
 	}
 
-	// Check for RateLimitError type first
+	// Check for typed errors first (fast path, no string matching).
+	if ce, ok := err.(*CategorizedError); ok {
+		return ce.Category
+	}
 	if _, ok := err.(*RateLimitError); ok {
 		return CategoryRateLimit
 	}
