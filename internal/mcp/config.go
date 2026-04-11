@@ -59,7 +59,7 @@ func (m *MCPConfigManager) Setup() error {
 	configPath := m.ConfigPath()
 	conduitEntry := mcpServerEntry{
 		Type: "http",
-		URL:  fmt.Sprintf("http://127.0.0.1:%d", m.port),
+		URL:  fmt.Sprintf("http://127.0.0.1:%d/mcp", m.port),
 	}
 
 	existing, err := os.ReadFile(configPath)
