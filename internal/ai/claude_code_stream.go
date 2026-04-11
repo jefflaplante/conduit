@@ -23,18 +23,28 @@ type streamEvent struct {
 	Event json.RawMessage `json:"event,omitempty"`
 
 	// Fields for "message" type events
-	Role    string          `json:"role,omitempty"`
-	Content json.RawMessage `json:"content,omitempty"`
-	UsageRaw json.RawMessage `json:"usage,omitempty"`
+	Role      string          `json:"role,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
+	UsageRaw  json.RawMessage `json:"usage,omitempty"`
 
 	// Fields for "system/api_retry" events
-	Attempt     int `json:"attempt,omitempty"`
-	MaxRetries  int `json:"max_retries,omitempty"`
-	RetryDelay  int `json:"retry_delay_ms,omitempty"`
+	Attempt    int `json:"attempt,omitempty"`
+	MaxRetries int `json:"max_retries,omitempty"`
+	RetryDelay int `json:"retry_delay_ms,omitempty"`
 
-	// Fields for JSON output mode result
+	// Fields for "system" init events
+	SubType string `json:"subtype,omitempty"`
+
+	// Fields for "assistant" events (verbose mode) — message is nested
+	Message json.RawMessage `json:"message,omitempty"`
+
+	// Fields for "result" events (verbose mode)
 	Result    *string         `json:"result,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
 	SessionID string          `json:"session_id,omitempty"`
+
+	// Fields for JSON output mode result (no type field)
+	ResultVal *string `json:"result,omitempty"`
 }
 
 // streamDelta represents the inner delta object within a stream_event.
@@ -64,6 +74,22 @@ type claudeCodeUsage struct {
 	OutputTokensSC int `json:"output_tokens,omitempty"`
 }
 
+// resultUsage represents the usage field inside the verbose "result" event,
+// which uses snake_case at the top level.
+type resultUsage struct {
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
+}
+
+// resultModelUsage represents the modelUsage field inside the verbose "result" event.
+type resultModelUsage map[string]struct {
+	InputTokens              int     `json:"inputTokens"`
+	OutputTokens             int     `json:"outputTokens"`
+	CacheReadInputTokens     int     `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens int     `json:"cacheCreationInputTokens"`
+	CostUSD                  float64 `json:"costUSD"`
+}
+
 // toUsage converts to the canonical Usage type, preferring whichever naming
 // convention has a non-zero value.
 func (u *claudeCodeUsage) toUsage() Usage {
@@ -82,9 +108,32 @@ func (u *claudeCodeUsage) toUsage() Usage {
 	}
 }
 
+// assistantMessage represents the nested message inside an "assistant" event.
+type assistantMessage struct {
+	Content   json.RawMessage `json:"content,omitempty"`
+	UsageRaw  json.RawMessage `json:"usage,omitempty"`
+	SessionID string          `json:"session_id,omitempty"`
+}
+
+// verboseResult represents the full "result" event from verbose stream-json.
+type verboseResult struct {
+	Result    string          `json:"result"`
+	IsError   bool            `json:"is_error"`
+	SessionID string          `json:"session_id"`
+	Usage     json.RawMessage `json:"usage,omitempty"`
+}
+
 // ParseClaudeCodeStream reads newline-delimited JSON from r (the stdout of
 // `claude -p --output-format stream-json`), calls onDelta for each text chunk,
 // and returns the accumulated result. Unknown event types are silently skipped.
+//
+// Supported event types (verbose stream-json format):
+//   - "system" — init event; session_id extracted
+//   - "assistant" — message content blocks; text and tool_use extracted
+//   - "stream_event" — inner delta for text_delta chunks
+//   - "message" — final message with content blocks and usage
+//   - "result" — final result with text, session_id, and usage
+//   - "system/api_retry" — retry notification
 //
 // If the reader closes unexpectedly, the result has Partial set to true with
 // whatever content was accumulated up to that point.
@@ -111,6 +160,77 @@ func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStre
 		}
 
 		switch env.Type {
+		case "system":
+			// Init event — grab session_id for --resume support
+			if env.SessionID != "" {
+				sessionID = env.SessionID
+			}
+
+		case "assistant":
+			// Verbose mode: assistant message with nested message.content
+			if env.Message != nil {
+				var msg assistantMessage
+				if err := json.Unmarshal(env.Message, &msg); err == nil {
+					// Grab session_id from message
+					if msg.SessionID != "" {
+						sessionID = msg.SessionID
+					}
+					// Parse content blocks
+					if msg.Content != nil {
+						var blocks []contentBlock
+						if err := json.Unmarshal(msg.Content, &blocks); err == nil {
+							for _, b := range blocks {
+								switch b.Type {
+								case "text":
+									if b.Text != "" {
+										// In verbose mode, assistant events may arrive
+										// after stream_event deltas; only set if empty.
+										if content.Len() == 0 {
+											content.WriteString(b.Text)
+										}
+									}
+								case "tool_use":
+									log.Printf("[ClaudeCodeStream] Tool use: %s", b.Name)
+								}
+							}
+						}
+					}
+					// Parse usage
+					if msg.UsageRaw != nil {
+						var cu claudeCodeUsage
+						if err := json.Unmarshal(msg.UsageRaw, &cu); err == nil {
+							usage = cu.toUsage()
+						}
+					}
+				}
+			}
+
+		case "result":
+			// Verbose mode: final result event with accumulated text, usage, session_id
+			var vr verboseResult
+			if err := json.Unmarshal([]byte(line), &vr); err == nil {
+				// Use result text if we haven't accumulated content from stream deltas
+				if content.Len() == 0 && vr.Result != "" {
+					content.WriteString(vr.Result)
+				}
+				if vr.SessionID != "" {
+					sessionID = vr.SessionID
+				}
+				// Parse usage from result event
+				if vr.Usage != nil {
+					var ru resultUsage
+					if err := json.Unmarshal(vr.Usage, &ru); err == nil {
+						if ru.InputTokens > 0 || ru.OutputTokens > 0 {
+							usage = Usage{
+								PromptTokens:     ru.InputTokens,
+								CompletionTokens: ru.OutputTokens,
+								TotalTokens:      ru.InputTokens + ru.OutputTokens,
+							}
+						}
+					}
+				}
+			}
+
 		case "stream_event":
 			// Parse inner event for text_delta
 			if env.Event != nil {
@@ -160,6 +280,9 @@ func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStre
 		case "system/api_retry":
 			log.Printf("[ClaudeCodeStream] API retry: attempt %d/%d (delay %dms)",
 				env.Attempt, env.MaxRetries, env.RetryDelay)
+
+		case "rate_limit_event":
+			// Rate limit status notification — informational, skip
 
 		default:
 			// Check for JSON output mode result object (no "type" field, has "result")
