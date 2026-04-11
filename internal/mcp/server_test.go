@@ -231,6 +231,7 @@ func TestToolsListViaInMemoryTransport(t *testing.T) {
 	)
 
 	srv := NewServer(registry, 0) // port unused for in-memory test
+	srv.RegisterTools()
 
 	ctx := context.Background()
 	t1, t2 := sdkmcp.NewInMemoryTransports()
@@ -277,6 +278,7 @@ func TestToolCallViaInMemoryTransport(t *testing.T) {
 	}
 
 	srv := NewServer(registry, 0)
+	srv.RegisterTools()
 
 	ctx := context.Background()
 	t1, t2 := sdkmcp.NewInMemoryTransports()
@@ -316,6 +318,7 @@ func TestToolCallErrorViaInMemoryTransport(t *testing.T) {
 	}
 
 	srv := NewServer(registry, 0)
+	srv.RegisterTools()
 
 	ctx := context.Background()
 	t1, t2 := sdkmcp.NewInMemoryTransports()
@@ -354,6 +357,7 @@ func TestToolCallToolResultError(t *testing.T) {
 	}
 
 	srv := NewServer(registry, 0)
+	srv.RegisterTools()
 
 	ctx := context.Background()
 	t1, t2 := sdkmcp.NewInMemoryTransports()
@@ -406,6 +410,7 @@ func TestNewServerRegistersFilteredTools(t *testing.T) {
 	)
 
 	srv := NewServer(registry, 0)
+	srv.RegisterTools()
 	require.NotNil(t, srv.mcpServer, "MCP server should be initialized")
 
 	// Verify tools were registered by connecting an in-memory client.
