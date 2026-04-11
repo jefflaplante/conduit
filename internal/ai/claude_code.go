@@ -167,6 +167,11 @@ func (p *ClaudeCodeProvider) buildCommand(ctx context.Context, userMessage strin
 		args = append(args, "--output-format", "json")
 	}
 
+	// Claude CLI requires --verbose when using --output-format=stream-json in print mode.
+	if streaming {
+		args = append(args, "--verbose")
+	}
+
 	// Model override.
 	if p.model != "" {
 		args = append(args, "--model", p.model)
