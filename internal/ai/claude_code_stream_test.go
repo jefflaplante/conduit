@@ -251,6 +251,38 @@ func TestParseClaudeCodeStream_NilCallback(t *testing.T) {
 	assert.Equal(t, "Hello", result.Content)
 }
 
+func TestParseClaudeCodeStream_JSONOutputFallback(t *testing.T) {
+	// A line with no "type" field but a "result" field should be parsed as a
+	// JSON output mode result object. This was previously broken by a duplicate
+	// JSON struct tag that caused env.Result to always be nil.
+	stream := lines(
+		`{"result": "hello from json mode", "session_id": "s-json-1", "usage": {"inputTokens": 10, "outputTokens": 5}}`,
+	)
+
+	result, err := ParseClaudeCodeStream(strings.NewReader(stream), nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "hello from json mode", result.Content)
+	assert.Equal(t, "s-json-1", result.SessionID)
+	assert.Equal(t, 10, result.Usage.PromptTokens)
+	assert.Equal(t, 5, result.Usage.CompletionTokens)
+}
+
+func TestParseClaudeCodeStream_VerboseResultEvent(t *testing.T) {
+	stream := lines(
+		`{"type": "stream_event", "event": {"delta": {"type": "text_delta", "text": "Hi"}}}`,
+		`{"type": "result", "result": "Hi", "session_id": "ses-result-1", "is_error": false, "usage": {"input_tokens": 200, "output_tokens": 80}}`,
+	)
+
+	result, err := ParseClaudeCodeStream(strings.NewReader(stream), nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "Hi", result.Content)
+	assert.Equal(t, "ses-result-1", result.SessionID)
+	assert.Equal(t, 200, result.Usage.PromptTokens)
+	assert.Equal(t, 80, result.Usage.CompletionTokens)
+}
+
 func TestParseClaudeCodeStream_MultipleToolUseBlocks(t *testing.T) {
 	stream := lines(
 		`{"type": "message", "content": [{"type": "tool_use", "name": "Read", "input": {"file": "a.go"}}, {"type": "tool_use", "name": "Glob", "input": {"pattern": "*.go"}}]}`,
