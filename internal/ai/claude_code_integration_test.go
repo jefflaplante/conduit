@@ -419,8 +419,8 @@ func TestIntegration_SessionMapperMultipleSessions(t *testing.T) {
 	// The mock script echoes back a session_id based on the prompt content.
 	// We use the prompt to control which CC session ID gets returned.
 	script := writeMockClaude(t, "claude", `
-# The last argument is the prompt
-prompt="${@: -1}"
+# Get the last argument (POSIX-compatible)
+for prompt; do :; done
 case "$prompt" in
   *"session-a"*) echo '{"result":"a","session_id":"cc-aaa","usage":{"inputTokens":1,"outputTokens":1}}' ;;
   *"session-b"*) echo '{"result":"b","session_id":"cc-bbb","usage":{"inputTokens":1,"outputTokens":1}}' ;;
