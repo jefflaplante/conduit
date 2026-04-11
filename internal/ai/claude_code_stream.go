@@ -64,11 +64,15 @@ type contentBlock struct {
 // camelCase (JSON output) and snake_case (stream events) field names.
 type claudeCodeUsage struct {
 	// camelCase (JSON output mode)
-	InputTokensCC  int `json:"inputTokens,omitempty"`
-	OutputTokensCC int `json:"outputTokens,omitempty"`
+	InputTokensCC          int `json:"inputTokens,omitempty"`
+	OutputTokensCC         int `json:"outputTokens,omitempty"`
+	CacheReadCC            int `json:"cacheReadInputTokens,omitempty"`
+	CacheCreationCC        int `json:"cacheCreationInputTokens,omitempty"`
 	// snake_case (stream message events)
-	InputTokensSC  int `json:"input_tokens,omitempty"`
-	OutputTokensSC int `json:"output_tokens,omitempty"`
+	InputTokensSC          int `json:"input_tokens,omitempty"`
+	OutputTokensSC         int `json:"output_tokens,omitempty"`
+	CacheReadSC            int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationSC        int `json:"cache_creation_input_tokens,omitempty"`
 }
 
 // resultUsage represents the usage field inside the verbose "result" event,
@@ -89,10 +93,20 @@ func (u *claudeCodeUsage) toUsage() Usage {
 	if output == 0 {
 		output = u.OutputTokensSC
 	}
+	cacheRead := u.CacheReadCC
+	if cacheRead == 0 {
+		cacheRead = u.CacheReadSC
+	}
+	cacheCreation := u.CacheCreationCC
+	if cacheCreation == 0 {
+		cacheCreation = u.CacheCreationSC
+	}
 	return Usage{
-		PromptTokens:     input,
-		CompletionTokens: output,
-		TotalTokens:      input + output,
+		PromptTokens:             input,
+		CompletionTokens:         output,
+		TotalTokens:              input + output,
+		CacheReadInputTokens:     cacheRead,
+		CacheCreationInputTokens: cacheCreation,
 	}
 }
 
@@ -105,10 +119,19 @@ type assistantMessage struct {
 
 // verboseResult represents the full "result" event from verbose stream-json.
 type verboseResult struct {
-	Result    string          `json:"result"`
-	IsError   bool            `json:"is_error"`
-	SessionID string          `json:"session_id"`
-	Usage     json.RawMessage `json:"usage,omitempty"`
+	Result     string          `json:"result"`
+	IsError    bool            `json:"is_error"`
+	SessionID  string          `json:"session_id"`
+	Usage      json.RawMessage `json:"usage,omitempty"`
+	ModelUsage json.RawMessage `json:"model_usage,omitempty"`
+}
+
+// modelUsageEntry represents per-model usage stats inside a verbose result's model_usage field.
+type modelUsageEntry struct {
+	InputTokens              int `json:"inputTokens"`
+	OutputTokens             int `json:"outputTokens"`
+	CacheReadInputTokens     int `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens int `json:"cacheCreationInputTokens"`
 }
 
 // ParseClaudeCodeStream reads newline-delimited JSON from r (the stdout of
@@ -214,6 +237,16 @@ func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStre
 								CompletionTokens: ru.OutputTokens,
 								TotalTokens:      ru.InputTokens + ru.OutputTokens,
 							}
+						}
+					}
+				}
+				// Parse per-model usage for cache token stats
+				if vr.ModelUsage != nil {
+					var mu map[string]modelUsageEntry
+					if err := json.Unmarshal(vr.ModelUsage, &mu); err == nil {
+						for _, entry := range mu {
+							usage.CacheReadInputTokens += entry.CacheReadInputTokens
+							usage.CacheCreationInputTokens += entry.CacheCreationInputTokens
 						}
 					}
 				}

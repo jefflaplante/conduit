@@ -283,6 +283,47 @@ func TestParseClaudeCodeStream_VerboseResultEvent(t *testing.T) {
 	assert.Equal(t, 80, result.Usage.CompletionTokens)
 }
 
+func TestParseClaudeCodeStream_CacheTokensFromResultModelUsage(t *testing.T) {
+	stream := lines(
+		`{"type": "stream_event", "event": {"delta": {"type": "text_delta", "text": "Hi"}}}`,
+		`{"type": "result", "result": "Hi", "session_id": "s1", "usage": {"input_tokens": 1000, "output_tokens": 200}, "model_usage": {"claude-sonnet-4-20250514": {"inputTokens": 1000, "outputTokens": 200, "cacheReadInputTokens": 800, "cacheCreationInputTokens": 150}}}`,
+	)
+
+	result, err := ParseClaudeCodeStream(strings.NewReader(stream), nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1000, result.Usage.PromptTokens)
+	assert.Equal(t, 200, result.Usage.CompletionTokens)
+	assert.Equal(t, 800, result.Usage.CacheReadInputTokens)
+	assert.Equal(t, 150, result.Usage.CacheCreationInputTokens)
+}
+
+func TestParseClaudeCodeStream_CacheTokensFromMessageUsage(t *testing.T) {
+	stream := lines(
+		`{"type": "message", "role": "assistant", "content": [{"type": "text", "text": "Done"}], "usage": {"input_tokens": 500, "output_tokens": 100, "cache_read_input_tokens": 400, "cache_creation_input_tokens": 50}}`,
+	)
+
+	result, err := ParseClaudeCodeStream(strings.NewReader(stream), nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, 500, result.Usage.PromptTokens)
+	assert.Equal(t, 100, result.Usage.CompletionTokens)
+	assert.Equal(t, 400, result.Usage.CacheReadInputTokens)
+	assert.Equal(t, 50, result.Usage.CacheCreationInputTokens)
+}
+
+func TestParseClaudeCodeJSON_CacheTokensCamelCase(t *testing.T) {
+	jsonStr := `{"result": "ok", "session_id": "s1", "usage": {"inputTokens": 300, "outputTokens": 50, "cacheReadInputTokens": 250, "cacheCreationInputTokens": 30}}`
+
+	result, err := ParseClaudeCodeJSON(strings.NewReader(jsonStr))
+
+	require.NoError(t, err)
+	assert.Equal(t, 300, result.Usage.PromptTokens)
+	assert.Equal(t, 50, result.Usage.CompletionTokens)
+	assert.Equal(t, 250, result.Usage.CacheReadInputTokens)
+	assert.Equal(t, 30, result.Usage.CacheCreationInputTokens)
+}
+
 func TestParseClaudeCodeStream_MultipleToolUseBlocks(t *testing.T) {
 	stream := lines(
 		`{"type": "message", "content": [{"type": "tool_use", "name": "Read", "input": {"file": "a.go"}}, {"type": "tool_use", "name": "Glob", "input": {"pattern": "*.go"}}]}`,
