@@ -662,6 +662,29 @@ func TestBuildCommand_SystemPrompt(t *testing.T) {
 	})
 }
 
+func TestIsStaleSessionError(t *testing.T) {
+	tests := []struct {
+		stderr string
+		want   bool
+	}{
+		{"Error: session not found", true},
+		{"Error: Session Not Found for id abc-123", true},
+		{"invalid session id", true},
+		{"could not resume session", true},
+		{"no such session", true},
+		{"session_not_found", true},
+		{"rate limit exceeded", false},
+		{"authentication error", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		got := isStaleSessionError(tt.stderr)
+		if got != tt.want {
+			t.Errorf("isStaleSessionError(%q) = %v, want %v", tt.stderr, got, tt.want)
+		}
+	}
+}
+
 // assertContainsSequence checks that args contains key followed by value.
 func assertContainsSequence(t *testing.T, args []string, key, value string) {
 	t.Helper()
