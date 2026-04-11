@@ -78,7 +78,11 @@ func TestClaudeCodeProvider_BuildCommand_Basic(t *testing.T) {
 		config: config.ClaudeCodeConfig{ClaudePath: "/usr/bin/claude", TimeoutSeconds: 60},
 	}
 
-	cmd := p.buildCommand(context.Background(), "hello world", "", false)
+	cmd, cleanup, err := p.buildCommand(context.Background(), "hello world", "", "", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer cleanup()
 
 	args := cmd.Args[1:] // skip the binary name
 	want := []string{"-p", "--output-format", "json", "hello world"}
@@ -94,7 +98,11 @@ func TestClaudeCodeProvider_BuildCommand_Streaming(t *testing.T) {
 		config: config.ClaudeCodeConfig{ClaudePath: "/usr/bin/claude", TimeoutSeconds: 60},
 	}
 
-	cmd := p.buildCommand(context.Background(), "hi", "", true)
+	cmd, cleanup, err := p.buildCommand(context.Background(), "hi", "", "", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer cleanup()
 
 	args := cmd.Args[1:]
 	// Should have stream-json and --model
@@ -114,9 +122,13 @@ func TestClaudeCodeProvider_BuildCommand_WithSessionResume(t *testing.T) {
 		sessionMapper: mapper,
 	}
 
-	cmd := p.buildCommand(context.Background(), "test", "conduit-sess-1", false)
-	args := cmd.Args[1:]
+	cmd, cleanup, err := p.buildCommand(context.Background(), "test", "", "conduit-sess-1", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer cleanup()
 
+	args := cmd.Args[1:]
 	assertContainsSequence(t, args, "--resume", "cc-sess-abc")
 }
 
@@ -138,7 +150,12 @@ func TestClaudeCodeProvider_BuildCommand_AllOptions(t *testing.T) {
 		sessionMapper: mapper,
 	}
 
-	cmd := p.buildCommand(context.Background(), "do stuff", "sess-1", true)
+	cmd, cleanup, err := p.buildCommand(context.Background(), "do stuff", "", "sess-1", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer cleanup()
+
 	args := cmd.Args[1:]
 
 	assertContainsSequence(t, args, "--output-format", "stream-json")
@@ -165,9 +182,13 @@ func TestClaudeCodeProvider_BuildCommand_NilMapper(t *testing.T) {
 		sessionMapper: nil, // nil mapper should not panic
 	}
 
-	cmd := p.buildCommand(context.Background(), "test", "some-session", false)
-	args := cmd.Args[1:]
+	cmd, cleanup, err := p.buildCommand(context.Background(), "test", "", "some-session", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer cleanup()
 
+	args := cmd.Args[1:]
 	// Should NOT contain --resume when mapper is nil.
 	for _, arg := range args {
 		if arg == "--resume" {
@@ -507,6 +528,138 @@ func sliceEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// --- extractSystemContent ---
+
+func TestExtractSystemContent(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []ChatMessage
+		want     string
+	}{
+		{
+			name:     "no system messages",
+			messages: []ChatMessage{{Role: "user", Content: "hello"}},
+			want:     "",
+		},
+		{
+			name:     "single system message",
+			messages: []ChatMessage{{Role: "system", Content: "You are helpful."}},
+			want:     "You are helpful.",
+		},
+		{
+			name: "multiple system messages joined",
+			messages: []ChatMessage{
+				{Role: "system", Content: "Identity section"},
+				{Role: "system", Content: "Memory section"},
+			},
+			want: "Identity section\n\nMemory section",
+		},
+		{
+			name: "mixed roles preserves only system in order",
+			messages: []ChatMessage{
+				{Role: "system", Content: "First system"},
+				{Role: "user", Content: "user msg"},
+				{Role: "assistant", Content: "reply"},
+				{Role: "system", Content: "Second system"},
+			},
+			want: "First system\n\nSecond system",
+		},
+		{
+			name: "empty system content skipped",
+			messages: []ChatMessage{
+				{Role: "system", Content: "Real content"},
+				{Role: "system", Content: ""},
+				{Role: "system", Content: "More content"},
+			},
+			want: "Real content\n\nMore content",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractSystemContent(tt.messages)
+			if got != tt.want {
+				t.Errorf("extractSystemContent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// --- buildCommand system prompt passthrough ---
+
+func TestBuildCommand_SystemPrompt(t *testing.T) {
+	provider := &ClaudeCodeProvider{
+		name: "test",
+		config: config.ClaudeCodeConfig{
+			ClaudePath:     "claude",
+			TimeoutSeconds: 30,
+		},
+	}
+	ctx := context.Background()
+
+	t.Run("empty system content adds no flag", func(t *testing.T) {
+		cmd, cleanup, err := provider.buildCommand(ctx, "hello", "", "", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer cleanup()
+
+		for _, arg := range cmd.Args {
+			if arg == "--append-system-prompt-file" {
+				t.Error("found --append-system-prompt-file flag with empty system content")
+			}
+		}
+	})
+
+	t.Run("non-empty system content creates temp file", func(t *testing.T) {
+		systemContent := "You are Conduit, a helpful AI assistant.\n\nRemember the user's preferences."
+		cmd, cleanup, err := provider.buildCommand(ctx, "hello", systemContent, "", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Find the temp file path from args.
+		var tempPath string
+		for i, arg := range cmd.Args {
+			if arg == "--append-system-prompt-file" && i+1 < len(cmd.Args) {
+				tempPath = cmd.Args[i+1]
+				break
+			}
+		}
+		if tempPath == "" {
+			t.Fatal("--append-system-prompt-file flag not found in args")
+		}
+
+		// Verify temp file exists and has correct content.
+		content, err := os.ReadFile(tempPath)
+		if err != nil {
+			t.Fatalf("failed to read temp file: %v", err)
+		}
+		if string(content) != systemContent {
+			t.Errorf("temp file content = %q, want %q", string(content), systemContent)
+		}
+
+		// Cleanup should remove the file.
+		cleanup()
+		if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+			t.Error("temp file still exists after cleanup")
+		}
+	})
+
+	t.Run("prompt is still last argument", func(t *testing.T) {
+		cmd, cleanup, err := provider.buildCommand(ctx, "my question", "system stuff", "", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer cleanup()
+
+		last := cmd.Args[len(cmd.Args)-1]
+		if last != "my question" {
+			t.Errorf("last arg = %q, want %q", last, "my question")
+		}
+	})
 }
 
 // assertContainsSequence checks that args contains key followed by value.
