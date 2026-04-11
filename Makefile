@@ -2,7 +2,8 @@
 
 .PHONY: build build-prod build-full build-prod-full build-sre build-iot build-custom \
         run test test-full test-coverage clean deps format lint \
-        install-deps channel-deps install init dev health help
+        install-deps channel-deps install init dev health help \
+        container-core container-full container-sre container-iot
 
 # Build configuration
 BINARY_NAME=conduit
@@ -226,6 +227,50 @@ dev:
 		make run; \
 	fi
 
+# =============================================================================
+# Container Build Targets (podman)
+# =============================================================================
+CONTAINER_IMAGE ?= conduit
+
+container-core:
+	@echo "Building core container image..."
+	podman build -f Containerfile \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg GIT_TAG=$(GIT_TAG) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-t $(CONTAINER_IMAGE):core .
+
+container-full:
+	@echo "Building full container image (all optional tools)..."
+	podman build -f Containerfile \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg GIT_TAG=$(GIT_TAG) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--build-arg BUILD_TAGS="$(call tags_for,$(OPTIONAL_TOOLS))" \
+		-t $(CONTAINER_IMAGE):full .
+
+container-sre:
+	@echo "Building SRE container image (Datadog+PagerDuty+SRE)..."
+	podman build -f Containerfile \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg GIT_TAG=$(GIT_TAG) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--build-arg BUILD_TAGS="$(call tags_for,$(SRE_TOOLS))" \
+		-t $(CONTAINER_IMAGE):sre .
+
+container-iot:
+	@echo "Building IoT container image (MQTT+UniFi)..."
+	podman build -f Containerfile \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg GIT_TAG=$(GIT_TAG) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--build-arg BUILD_TAGS="$(call tags_for,$(IOT_TOOLS))" \
+		-t $(CONTAINER_IMAGE):iot .
+
 # Quick health check
 health:
 	@echo "Checking gateway health..."
@@ -263,6 +308,12 @@ help:
 	@echo "  make clean           Clean build artifacts"
 	@echo "  make format          Format Go code"
 	@echo "  make lint            Lint Go code"
+	@echo ""
+	@echo "Container Builds (podman):"
+	@echo "  make container-core  Build core container image"
+	@echo "  make container-full  Build container with all optional tools"
+	@echo "  make container-sre   Build container with SRE tools"
+	@echo "  make container-iot   Build container with IoT tools"
 	@echo ""
 	@echo "Optional Tools (build tags):"
 	@echo "  datadog, k8s, pagerduty, sre, mqtt, ssh, unifi"

@@ -28,17 +28,25 @@ ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 ARG GIT_TAG=
 ARG BUILD_DATE=unknown
+ARG BUILD_TAGS=
 
 # Build the binary with production flags
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -buildvcs=false \
-    -ldflags="-s -w \
-        -X 'conduit/internal/version.Version=${VERSION}' \
-        -X 'conduit/internal/version.GitCommit=${GIT_COMMIT}' \
-        -X 'conduit/internal/version.GitTag=${GIT_TAG}' \
-        -X 'conduit/internal/version.BuildDate=${BUILD_DATE}'" \
-    -o conduit \
-    ./cmd/gateway
+# BUILD_TAGS: optional comma-separated build tags (e.g., "with_datadog,with_k8s,with_mqtt")
+# TARGETARCH: injected by Docker BuildKit for multi-platform builds
+ARG TARGETARCH
+RUN if [ -n "${BUILD_TAGS}" ]; then \
+      TAGS_FLAG="-tags ${BUILD_TAGS}"; \
+    fi && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+        -buildvcs=false \
+        ${TAGS_FLAG} \
+        -ldflags="-s -w \
+            -X 'conduit/internal/version.Version=${VERSION}' \
+            -X 'conduit/internal/version.GitCommit=${GIT_COMMIT}' \
+            -X 'conduit/internal/version.GitTag=${GIT_TAG}' \
+            -X 'conduit/internal/version.BuildDate=${BUILD_DATE}'" \
+        -o conduit \
+        ./cmd/gateway
 
 # =============================================================================
 # Runtime Stage

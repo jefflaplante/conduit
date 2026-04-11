@@ -1,4 +1,4 @@
-name: Build and Push Container Image
+name: Build and Push Container Images
 
 on:
   push:
@@ -16,6 +16,23 @@ jobs:
     permissions:
       contents: read
       packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - name: core
+            build_tags: ""
+            suffix: ""
+          - name: full
+            build_tags: "with_datadog,with_k8s,with_pagerduty,with_sre,with_mqtt,with_ssh,with_unifi"
+            suffix: "-full"
+          - name: sre
+            build_tags: "with_datadog,with_pagerduty,with_sre"
+            suffix: "-sre"
+          - name: iot
+            build_tags: "with_mqtt,with_unifi"
+            suffix: "-iot"
 
     steps:
       - name: Checkout repository
@@ -54,13 +71,13 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch,suffix=${{ matrix.variant.suffix }}
+            type=semver,pattern={{version}},suffix=${{ matrix.variant.suffix }}
+            type=semver,pattern={{major}}.{{minor}},suffix=${{ matrix.variant.suffix }}
+            type=sha,prefix=sha-,suffix=${{ matrix.variant.suffix }}
+            type=raw,value=${{ matrix.variant.suffix == '' && 'latest' || matrix.variant.name }},enable={{is_default_branch}}
 
-      - name: Build and push container image
+      - name: Build and push container image (${{ matrix.variant.name }})
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -73,6 +90,7 @@ jobs:
             GIT_COMMIT=${{ steps.version.outputs.git_commit }}
             GIT_TAG=${{ steps.version.outputs.git_tag }}
             BUILD_DATE=${{ steps.version.outputs.build_date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64
+            BUILD_TAGS=${{ matrix.variant.build_tags }}
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
+          platforms: linux/amd64,linux/arm64
