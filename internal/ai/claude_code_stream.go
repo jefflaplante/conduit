@@ -38,13 +38,10 @@ type streamEvent struct {
 	// Fields for "assistant" events (verbose mode) — message is nested
 	Message json.RawMessage `json:"message,omitempty"`
 
-	// Fields for "result" events (verbose mode)
+	// Fields for "result" events (verbose mode) and JSON output mode (no type field)
 	Result    *string         `json:"result,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
 	SessionID string          `json:"session_id,omitempty"`
-
-	// Fields for JSON output mode result (no type field)
-	ResultVal *string `json:"result,omitempty"`
 }
 
 // streamDelta represents the inner delta object within a stream_event.
@@ -79,15 +76,6 @@ type claudeCodeUsage struct {
 type resultUsage struct {
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
-}
-
-// resultModelUsage represents the modelUsage field inside the verbose "result" event.
-type resultModelUsage map[string]struct {
-	InputTokens              int     `json:"inputTokens"`
-	OutputTokens             int     `json:"outputTokens"`
-	CacheReadInputTokens     int     `json:"cacheReadInputTokens"`
-	CacheCreationInputTokens int     `json:"cacheCreationInputTokens"`
-	CostUSD                  float64 `json:"costUSD"`
 }
 
 // toUsage converts to the canonical Usage type, preferring whichever naming
