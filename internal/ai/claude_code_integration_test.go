@@ -649,3 +649,61 @@ echo '{"result":"ok","session_id":"cc-stable","usage":{"inputTokens":1,"outputTo
 	assert.NotEqual(t, backdatedCreatedAt, lastUsed2,
 		"last_used_at should be more recent than the backdated created_at")
 }
+
+// TestIntegration_StaleSessionRecovery verifies that when --resume targets an
+// expired session, the provider deletes the mapping and retries successfully.
+func TestIntegration_StaleSessionRecovery(t *testing.T) {
+	counterFile := filepath.Join(t.TempDir(), "call_count")
+	argsFile := filepath.Join(t.TempDir(), "args.log")
+
+	// First invocation: write "session not found" to stderr and exit 1.
+	// Second invocation: succeed.
+	script := writeMockClaude(t, "claude", fmt.Sprintf(`
+COUNTER=%s
+ARGSLOG=%s
+echo "$@" >> "$ARGSLOG"
+if [ ! -f "$COUNTER" ]; then
+  echo "1" > "$COUNTER"
+  echo "Error: session not found" >&2
+  exit 1
+fi
+echo '{"result":"recovered","session_id":"cc-new-session","usage":{"inputTokens":10,"outputTokens":5}}'
+`, counterFile, argsFile))
+
+	mapper := newIntegrationSessionMapper(t)
+	// Pre-seed a stale session mapping.
+	require.NoError(t, mapper.SaveMapping("conduit-stale", "cc-expired-session"))
+
+	p, err := NewClaudeCodeProvider(config.ProviderConfig{
+		Name: "stale-recovery-test",
+		Type: "claude-code",
+		ClaudeCode: &config.ClaudeCodeConfig{
+			ClaudePath:     script,
+			TimeoutSeconds: 10,
+		},
+	}, mapper)
+	require.NoError(t, err)
+
+	ctx := types.WithRequestContext(context.Background(), "ch-1", "user-1", "conduit-stale")
+	req := &GenerateRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}}
+
+	resp, err := p.GenerateResponse(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, "recovered", resp.Content)
+
+	// Verify the retry used no --resume flag.
+	argsData, err := os.ReadFile(argsFile)
+	require.NoError(t, err)
+	argLines := strings.Split(strings.TrimSpace(string(argsData)), "\n")
+	require.Len(t, argLines, 2, "should have exactly 2 invocations (fail + retry)")
+
+	assert.Contains(t, argLines[0], "--resume",
+		"first call should have used --resume")
+	assert.NotContains(t, argLines[1], "--resume",
+		"retry call should NOT have used --resume")
+
+	// Verify the new session mapping was saved.
+	ccSess, err := mapper.GetClaudeCodeSession("conduit-stale")
+	require.NoError(t, err)
+	assert.Equal(t, "cc-new-session", ccSess)
+}

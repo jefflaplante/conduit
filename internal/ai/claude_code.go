@@ -72,6 +72,7 @@ func (p *ClaudeCodeProvider) GenerateResponse(ctx context.Context, req *Generate
 	}
 
 	conduitSessionID := extractSessionID(ctx)
+	hadResume := p.hasSessionMapping(conduitSessionID)
 
 	// Create a timeout context.
 	timeout := time.Duration(p.config.TimeoutSeconds) * time.Second
@@ -92,6 +93,12 @@ func (p *ClaudeCodeProvider) GenerateResponse(ctx context.Context, req *Generate
 	log.Printf("[ClaudeCode] Executing: %s (session=%s)", p.config.ClaudePath, conduitSessionID)
 
 	if err := cmd.Run(); err != nil {
+		// If --resume was used and the session is stale, retry without it.
+		if hadResume && isStaleSessionError(stderr.String()) {
+			log.Printf("[ClaudeCode] Stale session detected, retrying without --resume")
+			p.deleteSessionMapping(conduitSessionID)
+			return p.GenerateResponse(ctx, req)
+		}
 		return nil, classifyClaudeCodeError(stderr.String(), cmd.ProcessState.ExitCode(), err)
 	}
 
@@ -120,6 +127,7 @@ func (p *ClaudeCodeProvider) GenerateResponseStreaming(ctx context.Context, req 
 	}
 
 	conduitSessionID := extractSessionID(ctx)
+	hadResume := p.hasSessionMapping(conduitSessionID)
 
 	timeout := time.Duration(p.config.TimeoutSeconds) * time.Second
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -160,6 +168,12 @@ func (p *ClaudeCodeProvider) GenerateResponseStreaming(ctx context.Context, req 
 		}, parseErr
 	}
 	if waitErr != nil {
+		// If --resume was used and the session is stale, retry without it.
+		if hadResume && isStaleSessionError(stderr.String()) {
+			log.Printf("[ClaudeCode] Stale session detected (streaming), retrying without --resume")
+			p.deleteSessionMapping(conduitSessionID)
+			return p.GenerateResponseStreaming(ctx, req, onDelta)
+		}
 		return nil, classifyClaudeCodeError(stderr.String(), cmd.ProcessState.ExitCode(), waitErr)
 	}
 
@@ -268,6 +282,36 @@ func (p *ClaudeCodeProvider) saveSessionMapping(conduitSessionID, ccSessionID st
 	if err := p.sessionMapper.SaveMapping(conduitSessionID, ccSessionID); err != nil {
 		log.Printf("[ClaudeCode] Warning: failed to save session mapping: %v", err)
 	}
+}
+
+// hasSessionMapping returns true if a CC session mapping exists for the given Conduit session.
+func (p *ClaudeCodeProvider) hasSessionMapping(conduitSessionID string) bool {
+	if p.sessionMapper == nil || conduitSessionID == "" {
+		return false
+	}
+	ccSessionID, _ := p.sessionMapper.GetClaudeCodeSession(conduitSessionID)
+	return ccSessionID != ""
+}
+
+// deleteSessionMapping removes a stale CC session mapping.
+func (p *ClaudeCodeProvider) deleteSessionMapping(conduitSessionID string) {
+	if p.sessionMapper == nil || conduitSessionID == "" {
+		return
+	}
+	if err := p.sessionMapper.DeleteMapping(conduitSessionID); err != nil {
+		log.Printf("[ClaudeCode] Warning: failed to delete stale session mapping: %v", err)
+	}
+}
+
+// isStaleSessionError returns true if stderr indicates the --resume session
+// could not be found or is no longer valid.
+func isStaleSessionError(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	return strings.Contains(lower, "session not found") ||
+		strings.Contains(lower, "invalid session") ||
+		strings.Contains(lower, "could not resume") ||
+		strings.Contains(lower, "no such session") ||
+		strings.Contains(lower, "session_not_found")
 }
 
 // extractLastUserMessage returns the content of the last message with Role="user".
