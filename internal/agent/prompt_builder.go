@@ -68,6 +68,7 @@ type PromptBuilder struct {
 	skillsManager    *skills.Manager
 	sectionParams    *SectionParams
 	promptScaling    config.PromptScalingConfig
+	brainService     BrainLister
 }
 
 // NewPromptBuilder creates a new prompt builder with full integration.
@@ -75,6 +76,7 @@ type PromptBuilder struct {
 // If nil, a built-in default set is used.
 // promptScaling controls budget allocation for small-context models.
 // summaryManager is optional; if provided, enables AI-powered summarization for small-context models.
+// brainService is optional; if provided, enables Situation Awareness section with reflection data.
 func NewPromptBuilder(
 	agentName, personality string,
 	email config.AgentEmail,
@@ -88,6 +90,7 @@ func NewPromptBuilder(
 	promptScaling *config.PromptScalingConfig,
 	timezone string,
 	runtimeChannel string,
+	brainService BrainLister,
 ) *PromptBuilder {
 	params := NewSectionParams(tools)
 
@@ -158,6 +161,7 @@ func NewPromptBuilder(
 		skillsManager:    skillsManager,
 		sectionParams:    params,
 		promptScaling:    scaling,
+		brainService:     brainService,
 	}
 }
 
@@ -375,6 +379,9 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		{name: "Memory Recall", priority: 2, build: func() string { return buildMemorySection(params) }},
 		{name: "Memory Persistence", priority: 2, build: func() string { return buildMemoryPersistenceSection(params) }},
 		{name: "Brain", priority: 2, build: func() string { return buildBrainSection(params) }},
+		{name: "Situation Awareness", priority: 2, build: func() string {
+			return pb.buildSituationAwareness(ctx, params)
+		}},
 		{name: "Tooling", priority: 2, build: func() string { return pb.buildToolingSection() }},
 		{name: "Heartbeats", priority: 2, build: func() string { return buildHeartbeatsSection(params) }},
 		{name: "Messaging", priority: 2, build: func() string { return buildMessagingSection(params) }},

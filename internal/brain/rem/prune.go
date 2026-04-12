@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
+
+	"conduit/internal/reflection"
 )
 
 // isFilePath returns true if the source string looks like a filesystem path
@@ -46,75 +49,123 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 		return nil, fmt.Errorf("count LTM entries: %w", err)
 	}
 
+	var err error
+
 	if ltmCount < maxEntries {
 		// Under threshold — only do orphan detection for entries whose source
 		// files have genuinely been deleted from disk. Skip salience-based eviction.
-		return r.pruneOrphansOnly(ctx, result, dryRun)
+		result, err = r.pruneOrphansOnly(ctx, result, dryRun)
+		if err != nil {
+			return result, err
+		}
+	} else {
+		// Over threshold — run full salience-based eviction + orphan detection.
+
+		// Get evict threshold from brain config (default 0.1)
+		evictThreshold := 0.1
+
+		// 1. Find entries to evict based on salience and age
+		query := `
+			SELECT key, value, source, salience
+			FROM brain_ltm
+			WHERE salience < ?
+			AND accessed_at < datetime('now', ? || ' days')
+		`
+
+		rows, err := r.db.Query(query, evictThreshold, fmt.Sprintf("-%d", r.config.PruneAgeDays))
+		if err != nil {
+			return nil, fmt.Errorf("query low-salience entries: %w", err)
+		}
+		defer rows.Close()
+
+		type evictCandidate struct {
+			key      string
+			value    string
+			source   string
+			salience float64
+		}
+		var candidates []evictCandidate
+
+		for rows.Next() {
+			var c evictCandidate
+			if err := rows.Scan(&c.key, &c.value, &c.source, &c.salience); err != nil {
+				return nil, fmt.Errorf("scan evict candidate: %w", err)
+			}
+			candidates = append(candidates, c)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate evict candidates: %w", err)
+		}
+
+		// 2. Archive entries (move, don't delete)
+		for _, c := range candidates {
+			if !dryRun {
+				_, err := r.db.Exec(`
+					INSERT OR REPLACE INTO brain_archive (key, value, source, tier, salience, reason, archived_at)
+					VALUES (?, ?, ?, 'longterm', ?, 'low_salience', datetime('now'))
+				`, c.key, c.value, c.source, c.salience)
+				if err != nil {
+					return nil, fmt.Errorf("archive entry %q: %w", c.key, err)
+				}
+
+				_, err = r.db.Exec("DELETE FROM brain_ltm WHERE key = ?", c.key)
+				if err != nil {
+					return nil, fmt.Errorf("delete entry %q from LTM: %w", c.key, err)
+				}
+			}
+
+			result.Archived = append(result.Archived, ArchiveRecord{
+				Key:    c.key,
+				Reason: "low_salience",
+			})
+		}
+
+		// 3. Detect orphaned keys (file-path sources only)
+		result, err = r.pruneOrphansOnly(ctx, result, dryRun)
+		if err != nil {
+			return result, err
+		}
 	}
 
-	// Over threshold — run full salience-based eviction + orphan detection.
-
-	// Get evict threshold from brain config (default 0.1)
-	evictThreshold := 0.1
-
-	// 1. Find entries to evict based on salience and age
-	query := `
-		SELECT key, value, source, salience
-		FROM brain_ltm
-		WHERE salience < ?
-		AND accessed_at < datetime('now', ? || ' days')
-	`
-
-	rows, err := r.db.Query(query, evictThreshold, fmt.Sprintf("-%d", r.config.PruneAgeDays))
+	// 4. Groom old processed reflection entries
+	groomed, err := r.groomReflections(ctx, dryRun)
 	if err != nil {
-		return nil, fmt.Errorf("query low-salience entries: %w", err)
+		return result, fmt.Errorf("groom reflections: %w", err)
 	}
-	defer rows.Close()
+	result.ReflectionsGroomed = groomed
 
-	type evictCandidate struct {
-		key      string
-		value    string
-		source   string
-		salience float64
+	return result, nil
+}
+
+// groomReflections deletes processed reflection entries older than retention days.
+func (r *REMCycle) groomReflections(ctx context.Context, dryRun bool) (int, error) {
+	retentionDays := r.config.PruneAgeDays
+	if retentionDays <= 0 {
+		retentionDays = 30
 	}
-	var candidates []evictCandidate
 
-	for rows.Next() {
-		var c evictCandidate
-		if err := rows.Scan(&c.key, &c.value, &c.source, &c.salience); err != nil {
-			return nil, fmt.Errorf("scan evict candidate: %w", err)
+	if dryRun {
+		// Count how many would be groomed
+		cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
+		cutoffStr := cutoff.Format("2006-01-02 15:04:05")
+		var count int
+		err := r.db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM brain_reflections WHERE rem_processed = 1 AND timestamp < ?",
+			cutoffStr).Scan(&count)
+		if err != nil {
+			// Table may not exist yet; that's fine
+			return 0, nil
 		}
-		candidates = append(candidates, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate evict candidates: %w", err)
+		return count, nil
 	}
 
-	// 2. Archive entries (move, don't delete)
-	for _, c := range candidates {
-		if !dryRun {
-			_, err := r.db.Exec(`
-				INSERT OR REPLACE INTO brain_archive (key, value, source, tier, salience, reason, archived_at)
-				VALUES (?, ?, ?, 'longterm', ?, 'low_salience', datetime('now'))
-			`, c.key, c.value, c.source, c.salience)
-			if err != nil {
-				return nil, fmt.Errorf("archive entry %q: %w", c.key, err)
-			}
-
-			_, err = r.db.Exec("DELETE FROM brain_ltm WHERE key = ?", c.key)
-			if err != nil {
-				return nil, fmt.Errorf("delete entry %q from LTM: %w", c.key, err)
-			}
-		}
-
-		result.Archived = append(result.Archived, ArchiveRecord{
-			Key:    c.key,
-			Reason: "low_salience",
-		})
+	store := reflection.NewStore(r.db)
+	groomed, err := store.Groom(ctx, retentionDays)
+	if err != nil {
+		// Table may not exist yet; that's fine
+		return 0, nil
 	}
-
-	// 3. Detect orphaned keys (file-path sources only)
-	return r.pruneOrphansOnly(ctx, result, dryRun)
+	return groomed, nil
 }
 
 // pruneOrphansOnly detects entries whose source files have been deleted.

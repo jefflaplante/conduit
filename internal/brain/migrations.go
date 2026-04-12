@@ -61,6 +61,32 @@ var migrations = []migration{
 		CREATE INDEX IF NOT EXISTS idx_brain_ltm_source ON brain_ltm(source);
 		CREATE INDEX IF NOT EXISTS idx_brain_ltm_source_hash ON brain_ltm(source_hash);`,
 	},
+	// Migration 4: SPAR Reflect - brain_reflections table
+	{
+		Version: 4,
+		SQL: `CREATE TABLE IF NOT EXISTS brain_reflections (
+			id TEXT PRIMARY KEY,
+			session_key TEXT NOT NULL,
+			timestamp DATETIME NOT NULL,
+			source TEXT NOT NULL,
+			type TEXT NOT NULL,
+			tool TEXT,
+			outcome TEXT NOT NULL,
+			retry_count INTEGER DEFAULT 0,
+			duration_ms INTEGER DEFAULT 0,
+			insight TEXT,
+			score INTEGER DEFAULT 0,
+			tags TEXT,
+			related_keys TEXT,
+			rem_processed INTEGER DEFAULT 0
+		);
+
+		CREATE INDEX idx_reflections_session ON brain_reflections (session_key);
+		CREATE INDEX idx_reflections_timestamp ON brain_reflections (timestamp);
+		CREATE INDEX idx_reflections_tool ON brain_reflections (tool);
+		CREATE INDEX idx_reflections_type ON brain_reflections (type);
+		CREATE INDEX idx_reflections_rem ON brain_reflections (rem_processed);`,
+	},
 }
 
 func runMigrations(db *sql.DB) error {

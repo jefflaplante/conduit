@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"text/tabwriter"
 	"time"
 
+	"conduit/internal/brain"
 	"conduit/internal/briefing"
 	"conduit/internal/config"
 	"conduit/internal/sessions"
@@ -185,6 +188,9 @@ func runBriefingGenerate(sessionID string, outputJSON bool, limit int) error {
 		return fmt.Errorf("failed to save briefing: %w", err)
 	}
 
+	// Write briefing to Brain for Situation Awareness prompt section.
+	storeBriefingInBrain(cfg, b)
+
 	// Output.
 	if outputJSON {
 		encoder := json.NewEncoder(os.Stdout)
@@ -303,6 +309,37 @@ func resolveBriefingsDir(cfg *config.Config) string {
 		workspace = "."
 	}
 	return filepath.Join(workspace, "briefings")
+}
+
+// storeBriefingInBrain writes the briefing summary to Brain under sense.briefing.latest
+// so the Situation Awareness prompt section can surface it. This is best-effort:
+// if Brain is not configured or unavailable, we log a warning and continue.
+func storeBriefingInBrain(cfg *config.Config, b *briefing.Briefing) {
+	if !cfg.Brain.Enabled {
+		return
+	}
+
+	brainDBPath := cfg.Brain.Path
+	if brainDBPath == "" {
+		brainDBPath = config.DeriveBrainDBPath(cfg.Database.Path)
+	}
+
+	brainSvc, err := brain.New(brainDBPath)
+	if err != nil {
+		log.Printf("briefing: failed to open brain for briefing store: %v", err)
+		return
+	}
+	defer brainSvc.Close()
+
+	ctx := brain.WithUserID(context.Background(), "system")
+	value := b.FormatForBrain()
+
+	if err := brainSvc.Store(ctx, "sense.briefing.latest", value, brain.TierWorking, "system:briefing"); err != nil {
+		log.Printf("briefing: failed to store briefing in brain: %v", err)
+		return
+	}
+
+	log.Printf("briefing: stored in brain as sense.briefing.latest (%d bytes)", len(value))
 }
 
 func printBriefingText(b *briefing.Briefing) {

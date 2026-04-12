@@ -41,6 +41,7 @@ type ConduitAgentWithIntegration struct {
 	skillsManager    *skills.Manager
 	modelAliases     map[string]string
 	promptBuilder    *PromptBuilder
+	brainService     BrainLister
 
 	// System prompt cache: keyed by "sessionKey:model:isOAuth"
 	promptCache    sync.Map
@@ -51,6 +52,7 @@ type ConduitAgentWithIntegration struct {
 // modelAliases maps short names to full model identifiers for the system prompt;
 // pass nil to use built-in defaults.
 // summaryManager enables AI-powered summarization for small-context models; pass nil to disable.
+// brainService is optional; if provided, enables Situation Awareness section.
 func NewConduitAgentWithIntegration(
 	cfg AgentConfig,
 	tools []ai.Tool,
@@ -58,6 +60,7 @@ func NewConduitAgentWithIntegration(
 	summaryManager *workspace.SummaryManager,
 	skillsManager *skills.Manager,
 	modelAliases map[string]string,
+	brainService BrainLister,
 ) *ConduitAgentWithIntegration {
 	agent := &ConduitAgentWithIntegration{
 		name:             cfg.Name,
@@ -73,6 +76,7 @@ func NewConduitAgentWithIntegration(
 		summaryManager:   summaryManager,
 		skillsManager:    skillsManager,
 		modelAliases:     modelAliases,
+		brainService:     brainService,
 		promptCacheTTL:   DefaultPromptCacheTTL,
 	}
 
@@ -90,6 +94,7 @@ func NewConduitAgentWithIntegration(
 		agent.promptScaling,
 		agent.timezone,
 		agent.runtimeChannel,
+		agent.brainService,
 	)
 
 	return agent
@@ -114,6 +119,7 @@ func (a *ConduitAgentWithIntegration) SetTools(tools []ai.Tool) {
 		a.promptScaling,
 		a.timezone,
 		a.runtimeChannel,
+		a.brainService,
 	)
 	a.mu.Unlock()
 	// Invalidate prompt cache since tools affect prompt content
@@ -459,6 +465,7 @@ func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error
 		a.promptScaling,
 		a.timezone,
 		a.runtimeChannel,
+		a.brainService,
 	)
 	a.mu.Unlock()
 
@@ -487,6 +494,7 @@ func (a *ConduitAgentWithIntegration) UpdateTools(tools []ai.Tool) error {
 		a.promptScaling,
 		a.timezone,
 		a.runtimeChannel,
+		a.brainService,
 	)
 
 	// Invalidate prompt cache since tools affect prompt content
@@ -550,6 +558,7 @@ func (a *ConduitAgentWithIntegration) SetSummaryManager(sm *workspace.SummaryMan
 		a.promptScaling,
 		a.timezone,
 		a.runtimeChannel,
+		a.brainService,
 	)
 	a.mu.Unlock()
 
@@ -565,6 +574,35 @@ func (a *ConduitAgentWithIntegration) GetSummaryManager() *workspace.SummaryMana
 // GetSkillsManager returns the skills manager (for external access if needed)
 func (a *ConduitAgentWithIntegration) GetSkillsManager() *skills.Manager {
 	return a.skillsManager
+}
+
+// SetBrainService sets the brain service for Situation Awareness prompt section.
+// This is called after the brain is available to provide reflection data.
+func (a *ConduitAgentWithIntegration) SetBrainService(bs BrainLister) {
+	a.mu.Lock()
+	a.brainService = bs
+
+	// Rebuild prompt builder with brain service
+	a.promptBuilder = NewPromptBuilder(
+		a.name,
+		a.personality,
+		a.email,
+		a.identity,
+		a.capabilities,
+		a.tools,
+		a.workspaceContext,
+		a.summaryManager,
+		a.skillsManager,
+		a.modelAliases,
+		a.promptScaling,
+		a.timezone,
+		a.runtimeChannel,
+		a.brainService,
+	)
+	a.mu.Unlock()
+
+	// Invalidate prompt cache since brain data affects prompt content
+	a.InvalidatePromptCache()
 }
 
 // Initialize performs any needed initialization for the agent and its components

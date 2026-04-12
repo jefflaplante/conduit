@@ -448,6 +448,58 @@ func extractFilePath(text string) string {
 	return ""
 }
 
+// FormatForBrain produces a compact text summary of a Briefing suitable for
+// storing in Brain under sense.briefing.latest. It includes the summary,
+// key decisions, next steps, and tool usage — the most relevant context for
+// the Situation Awareness prompt section.
+func (b *Briefing) FormatForBrain() string {
+	var parts []string
+
+	parts = append(parts, b.Summary)
+
+	if len(b.KeyDecisions) > 0 {
+		items := b.KeyDecisions
+		if len(items) > 5 {
+			items = items[:5]
+		}
+		parts = append(parts, "Key decisions: "+strings.Join(items, "; "))
+	}
+
+	if len(b.NextSteps) > 0 {
+		items := b.NextSteps
+		if len(items) > 5 {
+			items = items[:5]
+		}
+		parts = append(parts, "Next steps: "+strings.Join(items, "; "))
+	}
+
+	if len(b.OpenQuestions) > 0 {
+		items := b.OpenQuestions
+		if len(items) > 3 {
+			items = items[:3]
+		}
+		parts = append(parts, "Open questions: "+strings.Join(items, "; "))
+	}
+
+	if len(b.ToolsUsed) > 0 {
+		var toolStrs []string
+		limit := len(b.ToolsUsed)
+		if limit > 5 {
+			limit = 5
+		}
+		for _, t := range b.ToolsUsed[:limit] {
+			toolStrs = append(toolStrs, fmt.Sprintf("%s(%dx)", t.Name, t.Count))
+		}
+		parts = append(parts, "Tools: "+strings.Join(toolStrs, ", "))
+	}
+
+	if b.Duration > 0 {
+		parts = append(parts, fmt.Sprintf("Duration: %s", b.Duration.Round(time.Second)))
+	}
+
+	return strings.Join(parts, "\n")
+}
+
 // splitSentences does a simple sentence split on periods and newlines.
 func splitSentences(text string) []string {
 	// Replace newlines with periods for uniform splitting.

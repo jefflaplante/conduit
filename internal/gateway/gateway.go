@@ -32,6 +32,7 @@ import (
 	"conduit/internal/middleware"
 	"conduit/internal/monitoring"
 	"conduit/internal/mqtt"
+	"conduit/internal/reflection"
 	"conduit/internal/scheduler"
 	"conduit/internal/searchdb"
 	"conduit/internal/sessions"
@@ -140,8 +141,13 @@ type Gateway struct {
 	mqttService *mqtt.Service
 
 	// Brain cognitive architecture (optional)
-	brainService *brain.Brain
-	remCycle     *rem.REMCycle
+	brainService    *brain.Brain
+	remCycle        *rem.REMCycle
+	reflectionStore *reflection.ReflectionStore
+
+	// SPAR reflection: session-end detection and metrics
+	farewellDetector  *reflection.FarewellDetector
+	sessionReflector  *reflection.SessionReflector
 
 	// SSH server (optional)
 	sshServer *charmssh.Server
@@ -264,6 +270,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		nil, // SummaryManager set later after AI router is created
 		skillsManager,
 		cfg.AI.ModelAliases,
+		nil, // BrainService set later via SetBrainService after brain is initialized
 	)
 
 	// Initialize the agent system
@@ -728,6 +735,20 @@ func New(cfg *config.Config) (*Gateway, error) {
 		}
 	}
 
+	// Initialize optional SPAR reflection store (requires Brain for its database)
+	if gw.brainService != nil {
+		reflCfg := cfg.Reflection
+		if reflCfg == nil {
+			reflCfg = reflection.DefaultConfig()
+		}
+		if reflCfg.Enabled {
+			gw.reflectionStore = reflection.NewStore(gw.brainService.DB())
+			gw.sessionReflector = reflection.NewSessionReflector(gw.reflectionStore)
+			gw.farewellDetector = reflection.NewFarewellDetector()
+			logger.Info("reflection store initialized")
+		}
+	}
+
 	// Create schema builder with discovery providers for enhanced tool schemas
 	schemaBuilder := createSchemaBuilder(gw, cfg)
 
@@ -765,6 +786,12 @@ func New(cfg *config.Config) (*Gateway, error) {
 		remCycleRunner = newREMCycleAdapter(gw.remCycle)
 	}
 
+	// Build ReflectionService interface value (nil if reflection store not initialized)
+	var reflectionSvc types.ReflectionService
+	if gw.reflectionStore != nil {
+		reflectionSvc = newReflectionAdapter(gw.reflectionStore)
+	}
+
 	toolServices := &tools.ToolServices{
 		SessionStore:  sessionStore,
 		ConfigMgr:     cfg,
@@ -777,6 +804,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		Brain:         brainSvcAdapter,
 		BrainFTS:      brainFTS,
 		REMCycle:      remCycleRunner,
+		Reflection:    reflectionSvc,
 		SchemaBuilder: schemaBuilder,
 		DebugLog:      debugBuffer,
 	}
@@ -795,6 +823,11 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Update agent with the now-registered tools
 	agentSystem.SetTools(aiTools)
 
+	// Wire brain service into agent for Situation Awareness prompt section
+	if gw.brainService != nil {
+		agentSystem.SetBrainService(gw.brainService)
+	}
+
 	// Initialize scheduler
 	workspaceDir := cfg.Workspace.ContextDir
 	if workspaceDir == "" {
@@ -803,7 +836,12 @@ func New(cfg *config.Config) (*Gateway, error) {
 	gw.scheduler = scheduler.New(workspaceDir, gw.executeScheduledJob)
 
 	// Initialize heartbeat integration
-	gw.heartbeatIntegration = heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, metricsCollector, cfg.AgentHeartbeat.Model, cfg.AgentHeartbeat.TimeoutSeconds)
+	hbIntegration := heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, metricsCollector, cfg.AgentHeartbeat.Model, cfg.AgentHeartbeat.TimeoutSeconds)
+	if gw.brainService != nil {
+		hbIntegration.SetBrainWriter(newHeartbeatBrainWriter(gw.brainService))
+		logger.Info("heartbeat Brain writer enabled for sense.alerts.* namespace")
+	}
+	gw.heartbeatIntegration = hbIntegration
 
 	// NOTE: initializeAgentHeartbeat is called AFTER scheduler.Start() in the Run() method
 	// so that existing jobs are loaded from cron_jobs.json before the heartbeat job is added.
@@ -817,6 +855,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		"vector_search_enabled", gw.vectorService != nil,
 		"mqtt_enabled", gw.mqttService != nil,
 		"brain_enabled", gw.brainService != nil,
+		"reflection_enabled", gw.reflectionStore != nil,
 		"compaction_enabled", gw.compactionEngine != nil,
 		"rate_limiting_enabled", cfg.RateLimiting.Enabled,
 		"model_alias_count", len(cfg.AI.ModelAliases))
@@ -1091,6 +1130,19 @@ func (g *Gateway) Start(ctx context.Context) error {
 		<-ctx.Done()
 		stopCleanup()
 	}()
+
+	// Start SPAR reflection idle-session loop (writes Go-only metrics for
+	// substantive sessions that go idle). Runs on the same cadence as state cleanup.
+	if g.sessionReflector != nil {
+		go g.reflectOnIdleSessions(ctx, 30*time.Minute, 5*time.Minute)
+	}
+
+	// Start beads→Brain wiring: query active tasks from `br` CLI and write
+	// summary to Brain's sense.tasks.active namespace for Situation Awareness.
+	// Best-effort: if br is missing or slow, this is silently skipped.
+	if g.brainService != nil {
+		go g.refreshBeadsPeriodic(ctx, 5*time.Minute)
+	}
 
 	// Start fsnotify watcher for real-time FTS indexing of .md file changes
 	if g.ftsWatcher != nil {
@@ -1523,6 +1575,15 @@ func (g *Gateway) handleChannelStatus(w http.ResponseWriter, r *http.Request) {
 // handleClientRead handles incoming messages from a WebSocket client
 func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 	defer func() {
+		// SPAR reflection: fire low-confidence (Go-only) reflection on WS disconnect
+		// for substantive sessions. This runs before cleanup so the session data is
+		// still available.
+		if client.SessionKey != "" {
+			reflCtx, reflCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			g.reflectOnSessionEnd(reflCtx, client.SessionKey)
+			reflCancel()
+		}
+
 		g.clientMu.Lock()
 		delete(g.clients, client.ID)
 		clientCount := len(g.clients)
@@ -1719,6 +1780,18 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		return
 	}
 
+	// SPAR reflection: check for farewell before sending to AI.
+	// Pure string matching — no latency impact on normal messages.
+	isFarewell, _ := g.shouldTriggerReflection(msg.Text)
+	messageForAI := msg.Text
+	if isFarewell {
+		if reflPrompt := g.reflectHighConfidencePre(); reflPrompt != "" {
+			messageForAI = msg.Text + "\n\n[System: " + reflPrompt + "]"
+			g.logger.Info("SPAR reflection: farewell detected, injecting reflection prompt",
+				"session_key", session.Key, "channel_id", msg.ChannelID)
+		}
+	}
+
 	// Start typing indicator loop (refreshes every 4 seconds until done).
 	// Buffered to 1 to prevent goroutine leak if close() races with send.
 	typingDone := make(chan struct{}, 1)
@@ -1850,7 +1923,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 					}
 				}
 
-				convResponse, err = g.ai.GenerateResponseStreaming(reqCtx, session, msg.Text, providerOverride, modelOverride, onDelta)
+				convResponse, err = g.ai.GenerateResponseStreaming(reqCtx, session, messageForAI, providerOverride, modelOverride, onDelta)
 
 				// Final edit with complete text
 				if err == nil && convResponse != nil {
@@ -1934,7 +2007,7 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 				g.channelManager.SendMessage(progressMsg)
 			}
 
-			convResponse, err = g.ai.GenerateResponseWithToolsAndProgress(reqCtx, session, msg.Text, providerOverride, modelOverride, onProgress)
+			convResponse, err = g.ai.GenerateResponseWithToolsAndProgress(reqCtx, session, messageForAI, providerOverride, modelOverride, onProgress)
 		}
 		if err != nil {
 			if !typingClosed {
@@ -1985,6 +2058,16 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 				responseContent += warning.Text
 				batch[warning.Key] = "true"
 			}
+
+			// TODO(SPAR): Context budget reflection trigger.
+			// When context usage >= 80% of the model's window, inject the session
+			// reflection prompt on the NEXT message so the model can reflect while
+			// it still has meaningful context. Track via a session context flag
+			// (e.g. "reflection_context_budget_triggered") to fire only once.
+			// The contextWarningIfNeeded function already detects 80% — set the
+			// flag here and check it at the top of handleIncomingMessage to inject
+			// reflectHighConfidencePre() into messageForAI on the next turn.
+
 			_ = g.sessions.SetSessionContextBatch(session.Key, batch)
 		}
 
@@ -2003,6 +2086,13 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		_, err = g.sessions.AddMessage(session.Key, "assistant", responseContent, nil)
 		if err != nil {
 			logging.Error(ctx, "error saving AI message", "error", err)
+		}
+
+		// SPAR reflection: after model responds to farewell, compute session metrics
+		if isFarewell {
+			if updatedSession, sErr := g.sessions.GetSession(session.Key); sErr == nil {
+				g.reflectHighConfidencePost(ctx, updatedSession)
+			}
 		}
 
 		// Skip sending if streaming already edited the message

@@ -114,6 +114,36 @@ func convertEntries(entries []*brain.Entry) []*types.BrainEntry {
 	return result
 }
 
+// heartbeatBrainWriter adapts *brain.Brain to heartbeat.BrainWriter interface.
+// It writes heartbeat alerts into Brain's working memory under sense.alerts.* namespace.
+type heartbeatBrainWriter struct {
+	b *brain.Brain
+}
+
+func newHeartbeatBrainWriter(b *brain.Brain) *heartbeatBrainWriter {
+	return &heartbeatBrainWriter{b: b}
+}
+
+func (w *heartbeatBrainWriter) StoreAlert(ctx context.Context, key, value string) error {
+	return w.b.Store(ctx, key, value, brain.TierWorking, "system:heartbeat")
+}
+
+func (w *heartbeatBrainWriter) DeleteAlert(ctx context.Context, key string) error {
+	return w.b.Delete(ctx, key)
+}
+
+func (w *heartbeatBrainWriter) ListAlertKeys(ctx context.Context, prefix string) ([]string, error) {
+	entries, err := w.b.List(ctx, prefix, "")
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, len(entries))
+	for i, e := range entries {
+		keys[i] = e.Key
+	}
+	return keys, nil
+}
+
 // remCycleAdapter adapts *rem.REMCycle to types.REMCycleRunner interface.
 type remCycleAdapter struct {
 	cycle *rem.REMCycle

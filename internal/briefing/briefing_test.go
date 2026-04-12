@@ -254,6 +254,52 @@ func TestSplitSentences(t *testing.T) {
 	assert.Len(t, result, 3) // "Hello world", "How are you?", "Fine"
 }
 
+func TestFormatForBrain_Full(t *testing.T) {
+	b := &Briefing{
+		Summary:       "Session with 10 messages (6 user, 4 assistant).",
+		KeyDecisions:  []string{"Use Go for the backend", "Deploy to K8s"},
+		NextSteps:     []string{"Add integration tests", "Update docs"},
+		OpenQuestions: []string{"Should we add caching?"},
+		ToolsUsed:     []ToolUsage{{Name: "Read", Count: 5}, {Name: "Bash", Count: 3}},
+		Duration:      12 * time.Minute,
+	}
+
+	result := b.FormatForBrain()
+
+	assert.Contains(t, result, "Session with 10 messages")
+	assert.Contains(t, result, "Key decisions: Use Go for the backend; Deploy to K8s")
+	assert.Contains(t, result, "Next steps: Add integration tests; Update docs")
+	assert.Contains(t, result, "Open questions: Should we add caching?")
+	assert.Contains(t, result, "Read(5x)")
+	assert.Contains(t, result, "Bash(3x)")
+	assert.Contains(t, result, "Duration: 12m0s")
+}
+
+func TestFormatForBrain_Empty(t *testing.T) {
+	b := &Briefing{
+		Summary: "Minimal session.",
+	}
+
+	result := b.FormatForBrain()
+	assert.Equal(t, "Minimal session.", result)
+}
+
+func TestFormatForBrain_TruncatesLongLists(t *testing.T) {
+	b := &Briefing{
+		Summary: "Session summary.",
+		KeyDecisions: []string{
+			"Decision 1", "Decision 2", "Decision 3",
+			"Decision 4", "Decision 5", "Decision 6", "Decision 7",
+		},
+	}
+
+	result := b.FormatForBrain()
+
+	// Should only include 5 decisions (the cap).
+	assert.Contains(t, result, "Decision 5")
+	assert.NotContains(t, result, "Decision 6")
+}
+
 // helper
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))

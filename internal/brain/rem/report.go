@@ -12,6 +12,7 @@ import (
 type REMReport struct {
 	Date          time.Time
 	Triage        *TriageResult
+	Reflect       *ReflectResult
 	Consolidation *ConsolidationResult
 	Pruning       *PruneResult
 	Integration   *IntegrationResult
@@ -42,8 +43,9 @@ type MergeRecord struct {
 }
 
 type PruneResult struct {
-	Archived []ArchiveRecord
-	Orphaned []string
+	Archived           []ArchiveRecord
+	Orphaned           []string
+	ReflectionsGroomed int
 }
 
 type ArchiveRecord struct {
@@ -114,6 +116,14 @@ func (r *REMReport) WriteLog(logPath string) error {
 		}
 	}
 
+	// Reflect section
+	if r.Reflect != nil {
+		sb.WriteString("## Phase 1b: Reflect\n\n")
+		sb.WriteString(fmt.Sprintf("- Entries processed: %d\n", r.Reflect.EntriesProcessed))
+		sb.WriteString(fmt.Sprintf("- Clusters found: %d\n", r.Reflect.ClustersFound))
+		sb.WriteString(fmt.Sprintf("- Scores backfilled: %d\n\n", r.Reflect.ScoresBackfilled))
+	}
+
 	// Consolidation section
 	if r.Consolidation != nil {
 		sb.WriteString("## Phase 2: Consolidation\n\n")
@@ -143,7 +153,8 @@ func (r *REMReport) WriteLog(logPath string) error {
 	if r.Pruning != nil {
 		sb.WriteString("## Phase 3: Pruning\n\n")
 		sb.WriteString(fmt.Sprintf("- Archived: %d entries\n", len(r.Pruning.Archived)))
-		sb.WriteString(fmt.Sprintf("- Orphaned: %d entries\n\n", len(r.Pruning.Orphaned)))
+		sb.WriteString(fmt.Sprintf("- Orphaned: %d entries\n", len(r.Pruning.Orphaned)))
+		sb.WriteString(fmt.Sprintf("- Reflections groomed: %d\n\n", r.Pruning.ReflectionsGroomed))
 
 		if len(r.Pruning.Archived) > 0 {
 			sb.WriteString("### Archived Entries\n")

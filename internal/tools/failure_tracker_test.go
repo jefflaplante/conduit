@@ -32,17 +32,17 @@ func TestFailureTracker_RecordFailure(t *testing.T) {
 	ft := NewFailureTracker(3)
 
 	t.Run("increments failure count", func(t *testing.T) {
-		count := ft.RecordFailure("test_tool")
+		count := ft.RecordFailure("test_tool", "err1")
 		if count != 1 {
 			t.Errorf("expected count 1, got %d", count)
 		}
 
-		count = ft.RecordFailure("test_tool")
+		count = ft.RecordFailure("test_tool", "err2")
 		if count != 2 {
 			t.Errorf("expected count 2, got %d", count)
 		}
 
-		count = ft.RecordFailure("test_tool")
+		count = ft.RecordFailure("test_tool", "err3")
 		if count != 3 {
 			t.Errorf("expected count 3, got %d", count)
 		}
@@ -50,15 +50,15 @@ func TestFailureTracker_RecordFailure(t *testing.T) {
 
 	t.Run("tracks different tools separately", func(t *testing.T) {
 		ft2 := NewFailureTracker(3)
-		ft2.RecordFailure("tool_a")
-		ft2.RecordFailure("tool_a")
-		ft2.RecordFailure("tool_b")
+		ft2.RecordFailure("tool_a", "err")
+		ft2.RecordFailure("tool_a", "err")
+		ft2.RecordFailure("tool_b", "err")
 
 		if !ft2.ShouldPivot("tool_a") == false {
 			// tool_a has 2 failures, below threshold
 		}
-		countA := ft2.RecordFailure("tool_a")
-		countB := ft2.RecordFailure("tool_b")
+		countA := ft2.RecordFailure("tool_a", "err")
+		countB := ft2.RecordFailure("tool_b", "err")
 
 		if countA != 3 {
 			t.Errorf("expected tool_a count 3, got %d", countA)
@@ -73,12 +73,12 @@ func TestFailureTracker_RecordSuccess(t *testing.T) {
 	ft := NewFailureTracker(3)
 
 	t.Run("resets failure count", func(t *testing.T) {
-		ft.RecordFailure("test_tool")
-		ft.RecordFailure("test_tool")
+		ft.RecordFailure("test_tool", "err")
+		ft.RecordFailure("test_tool", "err")
 		ft.RecordSuccess("test_tool")
 
 		// After success, count should be reset
-		count := ft.RecordFailure("test_tool")
+		count := ft.RecordFailure("test_tool", "err")
 		if count != 1 {
 			t.Errorf("expected count 1 after reset, got %d", count)
 		}
@@ -94,8 +94,8 @@ func TestFailureTracker_ShouldPivot(t *testing.T) {
 	ft := NewFailureTracker(3)
 
 	t.Run("returns false below threshold", func(t *testing.T) {
-		ft.RecordFailure("test_tool")
-		ft.RecordFailure("test_tool")
+		ft.RecordFailure("test_tool", "err")
+		ft.RecordFailure("test_tool", "err")
 
 		if ft.ShouldPivot("test_tool") {
 			t.Error("expected ShouldPivot false with 2 failures")
@@ -104,9 +104,9 @@ func TestFailureTracker_ShouldPivot(t *testing.T) {
 
 	t.Run("returns true at threshold", func(t *testing.T) {
 		ft2 := NewFailureTracker(3)
-		ft2.RecordFailure("test_tool")
-		ft2.RecordFailure("test_tool")
-		ft2.RecordFailure("test_tool")
+		ft2.RecordFailure("test_tool", "err")
+		ft2.RecordFailure("test_tool", "err")
+		ft2.RecordFailure("test_tool", "err")
 
 		if !ft2.ShouldPivot("test_tool") {
 			t.Error("expected ShouldPivot true with 3 failures")
@@ -115,10 +115,10 @@ func TestFailureTracker_ShouldPivot(t *testing.T) {
 
 	t.Run("returns true above threshold", func(t *testing.T) {
 		ft3 := NewFailureTracker(3)
-		ft3.RecordFailure("test_tool")
-		ft3.RecordFailure("test_tool")
-		ft3.RecordFailure("test_tool")
-		ft3.RecordFailure("test_tool")
+		ft3.RecordFailure("test_tool", "err")
+		ft3.RecordFailure("test_tool", "err")
+		ft3.RecordFailure("test_tool", "err")
+		ft3.RecordFailure("test_tool", "err")
 
 		if !ft3.ShouldPivot("test_tool") {
 			t.Error("expected ShouldPivot true with 4 failures")
@@ -135,11 +135,11 @@ func TestFailureTracker_ShouldPivot(t *testing.T) {
 func TestFailureTracker_Reset(t *testing.T) {
 	ft := NewFailureTracker(3)
 
-	ft.RecordFailure("tool_a")
-	ft.RecordFailure("tool_a")
-	ft.RecordFailure("tool_b")
-	ft.RecordFailure("tool_b")
-	ft.RecordFailure("tool_b")
+	ft.RecordFailure("tool_a", "err")
+	ft.RecordFailure("tool_a", "err")
+	ft.RecordFailure("tool_b", "err")
+	ft.RecordFailure("tool_b", "err")
+	ft.RecordFailure("tool_b", "err")
 
 	ft.Reset()
 
@@ -151,7 +151,7 @@ func TestFailureTracker_Reset(t *testing.T) {
 	}
 
 	// Count should start fresh
-	count := ft.RecordFailure("tool_a")
+	count := ft.RecordFailure("tool_a", "err")
 	if count != 1 {
 		t.Errorf("expected count 1 after reset, got %d", count)
 	}
@@ -170,17 +170,17 @@ func TestFailureTracker_GetFailedTools(t *testing.T) {
 	t.Run("returns only tools at threshold", func(t *testing.T) {
 		ft2 := NewFailureTracker(3)
 		// tool_a: 3 failures (at threshold)
-		ft2.RecordFailure("tool_a")
-		ft2.RecordFailure("tool_a")
-		ft2.RecordFailure("tool_a")
+		ft2.RecordFailure("tool_a", "err")
+		ft2.RecordFailure("tool_a", "err")
+		ft2.RecordFailure("tool_a", "err")
 		// tool_b: 2 failures (below threshold)
-		ft2.RecordFailure("tool_b")
-		ft2.RecordFailure("tool_b")
+		ft2.RecordFailure("tool_b", "err")
+		ft2.RecordFailure("tool_b", "err")
 		// tool_c: 4 failures (above threshold)
-		ft2.RecordFailure("tool_c")
-		ft2.RecordFailure("tool_c")
-		ft2.RecordFailure("tool_c")
-		ft2.RecordFailure("tool_c")
+		ft2.RecordFailure("tool_c", "err")
+		ft2.RecordFailure("tool_c", "err")
+		ft2.RecordFailure("tool_c", "err")
+		ft2.RecordFailure("tool_c", "err")
 
 		failed := ft2.GetFailedTools()
 		if len(failed) != 2 {
@@ -219,7 +219,7 @@ func TestFailureTracker_Concurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < numIterations; j++ {
-				ft.RecordFailure("concurrent_tool")
+				ft.RecordFailure("concurrent_tool", "concurrent error")
 			}
 		}()
 	}
@@ -233,5 +233,163 @@ func TestFailureTracker_Concurrency(t *testing.T) {
 	expected := numGoroutines * numIterations
 	if count != expected {
 		t.Errorf("expected %d failures, got %d", expected, count)
+	}
+}
+
+// --- OnPivot callback tests ---
+
+func TestFailureTracker_OnPivot_FiresAtThreshold(t *testing.T) {
+	ft := NewFailureTracker(3)
+
+	var called bool
+	var gotTool string
+	var gotCount int
+	var gotError string
+
+	ft.OnPivot = func(toolName string, failCount int, lastError string) {
+		called = true
+		gotTool = toolName
+		gotCount = failCount
+		gotError = lastError
+	}
+
+	ft.RecordFailure("WebFetch", "connection refused")
+	ft.RecordFailure("WebFetch", "timeout")
+	ft.RecordFailure("WebFetch", "502 bad gateway") // threshold=3, should fire
+
+	if !called {
+		t.Fatal("expected OnPivot to be called at threshold")
+	}
+	if gotTool != "WebFetch" {
+		t.Errorf("expected tool 'WebFetch', got %q", gotTool)
+	}
+	if gotCount != 3 {
+		t.Errorf("expected failCount 3, got %d", gotCount)
+	}
+	if gotError != "502 bad gateway" {
+		t.Errorf("expected lastError '502 bad gateway', got %q", gotError)
+	}
+}
+
+func TestFailureTracker_OnPivot_NotCalledBelowThreshold(t *testing.T) {
+	ft := NewFailureTracker(3)
+
+	called := false
+	ft.OnPivot = func(toolName string, failCount int, lastError string) {
+		called = true
+	}
+
+	ft.RecordFailure("ReadFile", "not found")
+	ft.RecordFailure("ReadFile", "permission denied")
+
+	if called {
+		t.Error("OnPivot should not fire below threshold")
+	}
+}
+
+func TestFailureTracker_OnPivot_NotCalledAboveThreshold(t *testing.T) {
+	ft := NewFailureTracker(3)
+
+	callCount := 0
+	ft.OnPivot = func(toolName string, failCount int, lastError string) {
+		callCount++
+	}
+
+	ft.RecordFailure("Bash", "exit code 1")
+	ft.RecordFailure("Bash", "exit code 1")
+	ft.RecordFailure("Bash", "exit code 1") // fires here
+	ft.RecordFailure("Bash", "exit code 1") // should NOT fire again
+	ft.RecordFailure("Bash", "exit code 1") // should NOT fire again
+
+	if callCount != 1 {
+		t.Errorf("expected OnPivot called exactly once, got %d calls", callCount)
+	}
+}
+
+func TestFailureTracker_OnPivot_NilDoesNotPanic(t *testing.T) {
+	ft := NewFailureTracker(3)
+	// OnPivot is nil by default
+
+	// Should not panic even when threshold is reached
+	ft.RecordFailure("ReadFile", "err1")
+	ft.RecordFailure("ReadFile", "err2")
+	ft.RecordFailure("ReadFile", "err3")
+
+	if !ft.ShouldPivot("ReadFile") {
+		t.Error("expected ShouldPivot true after 3 failures")
+	}
+}
+
+func TestFailureTracker_OnPivot_LastErrorCaptured(t *testing.T) {
+	ft := NewFailureTracker(3)
+
+	var capturedError string
+	ft.OnPivot = func(toolName string, failCount int, lastError string) {
+		capturedError = lastError
+	}
+
+	ft.RecordFailure("WebSearch", "rate limited")
+	ft.RecordFailure("WebSearch", "connection reset")
+	ft.RecordFailure("WebSearch", "DNS resolution failed") // this error should be passed
+
+	if capturedError != "DNS resolution failed" {
+		t.Errorf("expected lastError 'DNS resolution failed', got %q", capturedError)
+	}
+}
+
+func TestFailureTracker_OnPivot_SuccessResetsAndDoesNotFireNextFailure(t *testing.T) {
+	ft := NewFailureTracker(3)
+
+	callCount := 0
+	ft.OnPivot = func(toolName string, failCount int, lastError string) {
+		callCount++
+	}
+
+	// Reach threshold
+	ft.RecordFailure("EditFile", "syntax error")
+	ft.RecordFailure("EditFile", "syntax error")
+	ft.RecordFailure("EditFile", "syntax error") // fires
+	if callCount != 1 {
+		t.Fatalf("expected 1 call after first threshold, got %d", callCount)
+	}
+
+	// Success resets
+	ft.RecordSuccess("EditFile")
+
+	// Next failure starts fresh — should not fire after just one
+	ft.RecordFailure("EditFile", "new error")
+	if callCount != 1 {
+		t.Errorf("expected no additional OnPivot call after success reset, got %d total", callCount)
+	}
+
+	// Reach threshold again
+	ft.RecordFailure("EditFile", "new error 2")
+	ft.RecordFailure("EditFile", "new error 3") // fires again
+	if callCount != 2 {
+		t.Errorf("expected 2 total OnPivot calls after second threshold, got %d", callCount)
+	}
+}
+
+func TestFailureTracker_OnPivot_MultipleTools(t *testing.T) {
+	ft := NewFailureTracker(2) // threshold of 2 for brevity
+
+	pivotedTools := make(map[string]string) // tool -> lastError
+	ft.OnPivot = func(toolName string, failCount int, lastError string) {
+		pivotedTools[toolName] = lastError
+	}
+
+	ft.RecordFailure("Bash", "exit 1")
+	ft.RecordFailure("ReadFile", "not found")
+	ft.RecordFailure("Bash", "exit 2")     // fires for Bash
+	ft.RecordFailure("ReadFile", "EACCES") // fires for ReadFile
+
+	if len(pivotedTools) != 2 {
+		t.Errorf("expected 2 pivoted tools, got %d", len(pivotedTools))
+	}
+	if pivotedTools["Bash"] != "exit 2" {
+		t.Errorf("expected Bash error 'exit 2', got %q", pivotedTools["Bash"])
+	}
+	if pivotedTools["ReadFile"] != "EACCES" {
+		t.Errorf("expected ReadFile error 'EACCES', got %q", pivotedTools["ReadFile"])
 	}
 }
