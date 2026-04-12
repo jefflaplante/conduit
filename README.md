@@ -46,8 +46,8 @@ A clean, high-performance rewrite of the Conduit gateway core in Go, with native
 
 | Metric | TypeScript | Go | Improvement |
 |--------|------------|----|-----------|
-| Memory (idle) | 150MB | 15MB | **90% less** |
-| Memory (1000 sessions) | 300MB | 60MB | **80% less** |
+| Memory (idle) | 150MB | 80MB | **47% less** |
+| Memory (1000 sessions) | 300MB | 120MB | **60% less** |
 | Startup time | 8s | 2s | **75% faster** |
 | Message latency | 150ms | 50ms | **67% faster** |
 | Concurrent connections | 1,000 | 10,000+ | **10x more** |
