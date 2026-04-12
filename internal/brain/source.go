@@ -14,6 +14,7 @@ const (
 	SourcePrefixUser     = "user"
 	SourcePrefixLLM      = "llm"
 	SourcePrefixSubAgent = "sub-agent"
+	SourcePrefixSystem   = "system"
 )
 
 // knownPrefixes is the set of recognized source prefixes.
@@ -24,6 +25,7 @@ var knownPrefixes = map[string]bool{
 	SourcePrefixUser:     true,
 	SourcePrefixLLM:      true,
 	SourcePrefixSubAgent: true,
+	SourcePrefixSystem:   true,
 }
 
 // ParseSource splits a source string into its prefix and detail parts.
@@ -50,7 +52,7 @@ func ValidateSource(s string) error {
 	if knownPrefixes[prefix] {
 		return nil
 	}
-	return fmt.Errorf("unknown source prefix %q (known: file, skill, tool, user, llm, sub-agent)", prefix)
+	return fmt.Errorf("unknown source prefix %q (known: file, skill, tool, user, llm, sub-agent, system)", prefix)
 }
 
 // StalenessThreshold returns the age-based staleness threshold for a source prefix.
@@ -61,7 +63,7 @@ func StalenessThreshold(prefix string) time.Duration {
 		return 0 // file: sources use hash-based detection, not age
 	case SourcePrefixUser:
 		return 0 // user-provided facts are authoritative
-	case SourcePrefixLLM:
+	case SourcePrefixLLM, SourcePrefixSystem:
 		return 14 * 24 * time.Hour // 14 days
 	case SourcePrefixSkill, SourcePrefixSubAgent, SourcePrefixTool:
 		return 30 * 24 * time.Hour // 30 days
