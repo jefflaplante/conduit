@@ -90,6 +90,7 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 ### Search & Memory
 - **[Brain (Cognitive Memory)](reference/brain.md)** — Tiered memory system: long-term (SQLite), working (per-session), and scratchpad (LIFO stack). Salience-scored with configurable weights, auto-promotion, and sub-agent working memory sharing. **Eliminates context window poisoning** — instead of dumping entire files into the prompt to retrieve a single fact, Brain returns just the fact (30 bytes vs. 12KB+). This dramatically reduces token waste, lowers cost, and keeps the context window clear for actual reasoning — especially critical for smaller models (Haiku, local quantized) where every token counts
 - **[REM Sleep Cycle](reference/brain.md#rem-sleep-cycle)** — A 5-phase memory consolidation process inspired by biological sleep. Phases: **Triage** (identify valuable working memory), **Consolidation** (promote high-value entries to LTM), **Pruning** (evict stale/low-value entries), **Integration** (cross-reference with workspace files), and **Grooming** (staleness tracking across all sources). Runs on a configurable schedule to keep long-term memory lean and relevant
+- **[SPAR Reflect](reference/spar.md)** — Cross-session learning loop. Tool outcomes are captured automatically on every execution, session summaries are written on idle/farewell/context budget, and the nightly REM Reflect phase clusters patterns (e.g., "WebFetch fails frequently") and feeds them back into the agent's Situation Awareness prompt section
 - **FTS5 Full-Text Search** — SQLite-based document, message, and brain LTM search
 - **Memory Search** — Semantic search across MEMORY.md, session history, and brain entries
 - **Web Search** — Hybrid Anthropic native + Brave API fallback
@@ -211,6 +212,7 @@ Use `/model <alias>` to switch models. The provider auto-resolves based on the m
 | [Skills System](reference/skills.md) | Creating and using skills |
 | [Authentication](reference/authentication.md) | Token and OAuth setup |
 | [Brain & REM Sleep](reference/brain.md) | Cognitive memory system with tiered storage and offline consolidation |
+| [SPAR Reflect](reference/spar.md) | Cross-session learning loop: tool outcome capture, session reflection, pattern clustering |
 | [SRE Tools](reference/sre-tools.md) | PagerDuty, Datadog, and incident correlation tools |
 | [Google Workspace](reference/google-workspace.md) | Gmail and Calendar integration via gws CLI |
 | [Remote SSH](reference/remote-ssh.md) | Multi-host SSH execution with security tiers |

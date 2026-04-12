@@ -111,6 +111,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/sessions/ — SQLite session store with state tracking
 - internal/mqtt/ — MQTT event ingest: paho client wrapper, per-topic ring buffers, service with background pruning, adapter to tool-layer interface
 - internal/brain/ — Tiered cognitive memory: LTM (SQLite-persisted), working memory (in-process per-user), scratchpad (LIFO stack). Salience-scored entries with configurable weights. Sub-agent WM sharing via parent context.
+- internal/reflection/ — SPAR Reflect subsystem: per-tool outcome capture (ReflectionMiddleware), session metrics (SessionReflector), farewell detection (FarewellDetector), ReflectionStore (brain_reflections table). See reference/spar.md.
 - internal/config/ — JSON config loading with ${ENV_VAR} expansion. Config struct includes: port, database, AI, agent, workspace, skills, tools, channels, debug, rate limiting, heartbeat, agent heartbeat, SSH, MQTT, brain
 - internal/database/ — SQLite migration system (4 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search)
 - internal/fts/ — FTS5 full-text search: document chunking, indexing, and search queries (Porter stemming, unicode61 tokenizer)
