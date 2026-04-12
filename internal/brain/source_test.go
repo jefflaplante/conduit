@@ -34,7 +34,7 @@ func TestParseSource(t *testing.T) {
 
 func TestValidateSource(t *testing.T) {
 	// Known prefixes should pass
-	for _, src := range []string{"file:test.md", "skill:foo", "tool", "user:manual", "llm:gen", "sub-agent:x"} {
+	for _, src := range []string{"file:test.md", "skill:foo", "tool", "user:manual", "llm:gen", "sub-agent:x", "system"} {
 		assert.NoError(t, ValidateSource(src), "source %q should be valid", src)
 	}
 	// Empty is valid (legacy)
