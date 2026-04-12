@@ -873,6 +873,28 @@ func (s *Store) GetSessionsByUser(userID string, limit int) ([]Session, error) {
 	return sessions, nil
 }
 
+// GetIdleSessions returns keys of sessions updated before olderThan with more than minMessages.
+func (s *Store) GetIdleSessions(olderThan time.Time, minMessages int) ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT key FROM sessions
+		WHERE updated_at < ? AND message_count > ?
+	`, olderThan.UTC().Format("2006-01-02 15:04:05"), minMessages)
+	if err != nil {
+		return nil, fmt.Errorf("query idle sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("scan idle session key: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
+
 // GetSessionByLabel retrieves a session by its label from the context JSON.
 // Labels are stored as context["label"] on sessions.
 func (s *Store) GetSessionByLabel(label string) (*Session, error) {

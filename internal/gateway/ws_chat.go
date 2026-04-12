@@ -96,9 +96,9 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		return
 	}
 
-	// SPAR reflection: check for natural language farewell before sending to AI.
-	// FarewellDetector is pure string matching — no latency impact on normal messages.
+	// SPAR reflection: check for farewell or context budget trigger before sending to AI.
 	isFarewell, _ := g.shouldTriggerReflection(text)
+	isContextBudgetReflect := false
 
 	// Save user message to session
 	_, err = g.sessions.AddMessage(session.Key, "user", msg.Text, nil)
@@ -115,6 +115,15 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		if reflPrompt := g.reflectHighConfidencePre(); reflPrompt != "" {
 			messageForAI = msg.Text + "\n\n[System: " + reflPrompt + "]"
 			log.Printf("SPAR reflection: farewell detected, injecting reflection prompt for session %s", session.Key)
+		}
+	} else if session.Context["reflection_context_budget_triggered"] == "true" {
+		if reflPrompt := g.reflectHighConfidencePre(); reflPrompt != "" {
+			messageForAI = msg.Text + "\n\n[System: " + reflPrompt + "]"
+			isContextBudgetReflect = true
+			_ = g.sessions.SetSessionContextBatch(session.Key, map[string]string{
+				"reflection_context_budget_triggered": "",
+			})
+			log.Printf("SPAR reflection: context budget triggered, injecting reflection prompt for session %s", session.Key)
 		}
 	}
 
@@ -270,11 +279,6 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 				responseContent += warning.Text
 			}
 
-			// TODO(SPAR): Context budget reflection trigger.
-			// When context usage >= 80%, set a session flag so the NEXT message
-			// injects the reflection prompt (via reflectHighConfidencePre).
-			// See the parallel TODO in gateway.go handleIncomingMessage.
-
 			// Accumulate session cost
 			requestCost = ai.CalculateCost(modelOverride, promptTokens, completionTokens)
 			prevCost, _ := strconv.ParseFloat(session.Context["session_total_cost"], 64)
@@ -291,6 +295,10 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 			}
 			if warning.Text != "" {
 				batch[warning.Key] = "true"
+				// SPAR: trigger reflection on next message when context budget >= 80%
+				if warning.Key == "context_warned_80" && g.sessionReflector != nil {
+					batch["reflection_context_budget_triggered"] = "true"
+				}
 			}
 			_ = g.sessions.SetSessionContextBatch(session.Key, batch)
 
@@ -361,9 +369,9 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		}
 	}
 
-	// SPAR reflection: after model responds to a farewell, compute and write
-	// session metrics (high-confidence path: model was available to reflect).
-	if isFarewell {
+	// SPAR reflection: after model responds to a farewell or context budget trigger,
+	// compute and write session metrics (high-confidence path: model was available to reflect).
+	if isFarewell || isContextBudgetReflect {
 		// Re-fetch session to get updated message count after saving the response
 		if updatedSession, sErr := g.sessions.GetSession(session.Key); sErr == nil {
 			g.reflectHighConfidencePost(ctx, updatedSession)

@@ -9,28 +9,19 @@ import (
 )
 
 // reflectOnIdleSessions runs periodically to write Go-only reflection metrics
-// for substantive sessions that have gone idle. This is a low-confidence trigger
-// (model unavailable) — only deterministic metrics are computed.
+// for substantive sessions that have gone idle without a clean WS disconnect
+// (e.g., network drops where the close frame is never received).
 //
 // A session is considered "substantive" when it has >5 messages. This is a
 // heuristic from the SPAR spec to avoid writing summaries for trivial sessions
-// (e.g. a single /status check).
-//
-// NOTE: The session state tracker does not expose a list/iterator method for
-// tracked sessions. The primary low-confidence reflection path is the WS
-// disconnect handler in handleClientRead, which fires for every client
-// disconnection. This loop serves as a safety net for sessions that idle out
-// without a clean disconnect (e.g., network drops where the WS close frame
-// is never received). A full implementation requires either:
-//   - Adding a ListIdleSessions method to SessionStateTracker, or
-//   - Querying the session store for sessions updated > idleTimeout ago
-//
-// For now the WS disconnect handler covers the common case.
+// (e.g. a single /status check). Already-reflected sessions are tracked in
+// memory to avoid duplicate writes across ticks.
 func (g *Gateway) reflectOnIdleSessions(ctx context.Context, idleTimeout time.Duration, interval time.Duration) {
 	if g.sessionReflector == nil {
 		return
 	}
 
+	reflected := make(map[string]struct{})
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -39,12 +30,21 @@ func (g *Gateway) reflectOnIdleSessions(ctx context.Context, idleTimeout time.Du
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// TODO(SPAR): Implement idle session scanning.
-			// Query the session store for sessions with updated_at older than
-			// idleTimeout, check message count > 5, and call reflectOnSessionEnd
-			// for each. Track already-reflected session keys to avoid duplicates.
-			// The WS disconnect handler covers most cases today.
-			continue
+			cutoff := time.Now().Add(-idleTimeout)
+			keys, err := g.sessions.GetIdleSessions(cutoff, 5)
+			if err != nil {
+				g.logger.Warn("reflection: failed to query idle sessions", "error", err)
+				continue
+			}
+			for _, key := range keys {
+				if _, done := reflected[key]; done {
+					continue
+				}
+				reflCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				g.reflectOnSessionEnd(reflCtx, key)
+				cancel()
+				reflected[key] = struct{}{}
+			}
 		}
 	}
 }
