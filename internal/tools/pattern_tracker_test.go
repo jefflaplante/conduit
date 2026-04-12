@@ -356,6 +356,182 @@ func TestDetectCircular_RealWorldScenarios(t *testing.T) {
 	})
 }
 
+func TestOnCircularCallback(t *testing.T) {
+	t.Run("fires when circular pattern detected", func(t *testing.T) {
+		pt := NewPatternTracker(10)
+
+		var gotPattern, gotSigHash string
+		callCount := 0
+		pt.OnCircular = func(pattern string, signatureHash string) {
+			callCount++
+			gotPattern = pattern
+			gotSigHash = signatureHash
+		}
+
+		// A B A B A B — triggers 2-element circular detection
+		calls := []string{"a", "b", "a", "b", "a", "b"}
+		for _, c := range calls {
+			pt.RecordCall(c, nil)
+		}
+
+		detected, pattern := pt.DetectCircular()
+		if !detected {
+			t.Fatal("expected circular pattern to be detected")
+		}
+		if callCount != 1 {
+			t.Errorf("expected OnCircular called once, got %d", callCount)
+		}
+		if gotPattern != pattern {
+			t.Errorf("callback pattern %q should match returned pattern %q", gotPattern, pattern)
+		}
+		if gotSigHash == "" {
+			t.Error("expected non-empty signature hash")
+		}
+	})
+
+	t.Run("not called when no pattern detected", func(t *testing.T) {
+		pt := NewPatternTracker(10)
+
+		callCount := 0
+		pt.OnCircular = func(pattern string, signatureHash string) {
+			callCount++
+		}
+
+		// Varied calls — no repeating pattern
+		calls := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+		for _, c := range calls {
+			pt.RecordCall(c, nil)
+		}
+
+		detected, _ := pt.DetectCircular()
+		if detected {
+			t.Fatal("should not detect pattern in varied calls")
+		}
+		if callCount != 0 {
+			t.Errorf("expected OnCircular not called, got %d calls", callCount)
+		}
+	})
+
+	t.Run("nil callback does not panic", func(t *testing.T) {
+		pt := NewPatternTracker(10)
+		// OnCircular is nil by default (not set)
+
+		calls := []string{"a", "b", "a", "b", "a", "b"}
+		for _, c := range calls {
+			pt.RecordCall(c, nil)
+		}
+
+		// Should not panic
+		detected, pattern := pt.DetectCircular()
+		if !detected {
+			t.Fatal("expected circular pattern to be detected")
+		}
+		if pattern != "a -> b" {
+			t.Errorf("expected 'a -> b', got '%s'", pattern)
+		}
+	})
+
+	t.Run("signature hash is stable for same pattern", func(t *testing.T) {
+		var hashes []string
+
+		for i := 0; i < 3; i++ {
+			pt := NewPatternTracker(10)
+			pt.OnCircular = func(_ string, sigHash string) {
+				hashes = append(hashes, sigHash)
+			}
+
+			calls := []string{"Read", "Edit", "Read", "Edit", "Read", "Edit"}
+			for _, c := range calls {
+				pt.RecordCall(c, nil)
+			}
+			pt.DetectCircular()
+		}
+
+		if len(hashes) != 3 {
+			t.Fatalf("expected 3 hashes, got %d", len(hashes))
+		}
+		if hashes[0] != hashes[1] || hashes[1] != hashes[2] {
+			t.Errorf("expected stable hashes, got %v", hashes)
+		}
+	})
+
+	t.Run("different patterns produce different signature hashes", func(t *testing.T) {
+		var hash1, hash2 string
+
+		pt1 := NewPatternTracker(10)
+		pt1.OnCircular = func(_ string, sigHash string) {
+			hash1 = sigHash
+		}
+		for i := 0; i < 6; i += 2 {
+			pt1.RecordCall("a", nil)
+			pt1.RecordCall("b", nil)
+		}
+		pt1.DetectCircular()
+
+		pt2 := NewPatternTracker(10)
+		pt2.OnCircular = func(_ string, sigHash string) {
+			hash2 = sigHash
+		}
+		for i := 0; i < 6; i += 2 {
+			pt2.RecordCall("x", nil)
+			pt2.RecordCall("y", nil)
+		}
+		pt2.DetectCircular()
+
+		if hash1 == "" || hash2 == "" {
+			t.Fatal("expected non-empty hashes")
+		}
+		if hash1 == hash2 {
+			t.Error("different patterns should produce different signature hashes")
+		}
+	})
+
+	t.Run("fires for 3-element pattern", func(t *testing.T) {
+		pt := NewPatternTracker(15)
+
+		var gotPattern string
+		callCount := 0
+		pt.OnCircular = func(pattern string, signatureHash string) {
+			callCount++
+			gotPattern = pattern
+		}
+
+		// A B C A B C A B C — 3-element pattern repeated 3 times
+		calls := []string{"a", "b", "c", "a", "b", "c", "a", "b", "c"}
+		for _, c := range calls {
+			pt.RecordCall(c, nil)
+		}
+
+		detected, _ := pt.DetectCircular()
+		if !detected {
+			t.Fatal("expected 3-element circular pattern to be detected")
+		}
+		if callCount != 1 {
+			t.Errorf("expected OnCircular called once, got %d", callCount)
+		}
+		if gotPattern != "a -> b -> c" {
+			t.Errorf("expected 'a -> b -> c', got '%s'", gotPattern)
+		}
+	})
+
+	t.Run("not called with insufficient history", func(t *testing.T) {
+		pt := NewPatternTracker(10)
+
+		callCount := 0
+		pt.OnCircular = func(pattern string, signatureHash string) {
+			callCount++
+		}
+
+		pt.RecordCall("a", nil)
+		pt.RecordCall("b", nil)
+
+		pt.DetectCircular()
+		if callCount != 0 {
+			t.Errorf("expected OnCircular not called with insufficient history, got %d calls", callCount)
+		}
+	})
+}
+
 func TestComputeSignature(t *testing.T) {
 	pt := NewPatternTracker(10)
 

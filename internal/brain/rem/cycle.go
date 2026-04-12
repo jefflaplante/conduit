@@ -42,7 +42,7 @@ func NewREMCycle(b *brain.Brain, db *sql.DB, config REMConfig) *REMCycle {
 func (r *REMCycle) Run(ctx context.Context, phases []string, dryRun bool) (*REMReport, error) {
 	// Default to all phases if none specified
 	if len(phases) == 0 {
-		phases = []string{"triage", "consolidation", "pruning", "integration", "grooming"}
+		phases = []string{"triage", "reflect", "consolidation", "pruning", "integration", "grooming"}
 	}
 
 	report := &REMReport{
@@ -62,6 +62,8 @@ func (r *REMCycle) Run(ctx context.Context, phases []string, dryRun bool) (*REMR
 		switch phase {
 		case "triage":
 			report.Triage, err = r.runTriage(ctx, dryRun)
+		case "reflect":
+			report.Reflect, err = r.runReflect(ctx, dryRun)
 		case "consolidation":
 			report.Consolidation, err = r.runConsolidation(ctx, dryRun)
 		case "pruning":
@@ -94,6 +96,10 @@ func (r *REMCycle) Run(ctx context.Context, phases []string, dryRun bool) (*REMR
 
 func (r *REMCycle) runTriage(ctx context.Context, dryRun bool) (*TriageResult, error) {
 	return r.Triage(ctx, dryRun)
+}
+
+func (r *REMCycle) runReflect(ctx context.Context, dryRun bool) (*ReflectResult, error) {
+	return r.Reflect(ctx, dryRun)
 }
 
 func (r *REMCycle) runConsolidation(ctx context.Context, dryRun bool) (*ConsolidationResult, error) {

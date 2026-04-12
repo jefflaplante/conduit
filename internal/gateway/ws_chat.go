@@ -96,12 +96,26 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		return
 	}
 
+	// SPAR reflection: check for natural language farewell before sending to AI.
+	// FarewellDetector is pure string matching — no latency impact on normal messages.
+	isFarewell, _ := g.shouldTriggerReflection(text)
+
 	// Save user message to session
 	_, err = g.sessions.AddMessage(session.Key, "user", msg.Text, nil)
 	if err != nil {
 		log.Printf("Error saving user message: %v", err)
 		g.sendErrorToClient(client, session.Key, "save_error", "Failed to save message")
 		return
+	}
+
+	// If farewell detected, append the reflection prompt to the message
+	// so the model sees it in the same turn and can reflect before signing off.
+	messageForAI := msg.Text
+	if isFarewell {
+		if reflPrompt := g.reflectHighConfidencePre(); reflPrompt != "" {
+			messageForAI = msg.Text + "\n\n[System: " + reflPrompt + "]"
+			log.Printf("SPAR reflection: farewell detected, injecting reflection prompt for session %s", session.Key)
+		}
 	}
 
 	// Create cancellable context for this request
@@ -197,7 +211,7 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	if smartRoutingEnabled && modelOverride == "" {
 		// Use smart routing: let the router select the optimal model
 		var routingResult *ai.SmartRoutingResult
-		convResponse, routingResult, err = g.ai.GenerateResponseSmartStreaming(reqCtx, session, msg.Text, providerOverride, onDelta)
+		convResponse, routingResult, err = g.ai.GenerateResponseSmartStreaming(reqCtx, session, messageForAI, providerOverride, onDelta)
 		if routingResult != nil {
 			// Store smart routing metadata in session context for debugging/visibility
 			_ = g.sessions.SetSessionContext(session.Key, "smart_routing_model", routingResult.SelectedModel)
@@ -208,7 +222,7 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		}
 	} else {
 		// Use direct streaming with explicit model (or default)
-		convResponse, err = g.ai.GenerateResponseStreaming(reqCtx, session, msg.Text, providerOverride, modelOverride, onDelta)
+		convResponse, err = g.ai.GenerateResponseStreaming(reqCtx, session, messageForAI, providerOverride, modelOverride, onDelta)
 	}
 	if err != nil {
 		// Check for cancellation from /stop
@@ -255,6 +269,11 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 			if warning.Text != "" {
 				responseContent += warning.Text
 			}
+
+			// TODO(SPAR): Context budget reflection trigger.
+			// When context usage >= 80%, set a session flag so the NEXT message
+			// injects the reflection prompt (via reflectHighConfidencePre).
+			// See the parallel TODO in gateway.go handleIncomingMessage.
 
 			// Accumulate session cost
 			requestCost = ai.CalculateCost(modelOverride, promptTokens, completionTokens)
@@ -341,6 +360,15 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 			log.Printf("Error saving AI message: %v", err)
 		}
 	}
+
+	// SPAR reflection: after model responds to a farewell, compute and write
+	// session metrics (high-confidence path: model was available to reflect).
+	if isFarewell {
+		// Re-fetch session to get updated message count after saving the response
+		if updatedSession, sErr := g.sessions.GetSession(session.Key); sErr == nil {
+			g.reflectHighConfidencePost(ctx, updatedSession)
+		}
+	}
 }
 
 // handleWebSocketCommand processes a slash command from a WebSocket client
@@ -380,11 +408,31 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 	}
 
 	switch {
+	case text == "/goodbye" || text == "/end":
+		// SPAR reflection: fire high-confidence reflection, then end session
+		if sessionKey == "" {
+			sendResponse("No active session.")
+			return
+		}
+		g.handleReflectiveSessionEnd(ctx, client, sessionKey, sendResponse)
+
 	case text == "/reset" || text == "/new" || strings.HasPrefix(text, "/reset ") || strings.HasPrefix(text, "/new "):
 		if sessionKey == "" {
 			sendResponse("No active session to reset.")
 			return
 		}
+
+		// SPAR reflection: fire reflection BEFORE clearing context.
+		// The model still has the full conversation context at this point.
+		if g.sessionReflector != nil {
+			if session, sErr := g.sessions.GetSession(sessionKey); sErr == nil && session.MessageCount > 2 {
+				reflCtx, reflCancel := context.WithTimeout(ctx, 10*time.Second)
+				g.reflectHighConfidencePost(reflCtx, session)
+				reflCancel()
+				log.Printf("SPAR reflection: pre-reset reflection written for session %s", sessionKey)
+			}
+		}
+
 		if err := g.sessions.ClearSessionMessages(sessionKey); err != nil {
 			log.Printf("Error clearing session: %v", err)
 			sendResponse("Failed to reset session.")
@@ -416,6 +464,8 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 	case text == "/help" || text == "/commands":
 		help := "Available Commands:\n\n" +
 			"/reset - Clear conversation history\n" +
+			"/goodbye - End session with reflection\n" +
+			"/end - Alias for /goodbye\n" +
 			"/status - Show session info\n" +
 			"/help - Show this message\n" +
 			"/model [alias] - View/switch model\n" +
@@ -712,6 +762,111 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 	default:
 		sendResponse(fmt.Sprintf("Unknown command: %s\nType /help for available commands.", command))
 	}
+}
+
+// handleReflectiveSessionEnd handles /goodbye and /end commands: it sends the
+// reflection prompt to the model so it can assess the session, then writes
+// Go-computed metrics and clears the session.
+func (g *Gateway) handleReflectiveSessionEnd(ctx context.Context, client *Client, sessionKey string, sendResponse func(string)) {
+	session, err := g.sessions.GetSession(sessionKey)
+	if err != nil {
+		sendResponse("Could not retrieve session.")
+		return
+	}
+
+	// If reflection is available and the session has enough history, let
+	// the model reflect before we tear down the context.
+	if g.sessionReflector != nil && session.MessageCount > 2 {
+		reflPrompt := g.reflectHighConfidencePre()
+		if reflPrompt != "" {
+			// Send the reflection prompt as a user message to the model so it
+			// can introspect on the conversation. We use a short timeout to
+			// avoid blocking the client if the model is slow.
+			reflCtx, reflCancel := context.WithTimeout(ctx, 30*time.Second)
+			defer reflCancel()
+
+			modelOverride := session.Context["model"]
+			providerOverride := session.Context["provider"]
+
+			// Send a StreamStart so the TUI knows a response is coming
+			requestID := fmt.Sprintf("refl_%d", time.Now().UnixNano())
+			g.sendToClient(client, &protocol.StreamStart{
+				BaseMessage: protocol.BaseMessage{
+					Type:      protocol.TypeStreamStart,
+					ID:        fmt.Sprintf("ss_%d", time.Now().UnixNano()),
+					Timestamp: time.Now(),
+				},
+				SessionKey: sessionKey,
+				RequestID:  requestID,
+			})
+
+			onDelta := func(delta string, done bool) {
+				if delta != "" {
+					g.sendToClient(client, &protocol.StreamDelta{
+						BaseMessage: protocol.BaseMessage{
+							Type:      protocol.TypeStreamDelta,
+							ID:        fmt.Sprintf("sd_%d", time.Now().UnixNano()),
+							Timestamp: time.Now(),
+						},
+						SessionKey: sessionKey,
+						RequestID:  requestID,
+						Delta:      delta,
+					})
+				}
+			}
+
+			convResponse, aiErr := g.ai.GenerateResponseStreaming(reflCtx, session, reflPrompt, providerOverride, modelOverride, onDelta)
+
+			var reflContent string
+			if aiErr == nil && convResponse != nil {
+				reflContent = convResponse.GetContent()
+			}
+
+			// Send StreamEnd with the reflection response
+			g.sendToClient(client, &protocol.StreamEnd{
+				BaseMessage: protocol.BaseMessage{
+					Type:      protocol.TypeStreamEnd,
+					ID:        fmt.Sprintf("se_%d", time.Now().UnixNano()),
+					Timestamp: time.Now(),
+				},
+				SessionKey: sessionKey,
+				RequestID:  requestID,
+				Content:    reflContent,
+			})
+
+			// Save the reflection response
+			if reflContent != "" {
+				_, _ = g.sessions.AddMessage(sessionKey, "assistant", reflContent, nil)
+			}
+
+			// Compute and write session metrics
+			if updatedSession, sErr := g.sessions.GetSession(sessionKey); sErr == nil {
+				g.reflectHighConfidencePost(reflCtx, updatedSession)
+			}
+
+			log.Printf("SPAR reflection: session-end reflection completed for %s", sessionKey)
+		}
+	} else if g.sessionReflector != nil {
+		// Session too short for model reflection — write Go-only metrics
+		reflCtx, reflCancel := context.WithTimeout(ctx, 5*time.Second)
+		g.reflectOnSessionEnd(reflCtx, sessionKey)
+		reflCancel()
+	}
+
+	// Clear the session (same as /reset)
+	if err := g.sessions.ClearSessionMessages(sessionKey); err != nil {
+		log.Printf("Error clearing session after /goodbye: %v", err)
+		sendResponse("Session reflection complete, but failed to clear session.")
+		return
+	}
+	_ = g.sessions.SetSessionContextBatch(sessionKey, map[string]string{
+		"last_prompt_tokens":     "",
+		"last_completion_tokens": "",
+		"last_total_tokens":      "",
+		"session_total_cost":     "",
+		"session_request_count":  "",
+	})
+	sendResponse("Session reflection complete. Goodbye!")
 }
 
 // handleWebSocketSessionSwitch handles session management requests

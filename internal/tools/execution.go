@@ -117,6 +117,12 @@ func DefaultTruncationConfig() TruncationConfig {
 	}
 }
 
+// AfterExecutionFunc is an optional callback invoked after each tool
+// execution completes (success or failure). It is used by the reflection
+// subsystem to capture tool outcomes without a hard dependency on the
+// reflection package. The callback must be safe for concurrent use.
+type AfterExecutionFunc func(ctx context.Context, toolName string, result *ExecutionResult)
+
 // ExecutionEngine handles tool execution, chaining, and middleware
 type ExecutionEngine struct {
 	registry         ToolRegistry
@@ -131,6 +137,7 @@ type ExecutionEngine struct {
 	refocusInterval  int                  // Inject goal reminder every N tool calls (0 = disabled, default 10)
 	patternTracker   *PatternTracker      // Detects circular tool call patterns
 	failureTracker   *FailureTracker      // Tracks consecutive tool failures for pivot prompts
+	afterExecHook    AfterExecutionFunc   // Optional hook for reflection capture (nil-safe)
 }
 
 // Middleware interface for tool execution pipeline
@@ -200,6 +207,14 @@ func (e *ExecutionEngine) SetMaxResultChars(maxChars int) {
 // Set to 0 to disable refocusing. Default is 10.
 func (e *ExecutionEngine) SetRefocusInterval(n int) {
 	e.refocusInterval = n
+}
+
+// SetAfterExecutionHook registers a callback that fires after every tool
+// execution. It is intended for the reflection middleware to capture tool
+// outcomes. Only one hook can be active; subsequent calls replace the
+// previous hook. Pass nil to remove the hook.
+func (e *ExecutionEngine) SetAfterExecutionHook(fn AfterExecutionFunc) {
+	e.afterExecHook = fn
 }
 
 // SetTruncationConfig configures smart truncation behavior for tool results.
@@ -305,7 +320,7 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 		}
 		// Track consecutive failures for pivot detection
 		if e.failureTracker != nil {
-			e.failureTracker.RecordFailure(call.Name)
+			e.failureTracker.RecordFailure(call.Name, err.Error())
 		}
 		// Create a user-friendly error result
 		if execResult.Result == nil {
@@ -363,6 +378,11 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 	// Run post-execution middleware
 	for _, mw := range e.middleware {
 		mw.AfterExecution(ctx, &call, execResult)
+	}
+
+	// Fire reflection hook (best-effort, never blocks or fails the tool call)
+	if e.afterExecHook != nil {
+		e.afterExecHook(ctx, call.Name, execResult)
 	}
 
 	return execResult

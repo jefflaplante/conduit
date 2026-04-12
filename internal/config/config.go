@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"conduit/internal/reflection"
 	"conduit/internal/skills"
 )
 
@@ -43,8 +44,9 @@ type Config struct {
 	Datadog        DatadogConfig        `json:"datadog,omitempty"`
 	Auth           AuthTokenConfig      `json:"auth,omitempty"`
 	Logging        LoggingConfig        `json:"logging,omitempty"`
-	Brain          BrainConfig          `json:"brain,omitempty"`
-	STT            STTConfig            `json:"stt,omitempty"`
+	Brain          BrainConfig                `json:"brain,omitempty"`
+	Reflection     *reflection.ReflectionConfig `json:"reflection,omitempty"`
+	STT            STTConfig                  `json:"stt,omitempty"`
 }
 
 // AuthTokenConfig holds configuration for the token authentication system

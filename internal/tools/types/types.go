@@ -261,6 +261,43 @@ type REMCycleRunner interface {
 	RunREMCycle(ctx context.Context, phases []string, dryRun bool) (*REMCycleReport, error)
 }
 
+// ReflectionEntry is the tool-layer representation of a reflection data point.
+type ReflectionEntry struct {
+	ID          string        `json:"id"`
+	SessionKey  string        `json:"session_key"`
+	Timestamp   time.Time     `json:"timestamp"`
+	Source      string        `json:"source"`
+	Type        string        `json:"type"`
+	Tool        string        `json:"tool,omitempty"`
+	Outcome     string        `json:"outcome"`
+	RetryCount  int           `json:"retry_count"`
+	Duration    time.Duration `json:"duration"`
+	Insight     string        `json:"insight,omitempty"`
+	Score       int           `json:"score"`
+	Tags        []string      `json:"tags,omitempty"`
+	RelatedKeys []string      `json:"related_keys,omitempty"`
+}
+
+// ReflectionToolStat holds aggregated tool outcome statistics.
+type ReflectionToolStat struct {
+	Tool        string        `json:"tool"`
+	Outcome     string        `json:"outcome"`
+	Count       int           `json:"count"`
+	AvgDuration time.Duration `json:"avg_duration"`
+	AvgRetries  float64       `json:"avg_retries"`
+}
+
+// ReflectionService provides access to the reflection store for tools and middleware.
+type ReflectionService interface {
+	Insert(ctx context.Context, entry *ReflectionEntry) error
+	InsertBatch(ctx context.Context, entries []*ReflectionEntry) error
+	QueryBySession(ctx context.Context, sessionKey string) ([]*ReflectionEntry, error)
+	QueryUnprocessed(ctx context.Context) ([]*ReflectionEntry, error)
+	MarkProcessed(ctx context.Context, ids []string) error
+	Groom(ctx context.Context, retentionDays int) (int, error)
+	QueryToolStats(ctx context.Context, since time.Time) ([]ReflectionToolStat, error)
+}
+
 // ToolServices provides access to services for tools (no direct gateway dependency)
 type ToolServices struct {
 	SessionStore  *sessions.Store
@@ -272,9 +309,10 @@ type ToolServices struct {
 	Searcher      SearchService  // FTS5 full-text search
 	VectorSearch  VectorService  // Optional vector/semantic search
 	MQTTService   MQTTService    // Optional MQTT event ingest
-	Brain         BrainService   // Optional tiered memory (LTM + working + scratchpad)
-	BrainFTS      BrainFTSSearcher // Optional FTS5 search over brain LTM
-	REMCycle      REMCycleRunner   // Optional REM sleep cycle runner
+	Brain         BrainService      // Optional tiered memory (LTM + working + scratchpad)
+	BrainFTS      BrainFTSSearcher  // Optional FTS5 search over brain LTM
+	REMCycle      REMCycleRunner    // Optional REM sleep cycle runner
+	Reflection    ReflectionService // Optional SPAR reflection store
 
 	// Schema enhancement
 	SchemaBuilder *schema.Builder // For enhancing tool schemas with discovery data

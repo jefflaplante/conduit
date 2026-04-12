@@ -139,6 +139,7 @@ func main() {
 		nil, // No summary manager for this test
 		skillsManager,
 		cfg.AI.ModelAliases,
+		nil, // No brain service for this test
 	)
 
 	// Initialize agent

@@ -19,6 +19,14 @@ type toolCallEntry struct {
 type PatternTracker struct {
 	recentCalls []toolCallEntry // Last N tool calls with signatures
 	maxHistory  int             // How many to track
+
+	// OnCircular is an optional callback invoked when DetectCircular finds a
+	// repeating pattern. The first argument is the human-readable pattern
+	// description (e.g. "Read -> Edit") and the second is a stable signature
+	// hash derived from the repeating tool call signatures. The callback is
+	// intended for external side-effects like writing to a reflection store or
+	// Brain — the PatternTracker itself remains side-effect-free.
+	OnCircular func(pattern string, signatureHash string)
 }
 
 // NewPatternTracker creates a new pattern tracker.
@@ -66,6 +74,8 @@ func (pt *PatternTracker) computeSignature(toolName string, args map[string]inte
 // Returns true if a pattern is detected, along with a description of the pattern.
 // Looks for 2-3 element patterns that appear 3+ times consecutively.
 // Uses argument hashing, so Bash("ls") repeated differs from Bash("make").
+// When a pattern is detected and OnCircular is non-nil, the callback is
+// invoked with the pattern description and a stable signature hash.
 func (pt *PatternTracker) DetectCircular() (bool, string) {
 	n := len(pt.recentCalls)
 
@@ -75,13 +85,15 @@ func (pt *PatternTracker) DetectCircular() (bool, string) {
 	}
 
 	// Check for 2-element patterns (need 6 elements: A B A B A B)
-	if detected, pattern := pt.detectPatternOfLength(2); detected {
+	if detected, pattern, sigHash := pt.detectPatternOfLength(2); detected {
+		pt.notifyCircular(pattern, sigHash)
 		return true, pattern
 	}
 
 	// Check for 3-element patterns (need 9 elements: A B C A B C A B C)
 	if n >= 9 {
-		if detected, pattern := pt.detectPatternOfLength(3); detected {
+		if detected, pattern, sigHash := pt.detectPatternOfLength(3); detected {
+			pt.notifyCircular(pattern, sigHash)
 			return true, pattern
 		}
 	}
@@ -89,14 +101,22 @@ func (pt *PatternTracker) DetectCircular() (bool, string) {
 	return false, ""
 }
 
+// notifyCircular invokes the OnCircular callback if set.
+func (pt *PatternTracker) notifyCircular(pattern, signatureHash string) {
+	if pt.OnCircular != nil {
+		pt.OnCircular(pattern, signatureHash)
+	}
+}
+
 // detectPatternOfLength checks if the last elements form a repeating pattern
 // of the given length, appearing at least 3 times consecutively.
-func (pt *PatternTracker) detectPatternOfLength(patternLen int) (bool, string) {
+// Returns (detected, patternDescription, signatureHash).
+func (pt *PatternTracker) detectPatternOfLength(patternLen int) (bool, string, string) {
 	n := len(pt.recentCalls)
 	minRequired := patternLen * 3 // Need 3 repetitions
 
 	if n < minRequired {
-		return false, ""
+		return false, "", ""
 	}
 
 	// Extract the candidate pattern signatures from the most recent calls
@@ -127,10 +147,19 @@ func (pt *PatternTracker) detectPatternOfLength(patternLen int) (bool, string) {
 	}
 
 	if repetitions >= 3 {
-		return true, formatPattern(patternNames)
+		sigHash := computePatternSignatureHash(patternSigs)
+		return true, formatPattern(patternNames), sigHash
 	}
 
-	return false, ""
+	return false, "", ""
+}
+
+// computePatternSignatureHash produces a stable hex hash from the ordered
+// tool-call signatures that form a repeating pattern.
+func computePatternSignatureHash(sigs []string) string {
+	combined := strings.Join(sigs, "|")
+	h := sha256.Sum256([]byte(combined))
+	return fmt.Sprintf("%x", h[:8])
 }
 
 // formatPattern creates a human-readable description of a pattern.

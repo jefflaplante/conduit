@@ -20,6 +20,20 @@ type GatewayIntegration struct {
 	scheduler        scheduler.SchedulerInterface
 	channelSender    ChannelSender
 	metricsCollector MetricsCollector
+	brainWriter      BrainWriter
+}
+
+// BrainWriter is an optional callback interface for writing heartbeat alerts into
+// Brain's sense.alerts.* namespace. This avoids importing brain directly and follows
+// the existing DI patterns in the heartbeat package.
+type BrainWriter interface {
+	// StoreAlert writes an alert entry to Brain working memory.
+	// key is the full dotted key (e.g. "sense.alerts.high_cpu").
+	StoreAlert(ctx context.Context, key, value string) error
+	// DeleteAlert removes a resolved alert from Brain.
+	DeleteAlert(ctx context.Context, key string) error
+	// ListAlertKeys returns all Brain keys under the given prefix.
+	ListAlertKeys(ctx context.Context, prefix string) ([]string, error)
 }
 
 // ChannelSender interface for sending messages via channels
@@ -54,6 +68,13 @@ func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, a
 		channelSender:    channelSender,
 		metricsCollector: metricsCollector,
 	}
+}
+
+// SetBrainWriter sets the optional BrainWriter for persisting alerts to Brain's
+// sense.alerts.* namespace. If nil, heartbeat results are processed normally without
+// Brain integration.
+func (g *GatewayIntegration) SetBrainWriter(bw BrainWriter) {
+	g.brainWriter = bw
 }
 
 // ExecuteHeartbeat executes a heartbeat job - this is called by the gateway's executeScheduledJob
@@ -97,6 +118,9 @@ func (g *GatewayIntegration) ExecuteHeartbeat(ctx context.Context, job *schedule
 
 // processHeartbeatResult processes the heartbeat execution result and takes appropriate actions
 func (g *GatewayIntegration) processHeartbeatResult(ctx context.Context, result *HeartbeatResult, job *scheduler.Job) error {
+	// Write alerts to Brain's sense.alerts.* namespace (if Brain is available)
+	g.syncAlertsToBrain(ctx, result, job)
+
 	switch result.Status {
 	case ResultStatusOK:
 		// HEARTBEAT_OK - log and optionally send to target if configured for verbose mode
@@ -126,6 +150,114 @@ func (g *GatewayIntegration) processHeartbeatResult(ctx context.Context, result 
 	default:
 		return fmt.Errorf("unknown result status: %s", result.Status)
 	}
+}
+
+// syncAlertsToBrain writes non-OK heartbeat results to Brain's sense.alerts.* namespace
+// and clears resolved alerts when the heartbeat result is OK.
+func (g *GatewayIntegration) syncAlertsToBrain(ctx context.Context, result *HeartbeatResult, job *scheduler.Job) {
+	if g.brainWriter == nil {
+		return
+	}
+
+	jobKey := SanitizeKeyComponent(job.Name)
+	if jobKey == "" {
+		jobKey = SanitizeKeyComponent(job.ID)
+	}
+	prefix := "sense.alerts."
+
+	switch result.Status {
+	case ResultStatusOK, ResultStatusNoAction:
+		// Clear any previously stored alerts for this heartbeat job
+		keys, err := g.brainWriter.ListAlertKeys(ctx, prefix+jobKey)
+		if err != nil {
+			log.Printf("[HeartbeatIntegration] Failed to list Brain alert keys for cleanup: %v", err)
+			return
+		}
+		for _, key := range keys {
+			if err := g.brainWriter.DeleteAlert(ctx, key); err != nil {
+				log.Printf("[HeartbeatIntegration] Failed to delete resolved Brain alert %s: %v", key, err)
+			} else {
+				log.Printf("[HeartbeatIntegration] Cleared resolved Brain alert: %s", key)
+			}
+		}
+
+	case ResultStatusAlert, ResultStatusAction:
+		// Write each alert action to Brain
+		for i, action := range result.Actions {
+			if action.Type != ActionTypeAlert && action.Type != ActionTypeNotification {
+				continue
+			}
+
+			alertType := SanitizeKeyComponent(action.Content)
+			// Truncate long alert types to keep keys reasonable
+			if len(alertType) > 60 {
+				alertType = alertType[:60]
+			}
+			// Use index suffix to ensure uniqueness when multiple alerts from same job
+			key := fmt.Sprintf("%s%s.%d_%s", prefix, jobKey, i, alertType)
+
+			severity := action.Priority.String()
+			summary := action.Content
+			if len(summary) > 200 {
+				summary = summary[:200] + "..."
+			}
+
+			value := fmt.Sprintf("severity=%s timestamp=%s message=%s",
+				severity,
+				time.Now().UTC().Format(time.RFC3339),
+				summary,
+			)
+
+			if err := g.brainWriter.StoreAlert(ctx, key, value); err != nil {
+				log.Printf("[HeartbeatIntegration] Failed to write Brain alert %s: %v", key, err)
+			} else {
+				log.Printf("[HeartbeatIntegration] Wrote Brain alert: %s (severity=%s)", key, severity)
+			}
+		}
+
+	case ResultStatusError:
+		// Write heartbeat errors as alerts too — they indicate system health issues
+		key := fmt.Sprintf("%s%s.error", prefix, jobKey)
+		value := fmt.Sprintf("severity=critical timestamp=%s message=Heartbeat execution error: %s",
+			time.Now().UTC().Format(time.RFC3339),
+			truncateString(result.Message, 200),
+		)
+		if err := g.brainWriter.StoreAlert(ctx, key, value); err != nil {
+			log.Printf("[HeartbeatIntegration] Failed to write Brain error alert %s: %v", key, err)
+		}
+	}
+}
+
+// SanitizeKeyComponent converts a string into a valid Brain dotted-namespace key component.
+// Replaces spaces and special characters with underscores, lowercases, and removes
+// leading/trailing underscores.
+func SanitizeKeyComponent(s string) string {
+	s = strings.ToLower(s)
+	var b strings.Builder
+	prevUnderscore := false
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevUnderscore = false
+		default:
+			// Replace non-alphanumeric with underscore, collapsing runs
+			if !prevUnderscore && b.Len() > 0 {
+				b.WriteByte('_')
+				prevUnderscore = true
+			}
+		}
+	}
+	result := b.String()
+	return strings.TrimRight(result, "_")
+}
+
+// truncateString truncates s to maxLen, appending "..." if truncated.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // executeActions processes and executes the actions from a heartbeat result

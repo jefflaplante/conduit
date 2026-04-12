@@ -19,9 +19,45 @@ import (
 func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessage, session *sessions.Session) bool {
 	text := strings.TrimSpace(msg.Text)
 
+	// Check for /goodbye or /end commands (SPAR reflection + session end)
+	if text == "/goodbye" || text == "/end" {
+		log.Printf("Processing %s command for session: %s", text, session.Key)
+
+		// Fire Go-only reflection metrics for substantive sessions.
+		// Channel commands don't have a streaming path back to the model,
+		// so this is a low-confidence trigger (Go-computed metrics only).
+		if g.sessionReflector != nil && session.MessageCount > 2 {
+			reflCtx, reflCancel := context.WithTimeout(ctx, 5*time.Second)
+			g.reflectHighConfidencePost(reflCtx, session)
+			reflCancel()
+		}
+
+		// Clear session messages
+		if err := g.sessions.ClearSessionMessages(session.Key); err != nil {
+			log.Printf("Error clearing session messages: %v", err)
+			g.sendCommandResponse(msg, "❌ Failed to end session. Please try again.")
+			return true
+		}
+		_ = g.sessions.SetSessionContext(session.Key, "last_prompt_tokens", "")
+		_ = g.sessions.SetSessionContext(session.Key, "last_completion_tokens", "")
+		_ = g.sessions.SetSessionContext(session.Key, "last_total_tokens", "")
+
+		g.sendCommandResponse(msg, "Session reflection complete. Goodbye!")
+		log.Printf("Session ended with reflection: %s", session.Key)
+		return true
+	}
+
 	// Check for /reset command
 	if text == "/reset" || text == "/new" || strings.HasPrefix(text, "/reset ") || strings.HasPrefix(text, "/new ") {
 		log.Printf("Processing /reset command for session: %s", session.Key)
+
+		// SPAR reflection: fire reflection BEFORE clearing context
+		if g.sessionReflector != nil && session.MessageCount > 2 {
+			reflCtx, reflCancel := context.WithTimeout(ctx, 5*time.Second)
+			g.reflectHighConfidencePost(reflCtx, session)
+			reflCancel()
+			log.Printf("SPAR reflection: pre-reset reflection written for session %s", session.Key)
+		}
 
 		// Clear session messages
 		if err := g.sessions.ClearSessionMessages(session.Key); err != nil {
@@ -153,6 +189,8 @@ func (g *Gateway) handleHelpCommand(msg *protocol.IncomingMessage) {
 	help := `*Available Commands*
 
 /reset - Clear conversation history
+/goodbye - End session with reflection
+/end - Alias for /goodbye
 /status - Show session info
 /help - Show this message
 /model - View/switch model (use /model reset to clear override)
