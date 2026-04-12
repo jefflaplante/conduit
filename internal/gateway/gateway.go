@@ -745,6 +745,28 @@ func New(cfg *config.Config) (*Gateway, error) {
 			gw.reflectionStore = reflection.NewStore(gw.brainService.DB())
 			gw.sessionReflector = reflection.NewSessionReflector(gw.reflectionStore)
 			gw.farewellDetector = reflection.NewFarewellDetector()
+
+			// Wire per-tool reflection capture: adapt ExecutionEngine's
+			// AfterExecutionFunc to the reflection middleware's hook.
+			reflMW := reflection.NewReflectionMiddleware(gw.reflectionStore, reflCfg)
+			hook := reflMW.Hook()
+			executionEngine.SetAfterExecutionHook(func(ctx context.Context, toolName string, result *tools.ExecutionResult) {
+				info := reflection.ToolOutcomeInfo{
+					ToolName:   toolName,
+					SessionKey: types.RequestSessionKey(ctx),
+					Duration:   result.Duration,
+				}
+				if result.Error != nil {
+					info.Error = result.Error.Error()
+					info.IsTimeout = reflection.IsTimeoutError(info.Error)
+				}
+				if result.Result != nil {
+					info.Success = result.Result.Success && result.Error == nil
+					info.RetryCount = result.Result.Retries
+				}
+				hook(ctx, info)
+			})
+
 			logger.Info("reflection store initialized")
 		}
 	}
