@@ -592,3 +592,67 @@ func TestSearchMessagesFTSTriggers(t *testing.T) {
 		t.Errorf("Expected 1 result after INSERT trigger, got %d", len(results))
 	}
 }
+
+func TestGetIdleSessions(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Create session with enough messages to be "substantive"
+	sess1, err := store.GetOrCreateSession("user1", "channel1")
+	if err != nil {
+		t.Fatalf("Failed to create session 1: %v", err)
+	}
+	for i := 0; i < 8; i++ {
+		if _, err := store.AddMessage(sess1.Key, "user", fmt.Sprintf("msg %d", i), nil); err != nil {
+			t.Fatalf("Failed to add message: %v", err)
+		}
+	}
+
+	// Create session with too few messages (should not appear)
+	sess2, err := store.GetOrCreateSession("user2", "channel2")
+	if err != nil {
+		t.Fatalf("Failed to create session 2: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := store.AddMessage(sess2.Key, "user", fmt.Sprintf("msg %d", i), nil); err != nil {
+			t.Fatalf("Failed to add message: %v", err)
+		}
+	}
+
+	// Both sessions were just updated, so a future cutoff should return nothing
+	futureKeys, err := store.GetIdleSessions(time.Now().Add(-1*time.Hour), 5)
+	if err != nil {
+		t.Fatalf("GetIdleSessions failed: %v", err)
+	}
+	if len(futureKeys) != 0 {
+		t.Errorf("Expected 0 idle sessions with past cutoff, got %d", len(futureKeys))
+	}
+
+	// A cutoff in the future should return the substantive session
+	keys, err := store.GetIdleSessions(time.Now().Add(1*time.Hour), 5)
+	if err != nil {
+		t.Fatalf("GetIdleSessions failed: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("Expected 1 idle session, got %d", len(keys))
+	}
+	if keys[0] != sess1.Key {
+		t.Errorf("Expected session key %s, got %s", sess1.Key, keys[0])
+	}
+
+	// Verify sess2 (3 messages, <= 5 threshold) is not returned
+	allKeys, err := store.GetIdleSessions(time.Now().Add(1*time.Hour), 2)
+	if err != nil {
+		t.Fatalf("GetIdleSessions failed: %v", err)
+	}
+	// Both should appear with lower threshold
+	if len(allKeys) != 2 {
+		t.Errorf("Expected 2 sessions with minMessages=2, got %d", len(allKeys))
+	}
+}

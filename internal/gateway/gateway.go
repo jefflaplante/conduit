@@ -1780,15 +1780,25 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		return
 	}
 
-	// SPAR reflection: check for farewell before sending to AI.
-	// Pure string matching — no latency impact on normal messages.
+	// SPAR reflection: check for farewell or context budget trigger before sending to AI.
 	isFarewell, _ := g.shouldTriggerReflection(msg.Text)
+	isContextBudgetReflect := false
 	messageForAI := msg.Text
 	if isFarewell {
 		if reflPrompt := g.reflectHighConfidencePre(); reflPrompt != "" {
 			messageForAI = msg.Text + "\n\n[System: " + reflPrompt + "]"
 			g.logger.Info("SPAR reflection: farewell detected, injecting reflection prompt",
 				"session_key", session.Key, "channel_id", msg.ChannelID)
+		}
+	} else if session.Context["reflection_context_budget_triggered"] == "true" {
+		if reflPrompt := g.reflectHighConfidencePre(); reflPrompt != "" {
+			messageForAI = msg.Text + "\n\n[System: " + reflPrompt + "]"
+			isContextBudgetReflect = true
+			_ = g.sessions.SetSessionContextBatch(session.Key, map[string]string{
+				"reflection_context_budget_triggered": "",
+			})
+			g.logger.Info("SPAR reflection: context budget triggered, injecting reflection prompt",
+				"session_key", session.Key)
 		}
 	}
 
@@ -2057,16 +2067,11 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 			if warning := contextWarningIfNeeded(session, usage.PromptTokens, modelOverride); warning.Text != "" {
 				responseContent += warning.Text
 				batch[warning.Key] = "true"
+				// SPAR: trigger reflection on next message when context budget >= 80%
+				if warning.Key == "context_warned_80" && g.sessionReflector != nil {
+					batch["reflection_context_budget_triggered"] = "true"
+				}
 			}
-
-			// TODO(SPAR): Context budget reflection trigger.
-			// When context usage >= 80% of the model's window, inject the session
-			// reflection prompt on the NEXT message so the model can reflect while
-			// it still has meaningful context. Track via a session context flag
-			// (e.g. "reflection_context_budget_triggered") to fire only once.
-			// The contextWarningIfNeeded function already detects 80% — set the
-			// flag here and check it at the top of handleIncomingMessage to inject
-			// reflectHighConfidencePre() into messageForAI on the next turn.
 
 			_ = g.sessions.SetSessionContextBatch(session.Key, batch)
 		}
@@ -2088,8 +2093,8 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 			logging.Error(ctx, "error saving AI message", "error", err)
 		}
 
-		// SPAR reflection: after model responds to farewell, compute session metrics
-		if isFarewell {
+		// SPAR reflection: after model responds to farewell or context budget trigger, compute session metrics
+		if isFarewell || isContextBudgetReflect {
 			if updatedSession, sErr := g.sessions.GetSession(session.Key); sErr == nil {
 				g.reflectHighConfidencePost(ctx, updatedSession)
 			}
