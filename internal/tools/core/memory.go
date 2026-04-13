@@ -303,8 +303,16 @@ func (t *MemorySearchTool) searchMemoryFilesHybrid(ctx context.Context, query st
 		return ftsResults, nil
 	}
 
-	// Merge using Reciprocal Rank Fusion
-	merged := reciprocalRankFusion(ftsResults, vectorResults)
+	// Read RRF weights from config (defaults: fts=1.0, vector=1.5)
+	ftsWeight := 1.0
+	vectorWeight := 1.5
+	if t.services.ConfigMgr != nil {
+		ftsWeight = t.services.ConfigMgr.Vector.GetFTSWeight()
+		vectorWeight = t.services.ConfigMgr.Vector.GetVectorWeight()
+	}
+
+	// Merge using Reciprocal Rank Fusion with per-list weights
+	merged := reciprocalRankFusion([]float64{ftsWeight, vectorWeight}, ftsResults, vectorResults)
 	return merged, nil
 }
 
@@ -375,22 +383,35 @@ func (t *MemorySearchTool) searchMemoryFilesGrep(_ context.Context, query string
 	return results, nil
 }
 
-// reciprocalRankFusion merges two ranked result lists using Reciprocal Rank Fusion.
-// Each result's fused score is the sum of 1/(k + rank) across all lists where it appears.
+// reciprocalRankFusion merges ranked result lists using Reciprocal Rank Fusion.
+// Each list has a corresponding weight in the weights slice. A result's fused score
+// is the sum of weight/(k + rank + 1) across all lists where it appears.
+// If weights is nil, all lists default to weight 1.0.
 // Results are identified by their content+path to handle deduplication.
-func reciprocalRankFusion(lists ...[]MemoryResult) []MemoryResult {
+func reciprocalRankFusion(weights []float64, lists ...[]MemoryResult) []MemoryResult {
 	type fusedEntry struct {
 		result MemoryResult
 		score  float64
 	}
 
+	// Default weights to 1.0 for any missing entries
+	if len(weights) < len(lists) {
+		expanded := make([]float64, len(lists))
+		copy(expanded, weights)
+		for i := len(weights); i < len(lists); i++ {
+			expanded[i] = 1.0
+		}
+		weights = expanded
+	}
+
 	// Map from dedup key to fused entry
 	fused := make(map[string]*fusedEntry)
 
-	for _, list := range lists {
+	for listIdx, list := range lists {
+		w := weights[listIdx]
 		for rank, result := range list {
 			key := resultDeduplicationKey(result)
-			rrfScore := 1.0 / float64(rrfK+rank+1) // rank is 0-based, so +1
+			rrfScore := w / float64(rrfK+rank+1) // rank is 0-based, so +1
 
 			if existing, ok := fused[key]; ok {
 				existing.score += rrfScore
@@ -408,8 +429,12 @@ func reciprocalRankFusion(lists ...[]MemoryResult) []MemoryResult {
 	}
 
 	// Normalize RRF scores to 0-1 range so they're comparable to raw vector/fts5 scores.
-	// Max possible RRF score = numLists * 1/(k+1) when an item is ranked #0 in every list.
-	maxPossible := float64(len(lists)) / float64(rrfK+1)
+	// Max possible RRF score = sum(weights) / (k+1) when an item is ranked #0 in every list.
+	var sumWeights float64
+	for i := 0; i < len(lists); i++ {
+		sumWeights += weights[i]
+	}
+	maxPossible := sumWeights / float64(rrfK+1)
 
 	// Collect and sort by fused score
 	results := make([]MemoryResult, 0, len(fused))

@@ -171,7 +171,7 @@ func TestReciprocalRankFusion_BasicMerge(t *testing.T) {
 		{Path: "d.md", Content: "content D", Source: "file", Score: 0.4},
 	}
 
-	merged := reciprocalRankFusion(list1, list2)
+	merged := reciprocalRankFusion(nil, list1, list2)
 
 	// All 4 unique items should be present
 	assert.Len(t, merged, 4)
@@ -198,7 +198,7 @@ func TestReciprocalRankFusion_SingleList(t *testing.T) {
 		{Path: "b.md", Content: "content B", Source: "file", Score: 0.7},
 	}
 
-	merged := reciprocalRankFusion(list)
+	merged := reciprocalRankFusion(nil, list)
 	assert.Len(t, merged, 2)
 
 	// Order should be preserved (first item has higher RRF score)
@@ -207,7 +207,7 @@ func TestReciprocalRankFusion_SingleList(t *testing.T) {
 }
 
 func TestReciprocalRankFusion_EmptyLists(t *testing.T) {
-	merged := reciprocalRankFusion([]MemoryResult{}, []MemoryResult{})
+	merged := reciprocalRankFusion(nil, []MemoryResult{}, []MemoryResult{})
 	assert.Empty(t, merged)
 }
 
@@ -220,10 +220,63 @@ func TestReciprocalRankFusion_Deduplication(t *testing.T) {
 		{Path: "a.md", Content: "exact same content", Source: "file"},
 	}
 
-	merged := reciprocalRankFusion(list1, list2)
+	merged := reciprocalRankFusion(nil, list1, list2)
 	assert.Len(t, merged, 1, "duplicate results should be merged")
 
 	// Score should be 1.0 (ranked #0 in both lists, normalized)
+	assert.InDelta(t, 1.0, merged[0].Score, 0.0001)
+}
+
+func TestReciprocalRankFusion_WeightedScoring(t *testing.T) {
+	ftsList := []MemoryResult{
+		{Path: "fts-only.md", Content: "keyword match", Source: "file"},
+	}
+	vecList := []MemoryResult{
+		{Path: "vec-only.md", Content: "semantic match", Source: "file"},
+	}
+
+	// Default weights: fts=1.0, vector=1.5
+	merged := reciprocalRankFusion([]float64{1.0, 1.5}, ftsList, vecList)
+
+	scoreMap := make(map[string]float64)
+	for _, r := range merged {
+		scoreMap[r.Path] = r.Score
+	}
+
+	// Vector-only at rank 0: 1.5/61 / (2.5/61) = 0.6
+	assert.InDelta(t, 0.6, scoreMap["vec-only.md"], 0.001)
+	// FTS-only at rank 0: 1.0/61 / (2.5/61) = 0.4
+	assert.InDelta(t, 0.4, scoreMap["fts-only.md"], 0.001)
+}
+
+func TestReciprocalRankFusion_EqualWeightsMatchUnweighted(t *testing.T) {
+	list1 := []MemoryResult{
+		{Path: "a.md", Content: "content A", Source: "file"},
+		{Path: "b.md", Content: "content B", Source: "file"},
+	}
+	list2 := []MemoryResult{
+		{Path: "b.md", Content: "content B", Source: "file"},
+		{Path: "c.md", Content: "content C", Source: "file"},
+	}
+
+	unweighted := reciprocalRankFusion(nil, list1, list2)
+	weighted := reciprocalRankFusion([]float64{1.0, 1.0}, list1, list2)
+
+	require.Len(t, unweighted, len(weighted))
+	for i := range unweighted {
+		assert.Equal(t, unweighted[i].Path, weighted[i].Path)
+		assert.InDelta(t, unweighted[i].Score, weighted[i].Score, 0.0001)
+	}
+}
+
+func TestReciprocalRankFusion_BothListsRankZero_Weighted(t *testing.T) {
+	item := MemoryResult{Path: "both.md", Content: "appears everywhere", Source: "file"}
+	list1 := []MemoryResult{item}
+	list2 := []MemoryResult{item}
+
+	// Even with asymmetric weights, rank 0 in both lists should normalize to 1.0
+	merged := reciprocalRankFusion([]float64{1.0, 1.5}, list1, list2)
+	require.Len(t, merged, 1)
 	assert.InDelta(t, 1.0, merged[0].Score, 0.0001)
 }
 

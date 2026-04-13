@@ -71,6 +71,27 @@ The `minScore` parameter (default `0.3`) filters low-relevance results. With rea
 - **0.3-0.5**: Tangentially related
 - **< 0.3**: Noise (filtered by default)
 
+### Hybrid Search Weights
+
+By default, vector (semantic) results receive 1.5x weight compared to FTS5 (keyword) results in the Reciprocal Rank Fusion merge. This means:
+
+- A document found **only** by vector search scores up to **0.60**
+- A document found **only** by FTS5 scores up to **0.40**
+- A document found by **both** scores up to **1.00**
+
+To adjust the balance, set `fts_weight` and `vector_weight` in the `vector` config:
+
+```json
+{
+  "vector": {
+    "fts_weight": 1.0,
+    "vector_weight": 2.0
+  }
+}
+```
+
+Equal weights (`1.0` / `1.0`) restore the original behavior where both search methods contribute equally.
+
 ## Auto-Detection Priority
 
 When `embed_provider` is not set (or set to `"auto"`), the gateway resolves embedders in this order:
@@ -132,6 +153,8 @@ Just run Ollama on localhost. No config.json changes needed.
       "host": "http://localhost:11434",
       "model": "nomic-embed-text"
     },
+    "fts_weight": 1.0,
+    "vector_weight": 1.5,
     "openai": {
       "api_key": "${OPENAI_API_KEY}",
       "model": "text-embedding-3-small"
@@ -147,6 +170,8 @@ Just run Ollama on localhost. No config.json changes needed.
 | `chunk_size` | int | `500` | Max tokens per chunk when splitting documents |
 | `embed_dims` | int | `0` | Embedding dimensions. 0 = use embedder default (768 Ollama, 1536 OpenAI) |
 | `embed_provider` | string | `"auto"` | `"auto"`, `"ollama"`, `"openai"` |
+| `fts_weight` | float | `1.0` | RRF weight for FTS5 (keyword) results. Higher values boost keyword matches |
+| `vector_weight` | float | `1.5` | RRF weight for vector (semantic) results. Higher values boost semantic matches |
 | `ollama.host` | string | `$OLLAMA_HOST` or `http://localhost:11434` | Ollama API endpoint |
 | `ollama.model` | string | `nomic-embed-text` | Ollama embedding model |
 | `openai.api_key` | string | `$OPENAI_API_KEY` | OpenAI API key |
