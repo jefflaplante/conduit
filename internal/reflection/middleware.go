@@ -53,7 +53,7 @@ func (m *ReflectionMiddleware) Hook() AfterExecutionHook {
 
 // recordOutcome determines the outcome, checks capture policy, builds a
 // ReflectionEntry, and writes it to the store.
-func (m *ReflectionMiddleware) recordOutcome(ctx context.Context, info ToolOutcomeInfo) {
+func (m *ReflectionMiddleware) recordOutcome(_ context.Context, info ToolOutcomeInfo) {
 	if m.store == nil || m.config == nil || !m.config.Enabled {
 		return
 	}
@@ -77,7 +77,14 @@ func (m *ReflectionMiddleware) recordOutcome(ctx context.Context, info ToolOutco
 	// Set session key for cross-session correlation.
 	entry.SessionKey = info.SessionKey
 
-	if err := m.store.Insert(ctx, entry); err != nil {
+	// Use a detached context with a short timeout. The caller's context may
+	// already be expired (e.g. tool hit its deadline), but we still want to
+	// record the outcome. Reflection is best-effort and should not inherit
+	// the tool execution's lifecycle.
+	insertCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := m.store.Insert(insertCtx, entry); err != nil {
 		// Reflection is best-effort; never fail the tool call.
 		log.Printf("[ReflectionMiddleware] failed to insert entry for tool %s: %v", info.ToolName, err)
 	}
