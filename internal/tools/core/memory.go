@@ -78,7 +78,7 @@ func (t *MemorySearchTool) Parameters() map[string]interface{} {
 			"minScore": map[string]interface{}{
 				"type":        "number",
 				"description": "Minimum relevance score (0.0-1.0)",
-				"default":     0.1,
+				"default":     0.3,
 			},
 			"searchSessions": map[string]interface{}{
 				"type":        "boolean",
@@ -111,7 +111,7 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]interfac
 	}
 
 	maxResults := toolargs.GetInt(args, "maxResults", 10)
-	minScore := toolargs.GetFloat64(args, "minScore", 0.1)
+	minScore := toolargs.GetFloat64(args, "minScore", 0.3)
 	searchSessions := toolargs.GetBool(args, "searchSessions", true)
 	sessionLimit := toolargs.GetInt(args, "sessionLimit", 50)
 	searchMode := toolargs.GetString(args, "searchMode", "auto")
@@ -165,6 +165,12 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]interfac
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Score > results[j].Score
 	})
+
+	// Log score distribution for calibration
+	if len(results) > 0 {
+		log.Printf("[vecgo] MemorySearch: mode=%s query=%q results=%d scores=[%.3f..%.3f]",
+			effectiveMode, query, len(results), results[len(results)-1].Score, results[0].Score)
+	}
 
 	// Limit results
 	if len(results) > maxResults {
@@ -401,10 +407,14 @@ func reciprocalRankFusion(lists ...[]MemoryResult) []MemoryResult {
 		}
 	}
 
+	// Normalize RRF scores to 0-1 range so they're comparable to raw vector/fts5 scores.
+	// Max possible RRF score = numLists * 1/(k+1) when an item is ranked #0 in every list.
+	maxPossible := float64(len(lists)) / float64(rrfK+1)
+
 	// Collect and sort by fused score
 	results := make([]MemoryResult, 0, len(fused))
 	for _, entry := range fused {
-		entry.result.Score = entry.score
+		entry.result.Score = entry.score / maxPossible
 		entry.result.SearchType = "hybrid"
 		results = append(results, entry.result)
 	}
