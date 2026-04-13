@@ -98,8 +98,26 @@ type VectorConfig struct {
 	EmbedProvider string             `json:"embed_provider,omitempty"` // "" or "auto" (default), "ollama", "openai"
 	EmbedTimeout  int                `json:"embed_timeout,omitempty"`  // Per-file embedding timeout in seconds (default 300)
 	EmbedPacing   int                `json:"embed_pacing,omitempty"`   // Delay between embedding calls in seconds (default 2)
+	FTSWeight     float64            `json:"fts_weight,omitempty"`     // RRF weight for FTS5 keyword results (default 1.0)
+	VectorWeight  float64            `json:"vector_weight,omitempty"`  // RRF weight for vector semantic results (default 1.5)
 	OpenAI        *OpenAIEmbedConfig `json:"openai,omitempty"`
 	Ollama        *OllamaEmbedConfig `json:"ollama,omitempty"`
+}
+
+// GetFTSWeight returns the configured FTS5 RRF weight, defaulting to 1.0.
+func (v *VectorConfig) GetFTSWeight() float64 {
+	if v.FTSWeight == 0 {
+		return 1.0
+	}
+	return v.FTSWeight
+}
+
+// GetVectorWeight returns the configured vector RRF weight, defaulting to 1.5.
+func (v *VectorConfig) GetVectorWeight() float64 {
+	if v.VectorWeight == 0 {
+		return 1.5
+	}
+	return v.VectorWeight
 }
 
 // STTConfig holds configuration for speech-to-text transcription.
