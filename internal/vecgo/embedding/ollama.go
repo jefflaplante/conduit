@@ -132,6 +132,13 @@ func (o *OllamaEmbedder) Embed(ctx context.Context, texts []string) ([][]float32
 	return resp.Embeddings, nil
 }
 
+// Ping verifies the embedder is functional by embedding a single test string.
+// This triggers model loading on cold start, which can take 30+ seconds.
+func (o *OllamaEmbedder) Ping(ctx context.Context) error {
+	_, err := o.Embed(ctx, []string{"ping"})
+	return err
+}
+
 // Ollama /api/embed types
 
 type ollamaEmbedRequest struct {

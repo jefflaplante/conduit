@@ -141,6 +141,12 @@ func (o *OpenAIEmbedder) Embed(ctx context.Context, texts []string) ([][]float32
 	return vectors, nil
 }
 
+// Ping verifies the embedder is functional by embedding a single test string.
+func (o *OpenAIEmbedder) Ping(ctx context.Context) error {
+	_, err := o.Embed(ctx, []string{"ping"})
+	return err
+}
+
 // OpenAI API types
 
 type openAIEmbedRequest struct {
