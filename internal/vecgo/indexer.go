@@ -378,20 +378,29 @@ func (idx *Indexer) embedWorker(ctx context.Context) {
 		}
 		first = false
 
+		log.Printf("vecgo indexer: embedding started: %s (%d bytes)", job.relPath, len(job.data))
+		embedStart := time.Now()
+
 		// Per-file timeout ensures one slow embedding doesn't starve the rest.
 		fileCtx, fileCancel := context.WithTimeout(job.ctx, idx.embedTimeout)
 		err := idx.svc.Index(fileCtx, job.relPath, string(job.data), job.meta)
 		fileCancel()
 
+		embedDur := time.Since(embedStart)
+
 		if err != nil {
+			log.Printf("vecgo indexer: embedding failed: %s after %v: %v", job.relPath, embedDur, err)
 			job.resultCh <- indexJobResult{err: fmt.Errorf("index %s: %w", job.relPath, err)}
 		} else {
+			log.Printf("vecgo indexer: embedding complete: %s in %v", job.relPath, embedDur)
 			// Update hash on success (caller holds idx.mu)
 			idx.hashes[job.relPath] = job.hash
 			// Persist hash to SQLite
 			if idx.hashDB != nil {
 				if persistErr := idx.persistHash(job.ctx, job.relPath, job.hash); persistErr != nil {
 					log.Printf("vecgo indexer: failed to persist hash for %s: %v", job.relPath, persistErr)
+				} else {
+					log.Printf("vecgo indexer: hash persisted: %s", job.relPath)
 				}
 			}
 			job.resultCh <- indexJobResult{}
