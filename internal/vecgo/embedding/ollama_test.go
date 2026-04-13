@@ -159,3 +159,32 @@ func TestOllamaEmbedder_Defaults(t *testing.T) {
 	assert.Equal(t, 768, e.dimensions)
 	assert.Equal(t, defaultOllamaHost, e.host)
 }
+
+func TestOllamaEmbedder_Ping_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := ollamaEmbedResponse{
+			Model:      "nomic-embed-text",
+			Embeddings: [][]float32{{0.1, 0.2, 0.3}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	e := newTestOllamaEmbedder(server.URL)
+	err := e.Ping(context.Background())
+	assert.NoError(t, err)
+}
+
+func TestOllamaEmbedder_Ping_Failure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error": "model not found"}`))
+	}))
+	defer server.Close()
+
+	e := newTestOllamaEmbedder(server.URL)
+	err := e.Ping(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "404")
+}

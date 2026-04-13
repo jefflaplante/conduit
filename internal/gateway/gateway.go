@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -138,6 +137,7 @@ type Gateway struct {
 
 	// Vector/semantic search (optional)
 	vectorService *vecgoservice.Service
+	vectorIndexer *vecgoservice.Indexer
 
 	// MQTT event ingest (optional)
 	mqttService *mqtt.Service
@@ -653,8 +653,33 @@ func New(cfg *config.Config) (*Gateway, error) {
 				logger.Warn("failed to initialize vector search, continuing without", "error", vecErr)
 			} else {
 				gw.vectorService = vectorSvc
-				indexWorkspaceForVector(ftsWorkspaceDir, vectorSvc)
+				gw.vectorIndexer = vecgoservice.NewIndexer(vectorSvc, vecgoservice.IndexerConfig{
+					WorkspaceDir: ftsWorkspaceDir,
+					PollInterval: 30 * time.Second,
+				})
 				logger.Info("vector search initialized", "provider", providerName, "dims", emb.Dimensions(), "path", vectorDBPath)
+
+				// Async: probe embedder readiness, then start indexer.
+				// This avoids blocking gateway startup on slow Ollama model loading.
+				go func() {
+					type pinger interface {
+						Ping(ctx context.Context) error
+					}
+					if p, ok := emb.(pinger); ok {
+						probeCtx, probeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+						if err := p.Ping(probeCtx); err != nil {
+							logger.Warn("vector embedder readiness probe failed; indexing deferred to poll cycle",
+								"provider", providerName, "error", err)
+						} else {
+							logger.Info("vector embedder readiness probe passed", "provider", providerName)
+						}
+						probeCancel()
+					}
+
+					if err := gw.vectorIndexer.Start(context.Background()); err != nil {
+						logger.Error("vector indexer failed to start", "error", err)
+					}
+				}()
 			}
 		}
 	}
@@ -1366,6 +1391,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Stop MQTT service
 	if g.mqttService != nil {
 		g.mqttService.Stop()
+	}
+
+	// Stop vector indexer before closing the service it references
+	if g.vectorIndexer != nil {
+		g.vectorIndexer.Stop()
 	}
 
 	// Close vector search service
@@ -2386,52 +2416,6 @@ const (
 	defaultOllamaEmbedHost  = "http://localhost:11434"
 	defaultOllamaEmbedModel = "nomic-embed-text"
 )
-
-// indexWorkspaceForVector walks workspace .md files and indexes them into the vector service.
-func indexWorkspaceForVector(workspaceDir string, svc *vecgoservice.Service) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	logger := logging.Default()
-	var indexed int
-	err := filepath.Walk(workspaceDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // skip inaccessible paths
-		}
-		if info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
-			return nil
-		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			logger.Debug("vecgo: skip file", "path", path, "error", readErr)
-			return nil
-		}
-		relPath, _ := filepath.Rel(workspaceDir, path)
-		if relPath == "" {
-			relPath = path
-		}
-		meta := map[string]string{
-			"source": "workspace",
-			"path":   relPath,
-			"title":  strings.TrimSuffix(info.Name(), ".md"),
-		}
-		if indexErr := svc.Index(ctx, relPath, string(data), meta); indexErr != nil {
-			logger.Warn("vecgo: index failed", "path", relPath, "error", indexErr)
-			return nil
-		}
-		indexed++
-		return nil
-	})
-	if err != nil {
-		logger.Warn("vector workspace indexing walk error", "error", err)
-	}
-	if indexed > 0 {
-		if saveErr := svc.Save(ctx); saveErr != nil {
-			logger.Warn("vector index save failed", "error", saveErr)
-		}
-		logger.Info("vector search indexed workspace files", "file_count", indexed)
-	}
-}
 
 // summaryAIRouterAdapter adapts ai.Router to workspace.SummaryAIRouter
 type summaryAIRouterAdapter struct {

@@ -304,6 +304,23 @@ func TestIndexer_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestIndexer_Start_ResilientToInitialScanFailure(t *testing.T) {
+	svc := newTestService(t)
+
+	// Use a non-existent workspace dir so the initial scan fails.
+	idx := NewIndexer(svc, IndexerConfig{
+		WorkspaceDir: "/nonexistent/path/that/does/not/exist",
+		PollInterval: 100 * time.Millisecond,
+	})
+
+	// Start should NOT return an error even though the initial scan fails.
+	err := idx.Start(context.Background())
+	require.NoError(t, err, "Start should succeed even when initial scan fails")
+
+	// The polling goroutine should have started — Stop must not hang.
+	idx.Stop()
+}
+
 func TestIndexer_SearchAfterIndexing(t *testing.T) {
 	svc := newTestService(t)
 	workspaceDir := t.TempDir()

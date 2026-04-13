@@ -165,14 +165,16 @@ func (idx *Indexer) RemoveFile(ctx context.Context, relativePath string) error {
 // interval. The initial scan happens synchronously before Start returns.
 // Call Stop() to terminate the background polling.
 func (idx *Indexer) Start(ctx context.Context) error {
-	// Initial scan
+	// Initial scan — log results but don't fail; polling will retry.
 	result, err := idx.IndexNow(ctx)
 	if err != nil {
-		return fmt.Errorf("initial indexing failed: %w", err)
-	}
-	if result.FilesIndexed > 0 {
-		log.Printf("vecgo indexer: initial scan indexed %d files (%d skipped, %d removed) in %v",
-			result.FilesIndexed, result.FilesSkipped, result.FilesRemoved, result.Duration)
+		log.Printf("vecgo indexer: initial scan failed: %v (polling will retry)", err)
+	} else {
+		log.Printf("vecgo indexer: initial scan: %d scanned, %d indexed, %d skipped, %d removed, %d errors in %v",
+			result.FilesScanned, result.FilesIndexed, result.FilesSkipped, result.FilesRemoved, len(result.Errors), result.Duration)
+		for _, e := range result.Errors {
+			log.Printf("vecgo indexer: scan error: %s", e)
+		}
 	}
 
 	// Start background polling if interval is configured
@@ -225,9 +227,12 @@ func (idx *Indexer) pollLoop(ctx context.Context) {
 				log.Printf("vecgo indexer: periodic scan failed: %v", err)
 				continue
 			}
-			if result.FilesIndexed > 0 || result.FilesRemoved > 0 {
-				log.Printf("vecgo indexer: periodic scan: %d indexed, %d removed, %d skipped in %v",
-					result.FilesIndexed, result.FilesRemoved, result.FilesSkipped, result.Duration)
+			if result.FilesIndexed > 0 || result.FilesRemoved > 0 || len(result.Errors) > 0 {
+				log.Printf("vecgo indexer: periodic scan: %d indexed, %d removed, %d skipped, %d errors in %v",
+					result.FilesIndexed, result.FilesRemoved, result.FilesSkipped, len(result.Errors), result.Duration)
+				for _, e := range result.Errors {
+					log.Printf("vecgo indexer: scan error: %s", e)
+				}
 			}
 		}
 	}
