@@ -96,6 +96,8 @@ type VectorConfig struct {
 	ChunkSize     int                `json:"chunk_size,omitempty"`     // Max tokens per chunk (default 500)
 	EmbedDims     int                `json:"embed_dims,omitempty"`     // Embedding dimensions (0 = use embedder default: 768 Ollama, 1536 OpenAI)
 	EmbedProvider string             `json:"embed_provider,omitempty"` // "" or "auto" (default), "ollama", "openai"
+	EmbedTimeout  int                `json:"embed_timeout,omitempty"`  // Per-file embedding timeout in seconds (default 300)
+	EmbedPacing   int                `json:"embed_pacing,omitempty"`   // Delay between embedding calls in seconds (default 2)
 	OpenAI        *OpenAIEmbedConfig `json:"openai,omitempty"`
 	Ollama        *OllamaEmbedConfig `json:"ollama,omitempty"`
 }
