@@ -92,7 +92,7 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **[REM Sleep Cycle](reference/brain.md#rem-sleep-cycle)** — A 5-phase memory consolidation process inspired by biological sleep. Phases: **Triage** (identify valuable working memory), **Consolidation** (promote high-value entries to LTM), **Pruning** (evict stale/low-value entries), **Integration** (cross-reference with workspace files), and **Grooming** (staleness tracking across all sources). Runs on a configurable schedule to keep long-term memory lean and relevant
 - **[SPAR Reflect](reference/spar.md)** — Cross-session learning loop. Tool outcomes are captured automatically on every execution, session summaries are written on idle/farewell/context budget, and the nightly REM Reflect phase clusters patterns (e.g., "WebFetch fails frequently") and feeds them back into the agent's Situation Awareness prompt section
 - **FTS5 Full-Text Search** — SQLite-based document, message, and brain LTM search
-- **Memory Search** — Semantic search across MEMORY.md, session history, and brain entries
+- **[Vecgo (Semantic Search)](reference/vecgo.md)** — Hybrid vector+keyword search via MemorySearch. **Batteries-included**: auto-detects Ollama at localhost and enables semantic embeddings with zero config. Searches like "power setup" find "EG4 18kPV" even without exact keyword match. Supports Ollama (local) and OpenAI embedders. Results merged with FTS5 via Reciprocal Rank Fusion
 - **Web Search** — Hybrid Anthropic native + Brave API fallback
 
 ### Communication & Vision
@@ -212,6 +212,7 @@ Use `/model <alias>` to switch models. The provider auto-resolves based on the m
 | [Skills System](reference/skills.md) | Creating and using skills |
 | [Authentication](reference/authentication.md) | Token and OAuth setup |
 | [Brain & REM Sleep](reference/brain.md) | Cognitive memory system with tiered storage and offline consolidation |
+| [Vecgo (Semantic Search)](reference/vecgo.md) | Vector search with Ollama/OpenAI embeddings — batteries-included setup |
 | [SPAR Reflect](reference/spar.md) | Cross-session learning loop: tool outcome capture, session reflection, pattern clustering |
 | [SRE Tools](reference/sre-tools.md) | PagerDuty, Datadog, and incident correlation tools |
 | [Google Workspace](reference/google-workspace.md) | Gmail and Calendar integration via gws CLI |

@@ -627,11 +627,16 @@ func New(cfg *config.Config) (*Gateway, error) {
 		}
 	}
 
-	// Initialize optional vector/semantic search service
-	if cfg.Vector.Enabled {
+	// Initialize vector/semantic search service.
+	// Batteries-included: auto-enables when Ollama is available at localhost,
+	// even without vector.enabled=true in config. Set vector.enabled=false
+	// explicitly only if you need to force-disable it.
+	if cfg.Vector.Enabled || shouldAutoEnableVecgo(cfg.Vector, logger) {
 		emb, providerName := resolveEmbedder(cfg.Vector, logger)
 		if emb == nil {
-			logger.Warn("vector search disabled: no embedding provider available", "provider", providerName)
+			if cfg.Vector.Enabled {
+				logger.Warn("vector search disabled: no embedding provider available", "provider", providerName)
+			}
 		} else {
 			vectorDBPath := cfg.Vector.Path
 			if vectorDBPath == "" {
@@ -2269,6 +2274,39 @@ func createSchemaBuilder(gw *Gateway, cfg *config.Config) *schema.Builder {
 	return schema.NewBuilder(providers)
 }
 
+// shouldAutoEnableVecgo returns true when vecgo should auto-enable despite
+// vector.enabled not being set in config. This fires when Ollama is reachable
+// at localhost or OLLAMA_HOST is set, or OPENAI_API_KEY is present.
+func shouldAutoEnableVecgo(cfg config.VectorConfig, logger *slog.Logger) bool {
+	// If user explicitly configured a provider, auto-enable
+	if cfg.EmbedProvider != "" && cfg.EmbedProvider != "auto" {
+		return true
+	}
+
+	// Check OLLAMA_HOST env
+	if os.Getenv("OLLAMA_HOST") != "" {
+		return true
+	}
+
+	// Check OPENAI_API_KEY env
+	if os.Getenv("OPENAI_API_KEY") != "" {
+		return true
+	}
+
+	// Probe default Ollama at localhost
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(defaultOllamaEmbedHost + "/api/version")
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		logger.Info("auto-detected Ollama at localhost, enabling vector search")
+		return true
+	}
+	return false
+}
+
 // resolveEmbedder determines the embedding provider based on config and environment.
 // Returns the embedder and a provider name for logging. A nil embedder means vecgo should be disabled.
 func resolveEmbedder(cfg config.VectorConfig, logger *slog.Logger) (embedder.Embedder, string) {
@@ -2299,19 +2337,28 @@ func resolveEmbedder(cfg config.VectorConfig, logger *slog.Logger) (embedder.Emb
 		return nil, "tfidf-deprecated"
 
 	default: // "" or "auto"
-		// Auto-detect from environment
-		if host := os.Getenv("OLLAMA_HOST"); host != "" {
-			_, model := ollamaConfigValues(cfg)
+		// Auto-detect: OLLAMA_HOST env, then localhost probe, then OPENAI_API_KEY
+		host, model := ollamaConfigValues(cfg)
+		if os.Getenv("OLLAMA_HOST") != "" {
 			logger.Info("auto-detected Ollama from OLLAMA_HOST", "host", host, "model", model)
 			return embedding.NewOllamaEmbedder(host, model, cfg.EmbedDims), "ollama"
 		}
+		// Probe default localhost Ollama
+		client := &http.Client{Timeout: 2 * time.Second}
+		if resp, err := client.Get(host + "/api/version"); err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				logger.Info("auto-detected Ollama at localhost", "host", host, "model", model)
+				return embedding.NewOllamaEmbedder(host, model, cfg.EmbedDims), "ollama"
+			}
+		}
 		if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-			model := ""
+			openaiModel := ""
 			if cfg.OpenAI != nil {
-				model = cfg.OpenAI.Model
+				openaiModel = cfg.OpenAI.Model
 			}
 			logger.Info("auto-detected OpenAI from OPENAI_API_KEY")
-			return embedding.NewOpenAIEmbedder(apiKey, model, cfg.EmbedDims), "openai"
+			return embedding.NewOpenAIEmbedder(apiKey, openaiModel, cfg.EmbedDims), "openai"
 		}
 		return nil, "none"
 	}
