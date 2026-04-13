@@ -48,7 +48,7 @@ func NewOllamaEmbedder(host, model string, dims int) *OllamaEmbedder {
 		host:       host,
 		model:      model,
 		dimensions: dims,
-		client:     &http.Client{Timeout: 60 * time.Second},
+		client:     &http.Client{}, // timeout controlled by caller's context
 	}
 }
 
