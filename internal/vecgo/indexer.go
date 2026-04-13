@@ -393,7 +393,15 @@ func (idx *Indexer) embedWorker(ctx context.Context) {
 			job.resultCh <- indexJobResult{err: fmt.Errorf("index %s: %w", job.relPath, err)}
 		} else {
 			log.Printf("vecgo indexer: embedding complete: %s in %v", job.relPath, embedDur)
-			// Update hash on success (caller holds idx.mu)
+			// Persist vectors to SQLite BEFORE recording the hash.
+			// This ensures the vectors table and file_hashes stay in sync —
+			// if Save fails, the hash is not recorded and the file will be
+			// re-indexed on the next scan.
+			if saveErr := idx.svc.Save(job.ctx); saveErr != nil {
+				log.Printf("vecgo indexer: vector save failed for %s: %v", job.relPath, saveErr)
+				job.resultCh <- indexJobResult{err: fmt.Errorf("save after index %s: %w", job.relPath, saveErr)}
+				continue
+			}
 			idx.hashes[job.relPath] = job.hash
 			// Persist hash to SQLite
 			if idx.hashDB != nil {
