@@ -653,9 +653,16 @@ func New(cfg *config.Config) (*Gateway, error) {
 				logger.Warn("failed to initialize vector search, continuing without", "error", vecErr)
 			} else {
 				gw.vectorService = vectorSvc
+				embedTimeout := time.Duration(cfg.Vector.EmbedTimeout) * time.Second
+				embedPacing := time.Duration(cfg.Vector.EmbedPacing) * time.Second
+				if cfg.Vector.EmbedPacing <= 0 {
+					embedPacing = 2 * time.Second
+				}
 				gw.vectorIndexer = vecgoservice.NewIndexer(vectorSvc, vecgoservice.IndexerConfig{
 					WorkspaceDir: ftsWorkspaceDir,
 					PollInterval: 30 * time.Second,
+					EmbedTimeout: embedTimeout,
+					EmbedPacing:  embedPacing,
 				})
 				logger.Info("vector search initialized", "provider", providerName, "dims", emb.Dimensions(), "path", vectorDBPath)
 

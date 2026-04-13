@@ -15,7 +15,9 @@ import (
 
 // Indexer watches workspace memory files and indexes them into the vector
 // database. It tracks file content hashes so that only new or changed files
-// are re-embedded and re-indexed.
+// are re-embedded and re-indexed. Embedding is serialized through a single
+// background worker with configurable pacing to avoid overwhelming CPU-based
+// embedding models.
 type Indexer struct {
 	svc          *Service
 	workspaceDir string
@@ -24,8 +26,14 @@ type Indexer struct {
 
 	// Polling configuration
 	pollInterval time.Duration
+	embedTimeout time.Duration
+	embedPacing  time.Duration
 	stopCh       chan struct{}
 	stopped      chan struct{}
+
+	// Embed worker queue
+	workCh     chan indexJob
+	workerDone chan struct{}
 }
 
 // IndexerConfig configures the memory indexing pipeline.
@@ -36,23 +44,59 @@ type IndexerConfig struct {
 	// PollInterval controls how often the indexer re-scans for changes.
 	// Zero disables periodic scanning (manual IndexNow only).
 	PollInterval time.Duration
+
+	// EmbedTimeout is the per-file embedding timeout.
+	// Zero uses the default (300s).
+	EmbedTimeout time.Duration
+
+	// EmbedPacing is the delay between consecutive embedding calls.
+	// This gives CPU-based embedders breathing room between documents.
+	// Zero disables pacing (back-to-back embedding).
+	EmbedPacing time.Duration
 }
+
+// indexJob is a unit of work for the embed worker.
+type indexJob struct {
+	ctx      context.Context
+	relPath  string
+	data     []byte
+	hash     string
+	meta     map[string]string
+	resultCh chan<- indexJobResult
+}
+
+// indexJobResult is the outcome of a single embedding job.
+type indexJobResult struct {
+	err error
+}
+
+// Default embedding timeout per file.
+const defaultEmbedTimeout = 300 * time.Second
 
 // NewIndexer creates a new memory indexing pipeline.
 func NewIndexer(svc *Service, cfg IndexerConfig) *Indexer {
+	embedTimeout := cfg.EmbedTimeout
+	if embedTimeout <= 0 {
+		embedTimeout = defaultEmbedTimeout
+	}
 	return &Indexer{
 		svc:          svc,
 		workspaceDir: cfg.WorkspaceDir,
 		hashes:       make(map[string]string),
 		pollInterval: cfg.PollInterval,
+		embedTimeout: embedTimeout,
+		embedPacing:  cfg.EmbedPacing,
 		stopCh:       make(chan struct{}),
 		stopped:      make(chan struct{}),
+		workCh:       make(chan indexJob, 64),
+		workerDone:   make(chan struct{}),
 	}
 }
 
 // IndexNow performs a full scan and index of all memory files. Only files
 // whose content has changed since the last scan are re-indexed. Stale entries
 // (files that have been deleted) are removed from the vector index.
+// Embedding calls are dispatched to the background worker with pacing.
 func (idx *Indexer) IndexNow(ctx context.Context) (*IndexResult, error) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -95,17 +139,29 @@ func (idx *Indexer) IndexNow(ctx context.Context) (*IndexResult, error) {
 		}
 		currentPaths[relPath] = true
 
-		changed, indexErr := idx.indexFileIfChanged(ctx, fullPath, relPath)
-		if indexErr != nil {
-			log.Printf("vecgo indexer: error indexing %s: %v", relPath, indexErr)
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", relPath, indexErr))
+		// Check if file changed (fast: file read + hash, no embedding)
+		data, hash, changed, checkErr := idx.checkFileChanged(fullPath, relPath)
+		if checkErr != nil {
+			log.Printf("vecgo indexer: error checking %s: %v", relPath, checkErr)
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", relPath, checkErr))
 			continue
 		}
-		if changed {
-			result.FilesIndexed++
-		} else {
+		if !changed {
 			result.FilesSkipped++
+			continue
 		}
+
+		// Build metadata
+		meta := idx.buildMeta(relPath)
+
+		// Submit to embed worker and wait for result
+		embedErr := idx.submitAndWait(ctx, relPath, data, hash, meta)
+		if embedErr != nil {
+			log.Printf("vecgo indexer: error indexing %s: %v", relPath, embedErr)
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", relPath, embedErr))
+			continue
+		}
+		result.FilesIndexed++
 	}
 
 	// Remove stale entries (files that no longer exist on disk)
@@ -139,14 +195,21 @@ func (idx *Indexer) IndexFile(ctx context.Context, relativePath string) error {
 	defer idx.mu.Unlock()
 
 	fullPath := filepath.Join(idx.workspaceDir, relativePath)
-	changed, err := idx.indexFileIfChanged(ctx, fullPath, relativePath)
+
+	data, hash, changed, err := idx.checkFileChanged(fullPath, relativePath)
 	if err != nil {
 		return err
 	}
-	if changed {
-		return idx.svc.Save(ctx)
+	if !changed {
+		return nil
 	}
-	return nil
+
+	meta := idx.buildMeta(relativePath)
+
+	if err := idx.submitAndWait(ctx, relativePath, data, hash, meta); err != nil {
+		return err
+	}
+	return idx.svc.Save(ctx)
 }
 
 // RemoveFile removes a file from the vector index.
@@ -161,10 +224,13 @@ func (idx *Indexer) RemoveFile(ctx context.Context, relativePath string) error {
 	return idx.svc.Save(ctx)
 }
 
-// Start begins periodic polling for file changes. It runs IndexNow at each
-// interval. The initial scan happens synchronously before Start returns.
-// Call Stop() to terminate the background polling.
+// Start begins periodic polling for file changes. It launches the embed
+// worker, runs an initial scan, then starts the poll loop.
+// Call Stop() to terminate background goroutines.
 func (idx *Indexer) Start(ctx context.Context) error {
+	// Launch the embed worker before the initial scan
+	go idx.embedWorker(ctx)
+
 	// Initial scan — log results but don't fail; polling will retry.
 	result, err := idx.IndexNow(ctx)
 	if err != nil {
@@ -185,9 +251,11 @@ func (idx *Indexer) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop terminates the background polling goroutine.
+// Stop terminates the background polling goroutine and embed worker.
 func (idx *Indexer) Stop() {
 	close(idx.stopCh)
+	close(idx.workCh)
+	<-idx.workerDone
 	if idx.pollInterval > 0 {
 		<-idx.stopped
 	}
@@ -202,6 +270,42 @@ func (idx *Indexer) Status() IndexerStatus {
 		WorkspaceDir: idx.workspaceDir,
 		TrackedFiles: len(idx.hashes),
 		PollInterval: idx.pollInterval,
+	}
+}
+
+// embedWorker processes embedding jobs sequentially with pacing.
+// It runs until workCh is closed or the context is cancelled.
+func (idx *Indexer) embedWorker(ctx context.Context) {
+	defer close(idx.workerDone)
+
+	first := true
+	for job := range idx.workCh {
+		// Pace between embedding calls (skip before the first one)
+		if !first && idx.embedPacing > 0 {
+			select {
+			case <-ctx.Done():
+				job.resultCh <- indexJobResult{err: ctx.Err()}
+				continue
+			case <-idx.stopCh:
+				job.resultCh <- indexJobResult{err: fmt.Errorf("indexer stopped")}
+				continue
+			case <-time.After(idx.embedPacing):
+			}
+		}
+		first = false
+
+		// Per-file timeout ensures one slow embedding doesn't starve the rest.
+		fileCtx, fileCancel := context.WithTimeout(job.ctx, idx.embedTimeout)
+		err := idx.svc.Index(fileCtx, job.relPath, string(job.data), job.meta)
+		fileCancel()
+
+		if err != nil {
+			job.resultCh <- indexJobResult{err: fmt.Errorf("index %s: %w", job.relPath, err)}
+		} else {
+			// Update hash on success (caller holds idx.mu)
+			idx.hashes[job.relPath] = job.hash
+			job.resultCh <- indexJobResult{}
+		}
 	}
 }
 
@@ -238,45 +342,62 @@ func (idx *Indexer) pollLoop(ctx context.Context) {
 	}
 }
 
-// indexFileIfChanged reads a file, computes its hash, and indexes it if the
-// content has changed since the last scan. Returns true if the file was
-// (re-)indexed, false if it was skipped as unchanged.
-func (idx *Indexer) indexFileIfChanged(ctx context.Context, fullPath, relPath string) (bool, error) {
-	data, err := os.ReadFile(fullPath)
+// checkFileChanged reads a file and computes its hash to determine if
+// the content has changed since the last index. This is fast (no embedding).
+func (idx *Indexer) checkFileChanged(fullPath, relPath string) (data []byte, hash string, changed bool, err error) {
+	data, err = os.ReadFile(fullPath)
 	if err != nil {
-		return false, fmt.Errorf("read %s: %w", relPath, err)
+		return nil, "", false, fmt.Errorf("read %s: %w", relPath, err)
 	}
 
-	hash := fmt.Sprintf("%x", sha256.Sum256(data))
+	hash = fmt.Sprintf("%x", sha256.Sum256(data))
 
-	// Skip unchanged files
 	if existingHash, ok := idx.hashes[relPath]; ok && existingHash == hash {
-		return false, nil
+		return nil, "", false, nil
 	}
 
-	// Build metadata
+	return data, hash, true, nil
+}
+
+// buildMeta constructs metadata for a file being indexed.
+func (idx *Indexer) buildMeta(relPath string) map[string]string {
 	name := filepath.Base(relPath)
 	meta := map[string]string{
 		"source": "workspace",
 		"path":   relPath,
 		"title":  strings.TrimSuffix(name, filepath.Ext(name)),
 	}
-
-	// Check if this is a memory file specifically
 	if relPath == "MEMORY.md" || strings.HasPrefix(relPath, "memory/") || strings.HasPrefix(relPath, "memory"+string(filepath.Separator)) {
 		meta["type"] = "memory"
 	}
+	return meta
+}
 
-	// Index the document (the VecGo pipeline handles chunking and embedding).
-	// Per-file timeout ensures one slow embedding doesn't starve the rest of the scan.
-	fileCtx, fileCancel := context.WithTimeout(ctx, 90*time.Second)
-	defer fileCancel()
-	if err := idx.svc.Index(fileCtx, relPath, string(data), meta); err != nil {
-		return false, fmt.Errorf("index %s: %w", relPath, err)
+// submitAndWait sends an embedding job to the worker and blocks until
+// the result is available. Returns the embedding error, if any.
+func (idx *Indexer) submitAndWait(ctx context.Context, relPath string, data []byte, hash string, meta map[string]string) error {
+	resultCh := make(chan indexJobResult, 1)
+	job := indexJob{
+		ctx:      ctx,
+		relPath:  relPath,
+		data:     data,
+		hash:     hash,
+		meta:     meta,
+		resultCh: resultCh,
 	}
 
-	idx.hashes[relPath] = hash
-	return true, nil
+	select {
+	case idx.workCh <- job:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	select {
+	case res := <-resultCh:
+		return res.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // IndexResult contains the results of an indexing run.

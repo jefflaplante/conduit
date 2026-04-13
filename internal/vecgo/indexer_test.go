@@ -20,6 +20,21 @@ func newTestService(t *testing.T) *Service {
 	return svc
 }
 
+// startTestIndexer creates an Indexer and launches its embed worker so that
+// IndexNow/IndexFile can be called without Start().
+func startTestIndexer(t *testing.T, svc *Service, cfg IndexerConfig) *Indexer {
+	t.Helper()
+	idx := NewIndexer(svc, cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	go idx.embedWorker(ctx)
+	t.Cleanup(func() {
+		cancel()
+		close(idx.workCh)
+		<-idx.workerDone
+	})
+	return idx
+}
+
 func writeTestFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
@@ -29,7 +44,7 @@ func TestIndexer_IndexNow_EmptyWorkspace(t *testing.T) {
 	svc := newTestService(t)
 	workspaceDir := t.TempDir()
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
 	result, err := idx.IndexNow(context.Background())
 	require.NoError(t, err)
 
@@ -43,7 +58,7 @@ func TestIndexer_IndexNow_EmptyWorkspace(t *testing.T) {
 func TestIndexer_IndexNow_EmptyWorkspaceDir(t *testing.T) {
 	svc := newTestService(t)
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: ""})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: ""})
 	result, err := idx.IndexNow(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.FilesScanned)
@@ -56,7 +71,7 @@ func TestIndexer_IndexNow_IndexesMarkdownFiles(t *testing.T) {
 	writeTestFile(t, workspaceDir, "MEMORY.md", "# Memory\n\nImportant project notes.\n")
 	writeTestFile(t, workspaceDir, "README.md", "# README\n\nProject overview.\n")
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
 	result, err := idx.IndexNow(context.Background())
 	require.NoError(t, err)
 
@@ -73,7 +88,7 @@ func TestIndexer_IndexNow_SkipsUnchangedFiles(t *testing.T) {
 
 	writeTestFile(t, workspaceDir, "test.md", "# Test\n\nSome content.\n")
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
 
 	// First index
 	result1, err := idx.IndexNow(context.Background())
@@ -94,7 +109,7 @@ func TestIndexer_IndexNow_ReindexesChangedFiles(t *testing.T) {
 
 	writeTestFile(t, workspaceDir, "test.md", "# Original\n\nOriginal content.\n")
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
 
 	// First index
 	result1, err := idx.IndexNow(context.Background())
@@ -118,7 +133,7 @@ func TestIndexer_IndexNow_RemovesStaleFiles(t *testing.T) {
 	writeTestFile(t, workspaceDir, "keep.md", "# Keep\n\nKeep this file.\n")
 	writeTestFile(t, workspaceDir, "remove.md", "# Remove\n\nRemove this file.\n")
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
 
 	// First index
 	result1, err := idx.IndexNow(context.Background())
@@ -146,7 +161,7 @@ func TestIndexer_IndexNow_SubdirectoryFiles(t *testing.T) {
 	writeTestFile(t, memDir, "notes.md", "## Notes\n\nSome notes in memory directory.\n")
 	writeTestFile(t, workspaceDir, "MEMORY.md", "# Main Memory\n\nTop-level memory.\n")
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
 	result, err := idx.IndexNow(context.Background())
 	require.NoError(t, err)
 
@@ -162,7 +177,7 @@ func TestIndexer_IndexNow_IgnoresNonMarkdown(t *testing.T) {
 	writeTestFile(t, workspaceDir, "data.json", `{"key": "value"}`)
 	writeTestFile(t, workspaceDir, "script.sh", "#!/bin/bash\necho hello\n")
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
 	result, err := idx.IndexNow(context.Background())
 	require.NoError(t, err)
 
@@ -176,7 +191,7 @@ func TestIndexer_IndexFile_SingleFile(t *testing.T) {
 
 	writeTestFile(t, workspaceDir, "single.md", "# Single\n\nA single file to index.\n")
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
 	err := idx.IndexFile(context.Background(), "single.md")
 	require.NoError(t, err)
 
@@ -191,7 +206,7 @@ func TestIndexer_IndexFile_SkipsUnchanged(t *testing.T) {
 
 	writeTestFile(t, workspaceDir, "single.md", "# Single\n\nContent.\n")
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
 
 	// Index once
 	require.NoError(t, idx.IndexFile(context.Background(), "single.md"))
@@ -206,7 +221,7 @@ func TestIndexer_RemoveFile(t *testing.T) {
 
 	writeTestFile(t, workspaceDir, "removable.md", "# Removable\n\nContent to remove.\n")
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
 	require.NoError(t, idx.IndexFile(context.Background(), "removable.md"))
 
 	assert.Equal(t, 1, idx.Status().TrackedFiles)
@@ -222,7 +237,7 @@ func TestIndexer_Status(t *testing.T) {
 	writeTestFile(t, workspaceDir, "a.md", "# A\n")
 	writeTestFile(t, workspaceDir, "b.md", "# B\n")
 
-	idx := NewIndexer(svc, IndexerConfig{
+	idx := startTestIndexer(t, svc, IndexerConfig{
 		WorkspaceDir: workspaceDir,
 		PollInterval: 5 * time.Minute,
 	})
@@ -249,6 +264,7 @@ func TestIndexer_Start_InitialScan(t *testing.T) {
 
 	err := idx.Start(context.Background())
 	require.NoError(t, err)
+	t.Cleanup(func() { idx.Stop() })
 
 	assert.Equal(t, 1, idx.Status().TrackedFiles)
 }
@@ -289,7 +305,7 @@ func TestIndexer_ContextCancellation(t *testing.T) {
 			"# File\n\nContent.\n")
 	}
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -328,7 +344,7 @@ func TestIndexer_SearchAfterIndexing(t *testing.T) {
 	writeTestFile(t, workspaceDir, "MEMORY.md", "# Memory\n\nThe quick brown fox jumps over the lazy dog.\n")
 	writeTestFile(t, workspaceDir, "notes.md", "# Notes\n\nDatabase configuration uses SQLite with WAL mode.\n")
 
-	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
 	result, err := idx.IndexNow(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.FilesIndexed)
@@ -346,4 +362,28 @@ func TestIndexer_SearchAfterIndexing(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "search should return content from indexed files")
+}
+
+func TestIndexer_EmbedPacing(t *testing.T) {
+	svc := newTestService(t)
+	workspaceDir := t.TempDir()
+
+	writeTestFile(t, workspaceDir, "a.md", "# A\nContent A.\n")
+	writeTestFile(t, workspaceDir, "b.md", "# B\nContent B.\n")
+	writeTestFile(t, workspaceDir, "c.md", "# C\nContent C.\n")
+
+	idx := startTestIndexer(t, svc, IndexerConfig{
+		WorkspaceDir: workspaceDir,
+		EmbedPacing:  50 * time.Millisecond,
+	})
+
+	start := time.Now()
+	result, err := idx.IndexNow(context.Background())
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, result.FilesIndexed)
+	// 3 files with 50ms pacing = at least 100ms (pacing between, not after last)
+	assert.GreaterOrEqual(t, elapsed, 100*time.Millisecond,
+		"pacing should add delay between embedding calls")
 }
