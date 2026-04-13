@@ -219,7 +219,7 @@ func (idx *Indexer) pollLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			scanCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			scanCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			result, err := idx.IndexNow(scanCtx)
 			cancel()
 
@@ -267,8 +267,11 @@ func (idx *Indexer) indexFileIfChanged(ctx context.Context, fullPath, relPath st
 		meta["type"] = "memory"
 	}
 
-	// Index the document (the VecGo pipeline handles chunking and embedding)
-	if err := idx.svc.Index(ctx, relPath, string(data), meta); err != nil {
+	// Index the document (the VecGo pipeline handles chunking and embedding).
+	// Per-file timeout ensures one slow embedding doesn't starve the rest of the scan.
+	fileCtx, fileCancel := context.WithTimeout(ctx, 90*time.Second)
+	defer fileCancel()
+	if err := idx.svc.Index(fileCtx, relPath, string(data), meta); err != nil {
 		return false, fmt.Errorf("index %s: %w", relPath, err)
 	}
 
