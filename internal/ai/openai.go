@@ -356,10 +356,35 @@ func (o *OpenAIProvider) convertToolsToOpenAI(tools []Tool) []interface{} {
 // convertMessagesToOpenAI converts ChatMessage slice to OpenAI format.
 // This handles tool calls (which need type:"function" and nested function object)
 // and tool results (which use role:"tool" with tool_call_id).
+//
+// System messages are extracted and consolidated at the beginning of the array.
+// This is required because some backends (llama.cpp, vLLM) enforce that system
+// messages appear only at the start, but the tool execution engine may inject
+// mid-conversation system messages (goal refocus, failure pivot suggestions).
 func (o *OpenAIProvider) convertMessagesToOpenAI(messages []ChatMessage) []map[string]interface{} {
 	result := make([]map[string]interface{}, 0, len(messages))
 
+	// First pass: collect any system messages that appear after index 0.
+	// Consolidate them into the leading system message block.
+	var systemParts []string
+	var nonSystemMessages []ChatMessage
 	for _, msg := range messages {
+		if msg.Role == "system" {
+			systemParts = append(systemParts, msg.Content)
+		} else {
+			nonSystemMessages = append(nonSystemMessages, msg)
+		}
+	}
+
+	// Emit consolidated system message first (if any).
+	if len(systemParts) > 0 {
+		result = append(result, map[string]interface{}{
+			"role":    "system",
+			"content": strings.Join(systemParts, "\n\n"),
+		})
+	}
+
+	for _, msg := range nonSystemMessages {
 		converted := map[string]interface{}{
 			"role": msg.Role,
 		}
