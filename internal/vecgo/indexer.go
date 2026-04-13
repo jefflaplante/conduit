@@ -3,6 +3,7 @@ package vecgo
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"fmt"
 	"io/fs"
 	"log"
@@ -10,7 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 // Indexer watches workspace memory files and indexes them into the vector
@@ -18,6 +22,10 @@ import (
 // are re-embedded and re-indexed. Embedding is serialized through a single
 // background worker with configurable pacing to avoid overwhelming CPU-based
 // embedding models.
+//
+// Hash tracking is persisted to SQLite so that unchanged files are skipped
+// across restarts. On startup, the indexer loads persisted hashes and runs
+// a non-blocking background scan that only embeds changed/new files.
 type Indexer struct {
 	svc          *Service
 	workspaceDir string
@@ -34,12 +42,25 @@ type Indexer struct {
 	// Embed worker queue
 	workCh     chan indexJob
 	workerDone chan struct{}
+
+	// Persistent hash storage (nil = in-memory only)
+	hashDB *sql.DB
+
+	// Ignore rules loaded from .vectorignore
+	ignore *ignoreRules
+
+	// Guards against EnsureIndexed calls before Start()
+	started atomic.Bool
 }
 
 // IndexerConfig configures the memory indexing pipeline.
 type IndexerConfig struct {
 	// WorkspaceDir is the root directory to scan for .md files.
 	WorkspaceDir string
+
+	// DBPath is the SQLite database path for persistent hash storage.
+	// If empty, hashes are kept in-memory only (lost on restart).
+	DBPath string
 
 	// PollInterval controls how often the indexer re-scans for changes.
 	// Zero disables periodic scanning (manual IndexNow only).
@@ -79,7 +100,8 @@ func NewIndexer(svc *Service, cfg IndexerConfig) *Indexer {
 	if embedTimeout <= 0 {
 		embedTimeout = defaultEmbedTimeout
 	}
-	return &Indexer{
+
+	idx := &Indexer{
 		svc:          svc,
 		workspaceDir: cfg.WorkspaceDir,
 		hashes:       make(map[string]string),
@@ -91,6 +113,20 @@ func NewIndexer(svc *Service, cfg IndexerConfig) *Indexer {
 		workCh:       make(chan indexJob, 64),
 		workerDone:   make(chan struct{}),
 	}
+
+	// Load .vectorignore rules
+	if cfg.WorkspaceDir != "" {
+		idx.ignore = loadIgnoreFile(filepath.Join(cfg.WorkspaceDir, ".vectorignore"))
+	}
+
+	// Initialize persistent hash storage
+	if cfg.DBPath != "" {
+		if err := idx.initHashDB(cfg.DBPath); err != nil {
+			log.Printf("vecgo indexer: hash persistence unavailable (falling back to in-memory): %v", err)
+		}
+	}
+
+	return idx
 }
 
 // IndexNow performs a full scan and index of all memory files. Only files
@@ -137,6 +173,13 @@ func (idx *Indexer) IndexNow(ctx context.Context) (*IndexResult, error) {
 			log.Printf("vecgo indexer: cannot relativize %s: %v", fullPath, relErr)
 			continue
 		}
+
+		// Skip files matched by .vectorignore
+		if idx.ignore.isIgnored(relPath) {
+			result.FilesSkipped++
+			continue
+		}
+
 		currentPaths[relPath] = true
 
 		// Check if file changed (fast: file read + hash, no embedding)
@@ -173,6 +216,7 @@ func (idx *Indexer) IndexNow(ctx context.Context) (*IndexResult, error) {
 				result.FilesRemoved++
 			}
 			delete(idx.hashes, path)
+			idx.deleteHashQuiet(ctx, path)
 		}
 	}
 
@@ -193,6 +237,10 @@ func (idx *Indexer) IndexNow(ctx context.Context) (*IndexResult, error) {
 func (idx *Indexer) IndexFile(ctx context.Context, relativePath string) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+
+	if idx.ignore.isIgnored(relativePath) {
+		return nil
+	}
 
 	fullPath := filepath.Join(idx.workspaceDir, relativePath)
 
@@ -221,27 +269,60 @@ func (idx *Indexer) RemoveFile(ctx context.Context, relativePath string) error {
 		return err
 	}
 	delete(idx.hashes, relativePath)
+	idx.deleteHashQuiet(ctx, relativePath)
 	return idx.svc.Save(ctx)
 }
 
-// Start begins periodic polling for file changes. It launches the embed
-// worker, runs an initial scan, then starts the poll loop.
-// Call Stop() to terminate background goroutines.
+// EnsureIndexed checks if a workspace file is indexed and current.
+// If stale or missing, queues it for background embedding (non-blocking).
+// Safe to call from any goroutine. No-op before Start() is called.
+func (idx *Indexer) EnsureIndexed(ctx context.Context, relativePath string) {
+	if !idx.started.Load() {
+		return
+	}
+
+	if idx.ignore.isIgnored(relativePath) {
+		return
+	}
+
+	// Quick check under lock: is it already indexed and current?
+	idx.mu.Lock()
+	fullPath := filepath.Join(idx.workspaceDir, relativePath)
+	_, _, changed, err := idx.checkFileChanged(fullPath, relativePath)
+	idx.mu.Unlock()
+
+	if err != nil || !changed {
+		return
+	}
+
+	// File needs indexing — submit asynchronously
+	go func() {
+		if indexErr := idx.IndexFile(context.Background(), relativePath); indexErr != nil {
+			log.Printf("vecgo indexer: on-demand index %s: %v", relativePath, indexErr)
+		}
+	}()
+}
+
+// Start begins the indexing pipeline. It launches the embed worker, loads
+// persisted hashes, runs a non-blocking background scan for changed files,
+// then starts the poll loop. Call Stop() to terminate background goroutines.
 func (idx *Indexer) Start(ctx context.Context) error {
-	// Launch the embed worker before the initial scan
+	// Launch the embed worker
 	go idx.embedWorker(ctx)
 
-	// Initial scan — log results but don't fail; polling will retry.
-	result, err := idx.IndexNow(ctx)
-	if err != nil {
-		log.Printf("vecgo indexer: initial scan failed: %v (polling will retry)", err)
-	} else {
-		log.Printf("vecgo indexer: initial scan: %d scanned, %d indexed, %d skipped, %d removed, %d errors in %v",
-			result.FilesScanned, result.FilesIndexed, result.FilesSkipped, result.FilesRemoved, len(result.Errors), result.Duration)
-		for _, e := range result.Errors {
-			log.Printf("vecgo indexer: scan error: %s", e)
+	// Load persisted hashes (fast, no embedding)
+	if idx.hashDB != nil {
+		if err := idx.loadHashes(ctx); err != nil {
+			log.Printf("vecgo indexer: failed to load persisted hashes: %v", err)
+		} else {
+			log.Printf("vecgo indexer: loaded %d persisted file hashes", len(idx.hashes))
 		}
 	}
+
+	idx.started.Store(true)
+
+	// Non-blocking background scan for changed/new files
+	go idx.staggeredScan(ctx)
 
 	// Start background polling if interval is configured
 	if idx.pollInterval > 0 {
@@ -258,6 +339,9 @@ func (idx *Indexer) Stop() {
 	<-idx.workerDone
 	if idx.pollInterval > 0 {
 		<-idx.stopped
+	}
+	if idx.hashDB != nil {
+		idx.hashDB.Close()
 	}
 }
 
@@ -304,9 +388,109 @@ func (idx *Indexer) embedWorker(ctx context.Context) {
 		} else {
 			// Update hash on success (caller holds idx.mu)
 			idx.hashes[job.relPath] = job.hash
+			// Persist hash to SQLite
+			if idx.hashDB != nil {
+				if persistErr := idx.persistHash(job.ctx, job.relPath, job.hash); persistErr != nil {
+					log.Printf("vecgo indexer: failed to persist hash for %s: %v", job.relPath, persistErr)
+				}
+			}
 			job.resultCh <- indexJobResult{}
 		}
 	}
+}
+
+// staggeredScan walks all .md files and queues only changed/new files for
+// embedding via the embed worker. This runs as a background goroutine so
+// Start() returns immediately. The embed worker's pacing naturally staggers
+// the embedding work.
+func (idx *Indexer) staggeredScan(ctx context.Context) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	if idx.workspaceDir == "" {
+		return
+	}
+
+	// Collect all .md files
+	var mdFiles []string
+	err := filepath.WalkDir(idx.workspaceDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !d.IsDir() && strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
+			mdFiles = append(mdFiles, path)
+		}
+		return nil
+	})
+	if err != nil {
+		log.Printf("vecgo indexer: staggered scan walk failed: %v", err)
+		return
+	}
+
+	var indexed, skipped, errors int
+	currentPaths := make(map[string]bool, len(mdFiles))
+
+	for _, fullPath := range mdFiles {
+		if ctx.Err() != nil {
+			log.Printf("vecgo indexer: staggered scan cancelled")
+			return
+		}
+
+		relPath, relErr := filepath.Rel(idx.workspaceDir, fullPath)
+		if relErr != nil {
+			continue
+		}
+
+		if idx.ignore.isIgnored(relPath) {
+			skipped++
+			continue
+		}
+
+		currentPaths[relPath] = true
+
+		data, hash, changed, checkErr := idx.checkFileChanged(fullPath, relPath)
+		if checkErr != nil {
+			log.Printf("vecgo indexer: staggered scan error checking %s: %v", relPath, checkErr)
+			errors++
+			continue
+		}
+		if !changed {
+			skipped++
+			continue
+		}
+
+		meta := idx.buildMeta(relPath)
+		if embedErr := idx.submitAndWait(ctx, relPath, data, hash, meta); embedErr != nil {
+			log.Printf("vecgo indexer: staggered scan error indexing %s: %v", relPath, embedErr)
+			errors++
+			continue
+		}
+		indexed++
+	}
+
+	// Remove stale entries
+	var removed int
+	for path := range idx.hashes {
+		if !currentPaths[path] {
+			if removeErr := idx.svc.Remove(ctx, path); removeErr != nil {
+				log.Printf("vecgo indexer: failed to remove stale entry %s: %v", path, removeErr)
+			} else {
+				removed++
+			}
+			delete(idx.hashes, path)
+			idx.deleteHashQuiet(ctx, path)
+		}
+	}
+
+	// Save if anything changed
+	if indexed > 0 || removed > 0 {
+		if saveErr := idx.svc.Save(ctx); saveErr != nil {
+			log.Printf("vecgo indexer: staggered scan save failed: %v", saveErr)
+		}
+	}
+
+	log.Printf("vecgo indexer: startup scan complete: %d indexed, %d skipped, %d removed, %d errors",
+		indexed, skipped, removed, errors)
 }
 
 // pollLoop runs periodic scans until Stop is called.
@@ -390,6 +574,8 @@ func (idx *Indexer) submitAndWait(ctx context.Context, relPath string, data []by
 	case idx.workCh <- job:
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-idx.stopCh:
+		return fmt.Errorf("indexer stopped")
 	}
 
 	select {
@@ -397,6 +583,76 @@ func (idx *Indexer) submitAndWait(ctx context.Context, relPath string, data []by
 		return res.err
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-idx.stopCh:
+		return fmt.Errorf("indexer stopped")
+	}
+}
+
+// --- Persistent hash storage ---
+
+// initHashDB opens a SQLite connection for the file_hashes table.
+func (idx *Indexer) initHashDB(dbPath string) error {
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode%%3Dwal&_pragma=busy_timeout%%3D5000&_pragma=synchronous%%3Dnormal", dbPath)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("open hash db: %w", err)
+	}
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(1)
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS file_hashes (
+		path TEXT PRIMARY KEY,
+		hash TEXT NOT NULL,
+		indexed_at TEXT NOT NULL
+	)`)
+	if err != nil {
+		db.Close()
+		return fmt.Errorf("create file_hashes table: %w", err)
+	}
+
+	idx.hashDB = db
+	return nil
+}
+
+// loadHashes populates the in-memory hash map from SQLite.
+func (idx *Indexer) loadHashes(ctx context.Context) error {
+	rows, err := idx.hashDB.QueryContext(ctx, "SELECT path, hash FROM file_hashes")
+	if err != nil {
+		return fmt.Errorf("query file_hashes: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var path, hash string
+		if err := rows.Scan(&path, &hash); err != nil {
+			return fmt.Errorf("scan file_hashes row: %w", err)
+		}
+		idx.hashes[path] = hash
+	}
+	return rows.Err()
+}
+
+// persistHash writes a file hash to SQLite.
+func (idx *Indexer) persistHash(ctx context.Context, relPath, hash string) error {
+	_, err := idx.hashDB.ExecContext(ctx,
+		"INSERT OR REPLACE INTO file_hashes (path, hash, indexed_at) VALUES (?, ?, ?)",
+		relPath, hash, time.Now().UTC().Format(time.RFC3339))
+	return err
+}
+
+// deleteHash removes a file hash from SQLite.
+func (idx *Indexer) deleteHash(ctx context.Context, relPath string) error {
+	_, err := idx.hashDB.ExecContext(ctx, "DELETE FROM file_hashes WHERE path = ?", relPath)
+	return err
+}
+
+// deleteHashQuiet removes a persisted hash, logging errors without returning them.
+func (idx *Indexer) deleteHashQuiet(ctx context.Context, relPath string) {
+	if idx.hashDB == nil {
+		return
+	}
+	if err := idx.deleteHash(ctx, relPath); err != nil {
+		log.Printf("vecgo indexer: failed to delete hash for %s: %v", relPath, err)
 	}
 }
 

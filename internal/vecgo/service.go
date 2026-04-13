@@ -147,6 +147,9 @@ func (s *Service) Save(ctx context.Context) error {
 	return s.pipeline.Save(ctx)
 }
 
+// DBPath returns the SQLite database path, or empty string for in-memory mode.
+func (s *Service) DBPath() string { return s.cfg.DBPath }
+
 // Close releases resources held by the pipeline.
 func (s *Service) Close() error {
 	if s.cfg.DBPath != "" {
