@@ -14,7 +14,7 @@ import (
 // newTestService creates an in-memory VecGo service for testing.
 func newTestService(t *testing.T) *Service {
 	t.Helper()
-	svc, err := NewService(DefaultConfig())
+	svc, err := NewService(testConfig())
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
 	return svc

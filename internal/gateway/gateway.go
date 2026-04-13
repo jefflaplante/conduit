@@ -46,6 +46,8 @@ import (
 	"conduit/internal/tui"
 	vecgoservice "conduit/internal/vecgo"
 	"conduit/internal/vecgo/embedding"
+
+	"github.com/jefflaplante/vecgo/embedder"
 	"conduit/internal/version"
 	"conduit/internal/workspace"
 	"conduit/internal/protocol"
@@ -627,40 +629,28 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 	// Initialize optional vector/semantic search service
 	if cfg.Vector.Enabled {
-		vectorDBPath := cfg.Vector.Path
-		if vectorDBPath == "" {
-			vectorDBPath = config.DeriveVectorDBPath(cfg.Database.Path)
-		}
-		vecCfg := vecgoservice.Config{
-			DBPath:    vectorDBPath,
-			ChunkSize: cfg.Vector.ChunkSize,
-			EmbedDims: cfg.Vector.EmbedDims,
-		}
-
-		// Select embedding provider
-		switch cfg.Vector.EmbedProvider {
-		case "openai":
-			if cfg.Vector.OpenAI != nil && cfg.Vector.OpenAI.APIKey != "" {
-				vecCfg.Embedder = embedding.NewOpenAIEmbedder(
-					cfg.Vector.OpenAI.APIKey,
-					cfg.Vector.OpenAI.Model,
-					cfg.Vector.EmbedDims,
-				)
-				logger.Info("using OpenAI embeddings", "model", vecCfg.Embedder.Name())
-			} else {
-				logger.Warn("OpenAI embeddings configured but no API key, falling back to TF-IDF")
-			}
-		default:
-			// TF-IDF is the default, no action needed (vecgo service handles it)
-		}
-
-		vectorSvc, vecErr := vecgoservice.NewService(vecCfg)
-		if vecErr != nil {
-			logger.Warn("failed to initialize vector search, continuing without", "error", vecErr)
+		emb, providerName := resolveEmbedder(cfg.Vector, logger)
+		if emb == nil {
+			logger.Warn("vector search disabled: no embedding provider available", "provider", providerName)
 		} else {
-			gw.vectorService = vectorSvc
-			indexWorkspaceForVector(ftsWorkspaceDir, vectorSvc)
-			logger.Info("vector search initialized", "path", vectorDBPath)
+			vectorDBPath := cfg.Vector.Path
+			if vectorDBPath == "" {
+				vectorDBPath = config.DeriveVectorDBPath(cfg.Database.Path)
+			}
+			vecCfg := vecgoservice.Config{
+				DBPath:    vectorDBPath,
+				ChunkSize: cfg.Vector.ChunkSize,
+				EmbedDims: emb.Dimensions(),
+				Embedder:  emb,
+			}
+			vectorSvc, vecErr := vecgoservice.NewService(vecCfg)
+			if vecErr != nil {
+				logger.Warn("failed to initialize vector search, continuing without", "error", vecErr)
+			} else {
+				gw.vectorService = vectorSvc
+				indexWorkspaceForVector(ftsWorkspaceDir, vectorSvc)
+				logger.Info("vector search initialized", "provider", providerName, "dims", emb.Dimensions(), "path", vectorDBPath)
+			}
 		}
 	}
 
@@ -2278,6 +2268,77 @@ func createSchemaBuilder(gw *Gateway, cfg *config.Config) *schema.Builder {
 
 	return schema.NewBuilder(providers)
 }
+
+// resolveEmbedder determines the embedding provider based on config and environment.
+// Returns the embedder and a provider name for logging. A nil embedder means vecgo should be disabled.
+func resolveEmbedder(cfg config.VectorConfig, logger *slog.Logger) (embedder.Embedder, string) {
+	switch cfg.EmbedProvider {
+	case "openai":
+		apiKey := ""
+		model := ""
+		if cfg.OpenAI != nil {
+			apiKey = cfg.OpenAI.APIKey
+			model = cfg.OpenAI.Model
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		}
+		if apiKey == "" {
+			logger.Error("embed_provider=openai but no API key configured (set openai.api_key or OPENAI_API_KEY)")
+			return nil, "openai-no-key"
+		}
+		return embedding.NewOpenAIEmbedder(apiKey, model, cfg.EmbedDims), "openai"
+
+	case "ollama":
+		host, model := ollamaConfigValues(cfg)
+		logger.Info("using Ollama embeddings", "host", host, "model", model)
+		return embedding.NewOllamaEmbedder(host, model, cfg.EmbedDims), "ollama"
+
+	case "tfidf":
+		logger.Warn("embed_provider=tfidf is deprecated — TF-IDF produces poor semantic search results; vecgo disabled")
+		return nil, "tfidf-deprecated"
+
+	default: // "" or "auto"
+		// Auto-detect from environment
+		if host := os.Getenv("OLLAMA_HOST"); host != "" {
+			_, model := ollamaConfigValues(cfg)
+			logger.Info("auto-detected Ollama from OLLAMA_HOST", "host", host, "model", model)
+			return embedding.NewOllamaEmbedder(host, model, cfg.EmbedDims), "ollama"
+		}
+		if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+			model := ""
+			if cfg.OpenAI != nil {
+				model = cfg.OpenAI.Model
+			}
+			logger.Info("auto-detected OpenAI from OPENAI_API_KEY")
+			return embedding.NewOpenAIEmbedder(apiKey, model, cfg.EmbedDims), "openai"
+		}
+		return nil, "none"
+	}
+}
+
+// ollamaConfigValues returns resolved host and model for Ollama from config + env.
+func ollamaConfigValues(cfg config.VectorConfig) (host, model string) {
+	host = defaultOllamaEmbedHost
+	model = defaultOllamaEmbedModel
+	if cfg.Ollama != nil {
+		if cfg.Ollama.Host != "" {
+			host = cfg.Ollama.Host
+		}
+		if cfg.Ollama.Model != "" {
+			model = cfg.Ollama.Model
+		}
+	}
+	if envHost := os.Getenv("OLLAMA_HOST"); envHost != "" {
+		host = envHost
+	}
+	return host, model
+}
+
+const (
+	defaultOllamaEmbedHost  = "http://localhost:11434"
+	defaultOllamaEmbedModel = "nomic-embed-text"
+)
 
 // indexWorkspaceForVector walks workspace .md files and indexes them into the vector service.
 func indexWorkspaceForVector(workspaceDir string, svc *vecgoservice.Service) {

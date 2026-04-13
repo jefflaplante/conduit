@@ -27,12 +27,14 @@ type Config struct {
 	Embedder  embedder.Embedder // Optional: if nil, uses TF-IDF default
 }
 
-// resolveEmbedder returns the configured embedder, falling back to TF-IDF.
+// resolveEmbedder returns the configured embedder.
+// Panics if no embedder is set — the caller (gateway) is responsible for
+// providing an embedder or not creating the service.
 func (c Config) resolveEmbedder() embedder.Embedder {
 	if c.Embedder != nil {
 		return c.Embedder
 	}
-	return embedder.NewTFIDF(c.EmbedDims)
+	panic("vecgo: Service created without an embedder — configure embed_provider in vector config")
 }
 
 // DefaultConfig returns sensible defaults for the vector service.

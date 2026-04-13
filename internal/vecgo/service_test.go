@@ -7,9 +7,22 @@ import (
 
 	"conduit/internal/tools/types"
 
+	"github.com/jefflaplante/vecgo/embedder"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testEmbedder returns a small TF-IDF embedder suitable for unit tests.
+// TF-IDF is fine for test correctness — it's only unsuitable for real semantic search.
+func testEmbedder() embedder.Embedder {
+	return embedder.NewTFIDF(128)
+}
+
+func testConfig() Config {
+	cfg := DefaultConfig()
+	cfg.Embedder = testEmbedder()
+	return cfg
+}
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
@@ -27,7 +40,7 @@ func TestInterfaceCompliance(t *testing.T) {
 }
 
 func TestNewServiceInMemory(t *testing.T) {
-	svc, err := NewService(DefaultConfig())
+	svc, err := NewService(testConfig())
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 	defer svc.Close()
@@ -35,7 +48,7 @@ func TestNewServiceInMemory(t *testing.T) {
 
 func TestNewServiceWithSQLite(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.vector.db")
-	cfg := DefaultConfig()
+	cfg := testConfig()
 	cfg.DBPath = dbPath
 
 	svc, err := NewService(cfg)
@@ -45,7 +58,7 @@ func TestNewServiceWithSQLite(t *testing.T) {
 }
 
 func TestIndexAndSearch(t *testing.T) {
-	svc, err := NewService(DefaultConfig())
+	svc, err := NewService(testConfig())
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -70,7 +83,7 @@ func TestIndexAndSearch(t *testing.T) {
 }
 
 func TestSearchEmptyIndex(t *testing.T) {
-	svc, err := NewService(DefaultConfig())
+	svc, err := NewService(testConfig())
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -81,7 +94,7 @@ func TestSearchEmptyIndex(t *testing.T) {
 }
 
 func TestRemove(t *testing.T) {
-	svc, err := NewService(DefaultConfig())
+	svc, err := NewService(testConfig())
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -112,7 +125,7 @@ func TestPersistAndReload(t *testing.T) {
 	ctx := context.Background()
 
 	// Create service, index data, save, close.
-	cfg := DefaultConfig()
+	cfg := testConfig()
 	cfg.DBPath = dbPath
 
 	svc1, err := NewService(cfg)
@@ -133,10 +146,17 @@ func TestPersistAndReload(t *testing.T) {
 }
 
 func TestDefaultsAppliedForZeroConfig(t *testing.T) {
-	// All-zero Config should get defaults filled in.
-	svc, err := NewService(Config{})
+	// All-zero Config should get defaults filled in (embedder still required).
+	cfg := Config{Embedder: testEmbedder()}
+	svc, err := NewService(cfg)
 	require.NoError(t, err)
 	defer svc.Close()
 	assert.Equal(t, 500, svc.cfg.ChunkSize)
 	assert.Equal(t, 4096, svc.cfg.EmbedDims)
+}
+
+func TestNewServicePanicsWithoutEmbedder(t *testing.T) {
+	assert.Panics(t, func() {
+		NewService(Config{}) //nolint:errcheck
+	}, "should panic when no embedder is configured")
 }

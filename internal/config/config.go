@@ -94,9 +94,10 @@ type VectorConfig struct {
 	Enabled       bool               `json:"enabled"`
 	Path          string             `json:"path,omitempty"`           // Path to vector DB file (derived from gateway DB if empty)
 	ChunkSize     int                `json:"chunk_size,omitempty"`     // Max tokens per chunk (default 500)
-	EmbedDims     int                `json:"embed_dims,omitempty"`     // Embedding dimensions (default 4096 for TF-IDF, 1536 for OpenAI)
-	EmbedProvider string             `json:"embed_provider,omitempty"` // "tfidf" (default), "openai"
+	EmbedDims     int                `json:"embed_dims,omitempty"`     // Embedding dimensions (0 = use embedder default: 768 Ollama, 1536 OpenAI)
+	EmbedProvider string             `json:"embed_provider,omitempty"` // "" or "auto" (default), "ollama", "openai"
 	OpenAI        *OpenAIEmbedConfig `json:"openai,omitempty"`
+	Ollama        *OllamaEmbedConfig `json:"ollama,omitempty"`
 }
 
 // STTConfig holds configuration for speech-to-text transcription.
@@ -110,7 +111,13 @@ type STTConfig struct {
 // OpenAIEmbedConfig holds configuration for OpenAI embedding provider.
 type OpenAIEmbedConfig struct {
 	APIKey string `json:"api_key,omitempty" cfg:"env"` // Supports ${ENV_VAR} expansion
-	Model  string `json:"model,omitempty"`   // Default: "text-embedding-3-small"
+	Model  string `json:"model,omitempty"`             // Default: "text-embedding-3-small"
+}
+
+// OllamaEmbedConfig holds configuration for the Ollama embedding provider.
+type OllamaEmbedConfig struct {
+	Host  string `json:"host,omitempty"`  // Default: OLLAMA_HOST env or http://localhost:11434
+	Model string `json:"model,omitempty"` // Default: nomic-embed-text
 }
 
 // DeriveVectorDBPath returns a vector DB path derived from the gateway DB path.

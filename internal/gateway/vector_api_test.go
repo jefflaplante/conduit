@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/jefflaplante/vecgo/embedder"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,7 +17,10 @@ import (
 // newTestVectorService creates an in-memory VecGo service for testing.
 func newTestVectorService(t *testing.T) *vecgoservice.Service {
 	t.Helper()
-	svc, err := vecgoservice.NewService(vecgoservice.Config{EmbedDims: 128})
+	svc, err := vecgoservice.NewService(vecgoservice.Config{
+		EmbedDims: 128,
+		Embedder:  embedder.NewTFIDF(128),
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
 	return svc

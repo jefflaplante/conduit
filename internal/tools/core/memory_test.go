@@ -223,9 +223,8 @@ func TestReciprocalRankFusion_Deduplication(t *testing.T) {
 	merged := reciprocalRankFusion(list1, list2)
 	assert.Len(t, merged, 1, "duplicate results should be merged")
 
-	// Score should be sum of both lists' contributions
-	expectedScore := 1.0/float64(rrfK+1) + 1.0/float64(rrfK+1)
-	assert.InDelta(t, expectedScore, merged[0].Score, 0.0001)
+	// Score should be 1.0 (ranked #0 in both lists, normalized)
+	assert.InDelta(t, 1.0, merged[0].Score, 0.0001)
 }
 
 func TestResultDeduplicationKey_FilesVsSessions(t *testing.T) {
