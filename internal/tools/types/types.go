@@ -175,6 +175,11 @@ type VectorService interface {
 	Close() error
 }
 
+// VectorIndexer provides on-demand vector indexing of workspace files.
+type VectorIndexer interface {
+	EnsureIndexed(ctx context.Context, relativePath string)
+}
+
 // BrainTier represents a memory tier in the cognitive architecture.
 type BrainTier string
 
@@ -308,6 +313,7 @@ type ToolServices struct {
 	Gateway       GatewayService // Interface for gateway operations
 	Searcher      SearchService  // FTS5 full-text search
 	VectorSearch  VectorService  // Optional vector/semantic search
+	VectorIndexer VectorIndexer  // Optional on-demand vector indexer
 	MQTTService   MQTTService    // Optional MQTT event ingest
 	Brain         BrainService      // Optional tiered memory (LTM + working + scratchpad)
 	BrainFTS      BrainFTSSearcher  // Optional FTS5 search over brain LTM

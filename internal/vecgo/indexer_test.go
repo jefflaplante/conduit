@@ -2,6 +2,7 @@ package vecgo
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	_ "modernc.org/sqlite"
 )
 
 // newTestService creates an in-memory VecGo service for testing.
@@ -18,6 +21,18 @@ func newTestService(t *testing.T) *Service {
 	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
 	return svc
+}
+
+// newTestServiceWithDB creates a VecGo service backed by a temp SQLite file.
+func newTestServiceWithDB(t *testing.T) (*Service, string) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test.vector.db")
+	cfg := testConfig()
+	cfg.DBPath = dbPath
+	svc, err := NewService(cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { svc.Close() })
+	return svc, dbPath
 }
 
 // startTestIndexer creates an Indexer and launches its embed worker so that
@@ -31,6 +46,9 @@ func startTestIndexer(t *testing.T, svc *Service, cfg IndexerConfig) *Indexer {
 		cancel()
 		close(idx.workCh)
 		<-idx.workerDone
+		if idx.hashDB != nil {
+			idx.hashDB.Close()
+		}
 	})
 	return idx
 }
@@ -38,6 +56,19 @@ func startTestIndexer(t *testing.T, svc *Service, cfg IndexerConfig) *Indexer {
 func writeTestFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+}
+
+// waitForTrackedFiles polls until the indexer tracks the expected number of files.
+func waitForTrackedFiles(t *testing.T, idx *Indexer, expected int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if idx.Status().TrackedFiles == expected {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d tracked files, got %d", expected, idx.Status().TrackedFiles)
 }
 
 func TestIndexer_IndexNow_EmptyWorkspace(t *testing.T) {
@@ -266,7 +297,8 @@ func TestIndexer_Start_InitialScan(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { idx.Stop() })
 
-	assert.Equal(t, 1, idx.Status().TrackedFiles)
+	// Start is non-blocking now; wait for the staggered scan to complete.
+	waitForTrackedFiles(t, idx, 1, 5*time.Second)
 }
 
 func TestIndexer_StartStop_WithPolling(t *testing.T) {
@@ -285,6 +317,9 @@ func TestIndexer_StartStop_WithPolling(t *testing.T) {
 
 	err := idx.Start(ctx)
 	require.NoError(t, err)
+
+	// Wait for staggered scan to finish
+	waitForTrackedFiles(t, idx, 1, 5*time.Second)
 
 	// Give polling a chance to run at least once
 	time.Sleep(250 * time.Millisecond)
@@ -386,4 +421,261 @@ func TestIndexer_EmbedPacing(t *testing.T) {
 	// 3 files with 50ms pacing = at least 100ms (pacing between, not after last)
 	assert.GreaterOrEqual(t, elapsed, 100*time.Millisecond,
 		"pacing should add delay between embedding calls")
+}
+
+// --- Persistent hash tests ---
+
+func TestIndexer_PersistentHashes_SurviveRestart(t *testing.T) {
+	svc, dbPath := newTestServiceWithDB(t)
+	workspaceDir := t.TempDir()
+
+	writeTestFile(t, workspaceDir, "persist.md", "# Persist\n\nThis content should survive restart.\n")
+	writeTestFile(t, workspaceDir, "another.md", "# Another\n\nAnother file.\n")
+
+	// First indexer: index files and persist hashes
+	idx1 := startTestIndexer(t, svc, IndexerConfig{
+		WorkspaceDir: workspaceDir,
+		DBPath:       dbPath,
+	})
+	result1, err := idx1.IndexNow(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, result1.FilesIndexed)
+	assert.Equal(t, 0, result1.FilesSkipped)
+
+	// Second indexer: same DB, should skip unchanged files
+	idx2 := startTestIndexer(t, svc, IndexerConfig{
+		WorkspaceDir: workspaceDir,
+		DBPath:       dbPath,
+	})
+
+	// Load persisted hashes
+	require.NoError(t, idx2.loadHashes(context.Background()))
+	assert.Equal(t, 2, len(idx2.hashes), "should have loaded 2 persisted hashes")
+
+	// IndexNow should skip both files
+	result2, err := idx2.IndexNow(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, result2.FilesIndexed, "unchanged files should be skipped after restart")
+	assert.Equal(t, 2, result2.FilesSkipped)
+}
+
+func TestIndexer_PersistentHashes_DetectsChanges(t *testing.T) {
+	svc, dbPath := newTestServiceWithDB(t)
+	workspaceDir := t.TempDir()
+
+	writeTestFile(t, workspaceDir, "mutable.md", "# Original\n\nOriginal content.\n")
+
+	// First indexer: index the file
+	idx1 := startTestIndexer(t, svc, IndexerConfig{
+		WorkspaceDir: workspaceDir,
+		DBPath:       dbPath,
+	})
+	result1, err := idx1.IndexNow(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, result1.FilesIndexed)
+
+	// Modify the file
+	writeTestFile(t, workspaceDir, "mutable.md", "# Changed\n\nDifferent content now.\n")
+
+	// Second indexer: should detect the change
+	idx2 := startTestIndexer(t, svc, IndexerConfig{
+		WorkspaceDir: workspaceDir,
+		DBPath:       dbPath,
+	})
+	require.NoError(t, idx2.loadHashes(context.Background()))
+
+	result2, err := idx2.IndexNow(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, result2.FilesIndexed, "changed file should be re-indexed")
+	assert.Equal(t, 0, result2.FilesSkipped)
+}
+
+func TestIndexer_HashPersistence_DeleteOnRemove(t *testing.T) {
+	svc, dbPath := newTestServiceWithDB(t)
+	workspaceDir := t.TempDir()
+
+	writeTestFile(t, workspaceDir, "removable.md", "# Removable\n\nWill be removed.\n")
+
+	idx := startTestIndexer(t, svc, IndexerConfig{
+		WorkspaceDir: workspaceDir,
+		DBPath:       dbPath,
+	})
+
+	// Index the file
+	require.NoError(t, idx.IndexFile(context.Background(), "removable.md"))
+	assert.Equal(t, 1, idx.Status().TrackedFiles)
+
+	// Verify hash exists in DB
+	var count int
+	require.NoError(t, idx.hashDB.QueryRow("SELECT COUNT(*) FROM file_hashes WHERE path = ?", "removable.md").Scan(&count))
+	assert.Equal(t, 1, count, "hash should be persisted in DB")
+
+	// Remove the file from index
+	require.NoError(t, idx.RemoveFile(context.Background(), "removable.md"))
+	assert.Equal(t, 0, idx.Status().TrackedFiles)
+
+	// Verify hash is deleted from DB
+	require.NoError(t, idx.hashDB.QueryRow("SELECT COUNT(*) FROM file_hashes WHERE path = ?", "removable.md").Scan(&count))
+	assert.Equal(t, 0, count, "hash should be deleted from DB after removal")
+}
+
+func TestIndexer_StaggeredScan_DoesNotBlock(t *testing.T) {
+	svc := newTestService(t)
+	workspaceDir := t.TempDir()
+
+	// Create several files
+	for i := 0; i < 10; i++ {
+		writeTestFile(t, workspaceDir, filepath.Base(filepath.Join(workspaceDir, "file"+string(rune('a'+i))+".md")),
+			"# File\n\nContent for pacing test.\n")
+	}
+
+	idx := NewIndexer(svc, IndexerConfig{
+		WorkspaceDir: workspaceDir,
+		EmbedPacing:  10 * time.Millisecond,
+		PollInterval: 0, // No polling
+	})
+
+	start := time.Now()
+	err := idx.Start(context.Background())
+	startDuration := time.Since(start)
+	require.NoError(t, err)
+	t.Cleanup(func() { idx.Stop() })
+
+	// Start() should return almost immediately (non-blocking)
+	assert.Less(t, startDuration, 500*time.Millisecond,
+		"Start() should return quickly, not block on indexing")
+
+	// Eventually all files get indexed
+	waitForTrackedFiles(t, idx, 10, 10*time.Second)
+}
+
+func TestIndexer_EnsureIndexed_QueuesNewFile(t *testing.T) {
+	svc := newTestService(t)
+	workspaceDir := t.TempDir()
+
+	idx := NewIndexer(svc, IndexerConfig{
+		WorkspaceDir: workspaceDir,
+		PollInterval: 0,
+	})
+	err := idx.Start(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(func() { idx.Stop() })
+
+	// Wait for initial scan (empty workspace)
+	time.Sleep(100 * time.Millisecond)
+
+	// Create a new file after startup
+	writeTestFile(t, workspaceDir, "ondemand.md", "# On Demand\n\nTriggered by access.\n")
+
+	// Trigger on-demand indexing
+	idx.EnsureIndexed(context.Background(), "ondemand.md")
+
+	// Should eventually be tracked
+	waitForTrackedFiles(t, idx, 1, 5*time.Second)
+}
+
+func TestIndexer_EnsureIndexed_SkipsCurrentFile(t *testing.T) {
+	svc := newTestService(t)
+	workspaceDir := t.TempDir()
+
+	writeTestFile(t, workspaceDir, "current.md", "# Current\n\nAlready indexed.\n")
+
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	idx.started.Store(true) // Simulate Start() having been called
+
+	// Index the file first
+	require.NoError(t, idx.IndexFile(context.Background(), "current.md"))
+	assert.Equal(t, 1, idx.Status().TrackedFiles)
+
+	// EnsureIndexed should return without queuing (file unchanged)
+	idx.EnsureIndexed(context.Background(), "current.md")
+
+	// Still only 1 tracked file, no re-indexing
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, 1, idx.Status().TrackedFiles)
+}
+
+func TestIndexer_EnsureIndexed_BeforeStart(t *testing.T) {
+	svc := newTestService(t)
+	workspaceDir := t.TempDir()
+
+	writeTestFile(t, workspaceDir, "early.md", "# Early\n\nBefore start.\n")
+
+	idx := NewIndexer(svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	// Don't call Start() — EnsureIndexed should be a no-op
+	idx.EnsureIndexed(context.Background(), "early.md")
+
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, 0, idx.Status().TrackedFiles, "should not index before Start()")
+}
+
+// --- .vectorignore integration tests ---
+
+func TestIndexer_RespectsVectorignore(t *testing.T) {
+	svc := newTestService(t)
+	workspaceDir := t.TempDir()
+
+	// Create .vectorignore
+	ignoreContent := "scratch.md\ndrafts/\n"
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceDir, ".vectorignore"), []byte(ignoreContent), 0644))
+
+	// Create files — some should be ignored
+	writeTestFile(t, workspaceDir, "important.md", "# Important\n\nIndex this.\n")
+	writeTestFile(t, workspaceDir, "scratch.md", "# Scratch\n\nIgnore this.\n")
+
+	draftsDir := filepath.Join(workspaceDir, "drafts")
+	require.NoError(t, os.MkdirAll(draftsDir, 0755))
+	writeTestFile(t, draftsDir, "wip.md", "# WIP\n\nIgnore this too.\n")
+
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
+	result, err := idx.IndexNow(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, result.FilesIndexed, "only important.md should be indexed")
+	assert.Equal(t, 1, idx.Status().TrackedFiles)
+}
+
+func TestIndexer_VectorignoreWithIndexFile(t *testing.T) {
+	svc := newTestService(t)
+	workspaceDir := t.TempDir()
+
+	ignoreContent := "scratch.md\n"
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceDir, ".vectorignore"), []byte(ignoreContent), 0644))
+
+	writeTestFile(t, workspaceDir, "scratch.md", "# Scratch\n\nIgnored.\n")
+
+	idx := startTestIndexer(t, svc, IndexerConfig{WorkspaceDir: workspaceDir})
+
+	// IndexFile should silently skip ignored files
+	err := idx.IndexFile(context.Background(), "scratch.md")
+	require.NoError(t, err)
+	assert.Equal(t, 0, idx.Status().TrackedFiles)
+}
+
+func TestIndexer_HashDB_DirectQuery(t *testing.T) {
+	_, dbPath := newTestServiceWithDB(t)
+
+	// Open the same DB to verify the table exists
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=journal_mode%3Dwal&_pragma=busy_timeout%3D5000")
+	require.NoError(t, err)
+	defer db.Close()
+
+	// The indexer should have created the file_hashes table
+	svc2, _ := newTestServiceWithDB(t) // separate service won't conflict
+	workspaceDir := t.TempDir()
+	writeTestFile(t, workspaceDir, "test.md", "# Test\n")
+
+	idx := startTestIndexer(t, svc2, IndexerConfig{
+		WorkspaceDir: workspaceDir,
+		DBPath:       dbPath,
+	})
+	require.NoError(t, idx.IndexFile(context.Background(), "test.md"))
+
+	// Query directly
+	var path, hash, indexedAt string
+	err = idx.hashDB.QueryRow("SELECT path, hash, indexed_at FROM file_hashes WHERE path = ?", "test.md").Scan(&path, &hash, &indexedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "test.md", path)
+	assert.NotEmpty(t, hash)
+	assert.NotEmpty(t, indexedAt)
 }

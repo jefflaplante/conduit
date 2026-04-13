@@ -660,6 +660,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 				}
 				gw.vectorIndexer = vecgoservice.NewIndexer(vectorSvc, vecgoservice.IndexerConfig{
 					WorkspaceDir: ftsWorkspaceDir,
+					DBPath:       vectorSvc.DBPath(),
 					PollInterval: 30 * time.Second,
 					EmbedTimeout: embedTimeout,
 					EmbedPacing:  embedPacing,
@@ -849,6 +850,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		Gateway:       gw, // Gateway implements GatewayService interface
 		Searcher:      ftsSearcher,
 		VectorSearch:  vectorSearch,
+		VectorIndexer: gw.vectorIndexer,
 		MQTTService:   mqttSvc,
 		Brain:         brainSvcAdapter,
 		BrainFTS:      brainFTS,
