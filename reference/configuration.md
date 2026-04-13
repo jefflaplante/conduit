@@ -573,6 +573,41 @@ Optional MQTT event ingest for IoT/home automation. See [MQTT Integration](mqtt.
 | `buffer_max_topics` | int | `500` | Max tracked topics |
 | `publish_allowed` | bool | `false` | Allow AI to publish messages |
 
+### Vector Search (Vecgo)
+
+Semantic search over workspace memory files using real embedding models. **Batteries-included**: auto-detects Ollama at localhost and enables with zero config. See [Vecgo Reference](vecgo.md) for full documentation.
+
+#### Zero Config (Recommended)
+
+Just run Ollama on localhost with `nomic-embed-text` pulled. Vecgo auto-enables at startup.
+
+#### Explicit Configuration
+
+```json
+{
+  "vector": {
+    "enabled": true,
+    "embed_provider": "ollama",
+    "ollama": {
+      "host": "http://localhost:11434",
+      "model": "nomic-embed-text"
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | auto | Explicit enable/disable. Omit to auto-detect from environment |
+| `path` | string | `""` | Vector DB path. Empty = derived from gateway DB |
+| `chunk_size` | int | `500` | Max tokens per Markdown chunk |
+| `embed_dims` | int | `0` | Embedding dimensions. 0 = use embedder default |
+| `embed_provider` | string | `"auto"` | `"auto"`, `"ollama"`, `"openai"` |
+| `ollama.host` | string | localhost | Ollama API endpoint (`$OLLAMA_HOST` overrides) |
+| `ollama.model` | string | `nomic-embed-text` | Embedding model name |
+| `openai.api_key` | string | `""` | OpenAI API key (supports `${ENV_VAR}`) |
+| `openai.model` | string | `text-embedding-3-small` | OpenAI embedding model |
+
 ### Brain (Cognitive Memory)
 
 Tiered cognitive memory system that gives the AI agent persistent memory across interactions. Stores facts in three tiers: long-term memory (SQLite-persisted), working memory (in-process per session), and a scratchpad stack (temporary LIFO).
@@ -833,6 +868,7 @@ Common environment variables:
 | `ANTHROPIC_OAUTH_TOKEN` | OAuth token for Claude Code compatibility |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token |
 | `OPENAI_API_KEY` | OpenAI API key (used for STT/Whisper and vector embeddings) |
+| `OLLAMA_HOST` | Ollama API endpoint for vector embeddings (e.g., `http://gpu-server:11434`) |
 | `BRAVE_API_KEY` | Brave Search API key |
 | `MQTT_USERNAME` | MQTT broker username |
 | `MQTT_PASSWORD` | MQTT broker password |
@@ -877,6 +913,7 @@ cp configs/config.example.json config.json
 
 - [z.ai / GLM](z-ai.md) — Setup guide for z.ai's GLM models
 - [Brain & REM Sleep](brain.md) — Full architecture reference for cognitive memory
+- [Vecgo (Semantic Search)](vecgo.md) — Vector search setup, Ollama/OpenAI embeddings
 - [SRE Tools](sre-tools.md) — PagerDuty, Datadog, and incident correlation
 - [Google Workspace](google-workspace.md) — Gmail and Calendar integration
 - [Remote SSH](remote-ssh.md) — Multi-host SSH execution

@@ -63,6 +63,7 @@ Files are loaded first-write-wins — earlier files take priority:
 | `channels[*].config.*` | `"${TELEGRAM_BOT_TOKEN}"` |
 | `tools.services.*.*` | `"${BRAVE_API_KEY}"` |
 | `vector.openai.api_key` | `"${OPENAI_API_KEY}"` |
+| `vector.ollama.host` | `"${OLLAMA_HOST}"` (auto-detected) |
 | `data_dir` | `"${CONDUIT_DATA_DIR}"` |
 
 Expansion uses Go's `os.ExpandEnv` — undefined vars expand to empty string, no error.
@@ -115,6 +116,9 @@ OPENAI_API_KEY=sk-...
 
 # Channels
 TELEGRAM_BOT_TOKEN=7123456789:AAF...
+
+# Vector Embeddings (optional — Ollama at localhost auto-detected)
+OLLAMA_HOST=http://localhost:11434
 
 # Search
 BRAVE_API_KEY=BSA...
