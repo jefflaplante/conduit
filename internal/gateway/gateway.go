@@ -160,6 +160,9 @@ type Gateway struct {
 
 	// Debug ring buffer (for /ring command)
 	ringBuffer *debuglog.RingBuffer
+
+	// Graceful shutdown
+	shutdownMgr *ShutdownManager
 }
 
 // Client represents a WebSocket client connection
@@ -527,6 +530,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 			Subprotocols: []string{"conduit-auth"},
 		},
 	}
+
+	gw.shutdownMgr = NewShutdownManager(logger, gw)
 
 	// Register token revocation handler to close WebSocket connections
 	// using a revoked token.
@@ -1090,8 +1095,19 @@ func (g *Gateway) createInternalToken(clientName string) (string, error) {
 	return resp.Token, nil
 }
 
+// ShutdownManager returns the gateway's shutdown manager for external callers.
+func (g *Gateway) ShutdownManager() *ShutdownManager {
+	return g.shutdownMgr
+}
+
 // Start starts the gateway server
 func (g *Gateway) Start(ctx context.Context) error {
+	// Wrap the incoming context so ShutdownManager can cancel it independently
+	// of signal-based cancellation from main.go.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	g.shutdownMgr.SetCancel(cancel)
+
 	// Store the gateway lifecycle context for WebSocket handlers.
 	// HTTP request contexts (r.Context()) are cancelled when the handler returns,
 	// which is immediate after WebSocket upgrade. WebSocket goroutines need a
@@ -1680,6 +1696,13 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 
 		switch msg := parsed.(type) {
 		case *protocol.ChatMessage:
+			if g.shutdownMgr != nil && g.shutdownMgr.IsDraining() {
+				g.sendToClient(client, map[string]string{
+					"type":    "system",
+					"content": "Gateway is restarting — not accepting new requests.",
+				})
+				continue
+			}
 			select {
 			case g.msgSemaphore <- struct{}{}:
 				go func() {
@@ -1776,6 +1799,11 @@ func (g *Gateway) processMessages(ctx context.Context) {
 	for {
 		select {
 		case msg := <-g.channelManager.ReceiveMessages():
+			if g.shutdownMgr != nil && g.shutdownMgr.IsDraining() {
+				g.logger.Warn("rejecting channel message during shutdown drain",
+					"channel_id", msg.ChannelID)
+				continue
+			}
 			select {
 			case g.msgSemaphore <- struct{}{}:
 				go func() {
