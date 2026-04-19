@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"conduit/internal/sessions"
 	"conduit/internal/version"
@@ -35,10 +36,12 @@ func (g *Gateway) GetGatewayStatus() (map[string]interface{}, error) {
 	}, nil
 }
 
-// RestartGateway restarts the gateway
+// RestartGateway initiates a graceful restart via the ShutdownManager.
 func (g *Gateway) RestartGateway(ctx context.Context) error {
-	// TODO: Implement proper restart
-	return fmt.Errorf("restart not yet implemented")
+	if g.shutdownMgr == nil {
+		return fmt.Errorf("shutdown manager not initialized")
+	}
+	return g.shutdownMgr.BeginShutdown("gateway tool restart", 30*time.Second)
 }
 
 // GetChannelStatus returns channel adapter status

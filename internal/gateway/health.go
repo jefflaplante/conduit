@@ -63,7 +63,9 @@ func (g *Gateway) handleHealthEnhanced(w http.ResponseWriter, r *http.Request) {
 	versionInfo := version.Info()
 	status := "healthy"
 
-	if g.gatewayMetrics != nil {
+	if g.shutdownMgr != nil && g.shutdownMgr.IsDraining() {
+		status = "draining"
+	} else if g.gatewayMetrics != nil {
 		uptime = g.gatewayMetrics.GetUptime().String()
 		if g.gatewayMetrics.Version != "" {
 			versionInfo = g.gatewayMetrics.Version
