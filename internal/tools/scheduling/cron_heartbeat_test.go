@@ -71,6 +71,9 @@ func (m *mockGatewayService) GetSchedulerStatus() map[string]interface{} {
 func (m *mockGatewayService) SendToSession(ctx context.Context, sessionKey, label, message string) error {
 	return nil
 }
+func (m *mockGatewayService) SendToSessionWake(ctx context.Context, sessionKey, label, message string) error {
+	return nil
+}
 func (m *mockGatewayService) SpawnSubAgent(ctx context.Context, task, agentId, model, label string, timeoutSeconds int) (string, error) {
 	return "", nil
 }
