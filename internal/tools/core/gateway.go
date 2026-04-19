@@ -191,7 +191,7 @@ func (t *GatewayTool) restart(ctx context.Context) (*types.ToolResult, error) {
 
 	return &types.ToolResult{
 		Success: true,
-		Content: "Gateway restart initiated successfully",
+		Content: "Gateway restart initiated. Drain timeout: 30s. Active sessions preserved in breadcrumb for resumption after restart.",
 		Data: map[string]interface{}{
 			"action":    "restart",
 			"timestamp": time.Now(),

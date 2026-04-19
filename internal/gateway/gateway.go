@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -1358,6 +1359,8 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	g.logger.Info("gateway started", "port", g.config.Port)
 
+	g.processRestartBreadcrumb()
+
 	// Wait for context cancellation
 	<-ctx.Done()
 
@@ -2490,6 +2493,47 @@ type summaryAIResponseAdapter struct {
 // GetContent returns the response content
 func (a *summaryAIResponseAdapter) GetContent() string {
 	return a.content
+}
+
+func (g *Gateway) processRestartBreadcrumb() {
+	dataDir := g.config.DataDir
+	if dataDir == "" {
+		dataDir = "."
+	}
+
+	path := filepath.Join(dataDir, ".conduit-restart.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	var breadcrumb RestartBreadcrumb
+	if err := json.Unmarshal(data, &breadcrumb); err != nil {
+		g.logger.Warn("failed to parse restart breadcrumb", "error", err, "path", path)
+		os.Remove(path)
+		return
+	}
+
+	resumed := 0
+	for _, s := range breadcrumb.ActiveSessions {
+		session, err := g.sessions.GetSession(s.SessionKey)
+		if err != nil || session == nil {
+			g.logger.Debug("skipping stale session from breadcrumb", "session", s.SessionKey)
+			continue
+		}
+
+		msg := fmt.Sprintf("Gateway restarted successfully at %s. Reason: %s. Previous sessions have been restored — you may continue where you left off.",
+			breadcrumb.Timestamp.Format(time.RFC3339), breadcrumb.Reason)
+
+		if _, err := g.sessions.AddMessage(s.SessionKey, "assistant", msg, nil); err != nil {
+			g.logger.Warn("failed to inject restart resume message", "session", s.SessionKey, "error", err)
+			continue
+		}
+		resumed++
+	}
+
+	os.Remove(path)
+	g.logger.Info("processed restart breadcrumb", "sessions_resumed", resumed, "reason", breadcrumb.Reason)
 }
 
 // convertSummaryFileConfigs converts config types to workspace types

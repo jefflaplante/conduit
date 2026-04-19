@@ -12,6 +12,8 @@ WorkingDirectory=/home/conduit/conduit
 
 # Binary and config
 ExecStart=/home/conduit/conduit/bin/conduit server --config /home/conduit/conduit/config.json
+# SIGHUP triggers graceful drain then re-exec (systemctl reload conduit)
+ExecReload=/bin/kill -HUP $MAINPID
 
 # Environment
 Environment=PATH=/usr/local/go/bin:/usr/bin:/bin:/usr/local/bin

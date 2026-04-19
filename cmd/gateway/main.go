@@ -7,7 +7,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"conduit/internal/auth"
 	"conduit/internal/config"
@@ -81,6 +84,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "config.json", "config file path")
 	rootCmd.PersistentFlags().StringVar(&dbPath, "database", "", "database file path (auto-detected if not specified)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose logging")
+	rootCmd.PersistentFlags().String("pidfile", "", "path to PID file (default: /tmp/conduit.pid)")
 
 	// Server command flags
 	serverCmd.Flags().IntVarP(&port, "port", "p", 18789, "WebSocket server port")
@@ -154,6 +158,24 @@ func initConfig() {
 	}
 }
 
+func isContainer() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	return os.Getenv("KUBERNETES_SERVICE_HOST") != ""
+}
+
+func reExec() {
+	exe, err := os.Executable()
+	if err != nil {
+		log.Fatalf("Failed to resolve executable path: %v", err)
+	}
+	log.Printf("Re-executing %s", exe)
+	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
+		log.Fatalf("Failed to re-exec: %v", err)
+	}
+}
+
 func runServer() error {
 	// Initialize data directory and load .env files before config
 	// so environment variables are available for ${ENV_VAR} expansion.
@@ -190,21 +212,58 @@ func runServer() error {
 		return fmt.Errorf("failed to create gateway: %w", err)
 	}
 
+	// Write pidfile
+	pidPath := resolvePidfilePath()
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		log.Printf("Warning: failed to write pidfile %s: %v", pidPath, err)
+	} else {
+		defer os.Remove(pidPath)
+		log.Printf("PID %d written to %s", os.Getpid(), pidPath)
+	}
+
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	var gatewayReady atomic.Bool
+	var hupInFlight atomic.Bool
+
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	go func() {
-		sig := <-sigCh
-		log.Printf("Received signal: %v", sig)
-		cancel()
+		for sig := range sigCh {
+			switch sig {
+			case syscall.SIGHUP:
+				if !gatewayReady.Load() {
+					log.Println("SIGHUP received before gateway ready, exiting")
+					cancel()
+					return
+				}
+				if !hupInFlight.CompareAndSwap(false, true) {
+					log.Println("SIGHUP already in progress, ignoring")
+					continue
+				}
+				log.Println("SIGHUP received, initiating graceful restart")
+				sm := gw.ShutdownManager()
+				if !isContainer() {
+					sm.SetOnShutdown(reExec)
+				}
+				if err := sm.BeginShutdown("SIGHUP", 30*time.Second); err != nil {
+					log.Printf("Failed to begin shutdown: %v", err)
+					hupInFlight.Store(false)
+				}
+			case syscall.SIGINT, syscall.SIGTERM:
+				log.Printf("Received signal: %v", sig)
+				cancel()
+				return
+			}
+		}
 	}()
 
 	// Start the gateway
 	log.Printf("Starting Conduit Gateway on port %d", cfg.Port)
+	gatewayReady.Store(true)
 	if err := gw.Start(ctx); err != nil {
 		return fmt.Errorf("gateway failed: %w", err)
 	}
