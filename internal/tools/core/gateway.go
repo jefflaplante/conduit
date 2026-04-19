@@ -542,7 +542,7 @@ func (t *GatewayTool) reloadSkills(ctx context.Context) (*types.ToolResult, erro
 	if count == 0 {
 		content += " No SKILL.md files found in skill search paths."
 	} else {
-		content += " All skill tools are callable immediately."
+		content += " System prompt cache cleared — new skills available on next turn."
 	}
 
 	return &types.ToolResult{
