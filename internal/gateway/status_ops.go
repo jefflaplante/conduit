@@ -3,7 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"conduit/internal/sessions"
 	"conduit/internal/version"
@@ -98,7 +98,8 @@ func (g *Gateway) ReloadSkillTools(ctx context.Context) (int, error) {
 	}
 	// Re-register skill tools in the registry
 	count := g.tools.RefreshSkillTools()
-	log.Printf("Skills hot-reloaded: %d skill tools registered", count)
+	g.agentSystem.InvalidatePromptCache()
+	slog.Info("Skills hot-reloaded", "skill_tools", count)
 	return count, nil
 }
 
