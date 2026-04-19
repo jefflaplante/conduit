@@ -54,14 +54,15 @@ type BreadcrumbSession struct {
 // ShutdownManager orchestrates graceful shutdown in phases:
 // DRAINING -> TERMINATE -> STOPPED
 type ShutdownManager struct {
-	logger       *slog.Logger
-	state        atomic.Int32
-	reason       string
-	drainTimeout time.Duration
-	mu           sync.Mutex
-	cancel       context.CancelFunc // cancels the gateway lifecycle context
-	gateway      *Gateway
-	onShutdown   func() // called after shutdown completes (e.g. re-exec)
+	logger        *slog.Logger
+	state         atomic.Int32
+	reason        string
+	triggerAction string
+	drainTimeout  time.Duration
+	mu            sync.Mutex
+	cancel        context.CancelFunc // cancels the gateway lifecycle context
+	gateway       *Gateway
+	onShutdown    func() // called after shutdown completes (e.g. re-exec)
 }
 
 func NewShutdownManager(logger *slog.Logger, gw *Gateway) *ShutdownManager {
@@ -89,6 +90,12 @@ func (sm *ShutdownManager) SetCancel(cancel context.CancelFunc) {
 func (sm *ShutdownManager) SetOnShutdown(fn func()) {
 	sm.mu.Lock()
 	sm.onShutdown = fn
+	sm.mu.Unlock()
+}
+
+func (sm *ShutdownManager) SetTriggerAction(action string) {
+	sm.mu.Lock()
+	sm.triggerAction = action
 	sm.mu.Unlock()
 }
 
@@ -243,8 +250,13 @@ func (sm *ShutdownManager) writeBreadcrumb() {
 	}
 	gw.clientMu.RUnlock()
 
+	sm.mu.Lock()
+	trigger := sm.triggerAction
+	sm.mu.Unlock()
+
 	breadcrumb := RestartBreadcrumb{
 		ActiveSessions: activeSessions,
+		TriggerAction:  trigger,
 		Reason:         sm.reason,
 		Timestamp:      time.Now(),
 	}

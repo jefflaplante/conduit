@@ -41,6 +41,7 @@ func (g *Gateway) RestartGateway(ctx context.Context) error {
 	if g.shutdownMgr == nil {
 		return fmt.Errorf("shutdown manager not initialized")
 	}
+	g.shutdownMgr.SetTriggerAction("gateway_tool")
 	return g.shutdownMgr.BeginShutdown("gateway tool restart", 30*time.Second)
 }
 
