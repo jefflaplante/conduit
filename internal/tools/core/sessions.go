@@ -231,6 +231,10 @@ func (t *SessionsSendTool) Parameters() map[string]interface{} {
 				"type":        "string",
 				"description": "Target session label (alternative to sessionKey)",
 			},
+			"wake": map[string]interface{}{
+				"type":        "boolean",
+				"description": "If true, immediately re-activate the target session so it processes the message now (like receiving a new user message). Defaults to false (message is queued for next activation).",
+			},
 		},
 		"required": []string{"message"},
 	}
@@ -247,6 +251,7 @@ func (t *SessionsSendTool) Execute(ctx context.Context, args map[string]interfac
 
 	sessionKey := toolargs.GetString(args, "sessionKey", "")
 	label := toolargs.GetString(args, "label", "")
+	wake := toolargs.GetBool(args, "wake", false)
 
 	if sessionKey == "" && label == "" {
 		return &types.ToolResult{
@@ -262,7 +267,12 @@ func (t *SessionsSendTool) Execute(ctx context.Context, args map[string]interfac
 		}, nil
 	}
 
-	err := t.services.Gateway.SendToSession(ctx, sessionKey, label, message)
+	var err error
+	if wake {
+		err = t.services.Gateway.SendToSessionWake(ctx, sessionKey, label, message)
+	} else {
+		err = t.services.Gateway.SendToSession(ctx, sessionKey, label, message)
+	}
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,
@@ -275,14 +285,20 @@ func (t *SessionsSendTool) Execute(ctx context.Context, args map[string]interfac
 		target = label
 	}
 
+	wakeNote := ""
+	if wake {
+		wakeNote = " (session woken for immediate processing)"
+	}
+
 	return &types.ToolResult{
 		Success: true,
-		Content: fmt.Sprintf("Message sent successfully to %s", target),
+		Content: fmt.Sprintf("Message sent successfully to %s%s", target, wakeNote),
 		Data: map[string]interface{}{
 			"target":     target,
 			"sessionKey": sessionKey,
 			"label":      label,
 			"message":    message,
+			"wake":       wake,
 		},
 	}, nil
 }

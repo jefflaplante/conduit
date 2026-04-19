@@ -36,6 +36,9 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 		return "", fmt.Errorf("cannot spawn sub-agent: parent context already canceled")
 	}
 
+	// Capture the parent session key now (before the goroutine), so we can wake it when done.
+	parentSessionKey := types.RequestSessionKey(ctx)
+
 	// Create a unique session key for the sub-agent
 	sessionKey := fmt.Sprintf("subagent_%d", time.Now().UnixNano())
 
@@ -99,21 +102,29 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 		// Store the result
 		_, _ = g.sessions.AddMessage(session.Key, "assistant", response.GetContent(), nil)
 
-		// Announce result if requested
+		result := response.GetContent()
+
+		// Announce result to channel if requested
 		if announce && parentChannelID != "" && parentUserID != "" {
-			result := response.GetContent()
-
-			// Check for silent response patterns - don't announce these
-			if result == "" || channels.IsSilentResponse(result) {
-				log.Printf("[SubAgent] Silent response, not announcing")
-				return
+			if result != "" && !channels.IsSilentResponse(result) {
+				announceText := result
+				if len(announceText) > 3500 {
+					announceText = announceText[:3500] + "\n\n_(truncated)_"
+				}
+				g.announceToParent(parentChannelID, parentUserID, announceText)
 			}
+		}
 
-			// Truncate if too long
-			if len(result) > 3500 {
-				result = result[:3500] + "\n\n_(truncated)_"
+		// Wake the parent session so it can process sub-agent output autonomously.
+		// This works regardless of announce mode — the parent session always gets woken.
+		if parentSessionKey != "" && result != "" && !channels.IsSilentResponse(result) {
+			wakeResult := result
+			if len(wakeResult) > 3500 {
+				wakeResult = wakeResult[:3500] + "\n\n_(truncated)_"
 			}
-			g.announceToParent(parentChannelID, parentUserID, result)
+			if wakeErr := g.SendToSessionWake(context.Background(), parentSessionKey, "", wakeResult); wakeErr != nil {
+				log.Printf("[SubAgent] Failed to wake parent session %s: %v", parentSessionKey, wakeErr)
+			}
 		}
 	}()
 

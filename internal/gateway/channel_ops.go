@@ -48,6 +48,7 @@ func (g *Gateway) GetAvailableTargets() []string {
 // The message is added to the target session's history as a "user" message
 // with source:inter_session metadata. No session wakeup — the message is
 // queued and processed on the target session's next activation.
+// Use SendToSessionWake to also trigger immediate processing.
 func (g *Gateway) SendToSession(ctx context.Context, sessionKey, label, message string) error {
 	// Resolve target session
 	var targetSession *sessions.Session
@@ -87,6 +88,60 @@ func (g *Gateway) SendToSession(ctx context.Context, sessionKey, label, message 
 
 	log.Printf("[SendToSession] Message delivered to session %s (via %s)",
 		targetSession.Key, map[bool]string{true: "key", false: "label"}[sessionKey != ""])
+
+	return nil
+}
+
+// SendToSessionWake sends a message to another session and then signals the session
+// to wake up and process it immediately. This is equivalent to SendToSession followed
+// by an immediate re-activation of the target session's AI processing loop.
+//
+// A recursion guard (wake_depth in session context) limits nesting to 3 levels deep
+// to prevent infinite wakeup loops when sessions message each other.
+func (g *Gateway) SendToSessionWake(ctx context.Context, sessionKey, label, message string) error {
+	// Resolve target session
+	var targetSession *sessions.Session
+	var err error
+
+	if sessionKey != "" {
+		targetSession, err = g.sessions.GetSession(sessionKey)
+		if err != nil {
+			return fmt.Errorf("session not found by key %q: %w", sessionKey, err)
+		}
+	} else if label != "" {
+		targetSession, err = g.sessions.GetSessionByLabel(label)
+		if err != nil {
+			return fmt.Errorf("session not found by label %q: %w", label, err)
+		}
+	} else {
+		return fmt.Errorf("either sessionKey or label must be provided")
+	}
+
+	// Build metadata for inter-session message
+	metadata := map[string]string{
+		"source": "inter_session",
+	}
+	if senderSession := types.RequestSessionKey(ctx); senderSession != "" {
+		metadata["sender_session"] = senderSession
+	}
+	if senderUser := types.RequestUserID(ctx); senderUser != "" {
+		metadata["sender_user"] = senderUser
+	}
+
+	// Add message to target session as "user" role
+	_, err = g.sessions.AddMessage(targetSession.Key, "user", message, metadata)
+	if err != nil {
+		return fmt.Errorf("failed to add message to session %q: %w", targetSession.Key, err)
+	}
+
+	log.Printf("[SendToSessionWake] Message delivered to session %s, signalling wake", targetSession.Key)
+
+	// Signal the wake listener (non-blocking: drop if buffer is full rather than blocking the caller)
+	select {
+	case g.sessionWake <- targetSession.Key:
+	default:
+		log.Printf("[SendToSessionWake] Wake channel full, session %s will process on next activation", targetSession.Key)
+	}
 
 	return nil
 }
