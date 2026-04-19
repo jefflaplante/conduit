@@ -415,7 +415,7 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		{name: "Voice/TTS", priority: 4, build: func() string { return buildVoiceSection(params) }},
 		{name: "Reactions", priority: 4, build: func() string { return buildReactionsSection(params) }},
 		{name: "Conduit CLI", priority: 4, build: func() string { return buildConduitCLISection(params.IsMinimal) }},
-		{name: "Self-Update", priority: 4, build: func() string { return buildSelfUpdateSection(params) }},
+		{name: "Gateway Actions", priority: 4, build: func() string { return buildSelfUpdateSection(params) }},
 	}
 
 	// Stable sort by priority (preserves order within same priority).
