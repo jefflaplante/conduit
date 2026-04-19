@@ -347,14 +347,12 @@ func buildConduitCLISection(isMinimal bool) string {
 
 	return `## Conduit CLI Quick Reference
 Conduit is controlled via subcommands. Do not invent commands.
-To manage the Gateway daemon service (start/stop/restart):
-- conduit status
-- conduit server
+Key commands: conduit server (start), conduit version, conduit tools, conduit token, conduit tui, conduit ssh-server, conduit maintenance, conduit backup.
 If unsure, ask the user to run ` + "`conduit help`" + ` (or ` + "`conduit --help`" + `) and paste the output.
 `
 }
 
-// buildSelfUpdateSection returns gateway self-update instructions
+// buildSelfUpdateSection returns gateway tool action reference
 func buildSelfUpdateSection(params *SectionParams) string {
 	if params.IsMinimal {
 		return ""
@@ -365,11 +363,10 @@ func buildSelfUpdateSection(params *SectionParams) string {
 		return ""
 	}
 
-	return `## Conduit Self-Update
-Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.
-Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.
-Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).
-After restart, Conduit pings the last active session automatically.
+	return `## Gateway Tool Actions
+Use the Gateway tool to inspect and manage the running gateway.
+Actions: status (health/uptime/connections), config (current config), update_config (apply config changes), metrics (performance stats), version, channels (list channels), enable_channel, disable_channel, reload_skills (hot-reload SKILL.md files), debug_prompt (inspect system prompt).
+Do not run update_config unless the user explicitly requests a config change; if it's not explicit, ask first.
 `
 }
 

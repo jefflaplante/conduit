@@ -178,7 +178,7 @@ func TestPromptSectionPriorities(t *testing.T) {
 	if counts[3] < 8 {
 		t.Errorf("expected at least 8 P3 sections, got %d", counts[3])
 	}
-	// P4: Nice-to-have (Silent Replies, Voice, Reactions, CLI, Self-Update)
+	// P4: Nice-to-have (Silent Replies, Voice, Reactions, CLI, Gateway Actions)
 	if counts[4] < 4 {
 		t.Errorf("expected at least 4 P4 sections, got %d", counts[4])
 	}
