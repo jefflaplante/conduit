@@ -864,6 +864,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		Reflection:    reflectionSvc,
 		SchemaBuilder: schemaBuilder,
 		DebugLog:      debugBuffer,
+		SkillsManager: skillsManager,
 	}
 	toolsRegistry.SetServices(toolServices)
 
@@ -1654,7 +1655,7 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 		// for substantive sessions. This runs before cleanup so the session data is
 		// still available.
 		if client.SessionKey != "" {
-			reflCtx, reflCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			reflCtx, reflCancel := context.WithTimeout(g.ctx, 5*time.Second)
 			g.reflectOnSessionEnd(reflCtx, client.SessionKey)
 			reflCancel()
 		}
