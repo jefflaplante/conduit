@@ -518,41 +518,11 @@ func (s *Scheduler) loadJobs() error {
 		return err
 	}
 
-	now := time.Now()
-	fastForwarded := false
 	for _, job := range jobs {
-		// Fast-forward past-due NextRun values so jobs aren't stuck after a restart.
-		if job.NextRun != nil && job.NextRun.Before(now) {
-			// Determine the correct parser for this job type.
-			var schedule cron.Schedule
-			var parseErr error
-			if job.Type == JobTypeGo {
-				schedule, parseErr = cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow).Parse(job.Schedule)
-			} else {
-				schedule, parseErr = cron.ParseStandard(job.Schedule)
-			}
-			if parseErr != nil {
-				log.Printf("[Scheduler] Job %s: cannot fast-forward past-due next_run (unparseable schedule %q): %v — skipping", job.ID, job.Schedule, parseErr)
-			} else {
-				oldNextRun := *job.NextRun
-				newNextRun := schedule.Next(now)
-				job.NextRun = &newNextRun
-				log.Printf("[Scheduler] Job %s: fast-forwarded past-due next_run from %v to %v", job.ID, oldNextRun.Format(time.RFC3339), newNextRun.Format(time.RFC3339))
-				fastForwarded = true
-			}
-		}
 		s.jobs[job.ID] = job
 	}
 
 	s.jobsLoaded = true
-
-	// Persist corrected next_run values so subsequent restarts don't repeat warnings.
-	if fastForwarded {
-		if err := s.saveJobs(); err != nil {
-			log.Printf("[Scheduler] Warning: failed to persist fast-forwarded next_run values: %v", err)
-		}
-	}
-
 	return nil
 }
 
