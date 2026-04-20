@@ -114,9 +114,9 @@ func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessa
 
 	// Check for /stop command
 	if text == "/stop" {
-		g.activeRequestsMu.RLock()
-		cancel, exists := g.activeRequests[session.Key]
-		g.activeRequestsMu.RUnlock()
+		g.ws.ActiveRequestsMu.RLock()
+		cancel, exists := g.ws.ActiveRequests[session.Key]
+		g.ws.ActiveRequestsMu.RUnlock()
 
 		if exists && cancel != nil {
 			cancel()

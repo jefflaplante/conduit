@@ -141,7 +141,7 @@ func TestHandleWebSocketCommandFromChat_Unknown(t *testing.T) {
 
 func TestHandleWebSocketCommandFromChat_Stop_NoActive(t *testing.T) {
 	gw, _, _ := newTestGatewayWithRouter(t)
-	gw.activeRequests = make(map[string]context.CancelFunc)
+	gw.ws.ActiveRequests = make(map[string]context.CancelFunc)
 	c := newTestWSClient("c1")
 	gw.handleWebSocketCommandFromChat(context.Background(), c, "sess-1", "/stop")
 	out := drainClientMessage(t, c)
@@ -153,9 +153,9 @@ func TestHandleWebSocketCommandFromChat_Stop_NoActive(t *testing.T) {
 
 func TestHandleWebSocketCommandFromChat_Stop_Active(t *testing.T) {
 	gw, _, _ := newTestGatewayWithRouter(t)
-	gw.activeRequests = make(map[string]context.CancelFunc)
+	gw.ws.ActiveRequests = make(map[string]context.CancelFunc)
 	called := false
-	gw.activeRequests["sess-1"] = func() { called = true }
+	gw.ws.ActiveRequests["sess-1"] = func() { called = true }
 	c := newTestWSClient("c1")
 	gw.handleWebSocketCommandFromChat(context.Background(), c, "sess-1", "/stop")
 	drainClientMessage(t, c)

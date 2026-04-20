@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -101,20 +99,17 @@ type Gateway struct {
 	// (monitoring_service.go) for the full surface.
 	monitoring *MonitoringService
 
-	// WebSocket handling
-	upgrader    websocket.Upgrader
-	clients     map[string]*Client
-	clientMu    sync.RWMutex
-	wsConnCount atomic.Int32    // active WebSocket connection count
-	ctx         context.Context // gateway lifecycle context (for WebSocket handlers)
+	// WebSocket subsystem (conduit-35t2): upgrader, client map, backpressure
+	// semaphore, active-request cancel map, and the gateway-lifecycle context
+	// used by per-connection goroutines. Extracted into WebSocketService to
+	// break the Gateway god-object.
+	ws *WebSocketService
 
-	// Active request tracking for /stop
-	activeRequests   map[string]context.CancelFunc // sessionKey -> cancel function
-	activeRequestsMu sync.RWMutex
-
-	// Backpressure: limits concurrent message-processing goroutines to prevent
-	// unbounded goroutine growth under load. Sized via MaxConcurrentRequests.
-	msgSemaphore chan struct{}
+	// ctx is the gateway-lifecycle context, bound by Start. It is shared with
+	// WebSocketService but also used by sibling goroutines (subagents,
+	// wakeSession, the SPAR reflection deferred-cleanup in handleClientRead)
+	// so it stays on Gateway as the source of truth.
+	ctx context.Context
 
 	// Search: FTS5 indexer/searcher/watcher, dedicated search.db with
 	// beads/brain/message indexers, and optional vector/semantic search
@@ -448,6 +443,11 @@ func New(cfg *config.Config) (*Gateway, error) {
 		return nil, fmt.Errorf("failed to create monitoring service: %w", err)
 	}
 
+	wsService := NewWebSocketService(logger, websocket.Upgrader{
+		CheckOrigin:  checkOrigin(cfg.AllowedOrigins),
+		Subprotocols: []string{"conduit-auth"},
+	}, MaxConcurrentRequests)
+
 	gw := &Gateway{
 		config:              cfg,
 		logger:              logger,
@@ -462,17 +462,11 @@ func New(cfg *config.Config) (*Gateway, error) {
 		auth:                authService,
 		rateLimitMiddleware: rateLimitMiddleware,
 		monitoring:          monitoringSvc,
-		clients:             make(map[string]*Client),
-		activeRequests:      make(map[string]context.CancelFunc),
-		msgSemaphore:        make(chan struct{}, MaxConcurrentRequests),
+		ws:                  wsService,
 		sessionWake:         make(chan string, 64),
 		mcpServer:           mcpServer,
 		mcpConfigMgr:        mcpConfigMgr,
 		ringBuffer:          debugBuffer,
-		upgrader: websocket.Upgrader{
-			CheckOrigin:  checkOrigin(cfg.AllowedOrigins),
-			Subprotocols: []string{"conduit-auth"},
-		},
 	}
 
 	gw.shutdownMgr = NewShutdownManager(logger, gw)
@@ -933,6 +927,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// which is immediate after WebSocket upgrade. WebSocket goroutines need a
 	// context tied to the gateway's lifecycle instead.
 	g.ctx = ctx
+	g.ws.Start(ctx)
 
 	// Start HTTP server for WebSocket connections
 	mux := http.NewServeMux()
@@ -1185,6 +1180,15 @@ func (g *Gateway) Start(ctx context.Context) error {
 		g.scheduler.Stop()
 	}
 
+	// Stop WebSocket service (no-op today; see WebSocketService.Stop).
+	// Active-request draining is handled by ShutdownManager before ctx is
+	// cancelled, and per-client goroutines exit on ctx.Done via
+	// handleClientWrite. Call order preserved so any future drain logic
+	// runs before rate limiter shutdown.
+	if g.ws != nil {
+		g.ws.Stop()
+	}
+
 	// Stop rate limiting middleware
 	if g.rateLimitMiddleware != nil {
 		g.rateLimitMiddleware.Stop()
@@ -1272,13 +1276,17 @@ func checkOrigin(allowedOrigins []string) func(r *http.Request) bool {
 	}
 }
 
-// handleWebSocket handles WebSocket connections with authentication
+// handleWebSocket handles WebSocket connections with authentication.
+// This stays on *Gateway because it is the HTTP handler entry point and
+// needs orchestrator-level access to auth (wsAuthenticator), metrics, tools,
+// skills, and the channel manager for the initial GatewayInfo frame. It
+// hands off to WebSocketService for connection-state bookkeeping.
 func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Check WebSocket connection limit before doing any work
-	if g.wsConnCount.Load() >= MaxWebSocketConnections {
+	if g.ws.WSConnCount.Load() >= MaxWebSocketConnections {
 		http.Error(w, "Too many WebSocket connections", http.StatusServiceUnavailable)
 		g.logger.Warn("WebSocket connection rejected: limit reached",
-			"current", g.wsConnCount.Load(),
+			"current", g.ws.WSConnCount.Load(),
 			"max", MaxWebSocketConnections)
 		return
 	}
@@ -1300,8 +1308,8 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Atomically increment and check the connection count.
 	// Re-check after increment to handle races between the Load() above and now.
-	if count := g.wsConnCount.Add(1); count > MaxWebSocketConnections {
-		g.wsConnCount.Add(-1)
+	if count := g.ws.WSConnCount.Add(1); count > MaxWebSocketConnections {
+		g.ws.WSConnCount.Add(-1)
 		http.Error(w, "Too many WebSocket connections", http.StatusServiceUnavailable)
 		g.logger.Warn("WebSocket connection rejected (race): limit reached",
 			"current", count-1,
@@ -1309,9 +1317,9 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := g.upgrader.Upgrade(w, r, responseHeader)
+	conn, err := g.ws.Upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
-		g.wsConnCount.Add(-1) // Decrement on upgrade failure
+		g.ws.WSConnCount.Add(-1) // Decrement on upgrade failure
 		g.logger.Error("WebSocket upgrade error", "error", err)
 		return
 	}
@@ -1325,10 +1333,10 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Send:    make(chan []byte, 256),
 	}
 
-	g.clientMu.Lock()
-	g.clients[client.ID] = client
-	clientCount := len(g.clients)
-	g.clientMu.Unlock()
+	g.ws.ClientMu.Lock()
+	g.ws.Clients[client.ID] = client
+	clientCount := len(g.ws.Clients)
+	g.ws.ClientMu.Unlock()
 
 	// Update metrics
 	if g.monitoring.MetricsCollector != nil {
@@ -1371,28 +1379,17 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // handleTokenRevocation closes all WebSocket connections authenticated with the
 // given token. This is called by TokenStorage.OnRevoke as a best-effort
 // operation -- errors from already-closing connections are silently ignored.
+//
+// The name stays on *Gateway (per conduit-23rz) to keep the symbol stable for
+// existing callers and tests. It delegates to WebSocketService.
 func (g *Gateway) handleTokenRevocation(tokenID string) {
-	g.clientMu.RLock()
-	var targets []*Client
-	for _, c := range g.clients {
-		if c.TokenID == tokenID {
-			targets = append(targets, c)
-		}
+	if g.ws == nil {
+		return
 	}
-	g.clientMu.RUnlock()
-
-	for _, c := range targets {
-		g.logger.Debug("closing connection for revoked token",
-			"client_id", c.ID,
-			"token_id", tokenID)
-		closeMsg := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "token revoked")
-		_ = c.Conn.WriteControl(websocket.CloseMessage, closeMsg, time.Now().Add(time.Second))
-		_ = c.Conn.Close()
-	}
-
-	if len(targets) > 0 {
+	n := g.ws.RevokeClientByToken(tokenID)
+	if n > 0 {
 		g.logger.Info("closed connections for revoked token",
-			"connection_count", len(targets),
+			"connection_count", n,
 			"token_id", tokenID)
 	}
 }
@@ -1440,13 +1437,13 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 			reflCancel()
 		}
 
-		g.clientMu.Lock()
-		delete(g.clients, client.ID)
-		clientCount := len(g.clients)
-		g.clientMu.Unlock()
+		g.ws.ClientMu.Lock()
+		delete(g.ws.Clients, client.ID)
+		clientCount := len(g.ws.Clients)
+		g.ws.ClientMu.Unlock()
 
 		// Decrement active WebSocket connection count
-		g.wsConnCount.Add(-1)
+		g.ws.WSConnCount.Add(-1)
 
 		// Update metrics
 		if g.monitoring.MetricsCollector != nil {
@@ -1488,9 +1485,9 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 				continue
 			}
 			select {
-			case g.msgSemaphore <- struct{}{}:
+			case g.ws.MsgSemaphore <- struct{}{}:
 				go func() {
-					defer func() { <-g.msgSemaphore }()
+					defer func() { <-g.ws.MsgSemaphore }()
 					g.handleWebSocketChat(ctx, client, msg)
 				}()
 			default:
@@ -1515,33 +1512,11 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 	}
 }
 
-// handleClientWrite handles outgoing messages to a WebSocket client.
-// It monitors both the client's Send channel and the gateway's lifecycle context (g.ctx).
-// When the gateway shuts down, it sends a WebSocket close message and exits,
-// preventing goroutine leaks from long-lived connections.
+// handleClientWrite is a thin wrapper that delegates to WebSocketService.
+// Kept on *Gateway only so the goroutine-spawn call site in handleWebSocket
+// reads naturally; the actual loop lives on WebSocketService.
 func (g *Gateway) handleClientWrite(client *Client) {
-	defer client.Conn.Close()
-
-	for {
-		select {
-		case message, ok := <-client.Send:
-			if !ok {
-				// Send channel closed; send WebSocket close frame and exit.
-				client.Conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-
-			if err := client.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				g.logger.Warn("WebSocket write error", "error", err)
-				return
-			}
-		case <-g.ctx.Done():
-			// Gateway is shutting down; send close frame and exit.
-			client.Conn.WriteMessage(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"))
-			return
-		}
-	}
+	g.ws.HandleClientWrite(client)
 }
 
 // startChannels initializes and starts the channel manager
@@ -1589,9 +1564,9 @@ func (g *Gateway) processMessages(ctx context.Context) {
 				continue
 			}
 			select {
-			case g.msgSemaphore <- struct{}{}:
+			case g.ws.MsgSemaphore <- struct{}{}:
 				go func() {
-					defer func() { <-g.msgSemaphore }()
+					defer func() { <-g.ws.MsgSemaphore }()
 					g.handleIncomingMessage(ctx, msg)
 				}()
 			default:
@@ -1751,10 +1726,10 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		}
 
 		// Track this request so /stop can cancel it
-		g.activeRequestsMu.Lock()
-		g.activeRequests[session.Key] = cancel
-		requestCount := len(g.activeRequests)
-		g.activeRequestsMu.Unlock()
+		g.ws.ActiveRequestsMu.Lock()
+		g.ws.ActiveRequests[session.Key] = cancel
+		requestCount := len(g.ws.ActiveRequests)
+		g.ws.ActiveRequestsMu.Unlock()
 
 		// Update metrics
 		if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
@@ -1763,10 +1738,10 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 
 		// Ensure we clean up when done
 		defer func() {
-			g.activeRequestsMu.Lock()
-			delete(g.activeRequests, session.Key)
-			finalRequestCount := len(g.activeRequests)
-			g.activeRequestsMu.Unlock()
+			g.ws.ActiveRequestsMu.Lock()
+			delete(g.ws.ActiveRequests, session.Key)
+			finalRequestCount := len(g.ws.ActiveRequests)
+			g.ws.ActiveRequestsMu.Unlock()
 
 			// Update metrics on cleanup
 			if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
@@ -2429,13 +2404,13 @@ func (g *Gateway) wakeSession(sessionKey string) {
 	wakeCtx = types.WithWakeSource(wakeCtx, wakeSource)
 
 	// Track this request so /stop can cancel it
-	g.activeRequestsMu.Lock()
-	g.activeRequests[sessionKey] = cancel
-	g.activeRequestsMu.Unlock()
+	g.ws.ActiveRequestsMu.Lock()
+	g.ws.ActiveRequests[sessionKey] = cancel
+	g.ws.ActiveRequestsMu.Unlock()
 	defer func() {
-		g.activeRequestsMu.Lock()
-		delete(g.activeRequests, sessionKey)
-		g.activeRequestsMu.Unlock()
+		g.ws.ActiveRequestsMu.Lock()
+		delete(g.ws.ActiveRequests, sessionKey)
+		g.ws.ActiveRequestsMu.Unlock()
 	}()
 
 	response, err := g.ai.GenerateResponseWithTools(wakeCtx, session, wakeMessage, providerOverride, modelOverride)

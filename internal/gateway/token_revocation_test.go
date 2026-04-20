@@ -68,7 +68,7 @@ func createTestGatewayWithAuth(t *testing.T) (*Gateway, *auth.TokenStorage) {
 		auth: &AuthService{
 			AuthStorage: authStorage,
 		},
-		clients: make(map[string]*Client),
+		ws: NewWebSocketService(testLogger, websocket.Upgrader{}, 16),
 	}
 
 	// Wire the revocation callback just like New() does.
@@ -108,9 +108,9 @@ func TestHandleTokenRevocation_ClosesMatchingClients(t *testing.T) {
 			Send:    make(chan []byte, 16),
 		}
 
-		gw.clientMu.Lock()
-		gw.clients[client.ID] = client
-		gw.clientMu.Unlock()
+		gw.ws.ClientMu.Lock()
+		gw.ws.Clients[client.ID] = client
+		gw.ws.ClientMu.Unlock()
 
 		// Block until the connection is closed.
 		for {
@@ -134,9 +134,9 @@ func TestHandleTokenRevocation_ClosesMatchingClients(t *testing.T) {
 		// Wait for the server handler to register the client.
 		deadline := time.Now().Add(2 * time.Second)
 		for time.Now().Before(deadline) {
-			gw.clientMu.RLock()
-			_, ok := gw.clients[clientID]
-			gw.clientMu.RUnlock()
+			gw.ws.ClientMu.RLock()
+			_, ok := gw.ws.Clients[clientID]
+			gw.ws.ClientMu.RUnlock()
 			if ok {
 				break
 			}
@@ -155,11 +155,11 @@ func TestHandleTokenRevocation_ClosesMatchingClients(t *testing.T) {
 	defer conn2.Close()
 
 	// Verify 3 clients registered.
-	gw.clientMu.RLock()
-	if len(gw.clients) != 3 {
-		t.Fatalf("Expected 3 clients, got %d", len(gw.clients))
+	gw.ws.ClientMu.RLock()
+	if len(gw.ws.Clients) != 3 {
+		t.Fatalf("Expected 3 clients, got %d", len(gw.ws.Clients))
 	}
-	gw.clientMu.RUnlock()
+	gw.ws.ClientMu.RUnlock()
 
 	// Revoke token 1 -- this should close c1a and c1b but leave c2 open.
 	if err := authStorage.RevokeToken(resp1.TokenInfo.TokenID); err != nil {
@@ -204,9 +204,9 @@ func TestHandleTokenRevocation_NoMatchingClients(t *testing.T) {
 		t.Fatalf("RevokeToken failed: %v", err)
 	}
 
-	gw.clientMu.RLock()
-	count := len(gw.clients)
-	gw.clientMu.RUnlock()
+	gw.ws.ClientMu.RLock()
+	count := len(gw.ws.Clients)
+	gw.ws.ClientMu.RUnlock()
 
 	if count != 0 {
 		t.Errorf("Expected 0 clients, got %d", count)
@@ -217,34 +217,34 @@ func TestHandleTokenRevocation_OnlyTargetTokenClosed(t *testing.T) {
 	gw, _ := createTestGatewayWithAuth(t)
 
 	// Directly test handleTokenRevocation with mock clients (no real WS).
-	gw.clientMu.Lock()
-	gw.clients["a"] = &Client{ID: "a", TokenID: "token-1"}
-	gw.clients["b"] = &Client{ID: "b", TokenID: "token-2"}
-	gw.clients["c"] = &Client{ID: "c", TokenID: "token-1"}
-	gw.clientMu.Unlock()
+	gw.ws.ClientMu.Lock()
+	gw.ws.Clients["a"] = &Client{ID: "a", TokenID: "token-1"}
+	gw.ws.Clients["b"] = &Client{ID: "b", TokenID: "token-2"}
+	gw.ws.Clients["c"] = &Client{ID: "c", TokenID: "token-1"}
+	gw.ws.ClientMu.Unlock()
 
 	// We can't call handleTokenRevocation on clients without real Conn objects
 	// because Close() would panic. Instead, verify the filtering logic by
 	// checking which clients match.
-	gw.clientMu.RLock()
+	gw.ws.ClientMu.RLock()
 	var matches int
-	for _, c := range gw.clients {
+	for _, c := range gw.ws.Clients {
 		if c.TokenID == "token-1" {
 			matches++
 		}
 	}
-	gw.clientMu.RUnlock()
+	gw.ws.ClientMu.RUnlock()
 
 	if matches != 2 {
 		t.Errorf("Expected 2 clients matching token-1, got %d", matches)
 	}
 
 	// Verify token-2 client would NOT match.
-	gw.clientMu.RLock()
-	for _, c := range gw.clients {
+	gw.ws.ClientMu.RLock()
+	for _, c := range gw.ws.Clients {
 		if c.TokenID == "token-2" && c.ID != "b" {
 			t.Error("token-2 should only match client b")
 		}
 	}
-	gw.clientMu.RUnlock()
+	gw.ws.ClientMu.RUnlock()
 }

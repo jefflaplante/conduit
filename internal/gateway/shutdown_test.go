@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -10,16 +9,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"conduit/internal/config"
 )
 
+// newTestGatewayForShutdown builds a minimal Gateway with a WebSocketService
+// wired up for shutdown-path tests.
+func newTestGatewayForShutdown(t *testing.T, cfg *config.Config) *Gateway {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	return &Gateway{
+		ws:     NewWebSocketService(logger, websocket.Upgrader{}, 1),
+		config: cfg,
+	}
+}
+
 func TestShutdownManager_StateTransitions(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	gw := &Gateway{
-		clients:        make(map[string]*Client),
-		activeRequests: make(map[string]context.CancelFunc),
-		config:         &config.Config{DataDir: t.TempDir()},
-	}
+	gw := newTestGatewayForShutdown(t, &config.Config{DataDir: t.TempDir()})
 	sm := NewShutdownManager(logger, gw)
 
 	if sm.State() != StateRunning {
@@ -58,23 +66,19 @@ func TestShutdownManager_StateTransitions(t *testing.T) {
 func TestShutdownManager_DrainActiveRequests(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	gw := &Gateway{
-		clients:        make(map[string]*Client),
-		activeRequests: make(map[string]context.CancelFunc),
-		config:         &config.Config{DataDir: t.TempDir()},
-	}
+	gw := newTestGatewayForShutdown(t, &config.Config{DataDir: t.TempDir()})
 
 	// Simulate an active request that completes after 500ms
 	var requestCancelled bool
-	gw.activeRequestsMu.Lock()
-	gw.activeRequests["session-1"] = func() { requestCancelled = true }
-	gw.activeRequestsMu.Unlock()
+	gw.ws.ActiveRequestsMu.Lock()
+	gw.ws.ActiveRequests["session-1"] = func() { requestCancelled = true }
+	gw.ws.ActiveRequestsMu.Unlock()
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		gw.activeRequestsMu.Lock()
-		delete(gw.activeRequests, "session-1")
-		gw.activeRequestsMu.Unlock()
+		gw.ws.ActiveRequestsMu.Lock()
+		delete(gw.ws.ActiveRequests, "session-1")
+		gw.ws.ActiveRequestsMu.Unlock()
 	}()
 
 	sm := NewShutdownManager(logger, gw)
@@ -99,21 +103,17 @@ func TestShutdownManager_DrainActiveRequests(t *testing.T) {
 func TestShutdownManager_DrainTimeout_ForceCancels(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	gw := &Gateway{
-		clients:        make(map[string]*Client),
-		activeRequests: make(map[string]context.CancelFunc),
-		config:         &config.Config{DataDir: t.TempDir()},
-	}
+	gw := newTestGatewayForShutdown(t, &config.Config{DataDir: t.TempDir()})
 
 	var mu sync.Mutex
 	forceCancelled := false
-	gw.activeRequestsMu.Lock()
-	gw.activeRequests["stuck-session"] = func() {
+	gw.ws.ActiveRequestsMu.Lock()
+	gw.ws.ActiveRequests["stuck-session"] = func() {
 		mu.Lock()
 		forceCancelled = true
 		mu.Unlock()
 	}
-	gw.activeRequestsMu.Unlock()
+	gw.ws.ActiveRequestsMu.Unlock()
 
 	sm := NewShutdownManager(logger, gw)
 	done := make(chan struct{})
@@ -140,12 +140,8 @@ func TestShutdownManager_WritesBreadcrumb(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	dataDir := t.TempDir()
 
-	gw := &Gateway{
-		clients:        make(map[string]*Client),
-		activeRequests: make(map[string]context.CancelFunc),
-		config:         &config.Config{DataDir: dataDir},
-	}
-	gw.clients["ws-1"] = &Client{
+	gw := newTestGatewayForShutdown(t, &config.Config{DataDir: dataDir})
+	gw.ws.Clients["ws-1"] = &Client{
 		ID:         "ws-1",
 		SessionKey: "session-abc",
 		UserID:     "jeff",
