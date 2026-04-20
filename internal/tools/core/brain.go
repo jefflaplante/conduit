@@ -28,7 +28,7 @@ func (t *BrainTool) Description() string {
 Actions:
 - store: Save a key-value fact to a memory tier (longterm or working)
 - get: Retrieve a specific fact by key (checks working memory first, then LTM)
-- recall: Fuzzy search across all tiers by query string, ranked by salience
+- recall: Fuzzy search across all tiers by query string, ranked by salience. Optional 'context' param biases ranking toward entries whose key/value overlap with context tokens (keyword overlap only, no semantic similarity).
 - list: List all entries matching a key prefix
 - delete: Remove a key from all tiers
 - push: Push a value onto the per-user scratchpad stack (LIFO)
@@ -79,6 +79,10 @@ func (t *BrainTool) Parameters() map[string]interface{} {
 			"query": map[string]interface{}{
 				"type":        "string",
 				"description": "Search query for recall action",
+			},
+			"context": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional context for recall action — entries whose key/value overlap with context tokens get a ranking boost (keyword overlap only, never filters results).",
 			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
@@ -202,7 +206,8 @@ func (t *BrainTool) handleRecall(ctx context.Context, args map[string]interface{
 	if l, ok := args["limit"].(float64); ok && l > 0 {
 		limit = int(l)
 	}
-	entries, err := brain.Recall(ctx, query, limit)
+	contextStr, _ := args["context"].(string)
+	entries, err := brain.RecallWithContext(ctx, query, limit, contextStr)
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("recall failed: %v", err)}, nil
 	}
