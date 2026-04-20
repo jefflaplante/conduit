@@ -871,6 +871,14 @@ func New(cfg *config.Config) (*Gateway, error) {
 		reflectionSvc = newReflectionAdapter(gw.reflectionStore)
 	}
 
+	// Wire a vision analyzer backed by the AI router so the ImageTool can
+	// perform real multimodal analysis via the configured provider (typically
+	// Anthropic Claude vision). nil when no provider is configured.
+	var visionAnalyzer types.VisionAnalyzer
+	if aiRouter != nil && aiRouter.HasProviders() {
+		visionAnalyzer = newVisionAdapter(aiRouter)
+	}
+
 	toolServices := &tools.ToolServices{
 		SessionStore:  sessionStore,
 		ConfigMgr:     cfg,
@@ -885,6 +893,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		BrainFTS:      brainFTS,
 		REMCycle:      remCycleRunner,
 		Reflection:    reflectionSvc,
+		Vision:        visionAnalyzer,
 		SchemaBuilder: schemaBuilder,
 		DebugLog:      debugBuffer,
 		SkillsManager: skillsManager,
