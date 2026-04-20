@@ -1,14 +1,104 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
+	"conduit/internal/agent"
+	"conduit/internal/channels"
 	"conduit/internal/config"
+	"conduit/internal/heartbeat"
+	"conduit/internal/protocol"
 	"conduit/internal/scheduler"
 	"conduit/internal/tools/types"
 )
+
+// executeScheduledJob is called when a Go cron job fires. It routes heartbeat
+// jobs through the HEARTBEAT.md execution framework and runs plain cron jobs
+// as AI prompts against a per-job synthetic session.
+func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) error {
+	g.logger.Info("executing scheduled job", "job_id", job.ID, "command", job.Command)
+
+	// Check if this is a heartbeat job.
+	if heartbeat.IsHeartbeatJob(job) {
+		g.logger.Debug("routing to heartbeat execution framework", "job_id", job.ID)
+		return g.monitoring.HeartbeatIntegration.ExecuteHeartbeat(ctx, job)
+	}
+
+	// Handle regular cron jobs.
+	// Create a session for this job.
+	sessionKey := fmt.Sprintf(agent.CronSessionKeyPrefix+"%s_%d", job.ID, time.Now().UnixNano())
+	session, err := g.sessions.GetOrCreateSession("cron", sessionKey)
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+
+	// Resolve model alias.
+	model := job.Model
+	if model == "" {
+		model = g.getDefaultModel()
+	} else if fullModel, exists := g.getModelAliases()[strings.ToLower(model)]; exists && fullModel != "" {
+		model = fullModel
+	}
+
+	// Store model and skill filter in session context for prompt/tool filtering.
+	if session.Context == nil {
+		session.Context = make(map[string]string)
+	}
+	session.Context["model"] = model
+	if len(job.Skills) > 0 {
+		session.Context["skill_filter"] = strings.Join(job.Skills, ",")
+	}
+
+	// Execute the job command as an AI prompt.
+	response, err := g.ai.GenerateResponseWithTools(ctx, session, job.Command, "", model)
+	if err != nil {
+		return fmt.Errorf("AI execution failed: %w", err)
+	}
+
+	// If there's a target, send the result there.
+	if job.Target != "" {
+		responseContent := response.GetContent()
+
+		// Check for silent response patterns - don't send these to the target.
+		if responseContent == "" || channels.IsSilentResponse(responseContent) {
+			g.logger.Debug("job completed with silent response, not sending to target", "job_id", job.ID)
+			return nil
+		}
+
+		// Target format: "telegram:chatid" or just "chatid".
+		parts := strings.SplitN(job.Target, ":", 2)
+		var channelID, userID string
+		if len(parts) == 2 {
+			channelID = parts[0]
+			userID = parts[1]
+		} else {
+			channelID = "telegram"
+			userID = job.Target
+		}
+
+		outgoingMsg := &protocol.OutgoingMessage{
+			BaseMessage: protocol.BaseMessage{
+				Type:      protocol.TypeOutgoingMessage,
+				ID:        fmt.Sprintf(agent.CronSessionKeyPrefix+"%s_%d", job.ID, time.Now().UnixNano()),
+				Timestamp: time.Now(),
+			},
+			ChannelID: channelID,
+			UserID:    userID,
+			Text:      responseContent,
+		}
+
+		if err := g.channelManager.SendMessage(outgoingMsg); err != nil {
+			g.logger.Error("failed to send job output", "job_id", job.ID, "target", job.Target, "error", err)
+		}
+	}
+
+	g.logger.Info("job completed", "job_id", job.ID, "response_chars", len(response.GetContent()))
+	return nil
+}
 
 // ScheduleJob adds a new scheduled job
 func (g *Gateway) ScheduleJob(job *types.SchedulerJob) error {
