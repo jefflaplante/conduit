@@ -47,13 +47,34 @@ func validatePort(me *multiError, port int) {
 // validateAICredentials checks that each Anthropic provider does not have both
 // an API key AND OAuth token configured simultaneously (conflicting credentials).
 //
-// After environment variable expansion, unexpanded placeholders become empty
-// strings; we treat empty values the same as "not configured".  If both fields
-// are empty the provider is in "template / env-var" mode and we skip the check
-// rather than producing a false-positive in default or test configurations.
+// # Why we allow "neither set"
 //
-// Only when BOTH api_key and oauth_token are explicitly set to real (non-empty)
-// values do we emit an error — that is the scenario an operator must fix.
+// The original spec (conduit-1jrv) called for "exactly one credential" to be
+// present.  That was softened (conduit-l4w0) after examining the real template
+// configs in configs/examples/:
+//
+//   config.example.json uses:  "api_key": "${ANTHROPIC_API_KEY}"
+//
+// config.Load calls os.ExpandEnv on every cfg:"env"-tagged field.  When the
+// environment variable is absent, os.ExpandEnv("${ANTHROPIC_API_KEY}") returns
+// "" — an empty string, not the literal placeholder text.  So by the time
+// ValidateSemantic runs, a template config with an unset env var is
+// indistinguishable from a config that has no api_key at all.
+//
+// Requiring exactly-one credential at parse time would therefore:
+//   - Reject every templated startup where ANTHROPIC_API_KEY / ANTHROPIC_OAUTH_TOKEN
+//     has not been exported yet (common in fresh installs and CI pipelines).
+//   - Force users to pre-export credentials before the binary even starts,
+//     conflicting with the secrets_file / environment-expansion workflow.
+//
+// The "neither set" case is intentionally deferred to the first AI call, where
+// the Anthropic provider returns a clear "no credentials configured" error.
+// This is the right place for that check: it has full context (which provider,
+// which request) and fires only when credentials are actually needed.
+//
+// NOTE: isUnexpandedPlaceholder is kept for direct calls to ValidateSemantic()
+// that bypass Load (e.g., unit tests constructing a Config in memory where the
+// raw "${...}" string was never expanded).  In the Load path it is always dead.
 func validateAICredentials(me *multiError, ai AIConfig) {
 	for _, p := range ai.Providers {
 		if p.Type != "anthropic" {
@@ -70,13 +91,16 @@ func validateAICredentials(me *multiError, ai AIConfig) {
 				"use exactly one — remove api_key to use OAuth, or remove auth.oauth_token to use an API key",
 				p.Name)
 		}
-		// Neither set: we allow this; the operator supplies credentials at runtime
-		// via environment variables or a secrets file.
+		// Neither set: allowed — operator supplies credentials at runtime via
+		// environment variables or a secrets file.  See the comment above for the
+		// full rationale (conduit-l4w0).
 	}
 }
 
 // isUnexpandedPlaceholder returns true when a value still looks like an
-// unexpanded ${ENV_VAR} token, meaning the environment variable was absent.
+// unexpanded ${ENV_VAR} token.  This only occurs when ValidateSemantic is
+// called directly (e.g., in unit tests) without going through config.Load,
+// since Load expands all placeholders via os.ExpandEnv before validation.
 func isUnexpandedPlaceholder(v string) bool {
 	return strings.HasPrefix(v, "${") && strings.HasSuffix(v, "}")
 }
