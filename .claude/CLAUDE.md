@@ -53,16 +53,17 @@ Incoming messages flow: Channel Adapter → Channel Manager → Gateway → AI R
 - ai.ExecutionEngine (internal/ai/router.go) — Tool call flow handling: HandleToolCallFlow processes iterative tool execution.
 - ai.AgentSystem (internal/ai/router.go) — Pluggable agent personality: BuildSystemPrompt, GetToolDefinitions, ProcessResponse.
 - types.Tool (internal/tools/types/types.go) — All tools implement Name(), Description(), Parameters(), Execute(ctx, args). Optional interfaces: EnhancedSchemaProvider, ParameterValidator, ParameterDiscoverer, UsageExampleProvider, SelfTester.
-- types.GatewayService (internal/tools/types/types.go) — Gateway operations exposed to tools without circular imports. Includes session, channel, config, metrics, and scheduler operations.
+- types.GatewayService (internal/tools/types/types.go) — Gateway operations exposed to tools without circular imports. Includes session, channel, config, metrics, scheduler operations, `GetContextBudget(ctx, sessionKey)`, and `GetFuelGaugeMap(topN int)`.
 - types.ChannelSender (internal/tools/types/types.go) — Channel message sending exposed to tools.
 - types.SearchService (internal/tools/types/types.go) — FTS5 full-text search interface over documents and messages.
 - types.BrainService (internal/tools/types/types.go) — Tiered cognitive memory: Store, Get, Recall, List, Delete, Push/Pop/Peek (scratchpad), Promote, Consolidate, Status, Close.
 - types.BrainFTSSearcher (internal/tools/types/types.go) — FTS5-backed search over brain LTM entries.
+- types.VisionAnalyzer (internal/tools/types/types.go) — Narrow single-method interface (`AnalyzeImage`) wiring ImageTool to a multimodal LLM backend.
 - agent.AgentSystem (internal/agent/interface.go) — Concrete agent system interface with Name(), BuildSystemPrompt, SetTools, ProcessResponse. Includes SessionStateManager for tracking processing states.
 
 ### Dependency Injection Pattern
 
-Tools cannot import gateway directly (circular dependency). Instead, types.ToolServices struct in internal/tools/types/types.go aggregates service interfaces (SessionStore, ConfigMgr, WebClient, SkillsManager, ChannelSender, Gateway, Searcher, Brain, BrainFTS, SchemaBuilder). The gateway creates services, then calls registry.SetServices() after construction.
+Tools cannot import gateway directly (circular dependency). Instead, types.ToolServices struct in internal/tools/types/types.go aggregates service interfaces (SessionStore, ConfigMgr, WebClient, SkillsManager, ChannelSender, Gateway, Searcher, Brain, BrainFTS, SchemaBuilder, Vision). The gateway creates services, then calls registry.SetServices() after construction.
 
 ## CLI Commands
 
@@ -82,7 +83,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 ## Package Layout
 
 - cmd/gateway/ — Entry point and CLI command definitions (main.go, backup.go, maintenance.go, ssh.go, ssh_keys.go, tui.go, tools.go, pairing.go)
-- internal/gateway/ — Core gateway orchestration, WebSocket handling, HTTP endpoints, context usage tracking, direct client for TUI, heartbeat integration
+- internal/gateway/ — Core gateway orchestration, WebSocket handling, HTTP endpoints, context usage tracking, direct client for TUI, heartbeat integration. Includes ContextBudget (context_budget.go), FuelGauge (fuel_gauge.go), VisionAnalyzer adapter (vision_adapter.go)
 - internal/ai/ — AI provider routing, conversation management, tool execution loops, streaming
 - internal/agent/ — Agent personality system: interface definition, Conduit agent implementation, prompt builder with section-based prompt construction
 - internal/models/ — Anthropic API request/response models and request builder
@@ -104,7 +105,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
     - validation/ — Parameter validation
     - mqtt/ — MQTT tool with action dispatch (status, topics, recent, history, publish)
     - errors/ — Tool error types
-- internal/tools/types/ — Single source of truth for tool-related types and service interfaces (Tool, ToolServices, GatewayService, ChannelSender, SearchService, MQTTService, BrainService, BrainFTSSearcher)
+- internal/tools/types/ — Single source of truth for tool-related types and service interfaces (Tool, ToolServices, GatewayService, ChannelSender, SearchService, MQTTService, BrainService, BrainFTSSearcher, VisionAnalyzer)
 - internal/channels/ — Channel adapter interface + manager; subdirectories:
   - telegram/ — Native Telegram adapter with pairing system (pairing storage, CLI, photo support)
   - tui/ — TUI channel adapter with factory for in-process BubbleTea connections
@@ -112,17 +113,17 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/mqtt/ — MQTT event ingest: paho client wrapper, per-topic ring buffers, service with background pruning, adapter to tool-layer interface
 - internal/brain/ — Tiered cognitive memory: LTM (SQLite-persisted), working memory (in-process per-user), scratchpad (LIFO stack). Salience-scored entries with configurable weights. Sub-agent WM sharing via parent context.
 - internal/reflection/ — SPAR Reflect subsystem: per-tool outcome capture (ReflectionMiddleware), session metrics (SessionReflector), farewell detection (FarewellDetector), ReflectionStore (brain_reflections table). See reference/spar.md.
-- internal/config/ — JSON config loading with ${ENV_VAR} expansion. Config struct includes: port, database, AI, agent, workspace, skills, tools, channels, debug, rate limiting, heartbeat, agent heartbeat, SSH, MQTT, brain
-- internal/database/ — SQLite migration system (4 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search)
+- internal/config/ — JSON config loading with ${ENV_VAR} expansion. Config struct includes: port, database, AI, agent, workspace, skills, tools, channels, debug, rate limiting, heartbeat, agent heartbeat, SSH, MQTT, brain. `Config.Validate()` (validate.go) is called by `config.Load()` and checks port range, AI credentials, channels, workspace, rate-limit sanity, and tool constraints; credential checks are intentionally soft (warn, not fatal) to allow partial configs.
+- internal/database/ — SQLite migration system (8 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search, messages_fts sync triggers, token hash versioning, ingest DLQ, alert history)
 - internal/fts/ — FTS5 full-text search: document chunking, indexing, and search queries (Porter stemming, unicode61 tokenizer)
 - internal/searchdb/ — Dedicated search.db with FTS5 indexes (document chunks, beads, messages, brain LTM). Includes BeadsIndexer, BrainIndexer, MessageSyncer
 - internal/search/ — Web search routing: Brave API, Anthropic search, result caching, strategy selection
 - internal/auth/ — Token auth (128-bit entropy, Base58, SHA256 hash storage), OAuth support, CLI token management
 - internal/backup/ — Backup/restore system: create tar.gz archives of database, config, workspace, SSH keys, skills; restore with dry-run support; list/inspect archives
-- internal/middleware/ — HTTP auth, WebSocket auth, rate limiting
+- internal/middleware/ — HTTP auth, WebSocket auth, rate limiting. RequestID middleware (request_id.go) injects a `request_id` into every request context; slog-based structured logging uses it for correlation throughout auth and rate-limit handlers.
 - internal/ratelimit/ — Sliding window rate limiter implementation
-- internal/monitoring/ — Gateway metrics, event tracking, metric aggregation, heartbeat metrics
-- internal/heartbeat/ — HEARTBEAT.md task execution, alert queue with priority routing, severity-based delivery, result processing, task types
+- internal/monitoring/ — Gateway metrics, event tracking, metric aggregation, heartbeat metrics. TokenWindowTracker (token_usage.go) records API token usage in rolling hour/day windows.
+- internal/heartbeat/ — HEARTBEAT.md task execution, alert queue with priority routing, severity-based delivery, result processing, task types. AlertAuditor (audit.go) persists alert history to the alert_history table.
 - internal/skills/ — Skill discovery from SKILL.md files, loading, validation, tool adaptation, manager
 - internal/maintenance/ — Database cleanup and maintenance scheduling
 - internal/scheduler/ — Cron job scheduling with interfaces
@@ -147,12 +148,16 @@ Config struct covers: port, database path, AI providers (Anthropic with OAuth or
 
 ## Database
 
-SQLite with WAL mode, 5s busy timeout, NORMAL synchronous, foreign keys enabled, 10000 page cache. Connection pool: max 4 open, 2 idle, no lifetime expiry. Four migrations:
+SQLite with WAL mode, 5s busy timeout, NORMAL synchronous, foreign keys enabled, 10000 page cache. Connection pool: max 4 open, 2 idle, no lifetime expiry. Eight migrations:
 
 1. Sessions and messages tables
 2. Auth tokens table (+ schema_migrations table)
 3. Telegram pairings table
 4. FTS5 virtual tables for document chunks and messages (with sync triggers, backfill)
+5. Messages FTS sync triggers
+6. Token hash version column (SHA256 v1 → HMAC-SHA256 v2)
+7. Ingest dead-letter queue (ingest_dlq) for dropped messages
+8. Alert history table (alert_history) for SRE audit trail
 
 ## Test Patterns
 
