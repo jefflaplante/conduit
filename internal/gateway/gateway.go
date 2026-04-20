@@ -2,12 +2,9 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,9 +13,9 @@ import (
 
 	"conduit/internal/agent"
 	"conduit/internal/ai"
+	"conduit/internal/auth"
 	"conduit/internal/brain"
 	"conduit/internal/brain/rem"
-	"conduit/internal/auth"
 	"conduit/internal/channels"
 	"conduit/internal/channels/telegram"
 	tuiAdapter "conduit/internal/channels/tui"
@@ -28,23 +25,17 @@ import (
 	"conduit/internal/mcp"
 	"conduit/internal/middleware"
 	"conduit/internal/mqtt"
+	"conduit/internal/protocol"
 	"conduit/internal/reflection"
 	"conduit/internal/scheduler"
 	"conduit/internal/sessions"
 	"conduit/internal/skills"
 	"conduit/internal/stt"
-	internalssh "conduit/internal/ssh"
 	"conduit/internal/tools"
 	"conduit/internal/tools/debuglog"
-	"conduit/internal/tools/schema"
 	"conduit/internal/tools/types"
-	"conduit/internal/tui"
-	"conduit/internal/vecgo/embedding"
-
-	"github.com/jefflaplante/vecgo/embedder"
 	"conduit/internal/version"
 	"conduit/internal/workspace"
-	"conduit/internal/protocol"
 
 	charmssh "github.com/charmbracelet/ssh"
 )
@@ -154,24 +145,6 @@ type Client struct {
 	TokenID    string // auth token ID used for this connection (for revocation)
 	Conn       *websocket.Conn
 	Send       chan []byte
-}
-
-// channelStatusAdapter wraps the channel manager to implement schema.ChannelStatusGetter
-type channelStatusAdapter struct {
-	manager *channels.Manager
-}
-
-// GetStatus implements schema.ChannelStatusGetter
-func (a *channelStatusAdapter) GetStatus() map[string]interface{} {
-	result := make(map[string]interface{})
-	for id, status := range a.manager.GetStatus() {
-		result[id] = map[string]interface{}{
-			"status":  string(status.Status),
-			"message": status.Message,
-			"name":    id, // Use ID as name for now
-		}
-	}
-	return result
 }
 
 // New creates a new Gateway instance
@@ -304,83 +277,11 @@ func New(cfg *config.Config) (*Gateway, error) {
 	logger.Debug("tool execution engine wired up")
 
 	// Initialize MCP server and session mapper if a claude-code provider is configured.
-	// The provider was created with a nil session mapper during router init; we wire it in now.
-	var mcpServer *mcp.Server
-	var mcpConfigMgr *mcp.MCPConfigManager
-	for _, provCfg := range cfg.AI.Providers {
-		if provCfg.Type == "claude-code" {
-			ccCfg := provCfg.ClaudeCodeOrDefault()
+	mcpServer, mcpConfigMgr := setupMCPForClaudeCode(cfg, aiRouter, toolsRegistry, sessionStore, logger)
 
-			// Create session mapper for conversation continuity
-			ccSessionMapper := sessions.NewClaudeCodeSessionMapper(sessionStore.DB())
-			if err := ccSessionMapper.EnsureTable(); err != nil {
-				logger.Warn("failed to create claude code session table", "error", err)
-			}
-
-			// Wire session mapper into the provider
-			if provider, ok := aiRouter.GetProvider(provCfg.Name); ok {
-				if ccProvider, ok := provider.(*ai.ClaudeCodeProvider); ok {
-					ccProvider.SetSessionMapper(ccSessionMapper)
-				}
-			}
-
-			// Create MCP server to expose Conduit tools to Claude Code
-			mcpServer = mcp.NewServer(toolsRegistry, ccCfg.MCPPort)
-
-			// Create MCP config manager for .mcp.json lifecycle
-			if ccCfg.WorkingDir != "" {
-				mcpConfigMgr = mcp.NewMCPConfigManager(ccCfg.WorkingDir, ccCfg.MCPPort)
-			}
-
-			logger.Info("claude-code provider configured",
-				"mcp_port", ccCfg.MCPPort,
-				"working_dir", ccCfg.WorkingDir)
-			break // Only one claude-code provider supported
-		}
-	}
-
-	// Initialize summary manager for AI-powered workspace summarization (small-context models)
-	if cfg.Workspace.Summary.Enabled && workspaceContext != nil {
-		logger.Info("initializing workspace summary manager")
-		summaryExecutor := workspace.NewSummaryExecutor(
-			newSummaryAIRouterAdapter(aiRouter),
-			cfg.Workspace.Summary.Model,
-		)
-		fallbackToTruncate := true
-		if cfg.Workspace.Summary.FallbackToTruncate != nil {
-			fallbackToTruncate = *cfg.Workspace.Summary.FallbackToTruncate
-		}
-		summaryConfig := workspace.SummaryConfig{
-			Enabled:            cfg.Workspace.Summary.Enabled,
-			Model:              cfg.Workspace.Summary.Model,
-			TargetRatio:        cfg.Workspace.Summary.TargetRatio,
-			CacheDir:           cfg.Workspace.Summary.CacheDir,
-			CacheTTLHours:      cfg.Workspace.Summary.CacheTTLHours,
-			FallbackToTruncate: fallbackToTruncate,
-			FileConfigs:        convertSummaryFileConfigs(cfg.Workspace.Summary.FileConfigs),
-		}
-		if summaryConfig.Model == "" {
-			summaryConfig.Model = "claude-haiku-4-5-20251001"
-		}
-		if summaryConfig.TargetRatio == 0 {
-			summaryConfig.TargetRatio = 0.25
-		}
-		if summaryConfig.CacheDir == "" {
-			summaryConfig.CacheDir = ".summaries"
-		}
-		if summaryConfig.CacheTTLHours == 0 {
-			summaryConfig.CacheTTLHours = 168
-		}
-		summaryManager := workspace.NewSummaryManager(
-			cfg.Workspace.ContextDir,
-			summaryExecutor,
-			summaryConfig,
-		)
-		agentSystem.SetSummaryManager(summaryManager)
-		logger.Info("workspace summary manager initialized",
-			"model", summaryConfig.Model,
-			"target_ratio_percent", summaryConfig.TargetRatio*100)
-	}
+	// Initialize summary manager for AI-powered workspace summarization
+	// (small-context models). Attaches to agentSystem when enabled.
+	setupSummaryManager(cfg, logger, aiRouter, agentSystem, workspaceContext)
 
 	// Initialize context compaction engine if enabled
 	var compactionEngine *ai.CompactionEngine
@@ -401,39 +302,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		return nil, fmt.Errorf("failed to create auth service: %w", err)
 	}
 
-	// Create rate limiting middleware
-	rateLimitMiddleware := middleware.NewRateLimitMiddleware(middleware.RateLimitMiddlewareConfig{
-		Logger: logger,
-		Config: middleware.RateLimitConfig{
-			Enabled: cfg.RateLimiting.Enabled,
-			Anonymous: struct {
-				WindowSeconds int `json:"windowSeconds"`
-				MaxRequests   int `json:"maxRequests"`
-			}{
-				WindowSeconds: cfg.RateLimiting.Anonymous.WindowSeconds,
-				MaxRequests:   cfg.RateLimiting.Anonymous.MaxRequests,
-			},
-			Authenticated: struct {
-				WindowSeconds int `json:"windowSeconds"`
-				MaxRequests   int `json:"maxRequests"`
-			}{
-				WindowSeconds: cfg.RateLimiting.Authenticated.WindowSeconds,
-				MaxRequests:   cfg.RateLimiting.Authenticated.MaxRequests,
-			},
-			CleanupIntervalSeconds: cfg.RateLimiting.CleanupIntervalSeconds,
-		},
-		OnRateLimitExceeded: func(r *http.Request, identifier string, isAnonymous bool) {
-			clientType := "authenticated_client"
-			if isAnonymous {
-				clientType = "anonymous_ip"
-			}
-			logging.Warn(r.Context(), "rate limit exceeded",
-				"method", r.Method,
-				"path", r.URL.Path,
-				"identifier", identifier,
-				"client_type", clientType)
-		},
-	})
+	rateLimitMiddleware := buildRateLimitMiddleware(cfg, logger)
 
 	// Initialize monitoring subsystem (metrics, heartbeat, event store,
 	// token-window fuel gauge). Heartbeat integration and delivery registry
@@ -504,175 +373,13 @@ func New(cfg *config.Config) (*Gateway, error) {
 		logger.Info("MQTT service configured", "broker", cfg.MQTT.BrokerURL, "topic_count", len(cfg.MQTT.Topics))
 	}
 
-	// Initialize optional Brain cognitive architecture
-	if cfg.Brain.Enabled {
-		brainDBPath := cfg.Brain.Path
-		if brainDBPath == "" {
-			brainDBPath = config.DeriveBrainDBPath(cfg.Database.Path)
-		}
-		var brainOpts []brain.Option
-		if cfg.Brain.MaxLTMEntries > 0 {
-			brainOpts = append(brainOpts, brain.WithMaxLTMEntries(cfg.Brain.MaxLTMEntries))
-		}
-		if cfg.Brain.AutoFlushSeconds > 0 {
-			brainOpts = append(brainOpts, brain.WithAutoFlushInterval(time.Duration(cfg.Brain.AutoFlushSeconds)*time.Second))
-		}
-		if cfg.Brain.ConsolidateThreshold > 0 {
-			brainOpts = append(brainOpts, brain.WithConsolidateThreshold(cfg.Brain.ConsolidateThreshold))
-		}
-		if cfg.Brain.EvictThreshold > 0 {
-			brainOpts = append(brainOpts, brain.WithEvictThreshold(cfg.Brain.EvictThreshold))
-		}
-		brainOpts = append(brainOpts, brain.WithAutoPromote(cfg.Brain.AutoPromote))
-		if cfg.Brain.WMGracePeriodSeconds > 0 {
-			brainOpts = append(brainOpts, brain.WithWMGracePeriod(time.Duration(cfg.Brain.WMGracePeriodSeconds)*time.Second))
-		}
-		if cfg.Brain.AccessWeight > 0 {
-			brainOpts = append(brainOpts, brain.WithAccessWeight(cfg.Brain.AccessWeight))
-		}
-		if cfg.Brain.RecencyWeight > 0 {
-			brainOpts = append(brainOpts, brain.WithRecencyWeight(cfg.Brain.RecencyWeight))
-		}
-		if cfg.Brain.TierWeight > 0 {
-			brainOpts = append(brainOpts, brain.WithTierWeight(cfg.Brain.TierWeight))
-		}
-		if cfg.Brain.RecencyDecayRate > 0 {
-			brainOpts = append(brainOpts, brain.WithRecencyDecayRate(cfg.Brain.RecencyDecayRate))
-		}
-		if cfg.Brain.AccessCountCap > 0 {
-			brainOpts = append(brainOpts, brain.WithAccessCountCap(cfg.Brain.AccessCountCap))
-		}
-		brainSvc, brainErr := brain.New(brainDBPath, brainOpts...)
-		if brainErr != nil {
-			logger.Warn("failed to initialize brain, continuing without", "error", brainErr)
-		} else {
-			gw.brainService = brainSvc
-			logger.Info("brain cognitive architecture initialized", "path", brainDBPath)
+	// Initialize optional Brain cognitive architecture (+ REM cycle).
+	gw.initBrainSubsystem(cfg)
 
-			// Initialize REM cycle if enabled
-			if cfg.Brain.REMEnabled {
-				remConfig := rem.REMConfig{
-					PruneAgeDays:      cfg.Brain.REMPruneAgeDays,
-					SalienceDecayRate: cfg.Brain.REMSalienceDecayRate,
-					IntegrationDay:    cfg.Brain.REMIntegrationDay,
-					GroomWithLLM:      cfg.Brain.REMGroomWithLLM,
-					LogPath:           cfg.Brain.REMLogPath,
-					WorkspaceDir:      cfg.Workspace.ContextDir,
-					MaxLTMEntries:     cfg.Brain.MaxLTMEntries,
-				}
-				gw.remCycle = rem.NewREMCycle(gw.brainService, gw.brainService.DB(), remConfig)
-				logger.Info("REM sleep cycle initialized",
-					"schedule", cfg.Brain.REMSchedule,
-					"prune_age_days", cfg.Brain.REMPruneAgeDays,
-					"integration_day", cfg.Brain.REMIntegrationDay)
-			}
-		}
-	}
+	// Initialize optional SPAR reflection store (requires Brain for its database).
+	gw.initReflectionSubsystem(cfg, executionEngine)
 
-	// Initialize optional SPAR reflection store (requires Brain for its database)
-	if gw.brainService != nil {
-		reflCfg := cfg.Reflection
-		if reflCfg == nil {
-			reflCfg = reflection.DefaultConfig()
-		}
-		if reflCfg.Enabled {
-			gw.reflectionStore = reflection.NewStore(gw.brainService.DB())
-			gw.sessionReflector = reflection.NewSessionReflector(gw.reflectionStore)
-			gw.farewellDetector = reflection.NewFarewellDetector()
-
-			// Wire per-tool reflection capture: adapt ExecutionEngine's
-			// AfterExecutionFunc to the reflection middleware's hook.
-			reflMW := reflection.NewReflectionMiddleware(gw.reflectionStore, reflCfg)
-			hook := reflMW.Hook()
-			executionEngine.SetAfterExecutionHook(func(ctx context.Context, toolName string, result *tools.ExecutionResult) {
-				info := reflection.ToolOutcomeInfo{
-					ToolName:   toolName,
-					SessionKey: types.RequestSessionKey(ctx),
-					Duration:   result.Duration,
-				}
-				if result.Error != nil {
-					info.Error = result.Error.Error()
-					info.IsTimeout = reflection.IsTimeoutError(info.Error)
-				}
-				if result.Result != nil {
-					info.Success = result.Result.Success && result.Error == nil
-					info.RetryCount = result.Result.Retries
-				}
-				hook(ctx, info)
-			})
-
-			logger.Info("reflection store initialized")
-		}
-	}
-
-	// Create schema builder with discovery providers for enhanced tool schemas
-	schemaBuilder := createSchemaBuilder(gw, cfg)
-
-	// Build VectorService interface value (nil if disabled)
-	var vectorSearch types.VectorService
-	if gw.search.VectorService != nil {
-		vectorSearch = gw.search.VectorService
-	}
-
-	// Build MQTTService interface value (nil if disabled)
-	var mqttSvc types.MQTTService
-	if gw.mqttService != nil {
-		mqttSvc = mqtt.NewServiceAdapter(gw.mqttService)
-	}
-
-	// Build BrainService interface value (nil if disabled)
-	var brainSvcAdapter types.BrainService
-	if gw.brainService != nil {
-		brainSvcAdapter = newBrainAdapter(gw.brainService)
-	}
-
-	// Build BrainFTSSearcher interface value (nil if brain or search DB unavailable)
-	var brainFTS types.BrainFTSSearcher
-	if gw.brainService != nil && gw.search.SearchDB != nil {
-		gw.search.WireBrainIndexer(context.Background(), gw.brainService.DB())
-		brainFTS = gw.search.BrainIndexer
-	}
-
-	// Build REMCycleRunner interface value (nil if REM cycle not initialized)
-	var remCycleRunner types.REMCycleRunner
-	if gw.remCycle != nil {
-		remCycleRunner = newREMCycleAdapter(gw.remCycle)
-	}
-
-	// Build ReflectionService interface value (nil if reflection store not initialized)
-	var reflectionSvc types.ReflectionService
-	if gw.reflectionStore != nil {
-		reflectionSvc = newReflectionAdapter(gw.reflectionStore)
-	}
-
-	// Wire a vision analyzer backed by the AI router so the ImageTool can
-	// perform real multimodal analysis via the configured provider (typically
-	// Anthropic Claude vision). nil when no provider is configured.
-	var visionAnalyzer types.VisionAnalyzer
-	if aiRouter != nil && aiRouter.HasProviders() {
-		visionAnalyzer = newVisionAdapter(aiRouter)
-	}
-
-	toolServices := &tools.ToolServices{
-		SessionStore:  sessionStore,
-		ConfigMgr:     cfg,
-		WebClient:     &http.Client{Timeout: 30 * time.Second},
-		ChannelSender: gw, // Gateway implements ChannelSender interface
-		Gateway:       gw, // Gateway implements GatewayService interface
-		Searcher:      gw.search.FTSSearcher,
-		VectorSearch:  vectorSearch,
-		VectorIndexer: gw.search.VectorIndexer,
-		MQTTService:   mqttSvc,
-		Brain:         brainSvcAdapter,
-		BrainFTS:      brainFTS,
-		REMCycle:      remCycleRunner,
-		Reflection:    reflectionSvc,
-		Vision:        visionAnalyzer,
-		SchemaBuilder: schemaBuilder,
-		DebugLog:      debugBuffer,
-		SkillsManager: skillsManager,
-	}
-	toolsRegistry.SetServices(toolServices)
+	toolsRegistry.SetServices(gw.buildToolServices(cfg, sessionStore, aiRouter, debugBuffer, skillsManager))
 
 	// Register MCP tools now that the registry is fully populated.
 	if mcpServer != nil {
@@ -741,158 +448,6 @@ func New(cfg *config.Config) (*Gateway, error) {
 	return gw, nil
 }
 
-// executeScheduledJob is called when a Go cron job fires
-func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) error {
-	g.logger.Info("executing scheduled job", "job_id", job.ID, "command", job.Command)
-
-	// Check if this is a heartbeat job
-	if heartbeat.IsHeartbeatJob(job) {
-		g.logger.Debug("routing to heartbeat execution framework", "job_id", job.ID)
-		return g.monitoring.HeartbeatIntegration.ExecuteHeartbeat(ctx, job)
-	}
-
-	// Handle regular cron jobs (existing logic)
-	// Create a session for this job
-	sessionKey := fmt.Sprintf(agent.CronSessionKeyPrefix+"%s_%d", job.ID, time.Now().UnixNano())
-	session, err := g.sessions.GetOrCreateSession("cron", sessionKey)
-	if err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
-	}
-
-	// Resolve model alias
-	model := job.Model
-	if model == "" {
-		model = g.getDefaultModel()
-	} else if fullModel, exists := g.getModelAliases()[strings.ToLower(model)]; exists && fullModel != "" {
-		model = fullModel
-	}
-
-	// Store model and skill filter in session context for prompt/tool filtering
-	if session.Context == nil {
-		session.Context = make(map[string]string)
-	}
-	session.Context["model"] = model
-	if len(job.Skills) > 0 {
-		session.Context["skill_filter"] = strings.Join(job.Skills, ",")
-	}
-
-	// Execute the job command as an AI prompt
-	response, err := g.ai.GenerateResponseWithTools(ctx, session, job.Command, "", model)
-	if err != nil {
-		return fmt.Errorf("AI execution failed: %w", err)
-	}
-
-	// If there's a target, send the result there
-	if job.Target != "" {
-		responseContent := response.GetContent()
-
-		// Check for silent response patterns - don't send these to the target
-		if responseContent == "" || channels.IsSilentResponse(responseContent) {
-			g.logger.Debug("job completed with silent response, not sending to target", "job_id", job.ID)
-			return nil
-		}
-
-		// Target format: "telegram:chatid" or just "chatid"
-		parts := strings.SplitN(job.Target, ":", 2)
-		var channelID, userID string
-		if len(parts) == 2 {
-			channelID = parts[0]
-			userID = parts[1]
-		} else {
-			channelID = "telegram"
-			userID = job.Target
-		}
-
-		outgoingMsg := &protocol.OutgoingMessage{
-			BaseMessage: protocol.BaseMessage{
-				Type:      protocol.TypeOutgoingMessage,
-				ID:        fmt.Sprintf(agent.CronSessionKeyPrefix+"%s_%d", job.ID, time.Now().UnixNano()),
-				Timestamp: time.Now(),
-			},
-			ChannelID: channelID,
-			UserID:    userID,
-			Text:      responseContent,
-		}
-
-		if err := g.channelManager.SendMessage(outgoingMsg); err != nil {
-			g.logger.Error("failed to send job output", "job_id", job.ID, "target", job.Target, "error", err)
-		}
-	}
-
-	g.logger.Info("job completed", "job_id", job.ID, "response_chars", len(response.GetContent()))
-	return nil
-}
-
-// convertToolsToAIFormat converts tools registry tools to AI format
-// deriveRuntimeChannel returns the first enabled channel name, or "websocket" as fallback.
-func deriveRuntimeChannel(channels []config.ChannelConfig) string {
-	for _, ch := range channels {
-		if ch.Enabled {
-			return ch.Type
-		}
-	}
-	return "websocket"
-}
-
-func convertToolsToAIFormat(registry *tools.Registry) []ai.Tool {
-	var aiTools []ai.Tool
-
-	availableTools := registry.GetAvailableTools()
-	for _, tool := range availableTools {
-		description := tool.Description()
-		params := tool.Parameters()
-
-		// Apply schema hints from EnhancedSchemaProvider
-		if esp, ok := tool.(types.EnhancedSchemaProvider); ok {
-			hints := esp.GetSchemaHints()
-			if len(hints) > 0 {
-				builder := schema.NewBuilder(nil)
-				params = builder.EnhanceSchema(context.Background(), params, hints)
-			}
-		}
-
-		// Append usage examples to description
-		if uep, ok := tool.(types.UsageExampleProvider); ok {
-			examples := uep.GetUsageExamples()
-			if len(examples) > 0 {
-				description += "\n\nUsage examples:"
-				for _, ex := range examples {
-					description += fmt.Sprintf("\n- %s: %s", ex.Name, ex.Description)
-				}
-			}
-		}
-
-		// Append per-action documentation
-		if adp, ok := tool.(types.ActionDocProvider); ok {
-			docs := adp.GetActionDocs()
-			if len(docs) > 0 {
-				description += "\n\nAction details:"
-				for action, doc := range docs {
-					description += fmt.Sprintf("\n[%s] %s", action, doc.Description)
-					if len(doc.RequiredParams) > 0 {
-						description += fmt.Sprintf(" Required: %s.", strings.Join(doc.RequiredParams, ", "))
-					}
-					if len(doc.OptionalParams) > 0 {
-						description += fmt.Sprintf(" Optional: %s.", strings.Join(doc.OptionalParams, ", "))
-					}
-					if doc.Returns != "" {
-						description += fmt.Sprintf(" Returns: %s.", doc.Returns)
-					}
-				}
-			}
-		}
-
-		aiTool := ai.Tool{
-			Name:        tool.Name(),
-			Description: description,
-			Parameters:  params,
-		}
-		aiTools = append(aiTools, aiTool)
-	}
-
-	return aiTools
-}
-
 // createInternalToken generates an authentication token for internal services
 // (e.g., the integrated SSH server) that connect back to the gateway via WebSocket.
 func (g *Gateway) createInternalToken(clientName string) (string, error) {
@@ -929,50 +484,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 	g.ctx = ctx
 	g.ws.Start(ctx)
 
-	// Start HTTP server for WebSocket connections
-	mux := http.NewServeMux()
-
-	// Diagnostic endpoints - auth requirement controlled by diagnostics config
-	// Auth middleware skip paths are configured at gateway initialization based on config.
-	// Default: /health is public (for load balancers), others require auth.
-	mux.Handle("/health", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleHealthEnhanced))))
-	mux.Handle("/metrics", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleMetrics))))
-	mux.Handle("/diagnostics", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleDiagnostics))))
-	mux.Handle("/prometheus", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handlePrometheusMetrics))))
-
-	// WebSocket endpoint with custom authentication and rate limiting
-	mux.Handle("/ws", g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleWebSocket)))
-
-	// Protected API endpoints - wrapped with auth middleware and rate limiting
-	// Order: auth middleware first (sets context), then rate limiting (uses context), then handler
-	// POST endpoints also get request body size limiting to prevent OOM attacks.
-	mux.Handle("/debug/prompt", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleDebugPrompt))))
-	mux.Handle("/api/channels/status", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleChannelStatus))))
-	mux.Handle("/api/test/message", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
-		limitRequestBody(http.HandlerFunc(g.handleTestMessage), MaxRequestBodySize))))
-
-	// Vector API endpoints (registered unconditionally; handlers return 503 when disabled)
-	vectorAPI := &VectorAPI{vectorService: g.search.VectorService}
-	mux.Handle("/api/vector/search", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
-		limitRequestBody(http.HandlerFunc(vectorAPI.handleSearch), MaxRequestBodySize))))
-	mux.Handle("/api/vector/index", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
-		limitRequestBody(http.HandlerFunc(vectorAPI.handleIndex), MaxRequestBodySize))))
-	mux.Handle("/api/vector/delete", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
-		limitRequestBody(http.HandlerFunc(vectorAPI.handleDelete), MaxRequestBodySize))))
-	mux.Handle("/api/vector/status", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(vectorAPI.handleStatus))))
-
-	// Inject request_id into every HTTP request so auth and rate-limit logs
-	// can be correlated across the entire request lifecycle.
-	requestIDMiddleware := middleware.NewRequestIDMiddleware()
-
-	server := &http.Server{
-		Addr:           fmt.Sprintf(":%d", g.config.Port),
-		Handler:        requestIDMiddleware.Wrap(mux),
-		MaxHeaderBytes: serverMaxHeaderBytes,
-		ReadTimeout:    serverReadTimeout,
-		WriteTimeout:   serverWriteTimeout,
-		IdleTimeout:    serverIdleTimeout,
-	}
+	// Build HTTP mux (diagnostics, WS, debug, channels, vector) and wrap it
+	// with the request-ID middleware so auth/rate-limit logs can be correlated.
+	server := g.buildHTTPServer()
 
 	// Start channel manager
 	if err := g.startChannels(ctx); err != nil {
@@ -1074,71 +588,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start SSH server if configured
-	if g.config.SSH.Enabled {
-		// Build shell security config from gateway config (SSH mode)
-		shellCfg := &g.config.TUI.ShellEscape
-		shellSecurity := tui.ShellSecurityConfig{
-			Enabled:          shellCfg.IsShellEscapeEnabled(true), // true = SSH
-			CommandAllowlist: shellCfg.CommandAllowlist,
-			CommandBlocklist: shellCfg.GetEffectiveBlocklist(),
-		}
+	// Start SSH server if configured.
+	g.startSSHServer(ctx)
 
-		sshConfig := internalssh.SSHConfig{
-			ListenAddr:         g.config.SSH.ListenAddr,
-			HostKeyPath:        g.config.SSH.HostKeyPath,
-			AuthorizedKeysPath: g.config.SSH.AuthorizedKeysPath,
-			GatewayURL:         fmt.Sprintf("ws://localhost:%d/ws", g.config.Port),
-			AssistantName:      g.config.Agent.Name,
-			Location:           g.config.GetLocation(),
-			ShellSecurity:      shellSecurity,
-			ClientFactory: func(sshUser string) tui.GatewayClient {
-				toolCount := len(g.tools.GetAvailableTools())
-				var skillCount int
-				if g.skillsManager != nil {
-					if skills, err := g.skillsManager.GetAvailableSkills(context.Background()); err == nil {
-						skillCount = len(skills)
-					}
-				}
-				return NewDirectClient(DirectClientConfig{
-					ParentCtx:    ctx,
-					UserID:       sshUser,
-					Sessions:     g.sessions,
-					AI:           g.ai,
-					Tools:        g.tools,
-					Metrics:      g.monitoring.MetricsCollector,
-					ModelAliases: g.getModelAliases(),
-					AgentName:    g.config.Agent.Name,
-					Version:      version.Info(),
-					GitCommit:    version.GitCommit,
-					UptimeFunc:   func() int64 { return int64(g.monitoring.GatewayMetrics.GetUptime().Seconds()) },
-					ToolCount:    toolCount,
-					SkillCount:   skillCount,
-				})
-			},
-		}
-		sshServer, err := internalssh.NewServer(sshConfig)
-		if err != nil {
-			g.logger.Warn("failed to create SSH server", "error", err)
-		} else {
-			g.sshServer = sshServer
-			go func() {
-				g.logger.Info("SSH server listening", "address", sshConfig.ListenAddr, "mode", "direct")
-				if err := sshServer.ListenAndServe(); err != nil {
-					select {
-					case <-ctx.Done():
-					default:
-						g.logger.Error("SSH server error", "error", err)
-					}
-				}
-			}()
-		}
-	}
-
-	// Start message processing goroutine
+	// Start message processing goroutine.
 	go g.processMessages(ctx)
 
-	// Start server in goroutine
+	// Start HTTP server in goroutine.
 	go func() {
 		if err := server.ListenAndServe(); err != http.ErrServerClosed {
 			g.logger.Error("HTTP server error", "error", err)
@@ -1149,131 +605,14 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	g.processRestartBreadcrumb()
 
-	// Wait for context cancellation
+	// Wait for context cancellation, then drain all subsystems.
 	<-ctx.Done()
-
-	// Graceful shutdown
 	g.logger.Info("shutting down gateway")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		g.logger.Error("server shutdown error", "error", err)
-	}
-
-	g.stopChannels()
-
-	// Stop SSH server
-	if g.sshServer != nil {
-		g.logger.Debug("stopping SSH server")
-		g.sshServer.Close()
-	}
-
-	// Stop monitoring subsystem (heartbeat service + any future lifecycle).
-	if err := g.monitoring.Stop(); err != nil {
-		g.logger.Error("error stopping monitoring service", "error", err)
-	}
-
-	// Stop scheduler
-	if g.scheduler != nil {
-		g.scheduler.Stop()
-	}
-
-	// Stop WebSocket service (no-op today; see WebSocketService.Stop).
-	// Active-request draining is handled by ShutdownManager before ctx is
-	// cancelled, and per-client goroutines exit on ctx.Done via
-	// handleClientWrite. Call order preserved so any future drain logic
-	// runs before rate limiter shutdown.
-	if g.ws != nil {
-		g.ws.Stop()
-	}
-
-	// Stop rate limiting middleware
-	if g.rateLimitMiddleware != nil {
-		g.rateLimitMiddleware.Stop()
-	}
-
-	// Drain async message syncer before closing search DB
-	g.search.DrainAsyncSyncer()
-
-	// Stop MCP server and clean up .mcp.json
-	if g.mcpServer != nil {
-		if err := g.mcpServer.Stop(shutdownCtx); err != nil {
-			g.logger.Error("error stopping MCP server", "error", err)
-		}
-	}
-	if g.mcpConfigMgr != nil {
-		if err := g.mcpConfigMgr.Cleanup(); err != nil {
-			g.logger.Warn("failed to clean up .mcp.json", "error", err)
-		}
-	}
-
-	// Stop MQTT service
-	if g.mqttService != nil {
-		g.mqttService.Stop()
-	}
-
-	// Stop vector indexer before closing the service it references, then
-	// close the vector search service (no-op when disabled).
-	g.search.StopVector()
-
-	// Close brain service
-	if g.brainService != nil {
-		if err := g.brainService.Close(); err != nil {
-			g.logger.Error("error closing brain service", "error", err)
-		}
-	}
-
+	g.stopAll(shutdownCtx, server)
 	return nil
-}
-
-// checkOrigin returns a function that validates WebSocket Origin headers.
-// If allowedOrigins is non-empty, only those origins (case-insensitive) are accepted.
-// If allowedOrigins is empty, requests with no Origin header or localhost origins are accepted.
-func checkOrigin(allowedOrigins []string) func(r *http.Request) bool {
-	return func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-
-		// No Origin header means same-origin (non-browser or same-origin browser request)
-		if origin == "" {
-			return true
-		}
-
-		originLower := strings.ToLower(origin)
-
-		// If explicit allowlist is configured, check against it
-		if len(allowedOrigins) > 0 {
-			for _, allowed := range allowedOrigins {
-				if strings.EqualFold(origin, allowed) {
-					return true
-				}
-			}
-			logging.Warn(r.Context(), "WebSocket origin rejected",
-				"origin", origin,
-				"reason", "not in allowed origins")
-			return false
-		}
-
-		// Default policy: allow localhost origins only
-		for _, prefix := range []string{
-			"http://localhost",
-			"https://localhost",
-			"http://127.0.0.1",
-			"https://127.0.0.1",
-			"http://[::1]",
-			"https://[::1]",
-		} {
-			if originLower == prefix || strings.HasPrefix(originLower, prefix+":") {
-				return true
-			}
-		}
-
-		logging.Warn(r.Context(), "WebSocket origin rejected",
-			"origin", origin,
-			"reason", "only localhost permitted")
-		return false
-	}
 }
 
 // handleWebSocket handles WebSocket connections with authentication.
@@ -1392,37 +731,6 @@ func (g *Gateway) handleTokenRevocation(tokenID string) {
 			"connection_count", n,
 			"token_id", tokenID)
 	}
-}
-
-// handleChannelStatus provides channel status information
-func (g *Gateway) handleChannelStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	status := g.channelManager.GetStatus()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	// Simple JSON encoding (in production, use json.Marshal)
-	response := "{\n"
-	first := true
-	for id, channelStatus := range status {
-		if !first {
-			response += ",\n"
-		}
-		response += fmt.Sprintf(`  "%s": {
-    "status": "%s",
-    "message": "%s",
-    "timestamp": "%s"
-  }`, id, channelStatus.Status, channelStatus.Message, channelStatus.Timestamp.Format(time.RFC3339))
-		first = false
-	}
-	response += "\n}"
-
-	w.Write([]byte(response))
 }
 
 // handleClientRead handles incoming messages from a WebSocket client
@@ -2028,453 +1336,3 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 	}
 }
 
-// limitRequestBody wraps a handler to enforce a maximum request body size.
-// Requests that exceed the limit will receive a 413 Payload Too Large error.
-func limitRequestBody(next http.Handler, maxBytes int64) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// handleTestMessage provides a test endpoint for sending messages without Telegram
-func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Parse request body
-	var req struct {
-		Message string `json:"message"`
-		UserID  string `json:"user_id"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if req.Message == "" {
-		http.Error(w, "Message is required", http.StatusBadRequest)
-		return
-	}
-
-	if req.UserID == "" {
-		req.UserID = "test_user"
-	}
-
-	// Get or create session
-	session, err := g.sessions.GetOrCreateSession(req.UserID, "test")
-	if err != nil {
-		g.logger.Error("test message: error creating session", "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// Add user message to session
-	_, err = g.sessions.AddMessage(session.Key, "user", req.Message, nil)
-	if err != nil {
-		g.logger.Error("test message: error saving user message", "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// Generate AI response
-	if g.ai == nil {
-		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
-		return
-	}
-
-	ctx := r.Context()
-	// Use GenerateResponseWithTools to enable tool execution
-	modelOverride := session.Context["model"]
-	providerOverride := session.Context["provider"]
-	convResponse, err := g.ai.GenerateResponseWithTools(ctx, session, req.Message, providerOverride, modelOverride)
-	if err != nil {
-		g.logger.Error("test message: error generating AI response", "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// Add AI response to session
-	_, err = g.sessions.AddMessage(session.Key, "assistant", convResponse.GetContent(), nil)
-	if err != nil {
-		g.logger.Error("error saving AI message", "error", err)
-	}
-
-	// Return response
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":  true,
-		"response": convResponse.GetContent(),
-		"usage":    convResponse.GetUsage(),
-		"steps":    convResponse.GetSteps(),
-	})
-}
-
-// createSchemaBuilder creates a schema builder with discovery providers
-func createSchemaBuilder(gw *Gateway, cfg *config.Config) *schema.Builder {
-	providers := make(map[string]schema.DiscoveryProvider)
-
-	// Add channel discovery provider
-	if gw != nil && gw.channelManager != nil {
-		channelProvider := schema.NewChannelDiscoveryProvider(&channelStatusAdapter{manager: gw.channelManager})
-		providers["channels"] = channelProvider
-	}
-
-	// Add workspace discovery provider
-	workspaceDir := cfg.Workspace.ContextDir
-	if workspaceDir == "" {
-		workspaceDir = "./workspace"
-	}
-	allowedPaths := cfg.Tools.Sandbox.AllowedPaths
-	workspaceProvider := schema.NewWorkspaceDiscoveryProvider(workspaceDir, allowedPaths)
-	providers["workspace_paths"] = workspaceProvider
-
-	return schema.NewBuilder(providers)
-}
-
-// shouldAutoEnableVecgo returns true when vecgo should auto-enable despite
-// vector.enabled not being set in config. This fires when Ollama is reachable
-// at localhost or OLLAMA_HOST is set, or OPENAI_API_KEY is present.
-func shouldAutoEnableVecgo(cfg config.VectorConfig, logger *slog.Logger) bool {
-	// If user explicitly configured a provider, auto-enable
-	if cfg.EmbedProvider != "" && cfg.EmbedProvider != "auto" {
-		return true
-	}
-
-	// Check OLLAMA_HOST env
-	if os.Getenv("OLLAMA_HOST") != "" {
-		return true
-	}
-
-	// Check OPENAI_API_KEY env
-	if os.Getenv("OPENAI_API_KEY") != "" {
-		return true
-	}
-
-	// Probe default Ollama at localhost
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(defaultOllamaEmbedHost + "/api/version")
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		logger.Info("auto-detected Ollama at localhost, enabling vector search")
-		return true
-	}
-	return false
-}
-
-// resolveEmbedder determines the embedding provider based on config and environment.
-// Returns the embedder and a provider name for logging. A nil embedder means vecgo should be disabled.
-func resolveEmbedder(cfg config.VectorConfig, logger *slog.Logger) (embedder.Embedder, string) {
-	switch cfg.EmbedProvider {
-	case "openai":
-		apiKey := ""
-		model := ""
-		if cfg.OpenAI != nil {
-			apiKey = cfg.OpenAI.APIKey
-			model = cfg.OpenAI.Model
-		}
-		if apiKey == "" {
-			apiKey = os.Getenv("OPENAI_API_KEY")
-		}
-		if apiKey == "" {
-			logger.Error("embed_provider=openai but no API key configured (set openai.api_key or OPENAI_API_KEY)")
-			return nil, "openai-no-key"
-		}
-		return embedding.NewOpenAIEmbedder(apiKey, model, cfg.EmbedDims), "openai"
-
-	case "ollama":
-		host, model := ollamaConfigValues(cfg)
-		logger.Info("using Ollama embeddings", "host", host, "model", model)
-		return embedding.NewOllamaEmbedder(host, model, cfg.EmbedDims), "ollama"
-
-	case "tfidf":
-		logger.Warn("embed_provider=tfidf is deprecated — TF-IDF produces poor semantic search results; vecgo disabled")
-		return nil, "tfidf-deprecated"
-
-	default: // "" or "auto"
-		// Auto-detect: OLLAMA_HOST env, then localhost probe, then OPENAI_API_KEY
-		host, model := ollamaConfigValues(cfg)
-		if os.Getenv("OLLAMA_HOST") != "" {
-			logger.Info("auto-detected Ollama from OLLAMA_HOST", "host", host, "model", model)
-			return embedding.NewOllamaEmbedder(host, model, cfg.EmbedDims), "ollama"
-		}
-		// Probe default localhost Ollama
-		client := &http.Client{Timeout: 2 * time.Second}
-		if resp, err := client.Get(host + "/api/version"); err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				logger.Info("auto-detected Ollama at localhost", "host", host, "model", model)
-				return embedding.NewOllamaEmbedder(host, model, cfg.EmbedDims), "ollama"
-			}
-		}
-		if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-			openaiModel := ""
-			if cfg.OpenAI != nil {
-				openaiModel = cfg.OpenAI.Model
-			}
-			logger.Info("auto-detected OpenAI from OPENAI_API_KEY")
-			return embedding.NewOpenAIEmbedder(apiKey, openaiModel, cfg.EmbedDims), "openai"
-		}
-		return nil, "none"
-	}
-}
-
-// ollamaConfigValues returns resolved host and model for Ollama from config + env.
-func ollamaConfigValues(cfg config.VectorConfig) (host, model string) {
-	host = defaultOllamaEmbedHost
-	model = defaultOllamaEmbedModel
-	if cfg.Ollama != nil {
-		if cfg.Ollama.Host != "" {
-			host = cfg.Ollama.Host
-		}
-		if cfg.Ollama.Model != "" {
-			model = cfg.Ollama.Model
-		}
-	}
-	if envHost := os.Getenv("OLLAMA_HOST"); envHost != "" {
-		host = envHost
-	}
-	return host, model
-}
-
-const (
-	defaultOllamaEmbedHost  = "http://localhost:11434"
-	defaultOllamaEmbedModel = "nomic-embed-text"
-)
-
-// summaryAIRouterAdapter adapts ai.Router to workspace.SummaryAIRouter
-type summaryAIRouterAdapter struct {
-	router *ai.Router
-}
-
-// newSummaryAIRouterAdapter creates a new adapter
-func newSummaryAIRouterAdapter(router *ai.Router) *summaryAIRouterAdapter {
-	return &summaryAIRouterAdapter{router: router}
-}
-
-// GenerateSimpleResponse generates a simple AI response without tools
-func (a *summaryAIRouterAdapter) GenerateSimpleResponse(ctx context.Context, prompt, model string) (workspace.SummaryAIResponse, error) {
-	// Create a minimal session for the summarization request
-	tempSession := &sessions.Session{
-		Key:     "summary_temp",
-		Context: map[string]string{"model": model},
-	}
-
-	// Use GenerateResponse without tools for simple summarization
-	// The 4th param is provider name (empty = default), model is set via session context
-	response, err := a.router.GenerateResponse(ctx, tempSession, prompt, "")
-	if err != nil {
-		return nil, err
-	}
-
-	return &summaryAIResponseAdapter{content: response.Content}, nil
-}
-
-// summaryAIResponseAdapter adapts ai.GenerateResponse to workspace.SummaryAIResponse
-type summaryAIResponseAdapter struct {
-	content string
-}
-
-// GetContent returns the response content
-func (a *summaryAIResponseAdapter) GetContent() string {
-	return a.content
-}
-
-func (g *Gateway) processRestartBreadcrumb() {
-	dataDir := g.config.DataDir
-	if dataDir == "" {
-		dataDir = "."
-	}
-
-	path := filepath.Join(dataDir, ".conduit-restart.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-
-	var breadcrumb RestartBreadcrumb
-	if err := json.Unmarshal(data, &breadcrumb); err != nil {
-		g.logger.Warn("failed to parse restart breadcrumb", "error", err, "path", path)
-		os.Remove(path)
-		return
-	}
-
-	resumed := 0
-	for _, s := range breadcrumb.ActiveSessions {
-		session, err := g.sessions.GetSession(s.SessionKey)
-		if err != nil || session == nil {
-			g.logger.Debug("skipping stale session from breadcrumb", "session", s.SessionKey)
-			continue
-		}
-
-		msg := fmt.Sprintf("Gateway restarted successfully at %s. Reason: %s. Previous sessions have been restored — you may continue where you left off.",
-			breadcrumb.Timestamp.Format(time.RFC3339), breadcrumb.Reason)
-
-		if _, err := g.sessions.AddMessage(s.SessionKey, "assistant", msg, nil); err != nil {
-			g.logger.Warn("failed to inject restart resume message", "session", s.SessionKey, "error", err)
-			continue
-		}
-		resumed++
-	}
-
-	os.Remove(path)
-	g.logger.Info("processed restart breadcrumb", "sessions_resumed", resumed, "reason", breadcrumb.Reason)
-}
-
-// wakeSession re-activates a session to process its most recent inter-session message.
-// It is called from the session wakeup listener goroutine started in Start().
-//
-// Recursion guard: the session's wake_depth context key is checked before processing.
-// If depth >= 3 (sessions messaging each other back and forth), the wake is skipped and
-// the message remains in the session for processing on the next normal activation.
-func (g *Gateway) wakeSession(sessionKey string) {
-	if g.ai == nil {
-		return
-	}
-
-	session, err := g.sessions.GetSession(sessionKey)
-	if err != nil {
-		g.logger.Warn("session wakeup: session not found", "session_key", sessionKey)
-		return
-	}
-
-	// Recursion guard: check current wake depth
-	depth := 0
-	if d := session.Context["wake_depth"]; d != "" {
-		if parsed, parseErr := strconv.Atoi(d); parseErr == nil {
-			depth = parsed
-		}
-	}
-	const maxWakeDepth = 3
-	if depth >= maxWakeDepth {
-		g.logger.Warn("session wakeup: max depth reached, message queued for next activation",
-			"session_key", sessionKey, "wake_depth", depth)
-		return
-	}
-
-	// Increment wake depth before processing (guards against recursive wakeups)
-	if setErr := g.sessions.SetSessionContext(sessionKey, "wake_depth", strconv.Itoa(depth+1)); setErr != nil {
-		g.logger.Warn("session wakeup: failed to set wake_depth", "session_key", sessionKey, "error", setErr)
-	}
-
-	// Find the most recent user message (the inter-session message just delivered)
-	messages, err := g.sessions.GetMessages(sessionKey, 20)
-	if err != nil || len(messages) == 0 {
-		g.logger.Warn("session wakeup: no messages found", "session_key", sessionKey)
-		_ = g.sessions.SetSessionContext(sessionKey, "wake_depth", "0")
-		return
-	}
-	var wakeMessage string
-	var wakeSource string
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			wakeMessage = messages[i].Content
-			if src, ok := messages[i].Metadata["wake_source"]; ok && src != "" {
-				wakeSource = src
-			} else if src, ok := messages[i].Metadata["source"]; ok && src == "inter_session" {
-				wakeSource = types.WakeSourceInterSession
-			}
-			break
-		}
-	}
-	if wakeMessage == "" {
-		g.logger.Warn("session wakeup: no user message to process", "session_key", sessionKey)
-		_ = g.sessions.SetSessionContext(sessionKey, "wake_depth", "0")
-		return
-	}
-
-	g.logger.Info("waking session for inter-session message",
-		"session_key", sessionKey, "wake_depth", depth+1, "wake_source", wakeSource)
-
-	// Derive a context from the gateway lifecycle context (not a request context)
-	wakeCtx, cancel := context.WithTimeout(g.ctx, 5*time.Minute)
-	defer cancel()
-
-	modelOverride := session.Context["model"]
-	providerOverride := session.Context["provider"]
-	wakeCtx = types.WithRequestContext(wakeCtx, session.ChannelID, session.UserID, sessionKey)
-	wakeCtx = types.WithWakeSource(wakeCtx, wakeSource)
-
-	// Track this request so /stop can cancel it
-	g.ws.ActiveRequestsMu.Lock()
-	g.ws.ActiveRequests[sessionKey] = cancel
-	g.ws.ActiveRequestsMu.Unlock()
-	defer func() {
-		g.ws.ActiveRequestsMu.Lock()
-		delete(g.ws.ActiveRequests, sessionKey)
-		g.ws.ActiveRequestsMu.Unlock()
-	}()
-
-	response, err := g.ai.GenerateResponseWithTools(wakeCtx, session, wakeMessage, providerOverride, modelOverride)
-
-	// Always reset wake depth when done (success or failure)
-	_ = g.sessions.SetSessionContext(sessionKey, "wake_depth", "0")
-
-	if err != nil {
-		if wakeCtx.Err() == context.Canceled {
-			g.logger.Debug("session wakeup cancelled", "session_key", sessionKey)
-			return
-		}
-		g.logger.Error("session wakeup: AI generation failed", "session_key", sessionKey, "error", err)
-		return
-	}
-
-	responseContent := response.GetContent()
-
-	// Persist AI response to session history
-	if _, addErr := g.sessions.AddMessage(sessionKey, "assistant", responseContent, nil); addErr != nil {
-		g.logger.Warn("session wakeup: failed to save AI response", "session_key", sessionKey, "error", addErr)
-	}
-
-	// Route non-silent responses to the session's channel
-	if responseContent != "" && !channels.IsSilentResponse(responseContent) &&
-		session.ChannelID != "" && session.UserID != "" {
-		outgoingMsg := &protocol.OutgoingMessage{
-			BaseMessage: protocol.BaseMessage{
-				Type:      protocol.TypeOutgoingMessage,
-				ID:        fmt.Sprintf("wake_%d", time.Now().UnixNano()),
-				Timestamp: time.Now(),
-			},
-			ChannelID: session.ChannelID,
-			UserID:    session.UserID,
-			Text:      responseContent,
-		}
-		if sendErr := g.channelManager.SendMessage(outgoingMsg); sendErr != nil {
-			g.logger.Warn("session wakeup: failed to send response to channel",
-				"session_key", sessionKey, "error", sendErr)
-		}
-	} else if wakeSource == types.WakeSourceSubAgentSilent &&
-		channels.IsSilentResponse(responseContent) {
-		// conduit-3qb1 observability: the sub-agent ran, produced output that
-		// was NOT posted to the channel (announce=false), and the parent LLM
-		// then chose to stay silent. The human never sees anything. Log this
-		// so we can observe the drop rate and tune the prompt guidance.
-		g.logger.Warn("session wakeup: sub-agent silent callback fully suppressed",
-			"session_key", sessionKey,
-			"wake_source", wakeSource,
-			"wake_message_chars", len(wakeMessage))
-	}
-}
-
-// convertSummaryFileConfigs converts config types to workspace types
-func convertSummaryFileConfigs(cfgConfigs map[string]config.SummaryFileConfig) map[string]workspace.SummaryFileConfig {
-	if len(cfgConfigs) == 0 {
-		return nil
-	}
-	result := make(map[string]workspace.SummaryFileConfig, len(cfgConfigs))
-	for filename, cfg := range cfgConfigs {
-		result[filename] = workspace.SummaryFileConfig{
-			Ratio:        cfg.Ratio,
-			PreserveKeys: cfg.PreserveKeys,
-		}
-	}
-	return result
-}
