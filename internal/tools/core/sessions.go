@@ -681,6 +681,36 @@ func (t *SessionStatusTool) formatSessionStatus(status map[string]interface{}) s
 		}
 	}
 
+	// Fuel gauge (conduit-zojv) — rate-limit headroom and rolling token consumption.
+	if gauge, ok := status["fuel_gauge"].(map[string]interface{}); ok && gauge != nil {
+		builder.WriteString("\nFuel Gauge:\n")
+		if tokenUsage, ok := gauge["token_usage"].(map[string]interface{}); ok {
+			if hour, ok := tokenUsage["hour"].(map[string]interface{}); ok {
+				builder.WriteString(fmt.Sprintf("  Tokens (1h):  %v req, %v in, %v out\n",
+					hour["requests"], hour["input_tokens"], hour["output_tokens"]))
+			}
+			if day, ok := tokenUsage["day"].(map[string]interface{}); ok {
+				builder.WriteString(fmt.Sprintf("  Tokens (24h): %v req, %v in, %v out\n",
+					day["requests"], day["input_tokens"], day["output_tokens"]))
+			}
+		}
+		if rl, ok := gauge["rate_limit"].(map[string]interface{}); ok {
+			enabled, _ := rl["enabled"].(bool)
+			if enabled {
+				if anon, ok := rl["anonymous"].(map[string]interface{}); ok {
+					builder.WriteString(fmt.Sprintf("  Rate limit (anon):  limit=%v, active_buckets=%v\n",
+						anon["limit"], anon["active_buckets"]))
+				}
+				if auth, ok := rl["authenticated"].(map[string]interface{}); ok {
+					builder.WriteString(fmt.Sprintf("  Rate limit (auth):  limit=%v, active_buckets=%v\n",
+						auth["limit"], auth["active_buckets"]))
+				}
+			} else {
+				builder.WriteString("  Rate limit: disabled\n")
+			}
+		}
+	}
+
 	// Context info
 	if context, ok := status["context"].(map[string]interface{}); ok && len(context) > 0 {
 		builder.WriteString("\nContext:\n")

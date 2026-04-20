@@ -1,11 +1,103 @@
 package gateway
 
 import (
+	"context"
 	"testing"
 
 	"conduit/internal/middleware"
 	"conduit/internal/monitoring"
 )
+
+// TestFuelGaugeToMap_Shape verifies that ToMap returns the expected nested
+// structure and that all mandatory keys are present (conduit-zojv).
+func TestFuelGaugeToMap_Shape(t *testing.T) {
+	gw, _ := newTestGatewayWithSessions(t)
+	tw := monitoring.NewTokenWindowTracker()
+	tw.Record(100, 50, 5, 2)
+	gw.tokenWindow = tw
+
+	m := gw.GetFuelGauge(0).ToMap()
+
+	// top-level keys
+	for _, k := range []string{"taken_at", "rate_limit", "token_usage"} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("ToMap missing top-level key %q", k)
+		}
+	}
+
+	// token_usage sub-keys
+	tu, ok := m["token_usage"].(map[string]interface{})
+	if !ok {
+		t.Fatal("token_usage should be map[string]interface{}")
+	}
+	for _, k := range []string{"hour", "day", "taken_at"} {
+		if _, ok := tu[k]; !ok {
+			t.Errorf("token_usage missing key %q", k)
+		}
+	}
+
+	hour, ok := tu["hour"].(map[string]interface{})
+	if !ok {
+		t.Fatal("token_usage.hour should be map[string]interface{}")
+	}
+	// Fields from monitoring.TokenWindowSnapshot are int64.
+	if v, _ := hour["requests"].(int64); v != 1 {
+		t.Errorf("hour.requests: want 1, got %v (type %T)", hour["requests"], hour["requests"])
+	}
+	if v, _ := hour["input_tokens"].(int64); v != 100 {
+		t.Errorf("hour.input_tokens: want 100, got %v", hour["input_tokens"])
+	}
+
+	// rate_limit sub-keys
+	rl, ok := m["rate_limit"].(map[string]interface{})
+	if !ok {
+		t.Fatal("rate_limit should be map[string]interface{}")
+	}
+	for _, k := range []string{"enabled", "anonymous", "authenticated"} {
+		if _, ok := rl[k]; !ok {
+			t.Errorf("rate_limit missing key %q", k)
+		}
+	}
+}
+
+// TestGetFuelGaugeMap_ViaInterface verifies that GetFuelGaugeMap on *Gateway
+// (satisfying types.GatewayService) returns non-nil data (conduit-zojv).
+func TestGetFuelGaugeMap_ViaInterface(t *testing.T) {
+	gw, _ := newTestGatewayWithSessions(t)
+	tw := monitoring.NewTokenWindowTracker()
+	tw.Record(200, 100, 0, 0)
+	gw.tokenWindow = tw
+
+	m := gw.GetFuelGaugeMap(0)
+	if m == nil {
+		t.Fatal("GetFuelGaugeMap returned nil")
+	}
+	if _, ok := m["token_usage"]; !ok {
+		t.Error("GetFuelGaugeMap result missing token_usage key")
+	}
+}
+
+// TestGetSessionStatus_IncludesFuelGauge verifies that GetSessionStatus
+// embeds a fuel_gauge field in its result (conduit-zojv).
+func TestGetSessionStatus_IncludesFuelGauge(t *testing.T) {
+	gw, store := newTestGatewayWithSessions(t)
+	sess, err := store.GetOrCreateSession("u1", "ch1")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	status, err := gw.GetSessionStatus(context.Background(), sess.Key)
+	if err != nil {
+		t.Fatalf("GetSessionStatus: %v", err)
+	}
+	fg, ok := status["fuel_gauge"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected fuel_gauge in status, got %T", status["fuel_gauge"])
+	}
+	if _, ok := fg["token_usage"]; !ok {
+		t.Error("fuel_gauge missing token_usage key")
+	}
+}
 
 func TestGetFuelGauge_NilComponentsReturnEmpty(t *testing.T) {
 	gw, _ := newTestGatewayWithSessions(t)
