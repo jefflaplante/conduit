@@ -126,6 +126,13 @@ func (d *SkillDiscovery) loadSkill(ctx context.Context, skillPath string) (*Skil
 	}
 	skill.References = references
 
+	// Parse declared dependencies from the skill content and load their
+	// contents. Missing/oversized/unsafe deps are recorded but never fail the
+	// skill load. See internal/skills/dependencies.go for details.
+	if depPaths := parseDependencyPaths(skill.Content); len(depPaths) > 0 {
+		skill.Dependencies = resolveDependencies(skillPath, depPaths)
+	}
+
 	return skill, nil
 }
 
