@@ -21,6 +21,10 @@ type GatewayMetrics struct {
 	CompletedRequests int64 `json:"completed_requests"`
 	FailedRequests    int64 `json:"failed_requests"`
 
+	// Ingest drop counters per channel (gateway.ingest.drops{channel=...}).
+	// Populated when msgSemaphore is full and a message cannot be handed off.
+	IngestDrops map[string]int64 `json:"ingest_drops,omitempty"`
+
 	// WebHook metrics (like TS Conduit)
 	WebhookConnections int `json:"webhook_connections"`
 	ActiveWebhooks     int `json:"active_webhooks"`
@@ -48,10 +52,37 @@ type GatewayMetrics struct {
 func NewGatewayMetrics() *GatewayMetrics {
 	now := time.Now()
 	return &GatewayMetrics{
-		Timestamp: now,
-		startTime: now,
-		Status:    "healthy",
+		Timestamp:   now,
+		startTime:   now,
+		Status:      "healthy",
+		IngestDrops: make(map[string]int64),
 	}
+}
+
+// IncrementIngestDrop increments the gateway.ingest.drops counter for a channel.
+// Used by backpressure branches where an incoming message cannot be processed
+// because the semaphore is full.
+func (g *GatewayMetrics) IncrementIngestDrop(channel string) {
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+
+	if g.IngestDrops == nil {
+		g.IngestDrops = make(map[string]int64)
+	}
+	g.IngestDrops[channel]++
+	g.Timestamp = time.Now()
+}
+
+// GetIngestDrops returns a copy of the per-channel ingest drop counters.
+func (g *GatewayMetrics) GetIngestDrops() map[string]int64 {
+	g.mutex.RLock()
+	defer g.mutex.RUnlock()
+
+	out := make(map[string]int64, len(g.IngestDrops))
+	for k, v := range g.IngestDrops {
+		out[k] = v
+	}
+	return out
 }
 
 // UpdateSessionCount updates session counters
@@ -144,31 +175,40 @@ func (g *GatewayMetrics) SetVersion(version string) {
 
 // MetricsSnapshot is a data-only copy of GatewayMetrics, safe to pass by value.
 type MetricsSnapshot struct {
-	ActiveSessions     int       `json:"active_sessions"`
-	ProcessingSessions int       `json:"processing_sessions"`
-	WaitingSessions    int       `json:"waiting_sessions"`
-	IdleSessions       int       `json:"idle_sessions"`
-	TotalSessions      int       `json:"total_sessions"`
-	QueueDepth         int       `json:"queue_depth"`
-	PendingRequests    int       `json:"pending_requests"`
-	CompletedRequests  int64     `json:"completed_requests"`
-	FailedRequests     int64     `json:"failed_requests"`
-	WebhookConnections int       `json:"webhook_connections"`
-	ActiveWebhooks     int       `json:"active_webhooks"`
-	UptimeSeconds      int64     `json:"uptime_seconds"`
-	MemoryUsageBytes   int64     `json:"memory_usage_bytes"`
-	MemoryUsageMB      float64   `json:"memory_usage_mb"`
-	CPUUsagePercent    float64   `json:"cpu_usage_percent,omitempty"`
-	GoroutineCount     int       `json:"goroutine_count"`
-	Timestamp          time.Time `json:"timestamp"`
-	Status             string    `json:"status"`
-	Version            string    `json:"version,omitempty"`
+	ActiveSessions     int              `json:"active_sessions"`
+	ProcessingSessions int              `json:"processing_sessions"`
+	WaitingSessions    int              `json:"waiting_sessions"`
+	IdleSessions       int              `json:"idle_sessions"`
+	TotalSessions      int              `json:"total_sessions"`
+	QueueDepth         int              `json:"queue_depth"`
+	PendingRequests    int              `json:"pending_requests"`
+	CompletedRequests  int64            `json:"completed_requests"`
+	FailedRequests     int64            `json:"failed_requests"`
+	IngestDrops        map[string]int64 `json:"ingest_drops,omitempty"`
+	WebhookConnections int              `json:"webhook_connections"`
+	ActiveWebhooks     int              `json:"active_webhooks"`
+	UptimeSeconds      int64            `json:"uptime_seconds"`
+	MemoryUsageBytes   int64            `json:"memory_usage_bytes"`
+	MemoryUsageMB      float64          `json:"memory_usage_mb"`
+	CPUUsagePercent    float64          `json:"cpu_usage_percent,omitempty"`
+	GoroutineCount     int              `json:"goroutine_count"`
+	Timestamp          time.Time        `json:"timestamp"`
+	Status             string           `json:"status"`
+	Version            string           `json:"version,omitempty"`
 }
 
 // Snapshot returns a thread-safe copy of the current metrics
 func (g *GatewayMetrics) Snapshot() MetricsSnapshot {
 	g.mutex.RLock()
 	defer g.mutex.RUnlock()
+
+	var drops map[string]int64
+	if len(g.IngestDrops) > 0 {
+		drops = make(map[string]int64, len(g.IngestDrops))
+		for k, v := range g.IngestDrops {
+			drops[k] = v
+		}
+	}
 
 	return MetricsSnapshot{
 		ActiveSessions:     g.ActiveSessions,
@@ -180,6 +220,7 @@ func (g *GatewayMetrics) Snapshot() MetricsSnapshot {
 		PendingRequests:    g.PendingRequests,
 		CompletedRequests:  g.CompletedRequests,
 		FailedRequests:     g.FailedRequests,
+		IngestDrops:        drops,
 		WebhookConnections: g.WebhookConnections,
 		ActiveWebhooks:     g.ActiveWebhooks,
 		UptimeSeconds:      g.UptimeSeconds,
@@ -223,6 +264,7 @@ func (g *GatewayMetrics) Reset() {
 	g.PendingRequests = 0
 	g.CompletedRequests = 0
 	g.FailedRequests = 0
+	g.IngestDrops = make(map[string]int64)
 	g.WebhookConnections = 0
 	g.ActiveWebhooks = 0
 	g.MemoryUsageBytes = 0

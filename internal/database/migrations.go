@@ -195,6 +195,26 @@ func GetMigrations() []Migration {
 				ALTER TABLE auth_tokens ADD COLUMN hash_version INTEGER NOT NULL DEFAULT 1;
 			`,
 		},
+		{
+			Version: 7,
+			Name:    "create_ingest_dlq_table",
+			SQL: `
+				-- Dead-letter queue for ingress messages dropped under backpressure
+				-- (msgSemaphore full). Provides an audit trail for otherwise-silent drops.
+				CREATE TABLE IF NOT EXISTS ingest_dlq (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					channel_id TEXT NOT NULL,
+					user_id TEXT NOT NULL DEFAULT '',
+					session_key TEXT NOT NULL DEFAULT '',
+					text TEXT NOT NULL DEFAULT '',
+					reason TEXT NOT NULL,
+					dropped_at DATETIME DEFAULT CURRENT_TIMESTAMP
+				);
+
+				CREATE INDEX IF NOT EXISTS idx_ingest_dlq_dropped_at ON ingest_dlq (dropped_at);
+				CREATE INDEX IF NOT EXISTS idx_ingest_dlq_channel_id ON ingest_dlq (channel_id);
+			`,
+		},
 	}
 }
 
