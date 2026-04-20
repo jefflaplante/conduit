@@ -616,3 +616,109 @@ func TestStaleColumnExists(t *testing.T) {
 	require.NotNil(t, entry)
 	assert.False(t, entry.Stale)
 }
+
+// TestRecallWithContext_EmptyContextMatchesRecall verifies that recall with an
+// empty context returns identical ordering to baseline Recall (no score change).
+func TestRecallWithContext_EmptyContextMatchesRecall(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	// Seed three entries that all match "solar" fuzzy but differ in their other content.
+	require.NoError(t, b.Store(ctx, "solar.panel_dimensions", "each panel is 1m by 1.7m aluminum frame", TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "solar.billing", "energy rate is 0.12 per kWh on the monthly bill", TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "solar.inverter", "SMA Sunny Boy 7.7kW, warranty 10 years", TierLongTerm, "test"))
+
+	baseline, err := b.Recall(ctx, "solar", 10)
+	require.NoError(t, err)
+	require.Len(t, baseline, 3)
+
+	// Empty context string — must produce the same ordering.
+	empty, err := b.RecallWithContext(ctx, "solar", 10, "")
+	require.NoError(t, err)
+	require.Len(t, empty, 3)
+
+	baselineKeys := make([]string, len(baseline))
+	for i, e := range baseline {
+		baselineKeys[i] = e.Key
+	}
+	emptyKeys := make([]string, len(empty))
+	for i, e := range empty {
+		emptyKeys[i] = e.Key
+	}
+	assert.Equal(t, baselineKeys, emptyKeys, "empty context must not change ordering")
+
+	// Whitespace-only context tokenizes to nothing — also identical ordering.
+	whitespace, err := b.RecallWithContext(ctx, "solar", 10, "   ")
+	require.NoError(t, err)
+	require.Len(t, whitespace, 3)
+	whitespaceKeys := make([]string, len(whitespace))
+	for i, e := range whitespace {
+		whitespaceKeys[i] = e.Key
+	}
+	assert.Equal(t, baselineKeys, whitespaceKeys, "whitespace-only context must not change ordering")
+}
+
+// TestRecallWithContext_BoostsOverlappingEntry verifies that a context string
+// overlapping with one entry's value promotes it above an entry that would
+// otherwise rank higher.
+func TestRecallWithContext_BoostsOverlappingEntry(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	// Seed two entries that both match the "solar" query, with distinct
+	// content so only one overlaps the context "billing costs electricity rate".
+	require.NoError(t, b.Store(ctx, "solar.panel_dimensions", "each panel is 1m by 1.7m aluminum frame", TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "solar.billing", "energy rate is 0.12 per kWh on the monthly bill", TierLongTerm, "test"))
+
+	// Establish baseline ordering without context. Record each rank.
+	baseline, err := b.Recall(ctx, "solar", 10)
+	require.NoError(t, err)
+	require.Len(t, baseline, 2)
+	baselineRank := make(map[string]int, len(baseline))
+	for i, e := range baseline {
+		baselineRank[e.Key] = i
+	}
+
+	// With context that overlaps the "billing" entry (tokens "billing" and "rate"
+	// both appear in its value), the billing entry must rank first regardless
+	// of baseline order.
+	withCtx, err := b.RecallWithContext(ctx, "solar", 10, "billing costs electricity rate")
+	require.NoError(t, err)
+	require.Len(t, withCtx, 2)
+	assert.Equal(t, "solar.billing", withCtx[0].Key,
+		"context-overlapping entry should rank first; baseline rank was %d", baselineRank["solar.billing"])
+
+	// Sanity: context must not filter — both entries are still returned.
+	keys := map[string]bool{withCtx[0].Key: true, withCtx[1].Key: true}
+	assert.True(t, keys["solar.billing"])
+	assert.True(t, keys["solar.panel_dimensions"])
+}
+
+// TestRecallWithContext_NoOverlapNoChange verifies that a context that matches
+// no entries leaves ordering undisturbed (no boost applied anywhere).
+func TestRecallWithContext_NoOverlapNoChange(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	require.NoError(t, b.Store(ctx, "solar.panel_dimensions", "each panel is 1m by 1.7m aluminum frame", TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "solar.billing", "energy rate is 0.12 per kWh on the monthly bill", TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "solar.inverter", "SMA Sunny Boy 7.7kW, warranty 10 years", TierLongTerm, "test"))
+
+	baseline, err := b.Recall(ctx, "solar", 10)
+	require.NoError(t, err)
+
+	// Context tokens that do not appear in any entry.
+	withCtx, err := b.RecallWithContext(ctx, "solar", 10, "xyzzy quokka")
+	require.NoError(t, err)
+	require.Len(t, withCtx, len(baseline))
+
+	baselineKeys := make([]string, len(baseline))
+	for i, e := range baseline {
+		baselineKeys[i] = e.Key
+	}
+	withCtxKeys := make([]string, len(withCtx))
+	for i, e := range withCtx {
+		withCtxKeys[i] = e.Key
+	}
+	assert.Equal(t, baselineKeys, withCtxKeys, "non-overlapping context must not change ordering")
+}
