@@ -123,7 +123,7 @@ func TestRateLimitingConfig_CustomValues(t *testing.T) {
     "identity": {"oauth_identity": "test", "api_key_identity": "test"},
     "capabilities": {"memory_recall": true, "tool_chaining": true}
   },
-  "tools": {"enabled_tools": [], "max_tool_chains": 25, "sandbox": {"workspace_dir": "./test"}},
+  "tools": {"enabled_tools": ["read"], "max_tool_chains": 25, "sandbox": {"workspace_dir": "./test"}},
   "channels": [],
   "heartbeat": {
     "enabled": true,

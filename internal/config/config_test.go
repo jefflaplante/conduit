@@ -65,6 +65,7 @@ func TestConfigSaveAndLoad(t *testing.T) {
 			},
 		},
 		Tools: ToolsConfig{
+			EnabledTools:  []string{"read"},
 			MaxToolChains: 25,
 		},
 		Heartbeat:      DefaultHeartbeatConfig(),
@@ -432,7 +433,7 @@ func TestDataDirAndSecretsFileInJSON(t *testing.T) {
 		"secrets_file": "/custom/secrets.env",
 		"database": {"path": "test.db"},
 		"ai": {"default_provider": "anthropic", "providers": [{"name": "anthropic", "type": "anthropic", "api_key": "test", "model": "test"}]},
-		"tools": {"max_tool_chains": 25},
+		"tools": {"enabled_tools": ["read"], "max_tool_chains": 25},
 		"heartbeat": {"enabled": false},
 		"agent_heartbeat": {"enabled": false}
 	}`
@@ -525,7 +526,7 @@ func TestDiagnosticsConfig_JSONSerialization(t *testing.T) {
 		"port": 18789,
 		"database": {"path": "test.db"},
 		"ai": {"default_provider": "anthropic", "providers": [{"name": "anthropic", "type": "anthropic", "api_key": "test", "model": "test"}]},
-		"tools": {"max_tool_chains": 25},
+		"tools": {"enabled_tools": ["read"], "max_tool_chains": 25},
 		"diagnostics": {
 			"require_auth": true,
 			"health_public": false
