@@ -24,15 +24,16 @@ const (
 )
 
 type Entry struct {
-	Key         string    `json:"key"`
-	Value       string    `json:"value"`
-	Tier        Tier      `json:"tier"`
-	CreatedAt   time.Time `json:"created_at"`
-	AccessedAt  time.Time `json:"accessed_at"`
-	AccessCount int       `json:"access_count"`
-	Salience    float64   `json:"salience"`
-	Source      string    `json:"source,omitempty"`
-	Stale       bool      `json:"stale,omitempty"`
+	Key         string     `json:"key"`
+	Value       string     `json:"value"`
+	Tier        Tier       `json:"tier"`
+	CreatedAt   time.Time  `json:"created_at"`
+	AccessedAt  time.Time  `json:"accessed_at"`
+	AccessCount int        `json:"access_count"`
+	Salience    float64    `json:"salience"`
+	Source      string     `json:"source,omitempty"`
+	Stale       bool       `json:"stale,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 }
 
 type ConsolidationReport struct {
@@ -49,6 +50,48 @@ type Status struct {
 	ScratchDepth int      `json:"scratch_depth"`
 	AvgSalience  float64  `json:"avg_salience,omitempty"`
 	HottestKeys  []string `json:"hottest_keys,omitempty"`
+	ExpiringSoon int      `json:"expiring_soon,omitempty"`
+}
+
+// storeOpts holds options for Store calls, populated by StoreOption funcs.
+type storeOpts struct {
+	ttl time.Duration
+}
+
+// StoreOption configures an individual Store call.
+type StoreOption func(*storeOpts)
+
+// WithTTL sets a time-to-live on the stored entry. After ttl elapses, the
+// entry is no longer returned from Get/Recall and is eligible for deletion
+// by the next pruneExpired/Consolidate/rem_cycle sweep. A zero duration
+// means no expiry.
+func WithTTL(d time.Duration) StoreOption {
+	return func(o *storeOpts) { o.ttl = d }
+}
+
+// ParseDuration parses a duration string with Go's standard units plus
+// the convenience suffixes "d" (days) and "w" (weeks), which time.ParseDuration
+// does not natively support. Example: "24h", "7d", "2w", "90m".
+func ParseDuration(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	// Check for trailing d or w (days/weeks); otherwise defer to stdlib.
+	if n := len(s); n >= 2 {
+		last := s[n-1]
+		if last == 'd' || last == 'w' {
+			var count int
+			if _, err := fmt.Sscanf(s[:n-1], "%d", &count); err != nil {
+				return 0, fmt.Errorf("parse duration %q: %w", s, err)
+			}
+			mult := 24 * time.Hour
+			if last == 'w' {
+				mult = 7 * 24 * time.Hour
+			}
+			return time.Duration(count) * mult, nil
+		}
+	}
+	return time.ParseDuration(s)
 }
 
 type Option func(*Brain)
@@ -126,14 +169,23 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 	return b, nil
 }
 
-func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source string) error {
+func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source string, opts ...StoreOption) error {
 	if err := ValidateSource(source); err != nil {
 		log.Printf("Brain: warning: %v (key=%q)", err, key)
 	}
+	o := &storeOpts{}
+	for _, opt := range opts {
+		opt(o)
+	}
 	now := time.Now()
+	var expiresAt *time.Time
+	if o.ttl > 0 {
+		t := now.Add(o.ttl)
+		expiresAt = &t
+	}
 	switch tier {
 	case TierLongTerm:
-		return b.storeLTM(key, value, source, now)
+		return b.storeLTM(key, value, source, now, expiresAt)
 	case TierWorking:
 		userID := userIDFromCtx(ctx)
 		b.mu.Lock()
@@ -147,11 +199,13 @@ func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source 
 			existing.AccessCount++
 			existing.Source = source
 			existing.Salience = b.computeSalience(existing)
+			existing.ExpiresAt = expiresAt
 		} else {
 			b.working[userID][key] = &Entry{
 				Key: key, Value: value, Tier: TierWorking,
 				CreatedAt: now, AccessedAt: now,
 				AccessCount: 1, Salience: 0.5, Source: source,
+				ExpiresAt: expiresAt,
 			}
 		}
 		return nil
@@ -294,25 +348,34 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 	return nil
 }
 
-func (b *Brain) storeLTM(key, value, source string, now time.Time) error {
+func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *time.Time) error {
 	nowStr := now.UTC().Format("2006-01-02 15:04:05")
+	var expiresStr interface{}
+	if expiresAt != nil {
+		// Use sub-second precision so TTLs shorter than 1s still expire correctly
+		// when compared against strftime('%Y-%m-%d %H:%M:%f','now').
+		expiresStr = expiresAt.UTC().Format("2006-01-02 15:04:05.000")
+	} else {
+		expiresStr = nil
+	}
 	// Use a simple default salience for upsert; the exact salience is recomputed on access.
 	// The ON CONFLICT UPDATE preserves the existing salience bumped slightly for the access.
 	err := database.RetryOnBusy(5, func() error {
 		_, err := b.db.Exec(`
-			INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
-			VALUES (?, ?, ?, ?, ?, 1, 0.5)
+			INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience, expires_at)
+			VALUES (?, ?, ?, ?, ?, 1, 0.5, ?)
 			ON CONFLICT(key) DO UPDATE SET
 				value = excluded.value,
 				source = excluded.source,
 				accessed_at = excluded.accessed_at,
 				access_count = access_count + 1,
+				expires_at = excluded.expires_at,
 				salience = COALESCE(
 					(MIN(CAST(access_count + 1 AS REAL) / CAST(? AS REAL), 1.0) * ?) +
 					(1.0 / (1.0 + 0.0)) * ? +
 					(0.8 * ?),
 					salience, 0.5)
-		`, key, value, source, nowStr, nowStr,
+		`, key, value, source, nowStr, nowStr, expiresStr,
 			b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight)
 		return err
 	})
@@ -333,9 +396,18 @@ func (b *Brain) storeLTM(key, value, source string, now time.Time) error {
 
 func (b *Brain) Get(ctx context.Context, key string) (*Entry, error) {
 	userID := userIDFromCtx(ctx)
+	now := time.Now()
 	b.mu.RLock()
 	if wm, ok := b.working[userID]; ok {
 		if entry, ok := wm[key]; ok {
+			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+				// Expired — delete and fall through to LTM lookup.
+				b.mu.RUnlock()
+				b.mu.Lock()
+				delete(wm, key)
+				b.mu.Unlock()
+				return b.getLTM(key)
+			}
 			b.mu.RUnlock()
 			b.mu.Lock()
 			entry.AccessedAt = time.Now()
@@ -350,6 +422,11 @@ func (b *Brain) Get(ctx context.Context, key string) (*Entry, error) {
 	if parentID != "" && parentID != userID {
 		if parentWM, ok := b.working[parentID]; ok {
 			if entry, ok := parentWM[key]; ok {
+				if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+					// Expired parent entry — skip, fall through to LTM.
+					b.mu.RUnlock()
+					return b.getLTM(key)
+				}
 				b.mu.RUnlock()
 				copied := *entry
 				return &copied, nil
@@ -370,13 +447,14 @@ func (b *Brain) getLTM(key string) (*Entry, error) {
 				(1.0 / (1.0 + 0.0)) * ? +
 				(0.8 * ?),
 				salience, 0.5)
-		WHERE key = ?
-		RETURNING key, value, created_at, accessed_at, access_count, salience, source, stale
+		WHERE key = ? AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))
+		RETURNING key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at
 	`, b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight, key)
 	entry := &Entry{Tier: TierLongTerm}
 	var staleInt int
+	var expiresAt sql.NullTime
 	err := row.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-		&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt)
+		&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -384,6 +462,10 @@ func (b *Brain) getLTM(key string) (*Entry, error) {
 		return nil, fmt.Errorf("get LTM: %w", err)
 	}
 	entry.Stale = staleInt != 0
+	if expiresAt.Valid {
+		t := expiresAt.Time
+		entry.ExpiresAt = &t
+	}
 	return entry, nil
 }
 
@@ -428,10 +510,14 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 
 	userID := userIDFromCtx(ctx)
 	parentID := parentUserIDFromCtx(ctx)
+	now := time.Now()
 
 	b.mu.RLock()
 	if wm, ok := b.working[userID]; ok {
 		for _, entry := range wm {
+			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+				continue
+			}
 			if ms := queryMatchScore(entry, terms); ms > 0 {
 				scored = append(scored, scoredEntry{entry, ms})
 				seen[entry.Key] = true
@@ -442,6 +528,9 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	if parentID != "" && parentID != userID {
 		if parentWM, ok := b.working[parentID]; ok {
 			for _, entry := range parentWM {
+				if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+					continue
+				}
 				if !seen[entry.Key] {
 					if ms := queryMatchScore(entry, terms); ms > 0 {
 						copied := *entry
@@ -466,10 +555,10 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 		matchArgs = append(matchArgs, "%"+term+"%", "%"+term+"%")
 	}
 
-	sql := fmt.Sprintf(
-		`SELECT key, value, created_at, accessed_at, access_count, salience, source, stale,
+	sqlQuery := fmt.Sprintf(
+		`SELECT key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at,
 		(%s) AS match_count
-		FROM brain_ltm WHERE %s
+		FROM brain_ltm WHERE (%s) AND (expires_at IS NULL OR expires_at > strftime('%%Y-%%m-%%d %%H:%%M:%%f', 'now'))
 		ORDER BY match_count DESC, salience DESC LIMIT ?`,
 		strings.Join(matchExprs, " + "),
 		strings.Join(whereClauses, " OR "),
@@ -477,7 +566,7 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	args := append(matchArgs, whereArgs...)
 	args = append(args, limit)
 
-	rows, err := b.db.Query(sql, args...)
+	rows, err := b.db.Query(sqlQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("recall LTM: %w", err)
 	}
@@ -486,11 +575,16 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 		entry := &Entry{Tier: TierLongTerm}
 		var matchCount int
 		var staleInt int
+		var expiresAtNT sql.NullTime
 		if err := rows.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &matchCount); err != nil {
+			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAtNT, &matchCount); err != nil {
 			continue
 		}
 		entry.Stale = staleInt != 0
+		if expiresAtNT.Valid {
+			t := expiresAtNT.Time
+			entry.ExpiresAt = &t
+		}
 		if !seen[entry.Key] {
 			ms := float64(matchCount) / float64(len(terms))
 			scored = append(scored, scoredEntry{entry, ms})
@@ -529,10 +623,14 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 	seen := make(map[string]bool)
 	userID := userIDFromCtx(ctx)
 	parentID := parentUserIDFromCtx(ctx)
+	now := time.Now()
 
 	b.mu.RLock()
 	if wm, ok := b.working[userID]; ok {
 		for _, entry := range wm {
+			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+				continue
+			}
 			if strings.HasPrefix(entry.Key, prefix) {
 				if sourcePrefix == "" || strings.HasPrefix(entry.Source, sourcePrefix) {
 					results = append(results, entry)
@@ -545,6 +643,9 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 	if parentID != "" && parentID != userID {
 		if parentWM, ok := b.working[parentID]; ok {
 			for _, entry := range parentWM {
+				if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+					continue
+				}
 				if !seen[entry.Key] && strings.HasPrefix(entry.Key, prefix) {
 					if sourcePrefix == "" || strings.HasPrefix(entry.Source, sourcePrefix) {
 						copied := *entry
@@ -556,8 +657,8 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 	}
 	b.mu.RUnlock()
 
-	query := `SELECT key, value, created_at, accessed_at, access_count, salience, source, stale
-		FROM brain_ltm WHERE key LIKE ?`
+	query := `SELECT key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at
+		FROM brain_ltm WHERE key LIKE ? AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))`
 	args := []interface{}{prefix + "%"}
 	if sourcePrefix != "" {
 		query += " AND source LIKE ?"
@@ -573,11 +674,16 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 	for rows.Next() {
 		entry := &Entry{Tier: TierLongTerm}
 		var staleInt int
+		var expiresAtNT sql.NullTime
 		if err := rows.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt); err != nil {
+			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAtNT); err != nil {
 			continue
 		}
 		entry.Stale = staleInt != 0
+		if expiresAtNT.Valid {
+			t := expiresAtNT.Time
+			entry.ExpiresAt = &t
+		}
 		results = append(results, entry)
 	}
 	return results, nil
@@ -652,12 +758,14 @@ func (b *Brain) Promote(ctx context.Context, key string) error {
 	if entry == nil {
 		return fmt.Errorf("key %q not found in working memory", key)
 	}
-	return b.storeLTM(key, entry.Value, entry.Source, time.Now())
+	return b.storeLTM(key, entry.Value, entry.Source, time.Now(), entry.ExpiresAt)
 }
 
 // WorkingMemoryEntries returns a snapshot of all WM entries for the given user.
+// Expired entries are filtered out.
 func (b *Brain) WorkingMemoryEntries(ctx context.Context) []*Entry {
 	userID := userIDFromCtx(ctx)
+	now := time.Now()
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	wm, ok := b.working[userID]
@@ -666,6 +774,9 @@ func (b *Brain) WorkingMemoryEntries(ctx context.Context) []*Entry {
 	}
 	entries := make([]*Entry, 0, len(wm))
 	for _, e := range wm {
+		if e.ExpiresAt != nil && !e.ExpiresAt.After(now) {
+			continue
+		}
 		copied := *e
 		entries = append(entries, &copied)
 	}
@@ -675,6 +786,11 @@ func (b *Brain) WorkingMemoryEntries(ctx context.Context) []*Entry {
 func (b *Brain) Consolidate(ctx context.Context, autoPromote bool) (*ConsolidationReport, error) {
 	userID := userIDFromCtx(ctx)
 	report := &ConsolidationReport{}
+
+	// Prune expired entries first so we never promote stale data.
+	if _, err := b.pruneExpired(ctx); err != nil {
+		log.Printf("Brain.Consolidate: pruneExpired failed: %v", err)
+	}
 
 	b.mu.Lock()
 	wm, ok := b.working[userID]
@@ -702,7 +818,7 @@ func (b *Brain) Consolidate(ctx context.Context, autoPromote bool) (*Consolidati
 	b.mu.Unlock()
 
 	for _, entry := range toPromote {
-		if err := b.storeLTM(entry.Key, entry.Value, entry.Source, time.Now()); err != nil {
+		if err := b.storeLTM(entry.Key, entry.Value, entry.Source, time.Now(), entry.ExpiresAt); err != nil {
 			log.Printf("Brain: failed to promote %q: %v", entry.Key, err)
 			continue
 		}
@@ -726,14 +842,23 @@ func (b *Brain) Consolidate(ctx context.Context, autoPromote bool) (*Consolidati
 
 func (b *Brain) Status(ctx context.Context) (*Status, error) {
 	userID := userIDFromCtx(ctx)
+	now := time.Now()
+	soonCutoff := now.Add(24 * time.Hour)
 	b.mu.RLock()
 	wmCount := 0
 	scratchDepth := 0
 	var totalSalience float64
+	expiringSoon := 0
 	if wm, ok := b.working[userID]; ok {
-		wmCount = len(wm)
 		for _, e := range wm {
+			if e.ExpiresAt != nil && !e.ExpiresAt.After(now) {
+				continue // already-expired entries don't count as "active"
+			}
+			wmCount++
 			totalSalience += e.Salience
+			if e.ExpiresAt != nil && !e.ExpiresAt.After(soonCutoff) {
+				expiringSoon++
+			}
 		}
 	}
 	if stack, ok := b.scratch[userID]; ok {
@@ -742,9 +867,9 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 	b.mu.RUnlock()
 
 	var ltmCount int
-	b.db.QueryRow("SELECT COUNT(*) FROM brain_ltm").Scan(&ltmCount)
+	b.db.QueryRow(`SELECT COUNT(*) FROM brain_ltm WHERE expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now')`).Scan(&ltmCount)
 	var hottestKeys []string
-	rows, err := b.db.Query("SELECT key FROM brain_ltm ORDER BY salience DESC LIMIT 5")
+	rows, err := b.db.Query(`SELECT key FROM brain_ltm WHERE expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now') ORDER BY salience DESC LIMIT 5`)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -754,6 +879,13 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 			}
 		}
 	}
+	// Count LTM entries expiring within the next 24h.
+	var ltmExpiringSoon int
+	b.db.QueryRow(
+		`SELECT COUNT(*) FROM brain_ltm WHERE expires_at IS NOT NULL AND expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now') AND expires_at <= strftime('%Y-%m-%d %H:%M:%f', 'now', '+24 hours')`,
+	).Scan(&ltmExpiringSoon)
+	expiringSoon += ltmExpiringSoon
+
 	avgSalience := 0.0
 	if wmCount > 0 {
 		avgSalience = totalSalience / float64(wmCount)
@@ -761,7 +893,59 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 	return &Status{
 		LTMEntries: ltmCount, WMEntries: wmCount, ScratchDepth: scratchDepth,
 		AvgSalience: avgSalience, HottestKeys: hottestKeys,
+		ExpiringSoon: expiringSoon,
 	}, nil
+}
+
+// pruneExpired deletes all brain_ltm rows whose expires_at has passed, and
+// also removes expired entries from in-memory working memory. Returns the
+// total count of deleted entries.
+func (b *Brain) pruneExpired(ctx context.Context) (int, error) {
+	var total int
+	// LTM: single DELETE for all expired rows.
+	var n int64
+	err := database.RetryOnBusy(5, func() error {
+		res, err := b.db.ExecContext(ctx,
+			`DELETE FROM brain_ltm WHERE expires_at IS NOT NULL AND expires_at <= strftime('%Y-%m-%d %H:%M:%f', 'now')`)
+		if err != nil {
+			return err
+		}
+		n, err = res.RowsAffected()
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("prune expired LTM: %w", err)
+	}
+	total += int(n)
+
+	// WM: walk every user's working map and drop expired entries.
+	now := time.Now()
+	b.mu.Lock()
+	for _, wm := range b.working {
+		for key, entry := range wm {
+			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+				delete(wm, key)
+				total++
+			}
+		}
+	}
+	b.mu.Unlock()
+	return total, nil
+}
+
+// PruneExpired is the exported wrapper for pruneExpired; used by REM cycle
+// phases (prune, consolidate) to delete time-expired entries before other work.
+func (b *Brain) PruneExpired(ctx context.Context) (int, error) {
+	return b.pruneExpired(ctx)
+}
+
+// StoreWithTTL is a convenience wrapper around Store that applies WithTTL(ttl).
+// A zero ttl is equivalent to calling Store with no options.
+func (b *Brain) StoreWithTTL(ctx context.Context, key, value string, tier Tier, source string, ttl time.Duration) error {
+	if ttl <= 0 {
+		return b.Store(ctx, key, value, tier, source)
+	}
+	return b.Store(ctx, key, value, tier, source, WithTTL(ttl))
 }
 
 // DB returns the underlying database connection for external indexers.

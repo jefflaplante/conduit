@@ -46,6 +46,7 @@ type PruneResult struct {
 	Archived           []ArchiveRecord
 	Orphaned           []string
 	ReflectionsGroomed int
+	ExpiredDeleted     int // Entries deleted because their TTL expired.
 }
 
 type ArchiveRecord struct {

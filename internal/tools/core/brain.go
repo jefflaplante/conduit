@@ -10,6 +10,30 @@ import (
 	"conduit/internal/tools/types"
 )
 
+// parseTTLString parses a TTL string accepting Go time.ParseDuration units
+// plus the convenience suffixes "d" (days) and "w" (weeks). Returns zero and
+// no error for empty input.
+func parseTTLString(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	if n := len(s); n >= 2 {
+		last := s[n-1]
+		if last == 'd' || last == 'w' {
+			var count int
+			if _, err := fmt.Sscanf(s[:n-1], "%d", &count); err != nil {
+				return 0, fmt.Errorf("parse ttl %q: %w", s, err)
+			}
+			mult := 24 * time.Hour
+			if last == 'w' {
+				mult = 7 * 24 * time.Hour
+			}
+			return time.Duration(count) * mult, nil
+		}
+	}
+	return time.ParseDuration(s)
+}
+
 // BrainTool exposes the tiered memory (LTM + working + scratchpad) to the AI agent.
 type BrainTool struct {
 	services *types.ToolServices
@@ -26,7 +50,7 @@ func (t *BrainTool) Description() string {
 	return `Tiered memory system with long-term (LTM), working, and scratchpad storage.
 
 Actions:
-- store: Save a single key-value fact to a memory tier (longterm or working)
+- store: Save a single key-value fact to a memory tier (longterm or working). Optional 'ttl' (e.g. "24h", "7d", "2w") sets an expiry — the entry is skipped by get/recall after expiry and deleted during consolidate/prune.
 - store_bulk: Save many key-value facts in one atomic transaction (array of {key, value, tier?, source?})
 - get: Retrieve a specific fact by key (checks working memory first, then LTM)
 - recall: Fuzzy search across all tiers by query string, ranked by salience. Optional 'context' param biases ranking toward entries whose key/value overlap with context tokens (keyword overlap only, no semantic similarity).
@@ -78,6 +102,10 @@ func (t *BrainTool) Parameters() map[string]interface{} {
 			"source": map[string]interface{}{
 				"type":        "string",
 				"description": "Source label for store action (e.g. 'user', 'tool', 'observation')",
+			},
+			"ttl": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional TTL for store action. Accepts Go duration strings (\"24h\", \"90m\") plus \"Nd\" (days) and \"Nw\" (weeks). After expiry, the entry is hidden from get/recall and deleted during the next consolidate/prune sweep. Omit for no expiry (default).",
 			},
 			"source_prefix": map[string]interface{}{
 				"type":        "string",
@@ -194,6 +222,20 @@ func (t *BrainTool) handleStore(ctx context.Context, args map[string]interface{}
 	source, _ := args["source"].(string)
 	if source == "" {
 		source = "tool"
+	}
+	ttlStr, _ := args["ttl"].(string)
+	ttl, err := parseTTLString(ttlStr)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("invalid ttl: %v", err)}, nil
+	}
+	if ttl > 0 {
+		if err := brain.StoreWithTTL(ctx, key, value, tier, source, ttl); err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("store failed: %v", err)}, nil
+		}
+		return &types.ToolResult{
+			Success: true,
+			Content: fmt.Sprintf("Stored key=%q in %s memory (source=%s, ttl=%s)", key, tier, source, ttl),
+		}, nil
 	}
 	if err := brain.Store(ctx, key, value, tier, source); err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("store failed: %v", err)}, nil

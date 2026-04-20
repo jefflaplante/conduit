@@ -37,6 +37,24 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 		Orphaned: []string{},
 	}
 
+	// Phase 0: Delete entries whose TTL has expired. This runs unconditionally
+	// and is reported separately so expired entries are not counted as
+	// low-salience evictions.
+	if !dryRun {
+		n, err := r.brain.PruneExpired(ctx)
+		if err != nil {
+			return result, fmt.Errorf("prune expired: %w", err)
+		}
+		result.ExpiredDeleted = n
+	} else {
+		// Dry-run: count without deleting.
+		var n int
+		_ = r.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM brain_ltm WHERE expires_at IS NOT NULL AND expires_at <= strftime('%Y-%m-%d %H:%M:%f', 'now')`,
+		).Scan(&n)
+		result.ExpiredDeleted = n
+	}
+
 	// Guard: skip pruning when LTM is under the size threshold.
 	// A small table doesn't degrade performance or search quality.
 	maxEntries := r.config.MaxLTMEntries

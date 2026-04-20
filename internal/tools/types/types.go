@@ -207,24 +207,26 @@ const (
 
 // BrainEntry represents a single fact stored in the brain.
 type BrainEntry struct {
-	Key         string    `json:"key"`
-	Value       string    `json:"value"`
-	Tier        BrainTier `json:"tier"`
-	CreatedAt   time.Time `json:"created_at"`
-	AccessedAt  time.Time `json:"accessed_at"`
-	AccessCount int       `json:"access_count"`
-	Salience    float64   `json:"salience"`
-	Source      string    `json:"source,omitempty"`
-	Stale       bool      `json:"stale,omitempty"`
+	Key         string     `json:"key"`
+	Value       string     `json:"value"`
+	Tier        BrainTier  `json:"tier"`
+	CreatedAt   time.Time  `json:"created_at"`
+	AccessedAt  time.Time  `json:"accessed_at"`
+	AccessCount int        `json:"access_count"`
+	Salience    float64    `json:"salience"`
+	Source      string     `json:"source,omitempty"`
+	Stale       bool       `json:"stale,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 }
 
 // BrainStatus reports the current state of the brain service.
 type BrainStatus struct {
-	LTMEntries   int      `json:"ltm_entries"`
-	WMEntries    int      `json:"wm_entries"`
-	ScratchDepth int      `json:"scratch_depth"`
-	AvgSalience  float64  `json:"avg_salience,omitempty"`
-	HottestKeys  []string `json:"hottest_keys,omitempty"`
+	LTMEntries    int      `json:"ltm_entries"`
+	WMEntries     int      `json:"wm_entries"`
+	ScratchDepth  int      `json:"scratch_depth"`
+	AvgSalience   float64  `json:"avg_salience,omitempty"`
+	HottestKeys   []string `json:"hottest_keys,omitempty"`
+	ExpiringSoon  int      `json:"expiring_soon,omitempty"`
 }
 
 // ConsolidationReport summarizes a consolidation sweep.
@@ -248,6 +250,9 @@ type BrainBulkEntry struct {
 // BrainService provides tiered memory (LTM + working + scratchpad) to tools.
 type BrainService interface {
 	Store(ctx context.Context, key, value string, tier BrainTier, source string) error
+	// StoreWithTTL stores an entry that expires after the given duration.
+	// A zero ttl means no expiry (equivalent to Store).
+	StoreWithTTL(ctx context.Context, key, value string, tier BrainTier, source string, ttl time.Duration) error
 	StoreBulk(ctx context.Context, entries []BrainBulkEntry) error
 	Get(ctx context.Context, key string) (*BrainEntry, error)
 	Recall(ctx context.Context, query string, limit int) ([]*BrainEntry, error)

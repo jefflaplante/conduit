@@ -277,3 +277,29 @@ func TestConsolidate_PromoteWM(t *testing.T) {
 	// High-salience entry should have been promoted
 	assert.Contains(t, result.Promoted, "hot.fact")
 }
+
+func TestConsolidate_PrunesExpiredBeforePromotion(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+
+	// Entry with already-expired TTL in LTM — must be deleted by Consolidate's
+	// phase-0 pruneExpired, NOT promoted or preserved.
+	require.NoError(t, b.StoreWithTTL(ctx, "expired.ltm", "gone", brain.TierLongTerm, "", 10*time.Millisecond))
+	require.NoError(t, b.Store(ctx, "keep.ltm", "stay", brain.TierLongTerm, ""))
+
+	time.Sleep(40 * time.Millisecond)
+
+	_, err := rem.Consolidate(ctx, false)
+	require.NoError(t, err)
+
+	// Verify expired entry is gone from DB.
+	var cnt int
+	require.NoError(t, rem.db.QueryRow("SELECT COUNT(*) FROM brain_ltm WHERE key = 'expired.ltm'").Scan(&cnt))
+	assert.Equal(t, 0, cnt, "expired entry must be pruned at start of Consolidate")
+
+	// Surviving entry remains.
+	require.NoError(t, rem.db.QueryRow("SELECT COUNT(*) FROM brain_ltm WHERE key = 'keep.ltm'").Scan(&cnt))
+	assert.Equal(t, 1, cnt)
+}

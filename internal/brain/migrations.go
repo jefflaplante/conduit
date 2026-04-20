@@ -87,6 +87,12 @@ var migrations = []migration{
 		CREATE INDEX idx_reflections_type ON brain_reflections (type);
 		CREATE INDEX idx_reflections_rem ON brain_reflections (rem_processed);`,
 	},
+	// Migration 5: TTL/expiry support for time-sensitive entries
+	{
+		Version: 5,
+		SQL: `ALTER TABLE brain_ltm ADD COLUMN expires_at DATETIME;
+		CREATE INDEX IF NOT EXISTS idx_brain_ltm_expires_at ON brain_ltm(expires_at);`,
+	},
 }
 
 func runMigrations(db *sql.DB) error {
