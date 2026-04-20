@@ -1,4 +1,5 @@
 {
+    "includeCoAuthoredBy": false,
     "permissions": {
         "allow": [
             "Bash",
@@ -9,7 +10,9 @@
             "Grep",
             "WebFetch",
             "Task",
-            "MCP"
+            "MCP",
+            "mcp__conduit__Brain",
+            "mcp__conduit__*"
         ],
         "deny": []
     }
