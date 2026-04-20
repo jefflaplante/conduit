@@ -37,6 +37,59 @@ func (f FuelGauge) HasTokenTraffic() bool {
 	return f.TokenUsage.Hour.Requests > 0 || f.TokenUsage.Day.Requests > 0
 }
 
+// ToMap renders the FuelGauge as a JSON-serializable map suitable for tool
+// responses. The structure is intentionally flat / shallow so callers can
+// forward it over the GatewayService interface without a direct import of
+// the middleware or monitoring packages.
+func (f FuelGauge) ToMap() map[string]interface{} {
+	return map[string]interface{}{
+		"taken_at": f.TakenAt,
+		"rate_limit": map[string]interface{}{
+			"enabled":  f.RateLimit.Enabled,
+			"taken_at": f.RateLimit.TakenAt,
+			"anonymous": map[string]interface{}{
+				"enabled":        f.RateLimit.Anonymous.Enabled,
+				"limit":          f.RateLimit.Anonymous.Limit,
+				"window_seconds": int(f.RateLimit.Anonymous.WindowDuration.Seconds()),
+				"active_buckets": f.RateLimit.Anonymous.ActiveBuckets,
+			},
+			"authenticated": map[string]interface{}{
+				"enabled":        f.RateLimit.Authenticated.Enabled,
+				"limit":          f.RateLimit.Authenticated.Limit,
+				"window_seconds": int(f.RateLimit.Authenticated.WindowDuration.Seconds()),
+				"active_buckets": f.RateLimit.Authenticated.ActiveBuckets,
+			},
+		},
+		"token_usage": map[string]interface{}{
+			"taken_at": f.TokenUsage.TakenAt,
+			"hour": map[string]interface{}{
+				"requests":      f.TokenUsage.Hour.Requests,
+				"input_tokens":  f.TokenUsage.Hour.InputTokens,
+				"output_tokens": f.TokenUsage.Hour.OutputTokens,
+				"cache_read":    f.TokenUsage.Hour.CacheRead,
+				"cache_write":   f.TokenUsage.Hour.CacheWrite,
+				"errors":        f.TokenUsage.Hour.Errors,
+			},
+			"day": map[string]interface{}{
+				"requests":      f.TokenUsage.Day.Requests,
+				"input_tokens":  f.TokenUsage.Day.InputTokens,
+				"output_tokens": f.TokenUsage.Day.OutputTokens,
+				"cache_read":    f.TokenUsage.Day.CacheRead,
+				"cache_write":   f.TokenUsage.Day.CacheWrite,
+				"errors":        f.TokenUsage.Day.Errors,
+			},
+		},
+	}
+}
+
+// GetFuelGaugeMap is the GatewayService interface method: returns the fuel-gauge
+// snapshot as a map so tool-layer consumers don't take a direct dependency on
+// the gateway.FuelGauge struct (avoids circular imports). topN caps the number
+// of per-tier rate-limit identifiers returned.
+func (g *Gateway) GetFuelGaugeMap(topN int) map[string]interface{} {
+	return g.GetFuelGauge(topN).ToMap()
+}
+
 // GetFuelGauge returns a point-in-time snapshot of rate-limit headroom and
 // rolling-window AI token consumption. topN caps the number of per-tier
 // identifiers returned (most-pressured first); pass 0 or a negative value
