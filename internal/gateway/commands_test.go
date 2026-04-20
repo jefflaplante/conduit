@@ -2,8 +2,12 @@ package gateway
 
 import (
 	"context"
+	"log/slog"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/gorilla/websocket"
 
 	"conduit/internal/channels"
 	"conduit/internal/config"
@@ -51,9 +55,12 @@ func newTestGatewayWithSessions(t *testing.T) (*Gateway, *sessions.Store) {
 
 	m := newTestChannelManager(t)
 
+	testLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	gw := &Gateway{
 		sessions:       store,
 		channelManager: m,
+		logger:         testLogger,
+		ws:             NewWebSocketService(testLogger, websocket.Upgrader{}, 16),
 		config: &config.Config{
 			AI: config.AIConfig{
 				ModelAliases: map[string]string{
@@ -253,7 +260,7 @@ func TestHandleCommand_Reset(t *testing.T) {
 
 func TestHandleCommand_Stop_NoActive(t *testing.T) {
 	gw, store := newTestGatewayWithSessions(t)
-	gw.activeRequests = make(map[string]context.CancelFunc)
+	gw.ws.ActiveRequests = make(map[string]context.CancelFunc)
 	session, _ := store.GetOrCreateSession("user1", "tui_test")
 
 	msg := &protocol.IncomingMessage{
@@ -271,9 +278,9 @@ func TestHandleCommand_Stop_WithActive(t *testing.T) {
 	gw, store := newTestGatewayWithSessions(t)
 	session, _ := store.GetOrCreateSession("user1", "tui_test")
 
-	gw.activeRequests = make(map[string]context.CancelFunc)
+	gw.ws.ActiveRequests = make(map[string]context.CancelFunc)
 	cancelled := false
-	gw.activeRequests[session.Key] = func() { cancelled = true }
+	gw.ws.ActiveRequests[session.Key] = func() { cancelled = true }
 
 	msg := &protocol.IncomingMessage{
 		ChannelID:  "tui_test",

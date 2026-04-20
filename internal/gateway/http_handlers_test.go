@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gorilla/websocket"
+
 	"conduit/internal/config"
 	"conduit/internal/protocol"
 )
@@ -98,9 +100,8 @@ func TestHandleIncomingMessage_NilRouter_Command(t *testing.T) {
 func TestShutdownManager_SetOnShutdownAndTriggerAction(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	gw := &Gateway{
-		clients:        map[string]*Client{},
-		activeRequests: map[string]context.CancelFunc{},
-		config:         &config.Config{DataDir: t.TempDir()},
+		ws:     NewWebSocketService(logger, websocket.Upgrader{}, 1),
+		config: &config.Config{DataDir: t.TempDir()},
 	}
 	sm := NewShutdownManager(logger, gw)
 

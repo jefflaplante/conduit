@@ -144,14 +144,16 @@ func TestProcessMessages_DropsWhenSemaphoreFull(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	// Capacity 1, pre-filled so the next send must take the default branch.
-	sem := make(chan struct{}, 1)
-	sem <- struct{}{}
+	ws := &WebSocketService{
+		MsgSemaphore: make(chan struct{}, 1),
+	}
+	ws.MsgSemaphore <- struct{}{}
 
 	gw := &Gateway{
-		logger:       logger,
-		sessions:     store,
-		monitoring:   &MonitoringService{GatewayMetrics: metrics},
-		msgSemaphore: sem,
+		logger:     logger,
+		sessions:   store,
+		monitoring: &MonitoringService{GatewayMetrics: metrics},
+		ws:         ws,
 	}
 
 	msg := &protocol.IncomingMessage{
@@ -165,7 +167,7 @@ func TestProcessMessages_DropsWhenSemaphoreFull(t *testing.T) {
 	// divergence between this mirror and the real select would be caught by the
 	// recordIngestDrop tests above.
 	select {
-	case gw.msgSemaphore <- struct{}{}:
+	case gw.ws.MsgSemaphore <- struct{}{}:
 		t.Fatalf("expected semaphore to be full, but send succeeded")
 	default:
 		gw.recordIngestDrop(msg, "msg_semaphore_full")

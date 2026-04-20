@@ -2,7 +2,11 @@ package gateway
 
 import (
 	"context"
+	"log/slog"
+	"os"
 	"testing"
+
+	"github.com/gorilla/websocket"
 
 	"conduit/internal/ai"
 	"conduit/internal/config"
@@ -45,10 +49,13 @@ func newTestGatewayWithRouter(t *testing.T) (*Gateway, *sessions.Store, *ai.Rout
 	}
 
 	m := newTestChannelManager(t)
+	testLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	gw := &Gateway{
 		sessions:       store,
 		channelManager: m,
 		ai:             router,
+		logger:         testLogger,
+		ws:             NewWebSocketService(testLogger, websocket.Upgrader{}, 16),
 		config:         &config.Config{AI: cfg},
 	}
 	return gw, store, router

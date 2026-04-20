@@ -132,20 +132,20 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	reqCtx = types.WithRequestContext(reqCtx, session.ChannelID, userID, session.Key)
 
 	// Track active request for /stop support
-	g.activeRequestsMu.Lock()
-	g.activeRequests[session.Key] = cancel
-	requestCount := len(g.activeRequests)
-	g.activeRequestsMu.Unlock()
+	g.ws.ActiveRequestsMu.Lock()
+	g.ws.ActiveRequests[session.Key] = cancel
+	requestCount := len(g.ws.ActiveRequests)
+	g.ws.ActiveRequestsMu.Unlock()
 
 	if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
 		g.monitoring.MetricsCollector.UpdateActiveRequests(requestCount)
 	}
 
 	defer func() {
-		g.activeRequestsMu.Lock()
-		delete(g.activeRequests, session.Key)
-		finalCount := len(g.activeRequests)
-		g.activeRequestsMu.Unlock()
+		g.ws.ActiveRequestsMu.Lock()
+		delete(g.ws.ActiveRequests, session.Key)
+		finalCount := len(g.ws.ActiveRequests)
+		g.ws.ActiveRequestsMu.Unlock()
 		if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
 			g.monitoring.MetricsCollector.UpdateActiveRequests(finalCount)
 		}
@@ -645,9 +645,9 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 		}
 
 	case text == "/stop":
-		g.activeRequestsMu.RLock()
-		cancel, exists := g.activeRequests[sessionKey]
-		g.activeRequestsMu.RUnlock()
+		g.ws.ActiveRequestsMu.RLock()
+		cancel, exists := g.ws.ActiveRequests[sessionKey]
+		g.ws.ActiveRequestsMu.RUnlock()
 
 		if exists && cancel != nil {
 			cancel()
