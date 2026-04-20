@@ -311,6 +311,21 @@ type ReflectionService interface {
 	QueryToolStats(ctx context.Context, since time.Time) ([]ReflectionToolStat, error)
 }
 
+// VisionAnalyzer performs multimodal image analysis.
+// Implementations wrap a multimodal LLM (e.g., Anthropic Claude with vision) and
+// return a natural-language description or answer for the supplied image + prompt.
+//
+// Intentionally narrow (single method) so the tool layer does not depend on the
+// full ai.Provider surface. The gateway wires a concrete adapter that delegates
+// to the configured AI router.
+type VisionAnalyzer interface {
+	// AnalyzeImage sends the image bytes and prompt to a multimodal model and
+	// returns the textual analysis. mediaType is the image MIME type (e.g.,
+	// "image/jpeg", "image/png"); callers should pass "" if unknown, in which
+	// case implementations MAY reject the request or fall back to "image/jpeg".
+	AnalyzeImage(ctx context.Context, image []byte, mediaType string, prompt string) (string, error)
+}
+
 // ToolServices provides access to services for tools (no direct gateway dependency)
 type ToolServices struct {
 	SessionStore  *sessions.Store
@@ -327,6 +342,7 @@ type ToolServices struct {
 	BrainFTS      BrainFTSSearcher  // Optional FTS5 search over brain LTM
 	REMCycle      REMCycleRunner    // Optional REM sleep cycle runner
 	Reflection    ReflectionService // Optional SPAR reflection store
+	Vision        VisionAnalyzer    // Optional multimodal image analysis (Anthropic vision, etc.)
 
 	// Schema enhancement
 	SchemaBuilder *schema.Builder // For enhancing tool schemas with discovery data
