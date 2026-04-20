@@ -217,7 +217,10 @@ func validateTarEntry(hdr *tar.Header, targetDir, dest string) error {
 // maxExtractFileSize is the maximum allowed size for a single extracted file (1 GB).
 // This prevents decompression bomb attacks where a small compressed file expands to
 // an extremely large file on disk.
-const maxExtractFileSize = 1 << 30 // 1 GB
+//
+// Declared as a var (not a const) so tests can shrink it to avoid allocating gigabytes
+// of memory when exercising the size-limit path under the race detector.
+var maxExtractFileSize int64 = 1 << 30 // 1 GB
 
 // extractFile writes a tar entry to disk, creating parent directories as needed.
 // File size is capped at the smaller of hdr.Size and maxExtractFileSize.
@@ -232,7 +235,7 @@ func extractFile(tr *tar.Reader, hdr *tar.Header, dest string) error {
 	}
 
 	// Determine the size limit: use the smaller of the declared size and our cap
-	limit := int64(maxExtractFileSize)
+	limit := maxExtractFileSize
 	if hdr.Size > 0 && hdr.Size < limit {
 		limit = hdr.Size
 	}

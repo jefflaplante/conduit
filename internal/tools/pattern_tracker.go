@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // toolCallEntry stores both the signature (for comparison) and tool name (for display).
@@ -16,7 +17,11 @@ type toolCallEntry struct {
 // PatternTracker detects circular tool call patterns that waste tokens.
 // It tracks recent tool calls and identifies repeating sequences like A->B->A->B.
 // Uses argument hashing to distinguish between same tool with different args.
+//
+// Safe for concurrent use: RecordCall and DetectCircular may be called from
+// multiple goroutines simultaneously (e.g. from parallel tool execution).
 type PatternTracker struct {
+	mu          sync.Mutex
 	recentCalls []toolCallEntry // Last N tool calls with signatures
 	maxHistory  int             // How many to track
 
@@ -26,6 +31,7 @@ type PatternTracker struct {
 	// hash derived from the repeating tool call signatures. The callback is
 	// intended for external side-effects like writing to a reflection store or
 	// Brain — the PatternTracker itself remains side-effect-free.
+	// The callback runs outside the tracker's lock.
 	OnCircular func(pattern string, signatureHash string)
 }
 
@@ -46,6 +52,8 @@ func NewPatternTracker(maxHistory int) *PatternTracker {
 func (pt *PatternTracker) RecordCall(toolName string, args map[string]interface{}) {
 	sig := pt.computeSignature(toolName, args)
 	entry := toolCallEntry{signature: sig, toolName: toolName}
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
 	pt.recentCalls = append(pt.recentCalls, entry)
 	// Trim to max history
 	if len(pt.recentCalls) > pt.maxHistory {
@@ -77,15 +85,18 @@ func (pt *PatternTracker) computeSignature(toolName string, args map[string]inte
 // When a pattern is detected and OnCircular is non-nil, the callback is
 // invoked with the pattern description and a stable signature hash.
 func (pt *PatternTracker) DetectCircular() (bool, string) {
+	pt.mu.Lock()
 	n := len(pt.recentCalls)
 
 	// Need at least 6 calls for a 2-element pattern repeated 3 times
 	if n < 6 {
+		pt.mu.Unlock()
 		return false, ""
 	}
 
 	// Check for 2-element patterns (need 6 elements: A B A B A B)
 	if detected, pattern, sigHash := pt.detectPatternOfLength(2); detected {
+		pt.mu.Unlock()
 		pt.notifyCircular(pattern, sigHash)
 		return true, pattern
 	}
@@ -93,11 +104,13 @@ func (pt *PatternTracker) DetectCircular() (bool, string) {
 	// Check for 3-element patterns (need 9 elements: A B C A B C A B C)
 	if n >= 9 {
 		if detected, pattern, sigHash := pt.detectPatternOfLength(3); detected {
+			pt.mu.Unlock()
 			pt.notifyCircular(pattern, sigHash)
 			return true, pattern
 		}
 	}
 
+	pt.mu.Unlock()
 	return false, ""
 }
 
@@ -111,6 +124,7 @@ func (pt *PatternTracker) notifyCircular(pattern, signatureHash string) {
 // detectPatternOfLength checks if the last elements form a repeating pattern
 // of the given length, appearing at least 3 times consecutively.
 // Returns (detected, patternDescription, signatureHash).
+// Caller must hold pt.mu.
 func (pt *PatternTracker) detectPatternOfLength(patternLen int) (bool, string, string) {
 	n := len(pt.recentCalls)
 	minRequired := patternLen * 3 // Need 3 repetitions
@@ -169,6 +183,8 @@ func formatPattern(pattern []string) string {
 
 // Reset clears the call history.
 func (pt *PatternTracker) Reset() {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
 	pt.recentCalls = pt.recentCalls[:0]
 }
 

@@ -87,9 +87,12 @@ func TestAdapter_Stop_Idempotent(t *testing.T) {
 }
 
 func TestAdapter_SendMessage(t *testing.T) {
-	var received *protocol.OutgoingMessage
+	// The handler runs on the adapter's outgoing-processing goroutine; use a
+	// channel to hand the message back to the test goroutine instead of a
+	// shared variable + time.Sleep (which races under -race).
+	receivedCh := make(chan *protocol.OutgoingMessage, 1)
 	handler := func(msg *protocol.OutgoingMessage) error {
-		received = msg
+		receivedCh <- msg
 		return nil
 	}
 
@@ -102,8 +105,12 @@ func TestAdapter_SendMessage(t *testing.T) {
 	err = adapter.SendMessage(msg)
 	require.NoError(t, err)
 
-	// Wait a bit for async processing
-	time.Sleep(50 * time.Millisecond)
+	var received *protocol.OutgoingMessage
+	select {
+	case received = <-receivedCh:
+	case <-time.After(time.Second):
+		t.Fatal("handler was not invoked within 1s")
+	}
 
 	assert.NotNil(t, received)
 	assert.Equal(t, "Hello", received.Text)
