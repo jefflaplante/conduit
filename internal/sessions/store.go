@@ -292,19 +292,22 @@ func (s *Store) SaveSession(session *Session) error {
 		return fmt.Errorf("failed to marshal context: %w", err)
 	}
 
-	_, err = s.db.Exec(`
-		INSERT OR REPLACE INTO sessions 
-		(key, user_id, channel_id, created_at, updated_at, message_count, context)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`,
-		session.Key,
-		session.UserID,
-		session.ChannelID,
-		session.CreatedAt,
-		time.Now(),
-		session.MessageCount,
-		string(contextJSON),
-	)
+	err = database.RetryOnBusy(5, func() error {
+		_, execErr := s.db.Exec(`
+			INSERT OR REPLACE INTO sessions
+			(key, user_id, channel_id, created_at, updated_at, message_count, context)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`,
+			session.Key,
+			session.UserID,
+			session.ChannelID,
+			session.CreatedAt,
+			time.Now(),
+			session.MessageCount,
+			string(contextJSON),
+		)
+		return execErr
+	})
 
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
@@ -437,12 +440,15 @@ func (s *Store) GetMessages(sessionKey string, limit int) ([]Message, error) {
 // updateSessionMessageCount increments the message count for a session.
 // Uses atomic increment instead of COUNT(*) subquery to avoid a table scan.
 func (s *Store) updateSessionMessageCount(sessionKey string) error {
-	_, err := s.db.Exec(`
-		UPDATE sessions
-		SET message_count = message_count + 1,
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE key = ?
-	`, sessionKey)
+	err := database.RetryOnBusy(5, func() error {
+		_, execErr := s.db.Exec(`
+			UPDATE sessions
+			SET message_count = message_count + 1,
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE key = ?
+		`, sessionKey)
+		return execErr
+	})
 
 	if err != nil {
 		return fmt.Errorf("failed to update session message count: %w", err)
@@ -459,17 +465,23 @@ func (s *Store) ClearSessionMessages(sessionKey string) error {
 	}
 
 	// Delete all messages for the session
-	_, err := s.db.Exec(`DELETE FROM messages WHERE session_key = ?`, sessionKey)
+	err := database.RetryOnBusy(5, func() error {
+		_, execErr := s.db.Exec(`DELETE FROM messages WHERE session_key = ?`, sessionKey)
+		return execErr
+	})
 	if err != nil {
 		return fmt.Errorf("failed to delete messages: %w", err)
 	}
 
 	// Update the session's message count to 0
-	_, err = s.db.Exec(`
-		UPDATE sessions 
-		SET message_count = 0, updated_at = CURRENT_TIMESTAMP 
-		WHERE key = ?
-	`, sessionKey)
+	err = database.RetryOnBusy(5, func() error {
+		_, execErr := s.db.Exec(`
+			UPDATE sessions
+			SET message_count = 0, updated_at = CURRENT_TIMESTAMP
+			WHERE key = ?
+		`, sessionKey)
+		return execErr
+	})
 	if err != nil {
 		return fmt.Errorf("failed to update session: %w", err)
 	}
@@ -481,12 +493,17 @@ func (s *Store) ClearSessionMessages(sessionKey string) error {
 // Uses json_set to perform an atomic read-modify-write in a single SQL statement,
 // preventing concurrent calls from losing each other's updates.
 func (s *Store) SetSessionContext(sessionKey, key, value string) error {
-	result, err := s.db.Exec(`
-		UPDATE sessions
-		SET context = json_set(context, '$.' || ?, ?),
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE key = ?
-	`, key, value, sessionKey)
+	var result sql.Result
+	err := database.RetryOnBusy(5, func() error {
+		var execErr error
+		result, execErr = s.db.Exec(`
+			UPDATE sessions
+			SET context = json_set(context, '$.' || ?, ?),
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE key = ?
+		`, key, value, sessionKey)
+		return execErr
+	})
 	if err != nil {
 		return fmt.Errorf("failed to update session context: %w", err)
 	}
@@ -619,8 +636,11 @@ func (s *Store) AddStateChangeHook(hook StateChangeHook) {
 // markSessionActivity is an internal helper to update the database last activity
 func (s *Store) markSessionActivity(sessionKey string) {
 	// Update the database record's updated_at timestamp
-	// This is best-effort and doesn't return an error to avoid disrupting normal flow
-	s.db.Exec(`UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE key = ?`, sessionKey)
+	// Best-effort — retry on BUSY so heartbeat-paced writers don't silently drop updates.
+	_ = database.RetryOnBusy(5, func() error {
+		_, err := s.db.Exec(`UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE key = ?`, sessionKey)
+		return err
+	})
 }
 
 // SearchMessagesResult represents a search result from session messages
