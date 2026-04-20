@@ -2604,9 +2604,15 @@ func (g *Gateway) wakeSession(sessionKey string) {
 		return
 	}
 	var wakeMessage string
+	var wakeSource string
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
 			wakeMessage = messages[i].Content
+			if src, ok := messages[i].Metadata["wake_source"]; ok && src != "" {
+				wakeSource = src
+			} else if src, ok := messages[i].Metadata["source"]; ok && src == "inter_session" {
+				wakeSource = types.WakeSourceInterSession
+			}
 			break
 		}
 	}
@@ -2617,7 +2623,7 @@ func (g *Gateway) wakeSession(sessionKey string) {
 	}
 
 	g.logger.Info("waking session for inter-session message",
-		"session_key", sessionKey, "wake_depth", depth+1)
+		"session_key", sessionKey, "wake_depth", depth+1, "wake_source", wakeSource)
 
 	// Derive a context from the gateway lifecycle context (not a request context)
 	wakeCtx, cancel := context.WithTimeout(g.ctx, 5*time.Minute)
@@ -2626,6 +2632,7 @@ func (g *Gateway) wakeSession(sessionKey string) {
 	modelOverride := session.Context["model"]
 	providerOverride := session.Context["provider"]
 	wakeCtx = types.WithRequestContext(wakeCtx, session.ChannelID, session.UserID, sessionKey)
+	wakeCtx = types.WithWakeSource(wakeCtx, wakeSource)
 
 	// Track this request so /stop can cancel it
 	g.activeRequestsMu.Lock()
@@ -2675,6 +2682,16 @@ func (g *Gateway) wakeSession(sessionKey string) {
 			g.logger.Warn("session wakeup: failed to send response to channel",
 				"session_key", sessionKey, "error", sendErr)
 		}
+	} else if wakeSource == types.WakeSourceSubAgentSilent &&
+		channels.IsSilentResponse(responseContent) {
+		// conduit-3qb1 observability: the sub-agent ran, produced output that
+		// was NOT posted to the channel (announce=false), and the parent LLM
+		// then chose to stay silent. The human never sees anything. Log this
+		// so we can observe the drop rate and tune the prompt guidance.
+		g.logger.Warn("session wakeup: sub-agent silent callback fully suppressed",
+			"session_key", sessionKey,
+			"wake_source", wakeSource,
+			"wake_message_chars", len(wakeMessage))
 	}
 }
 

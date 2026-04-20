@@ -332,6 +332,19 @@ type ToolServices struct {
 type ctxKeyChannelID struct{}
 type ctxKeyUserID struct{}
 type ctxKeySessionKey struct{}
+type ctxKeyWakeSource struct{}
+
+// Wake source values attached to the context when a session is woken. Lets the
+// agent system and tools tell a normal user message apart from a callback, and
+// further tell announced sub-agent results (user already saw them) from silent
+// ones (user hasn't — parent must decide whether to surface).
+const (
+	WakeSourceInterSession      = "inter_session"
+	WakeSourceSubAgentCallback  = "sub_agent_callback"  // kept for backwards compatibility
+	WakeSourceSubAgentAnnounced = "sub_agent_announced" // raw result already posted to channel
+	WakeSourceSubAgentSilent    = "sub_agent_silent"    // raw result NOT posted; parent must decide
+	WakeSourceHeartbeat         = "heartbeat"
+)
 
 // WithRequestContext attaches per-request channel, user, and session info to ctx.
 func WithRequestContext(ctx context.Context, channelID, userID, sessionKey string) context.Context {
@@ -360,6 +373,23 @@ func RequestUserID(ctx context.Context) string {
 // RequestSessionKey returns the session key from ctx, or "" if unset.
 func RequestSessionKey(ctx context.Context) string {
 	if v, ok := ctx.Value(ctxKeySessionKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// WithWakeSource attaches a wake-source tag to ctx (e.g. "sub_agent_callback").
+// An empty source is a no-op so callers don't have to branch on it.
+func WithWakeSource(ctx context.Context, source string) context.Context {
+	if source == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyWakeSource{}, source)
+}
+
+// WakeSource returns the wake-source tag from ctx, or "" if the request is not a wake.
+func WakeSource(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxKeyWakeSource{}).(string); ok {
 		return v
 	}
 	return ""

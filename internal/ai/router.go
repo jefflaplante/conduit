@@ -52,6 +52,30 @@ type Router struct {
 	smartRoutingCfg    *config.SmartRoutingConfig
 	contextEngine      ContextEngine
 	pricingResolver    *PricingResolver
+
+	// Per-session turn serialization: prevents concurrent LLM turns on the
+	// same session (e.g., a normal user message and an inter-session wake
+	// firing at the same time). Keys are session.Key; values are *sync.Mutex.
+	turnLocks sync.Map
+}
+
+// lockSession acquires the per-session turn lock and returns an unlock function.
+// Empty session keys are a no-op (returns a no-op unlock).
+func (r *Router) lockSession(sessionKey string) func() {
+	if sessionKey == "" {
+		return func() {}
+	}
+	v, _ := r.turnLocks.LoadOrStore(sessionKey, &sync.Mutex{})
+	lock := v.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
+}
+
+func sessionKeyOf(s *sessions.Session) string {
+	if s == nil {
+		return ""
+	}
+	return s.Key
 }
 
 // AgentProcessedResponse represents processed response from agent (to avoid circular imports)
@@ -559,8 +583,18 @@ func (r *Router) GenerateResponseWithTools(ctx context.Context, session *session
 	return r.GenerateResponseWithToolsAndProgress(ctx, session, userMessage, providerName, modelOverride, nil)
 }
 
-// GenerateResponseWithToolsAndProgress is like GenerateResponseWithTools but with progress callbacks
+// GenerateResponseWithToolsAndProgress is like GenerateResponseWithTools but with progress callbacks.
+// Acquires the per-session turn lock for the duration of the chain.
 func (r *Router) GenerateResponseWithToolsAndProgress(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onProgress ProgressCallback) (ConversationResponse, error) {
+	unlock := r.lockSession(sessionKeyOf(session))
+	defer unlock()
+	return r.generateResponseWithToolsLocked(ctx, session, userMessage, providerName, modelOverride, onProgress)
+}
+
+// generateResponseWithToolsLocked is the turn-lock-holding variant. Callers must already
+// hold the per-session turn lock (e.g., via lockSession). This avoids double-locking when
+// GenerateResponseStreaming falls back to the non-streaming path.
+func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onProgress ProgressCallback) (ConversationResponse, error) {
 	chainStart := time.Now()
 	log.Printf("[Router] >>> LLM CHAIN START")
 	var chainErr error
@@ -736,7 +770,11 @@ func (r *Router) getConversationalProgress(toolCalls []ToolCall) string {
 // GenerateResponseStreaming generates a streaming AI response.
 // The onDelta callback is called with each text delta, and done=true when complete.
 // Any provider implementing StreamingProvider will stream; others fall back to non-streaming.
+// Acquires the per-session turn lock for the duration of the chain.
 func (r *Router) GenerateResponseStreaming(ctx context.Context, session *sessions.Session, userMessage string, providerName string, modelOverride string, onDelta StreamCallback) (ConversationResponse, error) {
+	unlock := r.lockSession(sessionKeyOf(session))
+	defer unlock()
+
 	chainStart := time.Now()
 	log.Printf("[Router] >>> LLM CHAIN START (streaming)")
 	var chainErr error
@@ -786,8 +824,9 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	// Check if the provider supports streaming
 	streamingProvider, canStream := provider.(StreamingProvider)
 	if !canStream {
-		// Fall back to non-streaming
-		return r.GenerateResponseWithTools(ctx, session, userMessage, providerName, modelOverride)
+		// Fall back to non-streaming. We already hold the per-session turn lock,
+		// so dispatch to the unlocked worker to avoid deadlock.
+		return r.generateResponseWithToolsLocked(ctx, session, userMessage, providerName, modelOverride, nil)
 	}
 
 	// Build system prompt

@@ -99,6 +99,14 @@ func (g *Gateway) SendToSession(ctx context.Context, sessionKey, label, message 
 // A recursion guard (wake_depth in session context) limits nesting to 3 levels deep
 // to prevent infinite wakeup loops when sessions message each other.
 func (g *Gateway) SendToSessionWake(ctx context.Context, sessionKey, label, message string) error {
+	return g.sendToSessionWakeWithSource(ctx, sessionKey, label, message, "")
+}
+
+// sendToSessionWakeWithSource is the internal variant that lets the caller tag the
+// wake with a specific source (e.g. "sub_agent_callback") so the target session's
+// prompt/processing path can tell it apart from a plain inter-session send.
+// When wakeSource is empty the tag defaults to "inter_session".
+func (g *Gateway) sendToSessionWakeWithSource(ctx context.Context, sessionKey, label, message, wakeSource string) error {
 	// Resolve target session
 	var targetSession *sessions.Session
 	var err error
@@ -121,6 +129,9 @@ func (g *Gateway) SendToSessionWake(ctx context.Context, sessionKey, label, mess
 	metadata := map[string]string{
 		"source": "inter_session",
 	}
+	if wakeSource != "" {
+		metadata["wake_source"] = wakeSource
+	}
 	if senderSession := types.RequestSessionKey(ctx); senderSession != "" {
 		metadata["sender_session"] = senderSession
 	}
@@ -134,7 +145,7 @@ func (g *Gateway) SendToSessionWake(ctx context.Context, sessionKey, label, mess
 		return fmt.Errorf("failed to add message to session %q: %w", targetSession.Key, err)
 	}
 
-	log.Printf("[SendToSessionWake] Message delivered to session %s, signalling wake", targetSession.Key)
+	log.Printf("[SendToSessionWake] Message delivered to session %s, signalling wake (source=%q)", targetSession.Key, wakeSource)
 
 	// Signal the wake listener (non-blocking: drop if buffer is full rather than blocking the caller)
 	select {

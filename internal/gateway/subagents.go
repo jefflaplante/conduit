@@ -104,14 +104,31 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 
 		result := response.GetContent()
 
+		// Did we (the spawn path) post the raw result directly to the channel?
+		// This controls the wake_source tag we pass to the parent: if the human
+		// already saw the text, the parent LLM can safely stay silent; otherwise
+		// it must decide whether to surface the result.
+		var announced bool
+
 		// Announce result to channel if requested
-		if announce && parentChannelID != "" && parentUserID != "" {
+		if announce && parentUserID != "" {
 			if result != "" && !channels.IsSilentResponse(result) {
 				announceText := result
 				if len(announceText) > 3500 {
 					announceText = announceText[:3500] + "\n\n_(truncated)_"
 				}
-				g.announceToParent(parentChannelID, parentUserID, announceText)
+				// Resolve the parent's current channel from its session rather
+				// than relying on the captured parentChannelID snapshot — if the
+				// parent reconnected on a new channel since spawn time, this picks
+				// the live one.
+				channelID := g.resolveAnnounceChannelID(parentSessionKey, parentChannelID)
+				if channelID != "" {
+					g.announceToParent(channelID, parentUserID, announceText)
+					announced = true
+				} else {
+					log.Printf("[SubAgent] Cannot announce result for session %s: no live channel (captured=%q)",
+						parentSessionKey, parentChannelID)
+				}
 			}
 		}
 
@@ -122,13 +139,34 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 			if len(wakeResult) > 3500 {
 				wakeResult = wakeResult[:3500] + "\n\n_(truncated)_"
 			}
-			if wakeErr := g.SendToSessionWake(context.Background(), parentSessionKey, "", wakeResult); wakeErr != nil {
+			wakeSource := types.WakeSourceSubAgentSilent
+			if announced {
+				wakeSource = types.WakeSourceSubAgentAnnounced
+			}
+			if wakeErr := g.sendToSessionWakeWithSource(context.Background(), parentSessionKey, "", wakeResult, wakeSource); wakeErr != nil {
 				log.Printf("[SubAgent] Failed to wake parent session %s: %v", parentSessionKey, wakeErr)
 			}
 		}
 	}()
 
 	return session.Key, nil
+}
+
+// resolveAnnounceChannelID returns the parent session's current ChannelID if it
+// can be read from the session store, falling back to the channel captured at
+// spawn time. Empty string means we have no plausible destination and should
+// skip the announce.
+func (g *Gateway) resolveAnnounceChannelID(parentSessionKey, capturedChannelID string) string {
+	if parentSessionKey != "" {
+		if s, err := g.sessions.GetSession(parentSessionKey); err == nil && s != nil && s.ChannelID != "" {
+			if capturedChannelID != "" && s.ChannelID != capturedChannelID {
+				log.Printf("[SubAgent] Parent session %s channel shifted %q → %q since spawn; using live channel",
+					parentSessionKey, capturedChannelID, s.ChannelID)
+			}
+			return s.ChannelID
+		}
+	}
+	return capturedChannelID
 }
 
 // announceToParent sends a message back to the parent session
