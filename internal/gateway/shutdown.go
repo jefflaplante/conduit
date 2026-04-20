@@ -166,12 +166,15 @@ func (sm *ShutdownManager) runShutdownSequence() {
 
 func (sm *ShutdownManager) notifyClients() {
 	gw := sm.gateway
-	gw.clientMu.RLock()
-	clients := make([]*Client, 0, len(gw.clients))
-	for _, c := range gw.clients {
+	if gw.ws == nil {
+		return
+	}
+	gw.ws.ClientMu.RLock()
+	clients := make([]*Client, 0, len(gw.ws.Clients))
+	for _, c := range gw.ws.Clients {
 		clients = append(clients, c)
 	}
-	gw.clientMu.RUnlock()
+	gw.ws.ClientMu.RUnlock()
 
 	if len(clients) == 0 {
 		return
@@ -191,14 +194,17 @@ func (sm *ShutdownManager) notifyClients() {
 
 func (sm *ShutdownManager) drainActiveRequests() {
 	gw := sm.gateway
+	if gw.ws == nil {
+		return
+	}
 	deadline := time.After(sm.drainTimeout)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
-		gw.activeRequestsMu.RLock()
-		active := len(gw.activeRequests)
-		gw.activeRequestsMu.RUnlock()
+		gw.ws.ActiveRequestsMu.RLock()
+		active := len(gw.ws.ActiveRequests)
+		gw.ws.ActiveRequestsMu.RUnlock()
 
 		if active == 0 {
 			sm.logger.Info("all active requests drained")
@@ -211,12 +217,12 @@ func (sm *ShutdownManager) drainActiveRequests() {
 				"remaining", active,
 				"timeout", sm.drainTimeout,
 			)
-			gw.activeRequestsMu.RLock()
-			for sessionKey, cancelFn := range gw.activeRequests {
+			gw.ws.ActiveRequestsMu.RLock()
+			for sessionKey, cancelFn := range gw.ws.ActiveRequests {
 				sm.logger.Warn("force-cancelling request", "session", sessionKey)
 				cancelFn()
 			}
-			gw.activeRequestsMu.RUnlock()
+			gw.ws.ActiveRequestsMu.RUnlock()
 			return
 		case <-ticker.C:
 			sm.logger.Debug("waiting for active requests to drain", "remaining", active)
@@ -235,20 +241,22 @@ func (sm *ShutdownManager) writeBreadcrumb() {
 		dataDir = "."
 	}
 
-	gw.clientMu.RLock()
 	var activeSessions []BreadcrumbSession
-	seen := make(map[string]bool)
-	for _, client := range gw.clients {
-		if client.SessionKey != "" && !seen[client.SessionKey] {
-			seen[client.SessionKey] = true
-			activeSessions = append(activeSessions, BreadcrumbSession{
-				SessionKey: client.SessionKey,
-				UserID:     client.UserID,
-				ChannelID:  client.ID,
-			})
+	if gw.ws != nil {
+		gw.ws.ClientMu.RLock()
+		seen := make(map[string]bool)
+		for _, client := range gw.ws.Clients {
+			if client.SessionKey != "" && !seen[client.SessionKey] {
+				seen[client.SessionKey] = true
+				activeSessions = append(activeSessions, BreadcrumbSession{
+					SessionKey: client.SessionKey,
+					UserID:     client.UserID,
+					ChannelID:  client.ID,
+				})
+			}
 		}
+		gw.ws.ClientMu.RUnlock()
 	}
-	gw.clientMu.RUnlock()
 
 	sm.mu.Lock()
 	trigger := sm.triggerAction
