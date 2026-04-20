@@ -12,7 +12,9 @@ WorkingDirectory=/home/conduit/conduit
 
 # Binary and config
 ExecStart=/home/conduit/conduit/bin/conduit server --config /home/conduit/conduit/config.json
-# SIGHUP triggers graceful drain then re-exec (systemctl reload conduit)
+# SIGHUP triggers graceful drain then clean exit. systemd restarts the unit
+# via Restart=always below. Do NOT re-exec in-process under systemd: it
+# breaks MainPID tracking and previously caused self-kill loops.
 ExecReload=/bin/kill -HUP $MAINPID
 
 # Environment
@@ -26,8 +28,8 @@ KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30
 
-# Restart policy
-Restart=on-failure
+# Restart policy — always so clean drain-exit (SIGHUP reload) also brings us back.
+Restart=always
 RestartSec=5
 StartLimitIntervalSec=60
 StartLimitBurst=3
