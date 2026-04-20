@@ -605,6 +605,124 @@ func TestRecallAllStopwordsQuery(t *testing.T) {
 	assert.GreaterOrEqual(t, len(results), 1, "all-stopwords fallback should still search")
 }
 
+func TestStoreBulkWorkingMemory(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	entries := []BulkEntry{
+		{Key: "bulk.a", Value: "1", Tier: TierWorking, Source: "file:notes.md"},
+		{Key: "bulk.b", Value: "2", Tier: TierWorking, Source: "file:notes.md"},
+		{Key: "bulk.c", Value: "3", Source: "file:notes.md"}, // default tier = working
+	}
+	require.NoError(t, b.StoreBulk(ctx, entries))
+
+	for _, e := range entries {
+		got, err := b.Get(ctx, e.Key)
+		require.NoError(t, err)
+		require.NotNil(t, got, "key=%s", e.Key)
+		assert.Equal(t, e.Value, got.Value)
+		assert.Equal(t, TierWorking, got.Tier)
+		assert.Equal(t, "file:notes.md", got.Source)
+	}
+}
+
+func TestStoreBulkLongTerm(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	entries := []BulkEntry{
+		{Key: "ltm.bulk.a", Value: "A", Tier: TierLongTerm, Source: "file:x.md"},
+		{Key: "ltm.bulk.b", Value: "B", Tier: TierLongTerm, Source: "file:x.md"},
+	}
+	require.NoError(t, b.StoreBulk(ctx, entries))
+
+	for _, e := range entries {
+		got, err := b.Get(ctx, e.Key)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, e.Value, got.Value)
+		assert.Equal(t, TierLongTerm, got.Tier)
+		assert.Equal(t, "file:x.md", got.Source)
+	}
+}
+
+func TestStoreBulkSourcePreserved(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	entries := []BulkEntry{
+		{Key: "src.test.wm", Value: "v", Tier: TierWorking, Source: "file:alpha.md"},
+		{Key: "src.test.ltm", Value: "v", Tier: TierLongTerm, Source: "file:beta.md"},
+	}
+	require.NoError(t, b.StoreBulk(ctx, entries))
+
+	wm, err := b.Get(ctx, "src.test.wm")
+	require.NoError(t, err)
+	require.NotNil(t, wm)
+	assert.Equal(t, "file:alpha.md", wm.Source)
+
+	ltm, err := b.Get(ctx, "src.test.ltm")
+	require.NoError(t, err)
+	require.NotNil(t, ltm)
+	assert.Equal(t, "file:beta.md", ltm.Source)
+}
+
+func TestStoreBulkRejectsScratch(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	entries := []BulkEntry{
+		{Key: "ok.key", Value: "v", Tier: TierWorking},
+		{Key: "bad.key", Value: "v", Tier: TierScratch},
+	}
+	err := b.StoreBulk(ctx, entries)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scratch")
+
+	// No entries should have been applied — atomicity at validation time.
+	got, err := b.Get(ctx, "ok.key")
+	require.NoError(t, err)
+	assert.Nil(t, got, "validation failure must not apply any entries")
+}
+
+func TestStoreBulkRejectsEmptyKey(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	entries := []BulkEntry{
+		{Key: "", Value: "v", Tier: TierWorking},
+	}
+	err := b.StoreBulk(ctx, entries)
+	require.Error(t, err)
+}
+
+func TestStoreBulkEmptySliceNoop(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+	require.NoError(t, b.StoreBulk(ctx, nil))
+	require.NoError(t, b.StoreBulk(ctx, []BulkEntry{}))
+}
+
+func TestStoreBulkUpsertLTM(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	// First write
+	require.NoError(t, b.StoreBulk(ctx, []BulkEntry{
+		{Key: "upsert.key", Value: "v1", Tier: TierLongTerm, Source: "file:one.md"},
+	}))
+	// Second write updates
+	require.NoError(t, b.StoreBulk(ctx, []BulkEntry{
+		{Key: "upsert.key", Value: "v2", Tier: TierLongTerm, Source: "file:two.md"},
+	}))
+
+	got, err := b.Get(ctx, "upsert.key")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "v2", got.Value)
+	assert.Equal(t, "file:two.md", got.Source)
+}
+
 func TestStaleColumnExists(t *testing.T) {
 	b := newTestBrain(t)
 	ctx := testCtx("user1")

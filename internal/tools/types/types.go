@@ -236,9 +236,19 @@ type ConsolidationReport struct {
 	EvictedKeys   []string `json:"evicted_keys,omitempty"`
 }
 
+// BrainBulkEntry is a single entry passed to BrainService.StoreBulk. Tier
+// defaults to BrainTierWorking when empty; BrainTierScratch is rejected.
+type BrainBulkEntry struct {
+	Key    string    `json:"key"`
+	Value  string    `json:"value"`
+	Tier   BrainTier `json:"tier,omitempty"`
+	Source string    `json:"source,omitempty"`
+}
+
 // BrainService provides tiered memory (LTM + working + scratchpad) to tools.
 type BrainService interface {
 	Store(ctx context.Context, key, value string, tier BrainTier, source string) error
+	StoreBulk(ctx context.Context, entries []BrainBulkEntry) error
 	Get(ctx context.Context, key string) (*BrainEntry, error)
 	Recall(ctx context.Context, query string, limit int) ([]*BrainEntry, error)
 	List(ctx context.Context, prefix string, sourcePrefix string) ([]*BrainEntry, error)
@@ -268,13 +278,13 @@ type BrainFTSSearcher interface {
 
 // REMCycleReport is the tool-layer representation of a REM cycle execution report.
 type REMCycleReport struct {
-	Date          string                  `json:"date"`
-	DryRun        bool                    `json:"dry_run"`
-	Triage        map[string]interface{}  `json:"triage,omitempty"`
-	Consolidation map[string]interface{}  `json:"consolidation,omitempty"`
-	Pruning       map[string]interface{}  `json:"pruning,omitempty"`
-	Integration   map[string]interface{}  `json:"integration,omitempty"`
-	Grooming      map[string]interface{}  `json:"grooming,omitempty"`
+	Date          string                 `json:"date"`
+	DryRun        bool                   `json:"dry_run"`
+	Triage        map[string]interface{} `json:"triage,omitempty"`
+	Consolidation map[string]interface{} `json:"consolidation,omitempty"`
+	Pruning       map[string]interface{} `json:"pruning,omitempty"`
+	Integration   map[string]interface{} `json:"integration,omitempty"`
+	Grooming      map[string]interface{} `json:"grooming,omitempty"`
 }
 
 // REMCycleRunner executes the REM sleep consolidation cycle.
@@ -340,12 +350,12 @@ type ToolServices struct {
 	ConfigMgr     *config.Config
 	WebClient     *http.Client
 	SkillsManager *skills.Manager
-	ChannelSender ChannelSender  // Interface for channel operations
-	Gateway       GatewayService // Interface for gateway operations
-	Searcher      SearchService  // FTS5 full-text search
-	VectorSearch  VectorService  // Optional vector/semantic search
-	VectorIndexer VectorIndexer  // Optional on-demand vector indexer
-	MQTTService   MQTTService    // Optional MQTT event ingest
+	ChannelSender ChannelSender     // Interface for channel operations
+	Gateway       GatewayService    // Interface for gateway operations
+	Searcher      SearchService     // FTS5 full-text search
+	VectorSearch  VectorService     // Optional vector/semantic search
+	VectorIndexer VectorIndexer     // Optional on-demand vector indexer
+	MQTTService   MQTTService       // Optional MQTT event ingest
 	Brain         BrainService      // Optional tiered memory (LTM + working + scratchpad)
 	BrainFTS      BrainFTSSearcher  // Optional FTS5 search over brain LTM
 	REMCycle      REMCycleRunner    // Optional REM sleep cycle runner
