@@ -253,7 +253,22 @@ func (b *Brain) getLTM(key string) (*Entry, error) {
 	return entry, nil
 }
 
+// defaultContextWeight is the ranking boost applied per entry whose key or
+// value contains any token from the optional recall context. The entry's
+// blended score is multiplied by (1 + defaultContextWeight) when any context
+// token overlaps. See RecallWithContext.
+const defaultContextWeight = 0.3
+
 func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, error) {
+	return b.RecallWithContext(ctx, query, limit, "")
+}
+
+// RecallWithContext performs the same fuzzy recall as Recall but accepts an
+// optional context string. If context is non-empty, entries whose key or value
+// contain any context token (case-insensitive, same tokenization as the query)
+// have their final score boosted by (1 + defaultContextWeight). Context never
+// filters results — it only re-ranks. An empty context is identical to Recall.
+func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, contextStr string) ([]*Entry, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -261,6 +276,12 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 	terms := TokenizeQuery(query)
 	if len(terms) == 0 {
 		return nil, nil
+	}
+
+	// Tokenize the optional context — reused for keyword-overlap boost during ranking.
+	var contextTerms []string
+	if contextStr != "" {
+		contextTerms = TokenizeQuery(contextStr)
 	}
 
 	type scoredEntry struct {
@@ -343,10 +364,19 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 		}
 	}
 
-	// Sort by blended score: match relevance (60%) + salience (40%).
+	// Sort by blended score: match relevance (60%) + salience (40%),
+	// with an optional context-overlap boost of (1 + defaultContextWeight).
 	sort.Slice(scored, func(i, j int) bool {
 		si := (scored[i].matchScore * 0.6) + (scored[i].entry.Salience * 0.4)
 		sj := (scored[j].matchScore * 0.6) + (scored[j].entry.Salience * 0.4)
+		if len(contextTerms) > 0 {
+			if entryMatchesAnyTerm(scored[i].entry, contextTerms) {
+				si *= 1 + defaultContextWeight
+			}
+			if entryMatchesAnyTerm(scored[j].entry, contextTerms) {
+				sj *= 1 + defaultContextWeight
+			}
+		}
 		return si > sj
 	})
 
@@ -626,6 +656,23 @@ func (b *Brain) computeSalience(e *Entry) float64 {
 		tierScore = 0.1
 	}
 	return (accessScore * b.accessWeight) + (recencyScore * b.recencyWeight) + (tierScore * b.tierWeight)
+}
+
+// entryMatchesAnyTerm reports whether any of the given tokens appears in the
+// entry's key or value (case-insensitive substring match). Used to decide
+// whether to apply the context-overlap rerank boost.
+func entryMatchesAnyTerm(e *Entry, terms []string) bool {
+	if len(terms) == 0 {
+		return false
+	}
+	keyLower := strings.ToLower(e.Key)
+	valueLower := strings.ToLower(e.Value)
+	for _, term := range terms {
+		if strings.Contains(keyLower, term) || strings.Contains(valueLower, term) {
+			return true
+		}
+	}
+	return false
 }
 
 // queryMatchScore returns the fraction of query terms found in the entry's key or value.

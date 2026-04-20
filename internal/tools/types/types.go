@@ -241,6 +241,11 @@ type BrainService interface {
 	Store(ctx context.Context, key, value string, tier BrainTier, source string) error
 	Get(ctx context.Context, key string) (*BrainEntry, error)
 	Recall(ctx context.Context, query string, limit int) ([]*BrainEntry, error)
+	// RecallWithContext performs fuzzy recall with an optional context string.
+	// If contextStr is non-empty, entries whose key or value contain any context
+	// token get a ranking boost; it never filters results. An empty contextStr
+	// is equivalent to Recall.
+	RecallWithContext(ctx context.Context, query string, limit int, contextStr string) ([]*BrainEntry, error)
 	List(ctx context.Context, prefix string, sourcePrefix string) ([]*BrainEntry, error)
 	Delete(ctx context.Context, key string) error
 	Push(ctx context.Context, userID, value string) error
