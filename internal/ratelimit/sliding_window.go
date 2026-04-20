@@ -202,3 +202,129 @@ type Stats struct {
 	WindowDuration  time.Duration // Window duration
 	Limit           int           // Request limit per window
 }
+
+// IdentifierSnapshot is a per-identifier view of remaining headroom and when
+// the window resets for that identifier. This is a non-mutating read that
+// does NOT consume a request slot.
+type IdentifierSnapshot struct {
+	Identifier string    // client name or IP identifier
+	Used       int       // Requests used in the current window
+	Remaining  int       // Requests still allowed before limit
+	ResetAt    time.Time // When the oldest tracked request expires
+	LastSeen   time.Time // Most recent access time
+}
+
+// Snapshot returns a point-in-time view of the limiter. It includes the
+// configured limit/window and a slice of per-identifier states for every
+// bucket that currently has at least one request in the active window.
+// Identifiers whose requests have all expired are skipped.
+//
+// Callers can use this to compute "how much headroom is left?" without
+// mutating limiter state.
+type Snapshot struct {
+	WindowDuration time.Duration
+	Limit          int
+	Identifiers    []IdentifierSnapshot
+	ActiveBuckets  int // Total buckets tracked (including ones with all-expired timestamps)
+	TakenAt        time.Time
+}
+
+// Snapshot returns a point-in-time snapshot of the limiter state.
+// Safe for concurrent use; does not modify any bucket.
+func (sw *SlidingWindow) Snapshot() Snapshot {
+	now := time.Now()
+	snap := Snapshot{
+		WindowDuration: sw.windowDur,
+		Limit:          sw.limit,
+		TakenAt:        now,
+		Identifiers:    make([]IdentifierSnapshot, 0),
+	}
+
+	cutoff := now.Add(-sw.windowDur)
+
+	sw.buckets.Range(func(key, value interface{}) bool {
+		snap.ActiveBuckets++
+		id, _ := key.(string)
+		bucket, _ := value.(*WindowBucket)
+		if bucket == nil {
+			return true
+		}
+		bucket.mu.RLock()
+		lastSeen := bucket.lastAccess
+		// Count timestamps that are still within the window.
+		used := 0
+		var oldestValid time.Time
+		for _, ts := range bucket.timestamps {
+			if ts.After(cutoff) {
+				if used == 0 {
+					oldestValid = ts
+				}
+				used++
+			}
+		}
+		bucket.mu.RUnlock()
+
+		if used == 0 {
+			return true
+		}
+
+		remaining := sw.limit - used
+		if remaining < 0 {
+			remaining = 0
+		}
+		snap.Identifiers = append(snap.Identifiers, IdentifierSnapshot{
+			Identifier: id,
+			Used:       used,
+			Remaining:  remaining,
+			ResetAt:    oldestValid.Add(sw.windowDur),
+			LastSeen:   lastSeen,
+		})
+		return true
+	})
+
+	return snap
+}
+
+// PeekIdentifier returns the current state for a specific identifier
+// without recording a request. Returns (used, remaining, resetAt, exists).
+// When exists is false the identifier has never been seen (or its bucket
+// has been cleaned up) and remaining equals the configured limit.
+func (sw *SlidingWindow) PeekIdentifier(identifier string) (int, int, time.Time, bool) {
+	bucketInterface, ok := sw.buckets.Load(identifier)
+	if !ok {
+		return 0, sw.limit, time.Time{}, false
+	}
+	bucket := bucketInterface.(*WindowBucket)
+	now := time.Now()
+	cutoff := now.Add(-sw.windowDur)
+
+	bucket.mu.RLock()
+	defer bucket.mu.RUnlock()
+
+	used := 0
+	var oldestValid time.Time
+	for _, ts := range bucket.timestamps {
+		if ts.After(cutoff) {
+			if used == 0 {
+				oldestValid = ts
+			}
+			used++
+		}
+	}
+
+	remaining := sw.limit - used
+	if remaining < 0 {
+		remaining = 0
+	}
+	var resetAt time.Time
+	if used > 0 {
+		resetAt = oldestValid.Add(sw.windowDur)
+	}
+	return used, remaining, resetAt, true
+}
+
+// Limit returns the configured request limit per window.
+func (sw *SlidingWindow) Limit() int { return sw.limit }
+
+// WindowDuration returns the configured window duration.
+func (sw *SlidingWindow) WindowDuration() time.Duration { return sw.windowDur }
