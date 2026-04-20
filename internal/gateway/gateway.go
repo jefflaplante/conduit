@@ -2207,13 +2207,9 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 
 		responseContent := convResponse.GetContent()
 
-		// Persist usage to session context for /context command
+		// Persist usage to session context for /context command and context-budget gauge (conduit-2v0t)
 		if usage := convResponse.GetUsage(); usage != nil {
-			batch := map[string]string{
-				"last_prompt_tokens":     strconv.Itoa(usage.PromptTokens),
-				"last_completion_tokens": strconv.Itoa(usage.CompletionTokens),
-				"last_total_tokens":      strconv.Itoa(usage.TotalTokens),
-			}
+			batch := recordTokenUsage(session, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
 
 			// Proactive context window warning
 			if warning := contextWarningIfNeeded(session, usage.PromptTokens, modelOverride); warning.Text != "" {

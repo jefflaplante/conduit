@@ -116,6 +116,9 @@ func (m *mockGatewayService) GetVersion() string {
 func (m *mockGatewayService) GetSystemPromptDebug(ctx context.Context, sessionKey string) (map[string]interface{}, error) {
 	return nil, nil
 }
+func (m *mockGatewayService) GetContextBudget(ctx context.Context, sessionKey string) (map[string]interface{}, error) {
+	return nil, nil
+}
 func (m *mockGatewayService) ReloadSkillTools(ctx context.Context) (int, error) {
 	return 0, nil
 }
