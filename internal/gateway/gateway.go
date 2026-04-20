@@ -434,6 +434,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Create auth middleware
 	authMiddleware := middleware.NewAuthMiddleware(authStorage, middleware.AuthMiddlewareConfig{
 		SkipPaths: authSkipPaths,
+		Logger:    logger,
 		OnAuthError: func(r *http.Request, err middleware.AuthError) {
 			logging.Warn(r.Context(), "authentication failed",
 				"method", r.Method,
@@ -443,10 +444,11 @@ func New(cfg *config.Config) (*Gateway, error) {
 	})
 
 	// Create WebSocket authenticator
-	wsAuthenticator := middleware.NewWebSocketAuthenticator(authStorage)
+	wsAuthenticator := middleware.NewWebSocketAuthenticator(authStorage, logger)
 
 	// Create rate limiting middleware
 	rateLimitMiddleware := middleware.NewRateLimitMiddleware(middleware.RateLimitMiddlewareConfig{
+		Logger: logger,
 		Config: middleware.RateLimitConfig{
 			Enabled: cfg.RateLimiting.Enabled,
 			Anonymous: struct {
@@ -1152,9 +1154,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 		limitRequestBody(http.HandlerFunc(vectorAPI.handleDelete), MaxRequestBodySize))))
 	mux.Handle("/api/vector/status", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(vectorAPI.handleStatus))))
 
+	// Inject request_id into every HTTP request so auth and rate-limit logs
+	// can be correlated across the entire request lifecycle.
+	requestIDMiddleware := middleware.NewRequestIDMiddleware()
+
 	server := &http.Server{
 		Addr:           fmt.Sprintf(":%d", g.config.Port),
-		Handler:        mux,
+		Handler:        requestIDMiddleware.Wrap(mux),
 		MaxHeaderBytes: serverMaxHeaderBytes,
 		ReadTimeout:    serverReadTimeout,
 		WriteTimeout:   serverWriteTimeout,
