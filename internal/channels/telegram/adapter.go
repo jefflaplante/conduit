@@ -413,46 +413,53 @@ func (a *Adapter) SendMessage(msg *protocol.OutgoingMessage) error {
 		return nil
 	}
 
-	// Convert standard markdown to Telegram's limited markdown subset
-	telegramText := convertToTelegramMarkdown(sanitizedText)
+	chunks := splitMessage(sanitizedText, TelegramMessageLimit)
 
-	// Send message with legacy Markdown parse mode (more lenient than MarkdownV2)
-	// Telegram Markdown supports: *bold*, _italic_, `code`, ```code blocks```
-	params := &bot.SendMessageParams{
-		ChatID:    chatID,
-		Text:      telegramText,
-		ParseMode: models.ParseModeMarkdownV1,
-	}
+	parseModeOverride, hasParseModeOverride := msg.Metadata["parse_mode"]
 
-	// Handle reply-to if specified in metadata
+	replyToID := 0
 	if replyToStr, ok := msg.Metadata["reply_to_message_id"]; ok {
 		if replyToInt, err := strconv.Atoi(replyToStr); err == nil {
-			params.ReplyParameters = &models.ReplyParameters{
-				MessageID: replyToInt,
+			replyToID = replyToInt
+		}
+	}
+
+	for i, chunk := range chunks {
+		telegramText := convertToTelegramMarkdown(chunk)
+
+		params := &bot.SendMessageParams{
+			ChatID:    chatID,
+			Text:      telegramText,
+			ParseMode: models.ParseModeMarkdownV1,
+		}
+
+		// Only apply reply-to on the first chunk
+		if i == 0 && replyToID != 0 {
+			params.ReplyParameters = &models.ReplyParameters{MessageID: replyToID}
+		}
+
+		if hasParseModeOverride {
+			params.ParseMode = models.ParseMode(parseModeOverride)
+		}
+
+		_, err = a.bot.SendMessage(a.ctx, params)
+		if err != nil {
+			if strings.Contains(err.Error(), "can't parse entities") || strings.Contains(err.Error(), "message is too long") {
+				log.Printf("[Telegram] chunk %d/%d markdown failed, retrying plain text: %v", i+1, len(chunks), err)
+				params.ParseMode = ""
+				params.Text = chunk
+				_, err = a.bot.SendMessage(a.ctx, params)
+				if err != nil {
+					return fmt.Errorf("failed to send chunk %d/%d (plain text fallback): %w", i+1, len(chunks), err)
+				}
+			} else {
+				return fmt.Errorf("failed to send chunk %d/%d: %w", i+1, len(chunks), err)
 			}
 		}
 	}
 
-	// Handle parse mode override from metadata
-	if parseMode, ok := msg.Metadata["parse_mode"]; ok {
-		params.ParseMode = models.ParseMode(parseMode)
-	}
-
-	_, err = a.bot.SendMessage(a.ctx, params)
-	if err != nil {
-		// If HTML parsing fails, retry without formatting
-		if strings.Contains(err.Error(), "can't parse entities") {
-			log.Printf("[Telegram] HTML parsing failed, retrying as plain text: %v", err)
-			params.ParseMode = ""
-			params.Text = sanitizedText // Use original sanitized text without HTML conversion
-			_, err = a.bot.SendMessage(a.ctx, params)
-			if err != nil {
-				return fmt.Errorf("failed to send message (plain text fallback): %w", err)
-			}
-			log.Printf("[Telegram] Message sent as plain text fallback (%d chars)", len(sanitizedText))
-		} else {
-			return fmt.Errorf("failed to send message: %w", err)
-		}
+	if len(chunks) > 1 {
+		log.Printf("[Telegram] Message sent to chat in %d parts (%d chars, sanitized from %d)", len(chunks), len(sanitizedText), len(msg.Text))
 	} else {
 		log.Printf("[Telegram] Message sent to chat (%d chars, sanitized from %d)", len(sanitizedText), len(msg.Text))
 	}
@@ -493,10 +500,16 @@ func (a *Adapter) SendMessageWithID(chatID int64, text string) (int, error) {
 	return msg.ID, nil
 }
 
-// EditMessageText edits an existing message
+// EditMessageText edits an existing message.
+// When text exceeds TelegramMessageLimit the edit is refused so the caller can
+// fall back to sending a fresh (splittable) message via SendMessage.
 func (a *Adapter) EditMessageText(chatID int64, messageID int, text string) error {
 	if a.bot == nil {
 		return fmt.Errorf("bot not initialized")
+	}
+
+	if len(text) > TelegramMessageLimit {
+		return fmt.Errorf("text %d chars exceeds Telegram limit %d; caller should fall back to SendMessage", len(text), TelegramMessageLimit)
 	}
 
 	sanitizedText := sanitizeUserFacingText(text)

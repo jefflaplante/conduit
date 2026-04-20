@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -415,8 +416,8 @@ func (t *SessionStateTracker) triggerStateHooks(event StateChangeEvent) {
 			}()
 			defer func() {
 				if r := recover(); r != nil {
-					// Log hook panic but don't crash the system
-					// TODO: Add proper logging when logger is available
+					log.Printf("[SessionStateTracker] hook panic for session %s (%s -> %s): %v",
+						event.SessionKey, event.OldState, event.NewState, r)
 				}
 			}()
 			h(event)
