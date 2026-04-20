@@ -164,28 +164,35 @@ func (b *Brain) storeLTM(key, value, source string, now time.Time) error {
 	nowStr := now.UTC().Format("2006-01-02 15:04:05")
 	// Use a simple default salience for upsert; the exact salience is recomputed on access.
 	// The ON CONFLICT UPDATE preserves the existing salience bumped slightly for the access.
-	_, err := b.db.Exec(`
-		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
-		VALUES (?, ?, ?, ?, ?, 1, 0.5)
-		ON CONFLICT(key) DO UPDATE SET
-			value = excluded.value,
-			source = excluded.source,
-			accessed_at = excluded.accessed_at,
-			access_count = access_count + 1,
-			salience = COALESCE(
-				(MIN(CAST(access_count + 1 AS REAL) / CAST(? AS REAL), 1.0) * ?) +
-				(1.0 / (1.0 + 0.0)) * ? +
-				(0.8 * ?),
-				salience, 0.5)
-	`, key, value, source, nowStr, nowStr,
-		b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight)
+	err := database.RetryOnBusy(5, func() error {
+		_, err := b.db.Exec(`
+			INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
+			VALUES (?, ?, ?, ?, ?, 1, 0.5)
+			ON CONFLICT(key) DO UPDATE SET
+				value = excluded.value,
+				source = excluded.source,
+				accessed_at = excluded.accessed_at,
+				access_count = access_count + 1,
+				salience = COALESCE(
+					(MIN(CAST(access_count + 1 AS REAL) / CAST(? AS REAL), 1.0) * ?) +
+					(1.0 / (1.0 + 0.0)) * ? +
+					(0.8 * ?),
+					salience, 0.5)
+		`, key, value, source, nowStr, nowStr,
+			b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("store LTM: %w", err)
 	}
 	if b.maxLTMEntries > 0 {
-		b.db.Exec(`DELETE FROM brain_ltm WHERE key IN (
-			SELECT key FROM brain_ltm ORDER BY salience ASC
-			LIMIT MAX(0, (SELECT COUNT(*) FROM brain_ltm) - ?))`, b.maxLTMEntries)
+		// Best-effort eviction — retry on BUSY so heartbeat-paced writers don't hit the 5s cap.
+		_ = database.RetryOnBusy(5, func() error {
+			_, err := b.db.Exec(`DELETE FROM brain_ltm WHERE key IN (
+				SELECT key FROM brain_ltm ORDER BY salience ASC
+				LIMIT MAX(0, (SELECT COUNT(*) FROM brain_ltm) - ?))`, b.maxLTMEntries)
+			return err
+		})
 	}
 	return nil
 }
@@ -419,7 +426,10 @@ func (b *Brain) Delete(ctx context.Context, key string) error {
 		delete(wm, key)
 	}
 	b.mu.Unlock()
-	_, err := b.db.Exec("DELETE FROM brain_ltm WHERE key = ?", key)
+	err := database.RetryOnBusy(5, func() error {
+		_, err := b.db.Exec("DELETE FROM brain_ltm WHERE key = ?", key)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("delete LTM: %w", err)
 	}
