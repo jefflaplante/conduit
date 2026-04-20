@@ -244,3 +244,35 @@ func (t *BrainTool) SelfTest(ctx context.Context, opts *SelfTestOptions) *SelfTe
 ### Tools with SelfTest
 
 All ~30 tools implement SelfTest: BashTool, ReadFileTool, WriteFileTool, GlobTool, EditTool, FindTool, FactsTool, MemorySearchTool, BrainTool, GatewayTool, ContextTool, ChainTool, DebugLogTool, SessionsListTool, SessionsSendTool, SessionsSpawnTool, SessionStatusTool, MessageTool, StatusUpdateTool, TtsTool, CronTool, WebFetchTool, WebSearchTool, ImageTool, MQTTTool, DatadogTool, PagerDutyTool, K8sTool, SSHTool, SRETool, UniFiTool, GoogleWorkspaceTool.
+
+## Agent Gotchas
+
+### "File was modified" system-reminder is NOT a revert (conduit-358j)
+
+When you `Edit` or `Write` a file, you may later see a system-reminder like:
+
+> `Note: /path/to/file.go was modified, either by the user or by a linter. This change was intentional...`
+
+**This is NOT your edit being reverted.** This is Claude Code's built-in file-change-detection telling you the on-disk content differs from the version you last `Read`. It commonly fires when:
+
+- Another process (another subagent in a sibling worktree, a `make build` run, a git operation) touched the file.
+- The Wave orchestrator merged a feature branch into `main` while your subagent was running in a different worktree.
+- You ran `go build` / `go mod tidy` which touched generated files.
+
+**It does NOT mean a format-on-save hook rewrote your change.** This project has no `PostToolUse` format hook. The pre-commit hook (`.git/hooks/pre-commit`) only runs `br sync --flush-only` at commit time — it never touches `.go` files. There is no `.pre-commit-config.yaml`, no `.air.toml` in the worktree, no `.editorconfig`, no `.vscode/settings.json`.
+
+**Correct response** when you see the reminder:
+
+1. Run `git diff <path>` (or `Read` the file) — compare actual on-disk content to what you intended.
+2. If your edit is present: ignore the reminder, keep going.
+3. If it is genuinely missing: don't blindly re-Edit. First check `git log -p -- <path>` or look at sibling worktrees (`git worktree list`) to see who else touched the file. Re-applying a half-applied change on top of a concurrent merge is how bad merge states happen.
+
+**Do NOT:**
+
+- Assume a format hook is eating your edits — there isn't one.
+- Switch to `Bash` + `cat <<EOF` or `python -c` atomic writes as a workaround; they have the same observation semantics and just hide the real problem.
+- Run `go build` "to settle the hook"; the build doesn't touch source files, it just happens to not re-trigger the reminder because no further reads occur.
+
+### Parallel subagents share the repo but not worktrees
+
+During orchestrated swarms, each subagent runs in its own git worktree under `.claude/worktrees/agent-*/`. The worktrees share the same `.git/` object store but have independent working trees. Files like `internal/tools/types/types.go`, `internal/gateway/gateway.go`, and `internal/config/validate.go` are frequently edited by multiple Wave agents — if your ticket touches one of these, expect system-reminders when other agents merge.
