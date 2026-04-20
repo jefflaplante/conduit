@@ -18,13 +18,14 @@ func (g *Gateway) GetSessionStatus(ctx context.Context, sessionKey string) (map[
 	}
 
 	return map[string]interface{}{
-		"session_key":   session.Key,
-		"user_id":       session.UserID,
-		"channel_id":    session.ChannelID,
-		"message_count": session.MessageCount,
-		"created_at":    session.CreatedAt,
-		"updated_at":    session.UpdatedAt,
-		"context":       session.Context,
+		"session_key":    session.Key,
+		"user_id":        session.UserID,
+		"channel_id":     session.ChannelID,
+		"message_count":  session.MessageCount,
+		"created_at":     session.CreatedAt,
+		"updated_at":     session.UpdatedAt,
+		"context":        session.Context,
+		"context_budget": ContextBudgetFromSession(session).ToMap(),
 	}, nil
 }
 

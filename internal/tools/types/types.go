@@ -44,6 +44,13 @@ type GatewayService interface {
 	GetVersion() string
 	GetSystemPromptDebug(ctx context.Context, sessionKey string) (map[string]interface{}, error)
 
+	// GetContextBudget returns a point-in-time snapshot of the session's
+	// context-window consumption: latest prompt/completion tokens, the
+	// model's declared window, percent used, and remaining tokens. Returns
+	// the snapshot as a map for tool-layer consumption without exposing
+	// the concrete ContextBudget struct (avoids cross-package coupling).
+	GetContextBudget(ctx context.Context, sessionKey string) (map[string]interface{}, error)
+
 	// Skill hot-reload
 	ReloadSkillTools(ctx context.Context) (int, error)
 

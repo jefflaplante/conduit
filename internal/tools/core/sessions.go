@@ -653,6 +653,34 @@ func (t *SessionStatusTool) formatSessionStatus(status map[string]interface{}) s
 		builder.WriteString(fmt.Sprintf("Estimated Cost: $%.4f\n", cost))
 	}
 
+	// Context budget gauge (conduit-2v0t) — show context-window consumption up front
+	// because it's the most actionable status signal for the agent.
+	if budget, ok := status["context_budget"].(map[string]interface{}); ok && budget != nil {
+		builder.WriteString("\nContext Budget:\n")
+		if model, ok := budget["model"].(string); ok && model != "" {
+			builder.WriteString(fmt.Sprintf("  Model:            %s\n", model))
+		}
+		if window, ok := budget["model_window"].(int); ok {
+			builder.WriteString(fmt.Sprintf("  Window:           %d tokens", window))
+			if isDefault, _ := budget["model_window_is_default"].(bool); isDefault {
+				builder.WriteString(" (default — model not in lookup table)")
+			}
+			builder.WriteString("\n")
+		}
+		if prompt, ok := budget["prompt_tokens"].(int); ok {
+			builder.WriteString(fmt.Sprintf("  Prompt tokens:    %d\n", prompt))
+		}
+		if completion, ok := budget["completion_tokens"].(int); ok {
+			builder.WriteString(fmt.Sprintf("  Last completion:  %d\n", completion))
+		}
+		if pct, ok := budget["percent_used"].(float64); ok {
+			builder.WriteString(fmt.Sprintf("  Percent used:     %.2f%%\n", pct))
+		}
+		if remaining, ok := budget["remaining_tokens"].(int); ok {
+			builder.WriteString(fmt.Sprintf("  Remaining:        %d tokens\n", remaining))
+		}
+	}
+
 	// Context info
 	if context, ok := status["context"].(map[string]interface{}); ok && len(context) > 0 {
 		builder.WriteString("\nContext:\n")
