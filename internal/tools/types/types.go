@@ -225,6 +225,7 @@ type BrainStatus struct {
 	ScratchDepth int      `json:"scratch_depth"`
 	AvgSalience  float64  `json:"avg_salience,omitempty"`
 	HottestKeys  []string `json:"hottest_keys,omitempty"`
+	ColdestKeys  []string `json:"coldest_keys,omitempty"`
 }
 
 // ConsolidationReport summarizes a consolidation sweep.
