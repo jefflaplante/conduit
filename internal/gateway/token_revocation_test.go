@@ -65,8 +65,10 @@ func createTestGatewayWithAuth(t *testing.T) (*Gateway, *auth.TokenStorage) {
 			EventStore:       eventStore,
 		},
 		rateLimitMiddleware: rateLimitMiddleware,
-		authStorage:         authStorage,
-		clients:             make(map[string]*Client),
+		auth: &AuthService{
+			AuthStorage: authStorage,
+		},
+		clients: make(map[string]*Client),
 	}
 
 	// Wire the revocation callback just like New() does.
