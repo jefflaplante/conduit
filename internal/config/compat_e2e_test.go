@@ -35,11 +35,10 @@ func TestConfigLoadE2E_EnvAndTildeExpansion(t *testing.T) {
 			"default_provider": "anthropic",
 			"providers": []interface{}{
 				map[string]interface{}{
-					"name":    "anthropic",
-					"type":    "anthropic",
-					"api_key": "${TEST_API_KEY}",
+					"name":     "anthropic",
+					"type":     "anthropic",
 					"base_url": "${TEST_API_KEY}", // reuse to test base_url expansion
-					"model":   "claude-3-5-sonnet-20241022",
+					"model":    "claude-3-5-sonnet-20241022",
 					"auth": map[string]interface{}{
 						"type":          "oauth",
 						"oauth_token":   "${TEST_OAUTH}",
@@ -113,7 +112,9 @@ func TestConfigLoadE2E_EnvAndTildeExpansion(t *testing.T) {
 	home, _ := os.UserHomeDir()
 
 	// Env expansion checks
-	assert.Equal(t, "sk-ant-xxx", cfg.AI.Providers[0].APIKey, "Provider APIKey")
+	// Note: api_key is intentionally omitted from this provider (OAuth-only) to
+	// avoid the "both credentials set" validation error; we still verify base_url
+	// expansion to exercise the cfg:"env" tag on ProviderConfig.
 	assert.Equal(t, "sk-ant-xxx", cfg.AI.Providers[0].BaseURL, "Provider BaseURL")
 	assert.Equal(t, "oauth-tok-123", cfg.AI.Providers[0].Auth.OAuthToken, "Auth OAuthToken")
 	assert.Equal(t, "oauth-tok-123", cfg.AI.Providers[0].Auth.RefreshToken, "Auth RefreshToken")
