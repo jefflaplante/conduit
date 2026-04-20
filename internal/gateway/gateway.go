@@ -1731,7 +1731,7 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 					g.handleWebSocketChat(ctx, client, msg)
 				}()
 			default:
-				g.logger.Warn("request backpressure: dropping chat message", "client_id", client.ID)
+				g.recordWebSocketDrop(client, msg, "msg_semaphore_full")
 			}
 		case *protocol.CommandMessage:
 			go g.handleWebSocketCommand(ctx, client, msg)
@@ -1832,12 +1832,47 @@ func (g *Gateway) processMessages(ctx context.Context) {
 					g.handleIncomingMessage(ctx, msg)
 				}()
 			default:
-				g.logger.Warn("request backpressure: dropping channel message",
-					"channel_id", msg.ChannelID)
+				g.recordIngestDrop(msg, "msg_semaphore_full")
 			}
 
 		case <-ctx.Done():
 			return
+		}
+	}
+}
+
+// recordIngestDrop emits the gateway.ingest.drops{channel} metric and writes a
+// DLQ row for an ingress message that could not be handed off because
+// msgSemaphore was full. Silent drops were the bug in conduit-101n.
+func (g *Gateway) recordIngestDrop(msg *protocol.IncomingMessage, reason string) {
+	g.logger.Warn("request backpressure: dropping channel message",
+		"channel_id", msg.ChannelID, "reason", reason)
+
+	if g.gatewayMetrics != nil {
+		g.gatewayMetrics.IncrementIngestDrop(msg.ChannelID)
+	}
+	if g.sessions != nil {
+		if err := writeIngestDLQ(g.sessions.DB(), msg, reason); err != nil {
+			g.logger.Error("failed to write ingest DLQ row",
+				"channel_id", msg.ChannelID, "error", err)
+		}
+	}
+}
+
+// recordWebSocketDrop is the WS-chat analogue of recordIngestDrop. WS clients
+// don't have a channel adapter, so the drop is counted under the synthetic
+// "websocket" channel label and the DLQ row records the originating client.
+func (g *Gateway) recordWebSocketDrop(client *Client, msg *protocol.ChatMessage, reason string) {
+	g.logger.Warn("request backpressure: dropping chat message",
+		"client_id", client.ID, "reason", reason)
+
+	if g.gatewayMetrics != nil {
+		g.gatewayMetrics.IncrementIngestDrop("websocket")
+	}
+	if g.sessions != nil {
+		if err := writeClientChatDLQ(g.sessions.DB(), client.ID, client.UserID, msg.SessionKey, msg.Text, reason); err != nil {
+			g.logger.Error("failed to write ingest DLQ row",
+				"client_id", client.ID, "error", err)
 		}
 	}
 }
