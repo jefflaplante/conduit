@@ -165,6 +165,17 @@ func isContainer() bool {
 	return os.Getenv("KUBERNETES_SERVICE_HOST") != ""
 }
 
+// isUnderSystemd reports whether the current process was launched by systemd.
+// systemd sets INVOCATION_ID on every unit invocation; it is the canonical
+// signal per systemd.exec(5). Falling back to PPID==1 catches the (rare) case
+// where the variable was stripped but the parent is still PID 1.
+func isUnderSystemd() bool {
+	if os.Getenv("INVOCATION_ID") != "" {
+		return true
+	}
+	return os.Getppid() == 1
+}
+
 func reExec() {
 	exe, err := os.Executable()
 	if err != nil {
@@ -246,7 +257,13 @@ func runServer() error {
 				}
 				log.Println("SIGHUP received, initiating graceful restart")
 				sm := gw.ShutdownManager()
-				if !isContainer() {
+				// Under systemd we drain and exit 0; systemd's Restart= policy brings
+				// the unit back up. In-process re-exec under systemd breaks process
+				// tracking (MainPID changes without systemd's knowledge) and previously
+				// caused a self-kill loop when LLM actions triggered `conduit restart`.
+				// In containers, orchestrators likewise own restart. Only re-exec on
+				// bare-metal / dev.
+				if !isContainer() && !isUnderSystemd() {
 					sm.SetOnShutdown(reExec)
 				}
 				if err := sm.BeginShutdown("SIGHUP", 30*time.Second); err != nil {

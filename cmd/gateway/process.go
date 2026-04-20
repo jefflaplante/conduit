@@ -13,14 +13,50 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// isAncestorPID reports whether candidate is pid or any ancestor of pid by
+// walking /proc/<pid>/status PPid fields. Guards against the footgun where
+// the gateway (or one of its tool-subprocess descendants) invokes
+// `conduit restart|stop` and ends up signalling its own parent tree — which
+// kills every descendant including the signaller.
+func isAncestorPID(candidate int) bool {
+	if candidate <= 1 {
+		return false
+	}
+	pid := os.Getpid()
+	for i := 0; i < 64 && pid > 1; i++ {
+		if pid == candidate {
+			return true
+		}
+		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+		if err != nil {
+			return false
+		}
+		var next int
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(line, "PPid:") {
+				fmt.Sscanf(strings.TrimSpace(strings.TrimPrefix(line, "PPid:")), "%d", &next)
+				break
+			}
+		}
+		if next == 0 || next == pid {
+			return false
+		}
+		pid = next
+	}
+	return false
+}
+
 var restartCmd = &cobra.Command{
 	Use:   "restart",
 	Short: "Send restart signal to running Conduit process",
-	Long:  "Sends SIGHUP to the running Conduit process, triggering a graceful drain and re-exec.",
+	Long:  "Sends SIGHUP to the running Conduit process, triggering a graceful drain and restart.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		pid, err := readPidfile(resolvePidfilePath())
 		if err != nil {
 			return err
+		}
+		if isAncestorPID(pid) {
+			return fmt.Errorf("refusing to signal PID %d: target is an ancestor of this process (self-kill); use the in-process gateway_control tool or `systemctl restart conduit`", pid)
 		}
 		if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
 			return fmt.Errorf("failed to send SIGHUP to PID %d: %w", pid, err)
@@ -38,6 +74,9 @@ var stopCmd = &cobra.Command{
 		pid, err := readPidfile(resolvePidfilePath())
 		if err != nil {
 			return err
+		}
+		if isAncestorPID(pid) {
+			return fmt.Errorf("refusing to signal PID %d: target is an ancestor of this process (self-kill); use `systemctl stop conduit`", pid)
 		}
 		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 			return fmt.Errorf("failed to send SIGTERM to PID %d: %w", pid, err)
