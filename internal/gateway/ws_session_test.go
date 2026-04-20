@@ -147,7 +147,7 @@ func TestStartChannels_FreshManager(t *testing.T) {
 func TestProcessMessages_ContextCancelled(t *testing.T) {
 	gw, _ := newTestGatewayWithSessions(t)
 	gw.logger = newTestLogger()
-	gw.msgSemaphore = make(chan struct{}, 1)
+	gw.ws.MsgSemaphore = make(chan struct{}, 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

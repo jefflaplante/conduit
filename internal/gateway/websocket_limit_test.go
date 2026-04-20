@@ -2,13 +2,24 @@ package gateway
 
 import (
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/gorilla/websocket"
+
 	"conduit/internal/config"
 )
+
+// newTestWSService returns a minimal WebSocketService for tests that need to
+// manipulate the connection counter or client map without a full Gateway.
+func newTestWSService() *WebSocketService {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	return NewWebSocketService(logger, websocket.Upgrader{}, 1)
+}
 
 func TestWebSocketConfigDefaults(t *testing.T) {
 	// Test DefaultWebSocketConfig
@@ -156,34 +167,34 @@ func TestLimitRequestBody(t *testing.T) {
 }
 
 func TestWebSocketConnectionLimitTracking(t *testing.T) {
-	// Test that the atomic counter in the Gateway struct works correctly
-	gw := &Gateway{}
+	// Test that the atomic counter in the WebSocketService works correctly
+	gw := &Gateway{ws: newTestWSService()}
 
 	// Simulate connections
 	for i := 0; i < 5; i++ {
-		gw.wsConnCount.Add(1)
+		gw.ws.WSConnCount.Add(1)
 	}
 
-	if count := gw.wsConnCount.Load(); count != 5 {
+	if count := gw.ws.WSConnCount.Load(); count != 5 {
 		t.Errorf("expected 5 connections, got %d", count)
 	}
 
 	// Simulate disconnections
 	for i := 0; i < 3; i++ {
-		gw.wsConnCount.Add(-1)
+		gw.ws.WSConnCount.Add(-1)
 	}
 
-	if count := gw.wsConnCount.Load(); count != 2 {
+	if count := gw.ws.WSConnCount.Load(); count != 2 {
 		t.Errorf("expected 2 connections after disconnections, got %d", count)
 	}
 }
 
 func TestWebSocketConnectionLimitRejectsAtMax(t *testing.T) {
 	gw := createTestGateway(t)
-	gw.clients = make(map[string]*Client)
+	gw.ws = newTestWSService()
 
 	// Simulate being at the connection limit
-	gw.wsConnCount.Store(MaxWebSocketConnections)
+	gw.ws.WSConnCount.Store(MaxWebSocketConnections)
 
 	// Create a test request that should be rejected
 	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
@@ -202,22 +213,22 @@ func TestWebSocketConnectionLimitRejectsAtMax(t *testing.T) {
 
 func TestWebSocketConnectionLimitAllowsBelowMax(t *testing.T) {
 	gw := createTestGateway(t)
-	gw.clients = make(map[string]*Client)
+	gw.ws = newTestWSService()
 
 	// Set count below limit -- the initial check should pass
-	gw.wsConnCount.Store(MaxWebSocketConnections - 1)
+	gw.ws.WSConnCount.Store(MaxWebSocketConnections - 1)
 
 	// Verify Load() returns a value below the max, proving it would pass the gate
-	if gw.wsConnCount.Load() >= MaxWebSocketConnections {
-		t.Errorf("expected count below limit, got %d", gw.wsConnCount.Load())
+	if gw.ws.WSConnCount.Load() >= MaxWebSocketConnections {
+		t.Errorf("expected count below limit, got %d", gw.ws.WSConnCount.Load())
 	}
 
 	// Simulate the atomic increment that handleWebSocket does after the gate
-	newCount := gw.wsConnCount.Add(1)
+	newCount := gw.ws.WSConnCount.Add(1)
 	if newCount > MaxWebSocketConnections {
 		t.Errorf("expected count at or below limit after increment, got %d", newCount)
 	}
 
 	// Clean up
-	gw.wsConnCount.Add(-1)
+	gw.ws.WSConnCount.Add(-1)
 }

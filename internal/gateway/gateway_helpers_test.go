@@ -1,13 +1,14 @@
 package gateway
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 
 	"conduit/internal/config"
 	"conduit/internal/sessions"
@@ -154,9 +155,8 @@ func TestGatewayShutdownManager_Getter(t *testing.T) {
 	// With a ShutdownManager assigned
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	sm := NewShutdownManager(logger, &Gateway{
-		clients:        map[string]*Client{},
-		activeRequests: map[string]context.CancelFunc{},
-		config:         &config.Config{DataDir: t.TempDir()},
+		ws:     NewWebSocketService(logger, websocket.Upgrader{}, 1),
+		config: &config.Config{DataDir: t.TempDir()},
 	})
 	gw.shutdownMgr = sm
 	if gw.ShutdownManager() != sm {
