@@ -93,10 +93,8 @@ type Gateway struct {
 	scheduler        scheduler.SchedulerInterface
 	compactionEngine *ai.CompactionEngine
 
-	// Authentication
-	authStorage     *auth.TokenStorage
-	authMiddleware  *middleware.AuthMiddleware
-	wsAuthenticator *middleware.WebSocketAuthenticator
+	// Authentication (extracted into AuthService; see auth_service.go).
+	auth *AuthService
 
 	// Rate limiting
 	rateLimitMiddleware *middleware.RateLimitMiddleware
@@ -413,35 +411,14 @@ func New(cfg *config.Config) (*Gateway, error) {
 			"keep_messages", cfg.AI.Compaction.RecentMessagesToKeep)
 	}
 
-	// Initialize authentication system using the same database
-	authStorage := auth.NewTokenStorage(sessionStore.DB(), cfg.Auth.TokenSecret)
-
-	// Build auth skip paths based on diagnostics config
-	// By default, require auth for /metrics, /diagnostics, /prometheus
-	// /health is configurable for load balancer compatibility
-	var authSkipPaths []string
-	if cfg.Diagnostics.IsHealthPublic() {
-		authSkipPaths = append(authSkipPaths, "/health")
+	// Initialize authentication subsystem (token storage, HTTP auth middleware,
+	// WebSocket authenticator). See auth_service.go for details. This must be
+	// constructed before rate-limit middleware and any handler that wraps with
+	// auth middleware.
+	authService, err := NewAuthService(cfg, logger, sessionStore.DB())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create auth service: %w", err)
 	}
-	if !cfg.Diagnostics.RequireAuth {
-		// Legacy behavior: all diagnostic endpoints are public
-		authSkipPaths = append(authSkipPaths, "/metrics", "/diagnostics", "/prometheus")
-	}
-
-	// Create auth middleware
-	authMiddleware := middleware.NewAuthMiddleware(authStorage, middleware.AuthMiddlewareConfig{
-		SkipPaths: authSkipPaths,
-		Logger:    logger,
-		OnAuthError: func(r *http.Request, err middleware.AuthError) {
-			logging.Warn(r.Context(), "authentication failed",
-				"method", r.Method,
-				"path", r.URL.Path,
-				"code", err.Code)
-		},
-	})
-
-	// Create WebSocket authenticator
-	wsAuthenticator := middleware.NewWebSocketAuthenticator(authStorage, logger)
 
 	// Create rate limiting middleware
 	rateLimitMiddleware := middleware.NewRateLimitMiddleware(middleware.RateLimitMiddlewareConfig{
@@ -496,9 +473,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		skillsManager:       skillsManager,
 		channelManager:      nil, // Will be initialized below
 		compactionEngine:    compactionEngine,
-		authStorage:         authStorage,
-		authMiddleware:      authMiddleware,
-		wsAuthenticator:     wsAuthenticator,
+		auth:                authService,
 		rateLimitMiddleware: rateLimitMiddleware,
 		monitoring:          monitoringSvc,
 		clients:             make(map[string]*Client),
@@ -517,8 +492,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 	gw.shutdownMgr = NewShutdownManager(logger, gw)
 
 	// Register token revocation handler to close WebSocket connections
-	// using a revoked token.
-	authStorage.OnRevoke(gw.handleTokenRevocation)
+	// using a revoked token. This callback lives on *Gateway because it needs
+	// access to the client map (which isn't owned by AuthService).
+	gw.auth.AuthStorage.OnRevoke(gw.handleTokenRevocation)
 
 	// Initialize channel manager and register factories
 	gw.channelManager = channels.NewManager()
@@ -1081,7 +1057,7 @@ func convertToolsToAIFormat(registry *tools.Registry) []ai.Tool {
 // createInternalToken generates an authentication token for internal services
 // (e.g., the integrated SSH server) that connect back to the gateway via WebSocket.
 func (g *Gateway) createInternalToken(clientName string) (string, error) {
-	resp, err := g.authStorage.CreateToken(auth.CreateTokenRequest{
+	resp, err := g.auth.AuthStorage.CreateToken(auth.CreateTokenRequest{
 		ClientName: clientName,
 		Metadata: map[string]string{
 			"type": "internal",
@@ -1119,10 +1095,10 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Diagnostic endpoints - auth requirement controlled by diagnostics config
 	// Auth middleware skip paths are configured at gateway initialization based on config.
 	// Default: /health is public (for load balancers), others require auth.
-	mux.Handle("/health", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleHealthEnhanced))))
-	mux.Handle("/metrics", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleMetrics))))
-	mux.Handle("/diagnostics", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleDiagnostics))))
-	mux.Handle("/prometheus", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handlePrometheusMetrics))))
+	mux.Handle("/health", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleHealthEnhanced))))
+	mux.Handle("/metrics", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleMetrics))))
+	mux.Handle("/diagnostics", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleDiagnostics))))
+	mux.Handle("/prometheus", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handlePrometheusMetrics))))
 
 	// WebSocket endpoint with custom authentication and rate limiting
 	mux.Handle("/ws", g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleWebSocket)))
@@ -1130,20 +1106,20 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Protected API endpoints - wrapped with auth middleware and rate limiting
 	// Order: auth middleware first (sets context), then rate limiting (uses context), then handler
 	// POST endpoints also get request body size limiting to prevent OOM attacks.
-	mux.Handle("/debug/prompt", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleDebugPrompt))))
-	mux.Handle("/api/channels/status", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleChannelStatus))))
-	mux.Handle("/api/test/message", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
+	mux.Handle("/debug/prompt", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleDebugPrompt))))
+	mux.Handle("/api/channels/status", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleChannelStatus))))
+	mux.Handle("/api/test/message", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
 		limitRequestBody(http.HandlerFunc(g.handleTestMessage), MaxRequestBodySize))))
 
 	// Vector API endpoints (registered unconditionally; handlers return 503 when disabled)
 	vectorAPI := &VectorAPI{vectorService: g.vectorService}
-	mux.Handle("/api/vector/search", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
+	mux.Handle("/api/vector/search", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
 		limitRequestBody(http.HandlerFunc(vectorAPI.handleSearch), MaxRequestBodySize))))
-	mux.Handle("/api/vector/index", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
+	mux.Handle("/api/vector/index", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
 		limitRequestBody(http.HandlerFunc(vectorAPI.handleIndex), MaxRequestBodySize))))
-	mux.Handle("/api/vector/delete", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
+	mux.Handle("/api/vector/delete", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
 		limitRequestBody(http.HandlerFunc(vectorAPI.handleDelete), MaxRequestBodySize))))
-	mux.Handle("/api/vector/status", g.authMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(vectorAPI.handleStatus))))
+	mux.Handle("/api/vector/status", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(vectorAPI.handleStatus))))
 
 	// Inject request_id into every HTTP request so auth and rate-limit logs
 	// can be correlated across the entire request lifecycle.
@@ -1514,9 +1490,9 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Authenticate the WebSocket upgrade request
-	authResult := g.wsAuthenticator.Authenticate(r)
+	authResult := g.auth.WSAuthenticator.Authenticate(r)
 	if !authResult.Authenticated {
-		g.wsAuthenticator.RejectUpgrade(w, authResult.Error)
+		g.auth.WSAuthenticator.RejectUpgrade(w, authResult.Error)
 		return
 	}
 

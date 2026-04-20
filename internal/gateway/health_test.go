@@ -663,10 +663,10 @@ func TestDiagnosticEndpointsAuthRequirement(t *testing.T) {
 
 			// Create test server with proper middleware chain
 			mux := http.NewServeMux()
-			mux.Handle("/health", gw.authMiddleware.Wrap(gw.rateLimitMiddleware.Wrap(http.HandlerFunc(gw.handleHealthEnhanced))))
-			mux.Handle("/metrics", gw.authMiddleware.Wrap(gw.rateLimitMiddleware.Wrap(http.HandlerFunc(gw.handleMetrics))))
-			mux.Handle("/diagnostics", gw.authMiddleware.Wrap(gw.rateLimitMiddleware.Wrap(http.HandlerFunc(gw.handleDiagnostics))))
-			mux.Handle("/prometheus", gw.authMiddleware.Wrap(gw.rateLimitMiddleware.Wrap(http.HandlerFunc(gw.handlePrometheusMetrics))))
+			mux.Handle("/health", gw.auth.AuthMiddleware.Wrap(gw.rateLimitMiddleware.Wrap(http.HandlerFunc(gw.handleHealthEnhanced))))
+			mux.Handle("/metrics", gw.auth.AuthMiddleware.Wrap(gw.rateLimitMiddleware.Wrap(http.HandlerFunc(gw.handleMetrics))))
+			mux.Handle("/diagnostics", gw.auth.AuthMiddleware.Wrap(gw.rateLimitMiddleware.Wrap(http.HandlerFunc(gw.handleDiagnostics))))
+			mux.Handle("/prometheus", gw.auth.AuthMiddleware.Wrap(gw.rateLimitMiddleware.Wrap(http.HandlerFunc(gw.handlePrometheusMetrics))))
 
 			server := httptest.NewServer(mux)
 			defer server.Close()
@@ -788,7 +788,9 @@ func createTestGatewayWithDiagnosticsConfig(t *testing.T, requireAuth bool, heal
 			EventStore:       eventStore,
 		},
 		rateLimitMiddleware: rateLimitMiddleware,
-		authMiddleware:      authMiddleware,
+		auth: &AuthService{
+			AuthMiddleware: authMiddleware,
+		},
 	}
 
 	return gw, tokenResp.Token
