@@ -161,8 +161,13 @@ func (t *MessageTool) sendMessage(ctx context.Context, args map[string]interface
 		options["effectId"] = effectId
 	}
 
-	// Use current session's user ID so the adapter knows who to send to
-	userID := types.RequestUserID(ctx)
+	// Parse target format: "telegram:chatid" → channelID="telegram", userID="chatid"
+	// If no ":" prefix, use the session's user ID and treat target as the channel name.
+	channelID, targetUserID := parseTarget(target)
+	if targetUserID == "" {
+		// Bare channel name (e.g. "telegram") — use the session's originating user ID
+		targetUserID = types.RequestUserID(ctx)
+	}
 
 	// Build metadata for the outgoing message
 	var metadata map[string]string
@@ -179,7 +184,7 @@ func (t *MessageTool) sendMessage(ctx context.Context, args map[string]interface
 	// Send message via ChannelSender
 	var err error
 	if t.services != nil && t.services.ChannelSender != nil {
-		err = t.services.ChannelSender.SendMessage(ctx, target, userID, message, metadata)
+		err = t.services.ChannelSender.SendMessage(ctx, channelID, targetUserID, message, metadata)
 	} else {
 		return &types.ToolResult{
 			Success: false,
@@ -303,7 +308,7 @@ func (t *MessageTool) broadcastMessage(ctx context.Context, args map[string]inte
 		channelStatus = t.services.ChannelSender.GetChannelStatusMap()
 	}
 
-	userID := types.RequestUserID(ctx)
+	sessionUserID := types.RequestUserID(ctx)
 
 	for _, target := range targets {
 		if !t.isValidTarget(target, channelStatus) {
@@ -312,7 +317,11 @@ func (t *MessageTool) broadcastMessage(ctx context.Context, args map[string]inte
 		}
 
 		if t.services != nil && t.services.ChannelSender != nil {
-			err := t.services.ChannelSender.SendMessage(ctx, target, userID, message, nil)
+			chanID, chanUserID := parseTarget(target)
+			if chanUserID == "" {
+				chanUserID = sessionUserID
+			}
+			err := t.services.ChannelSender.SendMessage(ctx, chanID, chanUserID, message, nil)
 			if err != nil {
 				errors = append(errors, fmt.Sprintf("%s: %v", target, err))
 			}
@@ -506,6 +515,20 @@ func (t *MessageTool) formatChannelStatus(status map[string]interface{}) string 
 	}
 
 	return builder.String()
+}
+
+// parseTarget splits a target string of the form "channel:userID" into its two
+// components. If the target contains no ":" separator (e.g. "telegram"), the
+// raw value is returned as channelID and userID is empty.
+// Examples:
+//
+//	"telegram:1098302846" → ("telegram", "1098302846")
+//	"telegram"            → ("telegram", "")
+func parseTarget(target string) (channelID, userID string) {
+	if idx := strings.IndexByte(target, ':'); idx >= 0 {
+		return target[:idx], target[idx+1:]
+	}
+	return target, ""
 }
 
 // isValidTarget checks if a target is valid against available channels

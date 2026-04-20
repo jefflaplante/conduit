@@ -178,6 +178,49 @@ func TestMessageTool_SendMessage_Success(t *testing.T) {
 	assert.Equal(t, "Hello, world!", sender.sentMessages[0].content)
 }
 
+func TestMessageTool_SendMessage_TelegramPrefixedTarget(t *testing.T) {
+	sender := newMockChannelSender()
+	tool := NewMessageTool(newTestServices(sender))
+
+	ctx := types.WithRequestContext(context.Background(), "telegram", "session-user", "session1")
+	result, err := tool.Execute(ctx, map[string]interface{}{
+		"action":  "send",
+		"target":  "telegram:1098302846",
+		"message": "Hello via prefixed target!",
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Contains(t, result.Content, "sent successfully")
+
+	// The adapter lookup must use the bare channel name "telegram", not "telegram:1098302846"
+	require.Len(t, sender.sentMessages, 1)
+	assert.Equal(t, "telegram", sender.sentMessages[0].channelID)
+	// The chat/user ID must be the part after the colon
+	assert.Equal(t, "1098302846", sender.sentMessages[0].userID)
+	assert.Equal(t, "Hello via prefixed target!", sender.sentMessages[0].content)
+}
+
+func TestMessageTool_ParseTarget(t *testing.T) {
+	tests := []struct {
+		input      string
+		wantChan   string
+		wantUserID string
+	}{
+		{"telegram:1098302846", "telegram", "1098302846"},
+		{"telegram", "telegram", ""},
+		{"discord:server:channel", "discord", "server:channel"},
+		{"", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			gotChan, gotUserID := parseTarget(tt.input)
+			assert.Equal(t, tt.wantChan, gotChan)
+			assert.Equal(t, tt.wantUserID, gotUserID)
+		})
+	}
+}
+
 func TestMessageTool_SendMessage_MissingTarget(t *testing.T) {
 	sender := newMockChannelSender()
 	tool := NewMessageTool(newTestServices(sender))
