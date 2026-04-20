@@ -21,6 +21,22 @@ func (a *brainAdapter) Store(ctx context.Context, key, value string, tier types.
 	return a.b.Store(ctx, key, value, brain.Tier(tier), source)
 }
 
+func (a *brainAdapter) StoreBulk(ctx context.Context, entries []types.BrainBulkEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	converted := make([]brain.BulkEntry, len(entries))
+	for i, e := range entries {
+		converted[i] = brain.BulkEntry{
+			Key:    e.Key,
+			Value:  e.Value,
+			Tier:   brain.Tier(e.Tier),
+			Source: e.Source,
+		}
+	}
+	return a.b.StoreBulk(ctx, converted)
+}
+
 func (a *brainAdapter) Get(ctx context.Context, key string) (*types.BrainEntry, error) {
 	e, err := a.b.Get(ctx, key)
 	if err != nil || e == nil {
