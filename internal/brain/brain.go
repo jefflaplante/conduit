@@ -54,16 +54,16 @@ type Status struct {
 type Option func(*Brain)
 
 func WithMaxLTMEntries(n int) Option               { return func(b *Brain) { b.maxLTMEntries = n } }
-func WithAutoFlushInterval(d time.Duration) Option  { return func(b *Brain) { b.autoFlushInterval = d } }
-func WithConsolidateThreshold(t float64) Option     { return func(b *Brain) { b.consolidateThreshold = t } }
-func WithEvictThreshold(t float64) Option           { return func(b *Brain) { b.evictThreshold = t } }
-func WithAutoPromote(v bool) Option                 { return func(b *Brain) { b.autoPromote = v } }
-func WithWMGracePeriod(d time.Duration) Option      { return func(b *Brain) { b.wmGracePeriod = d } }
-func WithAccessWeight(w float64) Option              { return func(b *Brain) { b.accessWeight = w } }
-func WithRecencyWeight(w float64) Option             { return func(b *Brain) { b.recencyWeight = w } }
-func WithTierWeight(w float64) Option                { return func(b *Brain) { b.tierWeight = w } }
-func WithRecencyDecayRate(r float64) Option          { return func(b *Brain) { b.recencyDecayRate = r } }
-func WithAccessCountCap(n int) Option                { return func(b *Brain) { b.accessCountCap = n } }
+func WithAutoFlushInterval(d time.Duration) Option { return func(b *Brain) { b.autoFlushInterval = d } }
+func WithConsolidateThreshold(t float64) Option    { return func(b *Brain) { b.consolidateThreshold = t } }
+func WithEvictThreshold(t float64) Option          { return func(b *Brain) { b.evictThreshold = t } }
+func WithAutoPromote(v bool) Option                { return func(b *Brain) { b.autoPromote = v } }
+func WithWMGracePeriod(d time.Duration) Option     { return func(b *Brain) { b.wmGracePeriod = d } }
+func WithAccessWeight(w float64) Option            { return func(b *Brain) { b.accessWeight = w } }
+func WithRecencyWeight(w float64) Option           { return func(b *Brain) { b.recencyWeight = w } }
+func WithTierWeight(w float64) Option              { return func(b *Brain) { b.tierWeight = w } }
+func WithRecencyDecayRate(r float64) Option        { return func(b *Brain) { b.recencyDecayRate = r } }
+func WithAccessCountCap(n int) Option              { return func(b *Brain) { b.accessCountCap = n } }
 
 type Brain struct {
 	mu      sync.RWMutex
@@ -158,6 +158,140 @@ func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source 
 	default:
 		return fmt.Errorf("unsupported tier for store: %s (use Push for scratch)", tier)
 	}
+}
+
+// BulkEntry is a single key/value entry for StoreBulk. Tier defaults to
+// TierWorking when empty; TierScratch is rejected. Source is optional.
+type BulkEntry struct {
+	Key    string
+	Value  string
+	Tier   Tier
+	Source string
+}
+
+// StoreBulk stores many entries atomically. Long-term entries are written in
+// a single SQL transaction (so a failure on any entry rolls back all of the
+// LTM writes in the batch); working-memory entries are then applied under the
+// brain lock. If the LTM transaction fails, no entries — LTM or WM — are
+// persisted. TierScratch is not a valid bulk target and causes an error.
+func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// Normalize + validate up-front so we never partially apply.
+	normalized := make([]BulkEntry, len(entries))
+	for i, e := range entries {
+		if e.Key == "" {
+			return fmt.Errorf("bulk entry %d: key is required", i)
+		}
+		tier := e.Tier
+		if tier == "" {
+			tier = TierWorking
+		}
+		switch tier {
+		case TierLongTerm, TierWorking:
+			// ok
+		case TierScratch:
+			return fmt.Errorf("bulk entry %d: scratch tier is not a valid bulk target", i)
+		default:
+			return fmt.Errorf("bulk entry %d: unsupported tier %q", i, tier)
+		}
+		if err := ValidateSource(e.Source); err != nil {
+			// Match Store(): warn but do not fail on weird sources.
+			log.Printf("Brain.StoreBulk: warning: %v (key=%q)", err, e.Key)
+		}
+		normalized[i] = BulkEntry{Key: e.Key, Value: e.Value, Tier: tier, Source: e.Source}
+	}
+
+	now := time.Now()
+	nowStr := now.UTC().Format("2006-01-02 15:04:05")
+
+	// Partition so we can commit LTM atomically inside a single tx.
+	var ltmBatch []BulkEntry
+	var wmBatch []BulkEntry
+	for _, e := range normalized {
+		if e.Tier == TierLongTerm {
+			ltmBatch = append(ltmBatch, e)
+		} else {
+			wmBatch = append(wmBatch, e)
+		}
+	}
+
+	if len(ltmBatch) > 0 {
+		err := database.RetryOnBusy(5, func() error {
+			tx, err := b.db.BeginTx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			stmt, err := tx.PrepareContext(ctx, `
+				INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
+				VALUES (?, ?, ?, ?, ?, 1, 0.5)
+				ON CONFLICT(key) DO UPDATE SET
+					value = excluded.value,
+					source = excluded.source,
+					accessed_at = excluded.accessed_at,
+					access_count = access_count + 1,
+					salience = COALESCE(
+						(MIN(CAST(access_count + 1 AS REAL) / CAST(? AS REAL), 1.0) * ?) +
+						(1.0 / (1.0 + 0.0)) * ? +
+						(0.8 * ?),
+						salience, 0.5)
+			`)
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+			defer stmt.Close()
+			for _, e := range ltmBatch {
+				if _, err := stmt.ExecContext(ctx, e.Key, e.Value, e.Source, nowStr, nowStr,
+					b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight); err != nil {
+					tx.Rollback()
+					return err
+				}
+			}
+			return tx.Commit()
+		})
+		if err != nil {
+			return fmt.Errorf("store bulk LTM: %w", err)
+		}
+
+		// Best-effort eviction — same pattern as storeLTM.
+		if b.maxLTMEntries > 0 {
+			_ = database.RetryOnBusy(5, func() error {
+				_, err := b.db.Exec(`DELETE FROM brain_ltm WHERE key IN (
+					SELECT key FROM brain_ltm ORDER BY salience ASC
+					LIMIT MAX(0, (SELECT COUNT(*) FROM brain_ltm) - ?))`, b.maxLTMEntries)
+				return err
+			})
+		}
+	}
+
+	if len(wmBatch) > 0 {
+		userID := userIDFromCtx(ctx)
+		b.mu.Lock()
+		if b.working[userID] == nil {
+			b.working[userID] = make(map[string]*Entry)
+		}
+		for _, e := range wmBatch {
+			if existing, ok := b.working[userID][e.Key]; ok {
+				existing.Value = e.Value
+				existing.AccessedAt = now
+				existing.AccessCount++
+				existing.Source = e.Source
+				existing.Salience = b.computeSalience(existing)
+			} else {
+				b.working[userID][e.Key] = &Entry{
+					Key: e.Key, Value: e.Value, Tier: TierWorking,
+					CreatedAt: now, AccessedAt: now,
+					AccessCount: 1, Salience: 0.5, Source: e.Source,
+				}
+			}
+		}
+		b.mu.Unlock()
+	}
+
+	return nil
 }
 
 func (b *Brain) storeLTM(key, value, source string, now time.Time) error {
