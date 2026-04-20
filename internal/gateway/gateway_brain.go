@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"time"
 
 	"conduit/internal/brain"
 	"conduit/internal/brain/rem"
@@ -19,6 +20,10 @@ func newBrainAdapter(b *brain.Brain) *brainAdapter {
 
 func (a *brainAdapter) Store(ctx context.Context, key, value string, tier types.BrainTier, source string) error {
 	return a.b.Store(ctx, key, value, brain.Tier(tier), source)
+}
+
+func (a *brainAdapter) StoreWithTTL(ctx context.Context, key, value string, tier types.BrainTier, source string, ttl time.Duration) error {
+	return a.b.StoreWithTTL(ctx, key, value, brain.Tier(tier), source, ttl)
 }
 
 func (a *brainAdapter) StoreBulk(ctx context.Context, entries []types.BrainBulkEntry) error {
@@ -108,7 +113,7 @@ func (a *brainAdapter) Status(ctx context.Context) (*types.BrainStatus, error) {
 	return &types.BrainStatus{
 		LTMEntries: s.LTMEntries, WMEntries: s.WMEntries,
 		ScratchDepth: s.ScratchDepth, AvgSalience: s.AvgSalience,
-		HottestKeys: s.HottestKeys,
+		HottestKeys: s.HottestKeys, ExpiringSoon: s.ExpiringSoon,
 	}, nil
 }
 
@@ -126,6 +131,7 @@ func convertEntry(e *brain.Entry) *types.BrainEntry {
 		Key: e.Key, Value: e.Value, Tier: types.BrainTier(e.Tier),
 		CreatedAt: e.CreatedAt, AccessedAt: e.AccessedAt,
 		AccessCount: e.AccessCount, Salience: e.Salience, Source: e.Source, Stale: e.Stale,
+		ExpiresAt: e.ExpiresAt,
 	}
 }
 

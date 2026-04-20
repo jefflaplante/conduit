@@ -840,3 +840,155 @@ func TestRecallWithContext_NoOverlapNoChange(t *testing.T) {
 	}
 	assert.Equal(t, baselineKeys, withCtxKeys, "non-overlapping context must not change ordering")
 }
+
+// -------------------- TTL / Expiry tests --------------------
+
+func TestParseDuration_DaysAndWeeks(t *testing.T) {
+	d, err := ParseDuration("7d")
+	require.NoError(t, err)
+	assert.Equal(t, 7*24*time.Hour, d)
+
+	d, err = ParseDuration("2w")
+	require.NoError(t, err)
+	assert.Equal(t, 14*24*time.Hour, d)
+
+	d, err = ParseDuration("24h")
+	require.NoError(t, err)
+	assert.Equal(t, 24*time.Hour, d)
+
+	d, err = ParseDuration("90m")
+	require.NoError(t, err)
+	assert.Equal(t, 90*time.Minute, d)
+
+	d, err = ParseDuration("")
+	require.NoError(t, err)
+	assert.Equal(t, time.Duration(0), d)
+}
+
+func TestStoreWithTTL_WMExpiry(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	require.NoError(t, b.StoreWithTTL(ctx, "solar.today", "38kWh", TierWorking, "tool", 50*time.Millisecond))
+
+	// Still valid immediately.
+	entry, err := b.Get(ctx, "solar.today")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.NotNil(t, entry.ExpiresAt)
+
+	// Wait for it to expire.
+	time.Sleep(80 * time.Millisecond)
+
+	got, err := b.Get(ctx, "solar.today")
+	require.NoError(t, err)
+	assert.Nil(t, got, "expired WM entry must not be returned by Get")
+}
+
+func TestStoreWithTTL_LTMExpiry(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	require.NoError(t, b.StoreWithTTL(ctx, "theo.grooming_next", "April 23", TierLongTerm, "user", 50*time.Millisecond))
+
+	entry, err := b.Get(ctx, "theo.grooming_next")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.NotNil(t, entry.ExpiresAt)
+
+	time.Sleep(80 * time.Millisecond)
+
+	got, err := b.Get(ctx, "theo.grooming_next")
+	require.NoError(t, err)
+	assert.Nil(t, got, "expired LTM entry must not be returned by Get")
+}
+
+func TestRecallSkipsExpired(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	// One long-lived entry, one expiring entry, both match the query.
+	require.NoError(t, b.Store(ctx, "solar.panels", "30", TierLongTerm, ""))
+	require.NoError(t, b.StoreWithTTL(ctx, "solar.today", "38kWh", TierLongTerm, "", 50*time.Millisecond))
+
+	time.Sleep(80 * time.Millisecond)
+
+	results, err := b.Recall(ctx, "solar", 10)
+	require.NoError(t, err)
+	for _, r := range results {
+		assert.NotEqual(t, "solar.today", r.Key, "expired entry must not appear in Recall results")
+	}
+}
+
+func TestListSkipsExpired(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	require.NoError(t, b.Store(ctx, "solar.panels", "30", TierLongTerm, ""))
+	require.NoError(t, b.StoreWithTTL(ctx, "solar.today", "38kWh", TierWorking, "", 50*time.Millisecond))
+
+	time.Sleep(80 * time.Millisecond)
+
+	results, err := b.List(ctx, "solar.", "")
+	require.NoError(t, err)
+	for _, r := range results {
+		assert.NotEqual(t, "solar.today", r.Key, "expired entry must not appear in List results")
+	}
+}
+
+func TestPruneExpired_DeletesRows(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	require.NoError(t, b.StoreWithTTL(ctx, "ltm.expired", "old", TierLongTerm, "", 10*time.Millisecond))
+	require.NoError(t, b.StoreWithTTL(ctx, "wm.expired", "old", TierWorking, "", 10*time.Millisecond))
+	require.NoError(t, b.Store(ctx, "ltm.keep", "keep", TierLongTerm, ""))
+
+	time.Sleep(40 * time.Millisecond)
+
+	n, err := b.PruneExpired(ctx)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, n, 2, "expected at least 2 entries pruned (LTM + WM)")
+
+	// Kept entry still present.
+	got, err := b.Get(ctx, "ltm.keep")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	// Expired entries are gone even via raw DB query.
+	var cnt int
+	require.NoError(t, b.db.QueryRow("SELECT COUNT(*) FROM brain_ltm WHERE key = 'ltm.expired'").Scan(&cnt))
+	assert.Equal(t, 0, cnt)
+}
+
+func TestStatus_ExpiringSoon(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	// Entry expiring in 1h — counts as expiring soon.
+	require.NoError(t, b.StoreWithTTL(ctx, "soon.ltm", "v", TierLongTerm, "", time.Hour))
+	require.NoError(t, b.StoreWithTTL(ctx, "soon.wm", "v", TierWorking, "", time.Hour))
+	// Entry expiring in 48h — NOT expiring soon.
+	require.NoError(t, b.StoreWithTTL(ctx, "later.ltm", "v", TierLongTerm, "", 48*time.Hour))
+	// Entry with no TTL.
+	require.NoError(t, b.Store(ctx, "forever.ltm", "v", TierLongTerm, ""))
+
+	status, err := b.Status(ctx)
+	require.NoError(t, err)
+	// Expect soon.ltm + soon.wm = 2
+	assert.Equal(t, 2, status.ExpiringSoon, "ExpiringSoon must count entries expiring within 24h")
+}
+
+func TestStore_NoTTL_Unchanged(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	// Current-behavior path — no TTL, no opts — must still work.
+	require.NoError(t, b.Store(ctx, "persist.key", "v", TierLongTerm, ""))
+	time.Sleep(30 * time.Millisecond)
+
+	got, err := b.Get(ctx, "persist.key")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Nil(t, got.ExpiresAt, "entry stored without TTL must have nil ExpiresAt")
+}

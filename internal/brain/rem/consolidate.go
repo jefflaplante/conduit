@@ -16,6 +16,14 @@ func (r *REMCycle) Consolidate(ctx context.Context, dryRun bool) (*Consolidation
 		SalienceBoosted: 0,
 	}
 
+	// Phase 0: Prune expired entries before any promotion work so expired
+	// WM entries don't get promoted to LTM.
+	if !dryRun {
+		if _, err := r.brain.PruneExpired(ctx); err != nil {
+			return result, fmt.Errorf("prune expired before consolidate: %w", err)
+		}
+	}
+
 	// Phase 1: Promote high-salience WM entries to LTM
 	if err := r.promoteHighSalienceEntries(ctx, result, dryRun); err != nil {
 		return result, fmt.Errorf("promote high-salience entries: %w", err)

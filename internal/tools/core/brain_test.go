@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"conduit/internal/tools/types"
 )
@@ -14,12 +15,27 @@ type fakeBrainService struct {
 	bulkCalls    [][]types.BrainBulkEntry
 	bulkErr      error
 	singleStores []types.BrainBulkEntry
+	ttlCalls     []fakeTTLCall
+}
+
+type fakeTTLCall struct {
+	Key    string
+	Value  string
+	Tier   types.BrainTier
+	Source string
+	TTL    time.Duration
 }
 
 func (f *fakeBrainService) Store(ctx context.Context, key, value string, tier types.BrainTier, source string) error {
 	f.singleStores = append(f.singleStores, types.BrainBulkEntry{Key: key, Value: value, Tier: tier, Source: source})
 	return nil
 }
+
+func (f *fakeBrainService) StoreWithTTL(ctx context.Context, key, value string, tier types.BrainTier, source string, ttl time.Duration) error {
+	f.ttlCalls = append(f.ttlCalls, fakeTTLCall{Key: key, Value: value, Tier: tier, Source: source, TTL: ttl})
+	return nil
+}
+
 
 func (f *fakeBrainService) StoreBulk(ctx context.Context, entries []types.BrainBulkEntry) error {
 	if f.bulkErr != nil {
@@ -141,5 +157,100 @@ func TestBrainTool_StoreBulkPropagatesError(t *testing.T) {
 	})
 	if res.Success {
 		t.Fatalf("expected failure when StoreBulk returns error")
+	}
+}
+
+func TestBrainTool_StoreWithTTL(t *testing.T) {
+	fake := &fakeBrainService{}
+	tool := NewBrainTool(&types.ToolServices{Brain: fake})
+
+	res, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "store",
+		"key":    "theo.grooming_next",
+		"value":  "April 23",
+		"tier":   "longterm",
+		"ttl":    "7d",
+	})
+	if err != nil {
+		t.Fatalf("Execute err: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected success, got err=%q", res.Error)
+	}
+	if len(fake.ttlCalls) != 1 {
+		t.Fatalf("expected 1 StoreWithTTL call, got %d", len(fake.ttlCalls))
+	}
+	if fake.ttlCalls[0].TTL != 7*24*time.Hour {
+		t.Errorf("expected TTL 7d, got %v", fake.ttlCalls[0].TTL)
+	}
+	if len(fake.singleStores) != 0 {
+		t.Errorf("expected no Store call when ttl provided, got %d", len(fake.singleStores))
+	}
+}
+
+func TestBrainTool_StoreWithoutTTL_UsesStore(t *testing.T) {
+	fake := &fakeBrainService{}
+	tool := NewBrainTool(&types.ToolServices{Brain: fake})
+
+	res, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "store",
+		"key":    "persist.key",
+		"value":  "v",
+	})
+	if err != nil {
+		t.Fatalf("Execute err: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected success, got err=%q", res.Error)
+	}
+	if len(fake.ttlCalls) != 0 {
+		t.Errorf("expected no StoreWithTTL call when ttl absent, got %d", len(fake.ttlCalls))
+	}
+	if len(fake.singleStores) != 1 {
+		t.Errorf("expected 1 Store call, got %d", len(fake.singleStores))
+	}
+}
+
+func TestBrainTool_StoreInvalidTTL(t *testing.T) {
+	fake := &fakeBrainService{}
+	tool := NewBrainTool(&types.ToolServices{Brain: fake})
+
+	res, _ := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "store",
+		"key":    "k",
+		"value":  "v",
+		"ttl":    "not-a-duration",
+	})
+	if res.Success {
+		t.Fatalf("expected failure for invalid ttl")
+	}
+}
+
+func TestParseTTLString(t *testing.T) {
+	cases := []struct {
+		in   string
+		want time.Duration
+		err  bool
+	}{
+		{"", 0, false},
+		{"24h", 24 * time.Hour, false},
+		{"7d", 7 * 24 * time.Hour, false},
+		{"2w", 14 * 24 * time.Hour, false},
+		{"90m", 90 * time.Minute, false},
+		{"bogus", 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			got, err := parseTTLString(c.in)
+			if c.err && err == nil {
+				t.Fatalf("expected err for %q", c.in)
+			}
+			if !c.err && err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if !c.err && got != c.want {
+				t.Fatalf("got %v, want %v", got, c.want)
+			}
+		})
 	}
 }

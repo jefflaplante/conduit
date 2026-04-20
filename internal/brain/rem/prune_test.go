@@ -263,3 +263,56 @@ func TestIsFilePath(t *testing.T) {
 		})
 	}
 }
+
+func TestPrune_DeletesExpiredEntries(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+
+	// Two LTM entries: one expired, one not.
+	require.NoError(t, b.StoreWithTTL(ctx, "expired.key", "old", brain.TierLongTerm, "", 10*time.Millisecond))
+	require.NoError(t, b.Store(ctx, "alive.key", "keep", brain.TierLongTerm, ""))
+
+	time.Sleep(40 * time.Millisecond)
+
+	result, err := rem.Prune(ctx, false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Expired entry should have been deleted and counted under ExpiredDeleted,
+	// not archived under "low_salience" or "orphaned".
+	assert.GreaterOrEqual(t, result.ExpiredDeleted, 1, "ExpiredDeleted should be set")
+
+	var cnt int
+	require.NoError(t, rem.db.QueryRow("SELECT COUNT(*) FROM brain_ltm WHERE key = 'expired.key'").Scan(&cnt))
+	assert.Equal(t, 0, cnt, "expired LTM entry must be deleted by Prune")
+
+	require.NoError(t, rem.db.QueryRow("SELECT COUNT(*) FROM brain_ltm WHERE key = 'alive.key'").Scan(&cnt))
+	assert.Equal(t, 1, cnt, "non-expired entry must remain")
+
+	// None of the "Archived" records should reference expired.key —
+	// expired deletion is distinct from salience-based archive.
+	for _, a := range result.Archived {
+		assert.NotEqual(t, "expired.key", a.Key, "expired entry must not appear in Archived")
+	}
+}
+
+func TestPrune_DryRunCountsExpiredWithoutDeleting(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+
+	require.NoError(t, b.StoreWithTTL(ctx, "dryrun.expired", "old", brain.TierLongTerm, "", 10*time.Millisecond))
+	time.Sleep(40 * time.Millisecond)
+
+	result, err := rem.Prune(ctx, true)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, result.ExpiredDeleted, 1, "dry run must still report expired count")
+
+	// The row must still exist — dry run deletes nothing.
+	var cnt int
+	require.NoError(t, rem.db.QueryRow("SELECT COUNT(*) FROM brain_ltm WHERE key = 'dryrun.expired'").Scan(&cnt))
+	assert.Equal(t, 1, cnt, "dry run must not delete expired rows")
+}
