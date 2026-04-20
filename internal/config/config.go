@@ -1011,7 +1011,10 @@ func (c *Config) expandEnvVars() error {
 	return nil
 }
 
-// Validate validates the entire configuration
+// Validate validates the entire configuration.
+// It runs both subsystem-specific checks (heartbeat, MQTT, etc.) and the
+// top-level semantic checks added in ValidateSemantic (port range, AI
+// credentials, channel config, workspace paths, rate-limit values, tools list).
 func (c *Config) Validate() error {
 	// Validate heartbeat configuration
 	if err := c.Heartbeat.Validate(); err != nil {
@@ -1023,17 +1026,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid agent heartbeat configuration: %w", err)
 	}
 
-	// Validate rate limiting configuration
-	if c.RateLimiting.Enabled {
-		if c.RateLimiting.Anonymous.WindowSeconds <= 0 || c.RateLimiting.Anonymous.MaxRequests <= 0 {
-			return fmt.Errorf("invalid anonymous rate limiting configuration")
-		}
-		if c.RateLimiting.Authenticated.WindowSeconds <= 0 || c.RateLimiting.Authenticated.MaxRequests <= 0 {
-			return fmt.Errorf("invalid authenticated rate limiting configuration")
-		}
-	}
-
-	// Validate tools configuration
+	// Validate tools max-chain setting
 	if c.Tools.MaxToolChains <= 0 {
 		return fmt.Errorf("max_tool_chains must be greater than 0")
 	}
@@ -1076,6 +1069,12 @@ func (c *Config) Validate() error {
 	// Validate Brain configuration
 	if err := c.Brain.Validate(); err != nil {
 		return fmt.Errorf("invalid brain configuration: %w", err)
+	}
+
+	// Run semantic checks (port, AI credentials, channels, workspace paths,
+	// rate-limit values, tools list) — reports all problems at once.
+	if err := c.ValidateSemantic(); err != nil {
+		return err
 	}
 
 	return nil

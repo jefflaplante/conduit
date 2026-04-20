@@ -203,10 +203,13 @@ func runServer() error {
 		}
 	}
 
-	// Load configuration
+	// Load and validate configuration. Validation errors are printed directly
+	// to stderr and exit 1 so the operator sees an actionable message without
+	// cobra wrapping it in an extra "Error: ..." prefix.
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Wire data_dir into SSH key resolution
