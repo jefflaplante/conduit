@@ -126,6 +126,9 @@ func (t *ImageTool) Execute(ctx context.Context, args map[string]interface{}) (*
 		"extractText":   extractText,
 		"detectObjects": detectObjects,
 	}
+	if f, ok := metadata["format"].(string); ok {
+		options["format"] = f
+	}
 
 	// Analyze image
 	result, err := t.analyzeImage(ctx, imageData, prompt, options)
@@ -313,9 +316,78 @@ func (t *ImageTool) loadFromFile(path string, maxBytes int64, metadata map[strin
 	return imageData, metadata, nil
 }
 
-// analyzeImage performs the actual image analysis
+// detectMediaType returns the MIME type for the given image bytes using magic
+// bytes when the format hint is missing or "unknown". Returns "" when the
+// format cannot be determined.
+func detectMediaType(imageData []byte, formatHint string) string {
+	switch formatHint {
+	case "jpeg":
+		return "image/jpeg"
+	case "png":
+		return "image/png"
+	case "gif":
+		return "image/gif"
+	case "webp":
+		return "image/webp"
+	}
+	// Fall back to magic-byte sniffing.
+	if len(imageData) >= 8 && bytes.Equal(imageData[:8], []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}) {
+		return "image/png"
+	}
+	if len(imageData) >= 4 &&
+		(bytes.Equal(imageData[:4], []byte{0xFF, 0xD8, 0xFF, 0xE0}) ||
+			bytes.Equal(imageData[:4], []byte{0xFF, 0xD8, 0xFF, 0xE1}) ||
+			bytes.Equal(imageData[:4], []byte{0xFF, 0xD8, 0xFF, 0xDB})) {
+		return "image/jpeg"
+	}
+	if len(imageData) >= 6 &&
+		(bytes.Equal(imageData[:6], []byte{0x47, 0x49, 0x46, 0x38, 0x37, 0x61}) ||
+			bytes.Equal(imageData[:6], []byte{0x47, 0x49, 0x46, 0x38, 0x39, 0x61})) {
+		return "image/gif"
+	}
+	if len(imageData) >= 12 &&
+		bytes.Equal(imageData[:4], []byte{0x52, 0x49, 0x46, 0x46}) &&
+		bytes.Equal(imageData[8:12], []byte{0x57, 0x45, 0x42, 0x50}) {
+		return "image/webp"
+	}
+	return ""
+}
+
+// analyzeImage performs the actual image analysis.
+//
+// When a VisionAnalyzer service is wired (via ToolServices.Vision), the image
+// bytes and prompt are sent to the configured multimodal provider (typically
+// Anthropic Claude vision). When no service is wired, the tool falls back to
+// magic-byte format detection and returns a placeholder description so the
+// tool remains usable in tests and degraded environments.
 func (t *ImageTool) analyzeImage(ctx context.Context, imageData []byte, prompt string, options map[string]interface{}) (*ImageAnalysisResult, error) {
-	// Placeholder implementation - would integrate with actual vision service
+	// Determine media type from metadata hint or magic bytes.
+	formatHint := ""
+	if options != nil {
+		if f, ok := options["format"].(string); ok {
+			formatHint = f
+		}
+	}
+	mediaType := detectMediaType(imageData, formatHint)
+
+	// If a vision analyzer is wired, route through it.
+	if t.services != nil && t.services.Vision != nil {
+		description, err := t.services.Vision.AnalyzeImage(ctx, imageData, mediaType, prompt)
+		if err != nil {
+			return nil, err
+		}
+		return &ImageAnalysisResult{
+			Description: description,
+			Confidence:  1.0,
+			Metadata: map[string]interface{}{
+				"analyzed_at": time.Now(),
+				"service":     "vision_analyzer",
+				"media_type":  mediaType,
+			},
+		}, nil
+	}
+
+	// No vision service wired — fall back to magic-byte detection only.
 	result := &ImageAnalysisResult{
 		Description: "Image analysis service not available. This is a placeholder response.",
 		Confidence:  0.0,
@@ -324,13 +396,11 @@ func (t *ImageTool) analyzeImage(ctx context.Context, imageData []byte, prompt s
 			"service":     "placeholder",
 		},
 	}
-
-	// Basic image format detection
 	if len(imageData) > 4 {
 		if bytes.Equal(imageData[:4], []byte{0xFF, 0xD8, 0xFF, 0xE0}) ||
 			bytes.Equal(imageData[:4], []byte{0xFF, 0xD8, 0xFF, 0xE1}) {
 			result.Description = "JPEG image detected. " + result.Description
-		} else if bytes.Equal(imageData[:8], []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}) {
+		} else if len(imageData) >= 8 && bytes.Equal(imageData[:8], []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}) {
 			result.Description = "PNG image detected. " + result.Description
 		}
 	}
@@ -427,18 +497,46 @@ func (t *ImageTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *
 	}
 	deps = append(deps, servicesDep)
 
+	// Check VisionAnalyzer — this is what makes real analysis work. Without it
+	// the tool can still load and fingerprint images but will return a
+	// placeholder description instead of a real vision-model analysis.
+	visionDep := types.DependencyStatus{
+		Name:     "VisionAnalyzer",
+		Required: false,
+	}
+	analysisMode := "placeholder"
+	if t.services != nil && t.services.Vision != nil {
+		visionDep.Available = true
+		visionDep.Status = "configured"
+		visionDep.Message = "Multimodal vision analyzer wired"
+		result.Capabilities = append(result.Capabilities, "vision_analysis")
+		analysisMode = "vision_analyzer"
+	} else {
+		visionDep.Available = false
+		visionDep.Status = "not_configured"
+		visionDep.Message = "No vision analyzer wired; analyzeImage returns a placeholder"
+		result.UnavailableCapabilities = append(result.UnavailableCapabilities, "vision_analysis")
+		// Degrade status: we can still load/inspect images but cannot analyze.
+		result.Status = types.SelfTestStatusDegraded
+		result.Suggestions = append(result.Suggestions,
+			"Wire a VisionAnalyzer into ToolServices.Vision (gateway does this automatically when an AI provider is configured)")
+	}
+	deps = append(deps, visionDep)
+
 	result.Dependencies = deps
 	result.TestDuration = time.Since(start)
 
-	// Note: This tool uses a placeholder vision service - actual vision analysis
-	// would require integration with a vision API (e.g., Claude vision, GPT-4V)
-	result.Message = "Image tool is functional (placeholder analysis mode)"
+	if result.Status == types.SelfTestStatusOK {
+		result.Message = "Image tool is functional (vision analysis enabled)"
+	} else {
+		result.Message = "Image tool is functional (placeholder analysis mode; no vision analyzer wired)"
+	}
 
 	if opts.Verbose {
 		result.Details = map[string]interface{}{
-			"workspace_dir":   t.workspaceDir,
-			"http_timeout":    t.httpClient.Timeout.String(),
-			"analysis_mode":   "placeholder",
+			"workspace_dir":     t.workspaceDir,
+			"http_timeout":      t.httpClient.Timeout.String(),
+			"analysis_mode":     analysisMode,
 			"supported_formats": []string{"jpeg", "png", "gif", "webp"},
 		}
 	}
