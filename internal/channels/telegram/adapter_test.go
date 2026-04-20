@@ -1,10 +1,14 @@
 package telegram
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"conduit/internal/channels"
+	"conduit/internal/protocol"
 
+	"github.com/go-telegram/bot/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -117,6 +121,41 @@ func TestFactory_CreateAdapter_WithAllOptions(t *testing.T) {
 	assert.True(t, tgAdapter.config.WebhookMode)
 	assert.Equal(t, "https://example.com/webhook", tgAdapter.config.WebhookURL)
 	assert.True(t, tgAdapter.config.Debug)
+}
+
+func TestAdapter_HandleUpdate_DeduplicatesByUpdateID(t *testing.T) {
+	mb := &mockBot{}
+	adapter := newTestAdapter(mb)
+	defer adapter.cancel()
+	adapter.incoming = make(chan *protocol.IncomingMessage, 10)
+	adapter.seenUpdates = make(map[int64]time.Time)
+
+	update := &models.Update{
+		ID: 42,
+		Message: &models.Message{
+			ID:   1,
+			Text: "hello",
+			Chat: models.Chat{ID: 12345, Type: models.ChatTypePrivate},
+			From: &models.User{FirstName: "Alice"},
+		},
+	}
+
+	adapter.handleUpdate(context.Background(), nil, update)
+	adapter.handleUpdate(context.Background(), nil, update)
+
+	// Drain: only one message should arrive
+	select {
+	case <-adapter.incoming:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected first message to be delivered")
+	}
+
+	select {
+	case msg := <-adapter.incoming:
+		t.Fatalf("expected duplicate update to be suppressed, got %+v", msg)
+	case <-time.After(50 * time.Millisecond):
+		// Expected: no second message
+	}
 }
 
 func TestAdapter_IsPairingEnabled(t *testing.T) {

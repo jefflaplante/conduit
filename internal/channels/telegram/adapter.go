@@ -62,20 +62,22 @@ type botAPI interface {
 
 // Adapter implements the ChannelAdapter interface for Telegram
 type Adapter struct {
-	id         string
-	name       string
-	bot        botAPI
-	config     TelegramConfig
-	status     channels.StatusCode
-	statusMsg  string
-	incoming   chan *protocol.IncomingMessage
-	ctx        context.Context
-	cancel     context.CancelFunc
-	mutex      sync.RWMutex
-	startTime  time.Time
-	msgCount   int64
-	pairingMgr *PairingManager
-	stt        stt.Transcriber
+	id          string
+	name        string
+	bot         botAPI
+	config      TelegramConfig
+	status      channels.StatusCode
+	statusMsg   string
+	incoming    chan *protocol.IncomingMessage
+	ctx         context.Context
+	cancel      context.CancelFunc
+	mutex       sync.RWMutex
+	startTime   time.Time
+	msgCount    int64
+	pairingMgr  *PairingManager
+	stt         stt.Transcriber
+	seenUpdates map[int64]time.Time
+	seenCalls   int64
 }
 
 // TelegramConfig contains Telegram-specific configuration
@@ -134,12 +136,13 @@ func (f *Factory) CreateAdapter(config channels.ChannelConfig) (channels.Channel
 	}
 
 	adapter := &Adapter{
-		id:       config.ID,
-		name:     config.Name,
-		config:   telegramConfig,
-		status:   channels.StatusInitializing,
-		incoming: make(chan *protocol.IncomingMessage, 100),
-		stt:      f.stt,
+		id:          config.ID,
+		name:        config.Name,
+		config:      telegramConfig,
+		status:      channels.StatusInitializing,
+		incoming:    make(chan *protocol.IncomingMessage, 100),
+		stt:         f.stt,
+		seenUpdates: make(map[int64]time.Time),
 	}
 
 	// Initialize pairing manager if database is available
@@ -588,8 +591,41 @@ func (a *Adapter) IsHealthy() bool {
 	return a.status == channels.StatusOnline && a.bot != nil
 }
 
+// isDuplicateUpdate returns true if update.ID was seen recently. Telegram's
+// polling API can redeliver the same update on retries; without this check we
+// process the message twice. Entries older than 60s are swept periodically.
+func (a *Adapter) isDuplicateUpdate(id int64) bool {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+
+	if a.seenUpdates == nil {
+		a.seenUpdates = make(map[int64]time.Time)
+	}
+
+	if _, ok := a.seenUpdates[id]; ok {
+		return true
+	}
+	a.seenUpdates[id] = time.Now()
+
+	a.seenCalls++
+	if a.seenCalls%1000 == 0 {
+		cutoff := time.Now().Add(-60 * time.Second)
+		for k, t := range a.seenUpdates {
+			if t.Before(cutoff) {
+				delete(a.seenUpdates, k)
+			}
+		}
+	}
+	return false
+}
+
 // handleUpdate processes incoming Telegram updates
 func (a *Adapter) handleUpdate(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if a.isDuplicateUpdate(update.ID) {
+		log.Printf("[Telegram] Duplicate update %d detected, skipping", update.ID)
+		return
+	}
+
 	log.Printf("[Telegram] handleUpdate called with update type: message=%v, callback=%v",
 		update.Message != nil, update.CallbackQuery != nil)
 
