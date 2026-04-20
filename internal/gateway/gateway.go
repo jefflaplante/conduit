@@ -113,6 +113,10 @@ type Gateway struct {
 	heartbeatIntegration heartbeat.HeartbeatIntegrationInterface
 	eventStore           monitoring.EventStore
 
+	// Alert audit trail (conduit-1rp3): registry is wired with the auditor at
+	// startup so every delivery attempt is persisted to alert_history.
+	deliveryRegistry *heartbeat.DeliveryRegistry
+
 	// WebSocket handling
 	upgrader    websocket.Upgrader
 	clients     map[string]*Client
@@ -919,6 +923,13 @@ func New(cfg *config.Config) (*Gateway, error) {
 		logger.Info("heartbeat Brain writer enabled for sense.alerts.* namespace")
 	}
 	gw.heartbeatIntegration = hbIntegration
+
+	// Wire alert auditor (conduit-1rp3): create a DeliveryRegistry and attach
+	// an AlertAuditor backed by the same DB so every delivery attempt is
+	// persisted to the alert_history table (migration #8).
+	gw.deliveryRegistry = heartbeat.NewDeliveryRegistry()
+	gw.deliveryRegistry.SetAuditor(heartbeat.NewAlertAuditor(sessionStore.DB()))
+	logger.Info("alert auditor wired to delivery registry")
 
 	// NOTE: initializeAgentHeartbeat is called AFTER scheduler.Start() in the Run() method
 	// so that existing jobs are loaded from cron_jobs.json before the heartbeat job is added.

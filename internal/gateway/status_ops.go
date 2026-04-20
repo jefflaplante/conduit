@@ -26,6 +26,7 @@ func (g *Gateway) GetSessionStatus(ctx context.Context, sessionKey string) (map[
 		"updated_at":     session.UpdatedAt,
 		"context":        session.Context,
 		"context_budget": ContextBudgetFromSession(session).ToMap(),
+		"fuel_gauge":     g.GetFuelGauge(5).ToMap(),
 	}, nil
 }
 
