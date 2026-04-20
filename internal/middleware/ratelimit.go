@@ -3,13 +3,14 @@ package middleware
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"conduit/internal/logging"
 	"conduit/internal/ratelimit"
 )
 
@@ -69,21 +70,31 @@ type RateLimitMiddleware struct {
 	config               RateLimitConfig
 	onRateLimitExceeded  func(r *http.Request, identifier string, isAnonymous bool)
 	trustProxy           bool
+	logger               *slog.Logger
 }
 
 // RateLimitMiddlewareConfig contains initialization options for rate limiting middleware
 type RateLimitMiddlewareConfig struct {
 	Config              RateLimitConfig
 	OnRateLimitExceeded func(r *http.Request, identifier string, isAnonymous bool)
+	// Logger is the structured logger; defaults to logging.Default() when nil.
+	Logger *slog.Logger
 }
 
 // NewRateLimitMiddleware creates a new rate limiting middleware
 func NewRateLimitMiddleware(config RateLimitMiddlewareConfig) *RateLimitMiddleware {
+	logger := config.Logger
+	if logger == nil {
+		logger = logging.Default()
+	}
+	logger = logger.With("component", "ratelimit")
+
 	if !config.Config.Enabled {
 		// Return disabled middleware that allows all requests
 		return &RateLimitMiddleware{
 			config:              config.Config,
 			onRateLimitExceeded: config.OnRateLimitExceeded,
+			logger:              logger,
 		}
 	}
 
@@ -115,6 +126,7 @@ func NewRateLimitMiddleware(config RateLimitMiddlewareConfig) *RateLimitMiddlewa
 		config:               config.Config,
 		onRateLimitExceeded:  config.OnRateLimitExceeded,
 		trustProxy:           config.Config.TrustProxy,
+		logger:               logger,
 	}
 }
 
@@ -160,8 +172,14 @@ func (m *RateLimitMiddleware) Wrap(next http.Handler) http.Handler {
 
 			// Log rate limit exceeded (with sanitized identifier for privacy)
 			sanitizedID := sanitizeIdentifier(identifier, isAnonymous)
-			log.Printf("[RateLimit] Rate limit exceeded: %s %s (identifier: %s, type: %s)",
-				r.Method, r.URL.Path, sanitizedID, getIdentifierType(isAnonymous))
+			m.logger.Warn("rate limit exceeded",
+				"request_id", logging.RequestIDFromContext(r.Context()),
+				"remote_ip", extractClientIP(r, m.trustProxy),
+				"method", r.Method,
+				"path", r.URL.Path,
+				"identifier", sanitizedID,
+				"identifier_type", getIdentifierType(isAnonymous),
+			)
 
 			// Send 429 response
 			m.sendRateLimitError(w, r, retryAfter)
@@ -221,9 +239,9 @@ func (m *RateLimitMiddleware) sendRateLimitError(w http.ResponseWriter, r *http.
 
 	// Encode and send response
 	if err := json.NewEncoder(w).Encode(errorResponse); err != nil {
-		log.Printf("[RateLimit] Failed to encode error response: %v", err)
 		// If JSON encoding fails, we've already set the status code
 		// so we can't do much more than log the error
+		m.logger.Error("failed to encode rate limit error response", "error", err)
 	}
 }
 

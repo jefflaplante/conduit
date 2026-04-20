@@ -4,11 +4,12 @@ package middleware
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"conduit/internal/auth"
+	"conduit/internal/logging"
 )
 
 // contextKey is a type for context keys to avoid collisions
@@ -89,6 +90,7 @@ type AuthMiddleware struct {
 	extractor   *auth.TokenExtractor
 	skipPaths   map[string]bool
 	onAuthError func(r *http.Request, err AuthError)
+	logger      *slog.Logger
 }
 
 // AuthMiddlewareConfig contains configuration for AuthMiddleware
@@ -97,6 +99,8 @@ type AuthMiddlewareConfig struct {
 	SkipPaths []string
 	// OnAuthError is called when authentication fails (for logging/metrics)
 	OnAuthError func(r *http.Request, err AuthError)
+	// Logger is the structured logger; defaults to logging.Default() when nil.
+	Logger *slog.Logger
 }
 
 // NewAuthMiddleware creates a new authentication middleware
@@ -106,11 +110,18 @@ func NewAuthMiddleware(storage *auth.TokenStorage, config AuthMiddlewareConfig) 
 		skipPaths[path] = true
 	}
 
+	logger := config.Logger
+	if logger == nil {
+		logger = logging.Default()
+	}
+	logger = logger.With("component", "auth")
+
 	return &AuthMiddleware{
 		storage:     storage,
 		extractor:   auth.NewTokenExtractor(),
 		skipPaths:   skipPaths,
 		onAuthError: config.OnAuthError,
+		logger:      logger,
 	}
 }
 
@@ -129,6 +140,11 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 		// Handle missing or malformed token
 		if extracted.Token == "" {
 			if extracted.IsMalformed {
+				m.logger.Warn("auth failed",
+					"request_id", logging.RequestIDFromContext(r.Context()),
+					"remote_ip", r.RemoteAddr,
+					"reason", "malformed_token",
+				)
 				m.sendError(w, r, ErrMalformedToken)
 			} else {
 				m.sendError(w, r, ErrMissingToken)
@@ -139,9 +155,13 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 		// Validate token against database
 		tokenInfo, err := m.storage.ValidateToken(extracted.Token)
 		if err != nil {
-			// Log the error for debugging (without exposing token)
-			log.Printf("[Auth] Token validation failed from %s (source: %s): %v",
-				r.RemoteAddr, extracted.Source, sanitizeError(err))
+			// Log the failure with structured context
+			m.logger.Warn("auth failed",
+				"request_id", logging.RequestIDFromContext(r.Context()),
+				"remote_ip", r.RemoteAddr,
+				"source", extracted.Source,
+				"reason", sanitizeError(err),
+			)
 
 			// Check if it's an expiration error vs invalid token
 			if isExpiredError(err) {
@@ -163,8 +183,12 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 		}
 
 		// Log successful authentication (without token details)
-		log.Printf("[Auth] Request authenticated: client=%s path=%s source=%s",
-			tokenInfo.ClientName, r.URL.Path, extracted.Source)
+		m.logger.Info("request authenticated",
+			"request_id", logging.RequestIDFromContext(r.Context()),
+			"client", tokenInfo.ClientName,
+			"path", r.URL.Path,
+			"source", extracted.Source,
+		)
 
 		// Add auth info to context and continue
 		ctx := context.WithValue(r.Context(), AuthContextKey, authInfo)
@@ -211,7 +235,7 @@ func (m *AuthMiddleware) sendError(w http.ResponseWriter, r *http.Request, authE
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		// If JSON encoding fails, we've already written the status code
-		log.Printf("[Auth] Failed to encode error response: %v", err)
+		m.logger.Error("failed to encode auth error response", "error", err)
 	}
 }
 
