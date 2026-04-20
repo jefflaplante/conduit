@@ -756,7 +756,10 @@ func TestImageTool_SelfTest(t *testing.T) {
 		result := tool.SelfTest(context.Background(), nil)
 
 		require.NotNil(t, result)
-		assert.Equal(t, types.SelfTestStatusOK, result.Status)
+		// No VisionAnalyzer wired → degraded, but still functional for
+		// loading/fingerprinting images.
+		assert.Equal(t, types.SelfTestStatusDegraded, result.Status)
+		assert.True(t, result.IsFunctional())
 		assert.Contains(t, result.Capabilities, "load_from_file")
 		assert.Contains(t, result.Capabilities, "load_from_url")
 		assert.Contains(t, result.Capabilities, "load_from_data_url")
