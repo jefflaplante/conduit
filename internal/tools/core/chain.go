@@ -251,7 +251,7 @@ func (t *ChainTool) runChain(ctx context.Context, args map[string]interface{}) (
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,
-			Error:   fmt.Sprintf("chain execution failed: %v", err),
+			Error:   fmt.Sprintf("chain %q execution failed: %v", c.Name, err),
 		}, nil
 	}
 
@@ -283,9 +283,18 @@ func (t *ChainTool) runChain(ctx context.Context, args map[string]interface{}) (
 		}
 	}
 
+	// On failure, populate the Error field with step + tool context so the
+	// LLM's formatToolResultForAI path surfaces an actionable message rather
+	// than an empty "Tool 'Chain' failed:" string.
+	var errField string
+	if !result.Success {
+		errField = buildChainErrorSummary(c.Name, result)
+	}
+
 	return &types.ToolResult{
 		Success: result.Success,
 		Content: b.String(),
+		Error:   errField,
 		Data: map[string]interface{}{
 			"chain_name":     result.ChainName,
 			"success":        result.Success,
@@ -293,6 +302,27 @@ func (t *ChainTool) runChain(ctx context.Context, args map[string]interface{}) (
 			"total_duration": result.TotalDuration.String(),
 		},
 	}, nil
+}
+
+// buildChainErrorSummary produces a single-line error including the failing
+// step ID, tool name, and underlying error so callers that only surface
+// ToolResult.Error (not Content) still see actionable context.
+func buildChainErrorSummary(chainName string, result *chain.ChainResult) string {
+	var failures []string
+	for _, sr := range result.StepResults {
+		if sr.Success || sr.Error == "" {
+			continue
+		}
+		failures = append(failures, fmt.Sprintf("step %q (tool %s): %s", sr.StepID, sr.ToolName, sr.Error))
+	}
+	if len(failures) == 0 {
+		// Fallback when the runner aborted before any step recorded an error.
+		if result.Error != "" {
+			return fmt.Sprintf("chain %q failed: %s", chainName, result.Error)
+		}
+		return fmt.Sprintf("chain %q failed with no step error recorded", chainName)
+	}
+	return fmt.Sprintf("chain %q failed: %s", chainName, strings.Join(failures, "; "))
 }
 
 // --- adapters ---
@@ -307,10 +337,17 @@ type registryChainAdapter struct {
 func (a *registryChainAdapter) ExecuteTool(toolName string, params map[string]interface{}) (string, error) {
 	result, err := a.executor.ExecuteTool(a.ctx, toolName, params)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("tool %s: %w", toolName, err)
+	}
+	if result == nil {
+		return "", fmt.Errorf("tool %s returned nil result", toolName)
 	}
 	if !result.Success {
-		return "", fmt.Errorf("%s", result.Error)
+		errText := result.Error
+		if errText == "" {
+			errText = "tool reported failure with no error message"
+		}
+		return "", fmt.Errorf("tool %s: %s", toolName, errText)
 	}
 	return result.Content, nil
 }

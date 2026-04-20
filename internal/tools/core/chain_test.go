@@ -3,14 +3,32 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"conduit/internal/chain"
 	"conduit/internal/config"
 	"conduit/internal/tools/types"
 )
+
+// errorReturningExecutor returns an error from ExecuteTool to simulate the
+// path where sub-tool execution fails outside the ToolResult.Success=false
+// convention.
+type errorReturningExecutor struct {
+	tools map[string]types.Tool
+	err   error
+}
+
+func (e *errorReturningExecutor) ExecuteTool(_ context.Context, _ string, _ map[string]interface{}) (*types.ToolResult, error) {
+	return nil, e.err
+}
+
+func (e *errorReturningExecutor) GetAvailableTools() map[string]types.Tool {
+	return e.tools
+}
 
 // mockChainExecutor implements chain.ToolExecutor for tests.
 type mockChainExecutor struct {
@@ -242,6 +260,54 @@ func TestChainTool_RunFailingStep(t *testing.T) {
 	// Chain should report failure from the step.
 	if result.Success {
 		t.Fatal("expected chain failure when step fails")
+	}
+
+	// Regression (conduit-1zcq): the ToolResult.Error field must surface
+	// actionable context (step ID, tool name, underlying error) so the
+	// ExecutionEngine's formatToolResultForAI path produces a useful message
+	// instead of an empty "Tool 'Chain' failed:" line.
+	if result.Error == "" {
+		t.Fatalf("expected non-empty Error field on chain failure, got empty; Content=%q", result.Content)
+	}
+	for _, needle := range []string{"s1", "Bash", "command not found"} {
+		if !strings.Contains(result.Error, needle) {
+			t.Errorf("expected Error to contain %q, got %q", needle, result.Error)
+		}
+	}
+}
+
+// TestChainTool_RunFailingStep_AdapterWrapsToolName verifies the
+// registryChainAdapter wraps raw sub-tool errors with the tool name so the
+// chain runner records which tool triggered the failure even when the tool
+// returns (nil result, err) rather than (result{Success:false}, nil).
+func TestChainTool_RunFailingStep_AdapterWrapsToolName(t *testing.T) {
+	executor := &errorReturningExecutor{
+		tools: map[string]types.Tool{"Bash": &stubTool{name: "Bash"}},
+		err:   errors.New("exec kaboom"),
+	}
+	dir := t.TempDir()
+	chainsDir := filepath.Join(dir, "chains")
+	if err := os.MkdirAll(chainsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewChainTool(&types.ToolServices{}, config.SandboxConfig{WorkspaceDir: dir}, executor)
+	writeChain(t, chainsDir, sampleChain())
+
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "run",
+		"name":   "test-chain",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Success {
+		t.Fatal("expected failure")
+	}
+	if !strings.Contains(result.Error, "Bash") || !strings.Contains(result.Error, "exec kaboom") {
+		t.Errorf("expected Error to contain tool name and underlying error, got %q", result.Error)
+	}
+	if !strings.Contains(result.Error, "s1") {
+		t.Errorf("expected Error to contain step id, got %q", result.Error)
 	}
 }
 
