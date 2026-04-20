@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"conduit/internal/auth"
+	"conduit/internal/logging"
 )
 
 // WebSocketAuthenticator handles authentication for WebSocket connections
@@ -16,6 +17,7 @@ import (
 type WebSocketAuthenticator struct {
 	storage   *auth.TokenStorage
 	extractor *auth.TokenExtractor
+	logger    *slog.Logger
 }
 
 // WebSocketAuthResult contains the result of WebSocket authentication
@@ -42,11 +44,19 @@ const (
 	CloseForbidden = 4403
 )
 
-// NewWebSocketAuthenticator creates a new WebSocket authenticator
-func NewWebSocketAuthenticator(storage *auth.TokenStorage) *WebSocketAuthenticator {
+// NewWebSocketAuthenticator creates a new WebSocket authenticator.
+// An optional *slog.Logger may be provided; pass nil to use the default logger.
+func NewWebSocketAuthenticator(storage *auth.TokenStorage, loggers ...*slog.Logger) *WebSocketAuthenticator {
+	var logger *slog.Logger
+	if len(loggers) > 0 && loggers[0] != nil {
+		logger = loggers[0]
+	} else {
+		logger = logging.Default()
+	}
 	return &WebSocketAuthenticator{
 		storage:   storage,
 		extractor: auth.NewWebSocketTokenExtractor(),
+		logger:    logger.With("component", "ws_auth"),
 	}
 }
 
@@ -60,8 +70,12 @@ func (a *WebSocketAuthenticator) Authenticate(r *http.Request) WebSocketAuthResu
 	// Handle missing or malformed token
 	if extracted.Token == "" {
 		if extracted.IsMalformed {
-			log.Printf("[WS Auth] Malformed token from %s (source: %s)",
-				r.RemoteAddr, extracted.Source)
+			a.logger.Warn("auth failed",
+				"request_id", logging.RequestIDFromContext(r.Context()),
+				"remote_ip", r.RemoteAddr,
+				"source", extracted.Source,
+				"reason", "malformed_token",
+			)
 			return WebSocketAuthResult{
 				Error: &ErrMalformedToken,
 			}
@@ -74,8 +88,12 @@ func (a *WebSocketAuthenticator) Authenticate(r *http.Request) WebSocketAuthResu
 	// Validate token against database
 	tokenInfo, err := a.storage.ValidateToken(extracted.Token)
 	if err != nil {
-		log.Printf("[WS Auth] Token validation failed from %s (source: %s): %v",
-			r.RemoteAddr, extracted.Source, sanitizeError(err))
+		a.logger.Warn("auth failed",
+			"request_id", logging.RequestIDFromContext(r.Context()),
+			"remote_ip", r.RemoteAddr,
+			"source", extracted.Source,
+			"reason", sanitizeError(err),
+		)
 
 		if isExpiredError(err) {
 			return WebSocketAuthResult{Error: &ErrExpiredToken}
@@ -93,8 +111,11 @@ func (a *WebSocketAuthenticator) Authenticate(r *http.Request) WebSocketAuthResu
 		AuthenticatedAt: time.Now(),
 	}
 
-	log.Printf("[WS Auth] Connection authenticated: client=%s source=%s",
-		tokenInfo.ClientName, extracted.Source)
+	a.logger.Info("connection authenticated",
+		"request_id", logging.RequestIDFromContext(r.Context()),
+		"client", tokenInfo.ClientName,
+		"source", extracted.Source,
+	)
 
 	// Determine response protocol
 	var responseProtocol string
