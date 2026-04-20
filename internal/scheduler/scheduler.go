@@ -169,10 +169,23 @@ func (s *Scheduler) Stop() {
 	log.Printf("[Scheduler] Stopped")
 }
 
-// AddJob adds a new job
+// AddJob adds a new job, replacing any existing job with the same ID (upsert).
+// If a job with the same ID already exists its cron entry is removed before
+// the new one is registered, preventing duplicate concurrent executions.
 func (s *Scheduler) AddJob(job *Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Upsert: if a job with this ID already exists, unschedule it first so we
+	// don't accumulate ghost cron entries in the robfig/cron runner.
+	if existing, ok := s.jobs[job.ID]; ok {
+		if existing.Type == JobTypeGo && existing.entryID != 0 {
+			s.cron.Remove(existing.entryID)
+		} else if existing.Type == JobTypeSystem {
+			// Best-effort removal; ignore errors (job may already be absent).
+			_ = s.removeSystemCrontab(existing)
+		}
+	}
 
 	job.CreatedAt = time.Now()
 	if job.Metadata == nil {

@@ -466,6 +466,130 @@ func TestPersistence_AllMutationsPersist(t *testing.T) {
 	}
 }
 
+// TestAddJob_UpsertRemovesOldCronEntry verifies that calling AddJob twice with
+// the same job ID does not leave a ghost cron entry behind (regression for
+// conduit-aumx: duplicate heartbeat job on restart).
+func TestAddJob_UpsertRemovesOldCronEntry(t *testing.T) {
+	dir := t.TempDir()
+
+	var mu sync.Mutex
+	execCount := 0
+	executor := func(ctx context.Context, job *Job) error {
+		mu.Lock()
+		execCount++
+		mu.Unlock()
+		return nil
+	}
+
+	s := New(dir, executor)
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer s.Stop()
+
+	makeJob := func() *Job {
+		return &Job{
+			ID:       "heartbeat-dedup",
+			Name:     "Heartbeat Dedup Test",
+			Schedule: "* * * * * *", // every second
+			Type:     JobTypeGo,
+			Command:  "heartbeat",
+			Enabled:  true,
+		}
+	}
+
+	// First registration.
+	if err := s.AddJob(makeJob()); err != nil {
+		t.Fatalf("first AddJob failed: %v", err)
+	}
+
+	entriesAfterFirst := len(s.cron.Entries())
+
+	// Second registration with the same ID — simulates restart re-registration.
+	if err := s.AddJob(makeJob()); err != nil {
+		t.Fatalf("second AddJob failed: %v", err)
+	}
+
+	entriesAfterSecond := len(s.cron.Entries())
+
+	// The number of active cron entries must not grow after the second AddJob.
+	if entriesAfterSecond != entriesAfterFirst {
+		t.Errorf("duplicate cron entry created: entries went from %d to %d after re-registering the same job ID",
+			entriesAfterFirst, entriesAfterSecond)
+	}
+
+	// Only one job record should exist in the map.
+	jobs := s.ListJobs()
+	count := 0
+	for _, j := range jobs {
+		if j.ID == "heartbeat-dedup" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 job with id 'heartbeat-dedup', got %d", count)
+	}
+}
+
+// TestAddJob_Upsert_AfterRestart simulates the restart scenario: a job is
+// persisted to disk (with entryID=0 as serialised), then the scheduler is
+// restarted and AddJob is called again for the same ID.  There should be
+// exactly one cron entry, not two.
+func TestAddJob_Upsert_AfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	jobsFile := filepath.Join(dir, "cron_jobs.json")
+
+	// Pre-populate cron_jobs.json as if the job was registered in a previous run.
+	initial := []*Job{{
+		ID:      "agent_heartbeat_main",
+		Name:    "Heartbeat Task Execution",
+		Schedule: "0 */5 * * * *",
+		Type:    JobTypeGo,
+		Command: "heartbeat",
+		Enabled: true,
+		Metadata: map[string]interface{}{"heartbeat": true},
+	}}
+	data, _ := json.MarshalIndent(initial, "", "  ")
+	if err := os.WriteFile(jobsFile, data, 0644); err != nil {
+		t.Fatalf("failed to write jobs file: %v", err)
+	}
+
+	s := New(dir, nil)
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer s.Stop()
+
+	entriesAfterLoad := len(s.cron.Entries())
+	if entriesAfterLoad != 1 {
+		t.Fatalf("expected 1 cron entry after load, got %d", entriesAfterLoad)
+	}
+
+	// Simulate initializeAgentHeartbeat calling ScheduleHeartbeatJob again.
+	// In the buggy code this would add a second entry; the fix should upsert.
+	if err := s.AddJob(&Job{
+		ID:       "agent_heartbeat_main",
+		Name:     "Heartbeat Task Execution",
+		Schedule: "0 */5 * * * *",
+		Type:     JobTypeGo,
+		Command:  "heartbeat",
+		Enabled:  true,
+		Metadata: map[string]interface{}{"heartbeat": true},
+	}); err != nil {
+		t.Fatalf("AddJob (upsert) failed: %v", err)
+	}
+
+	entriesAfterUpsert := len(s.cron.Entries())
+	if entriesAfterUpsert != entriesAfterLoad {
+		t.Errorf("duplicate cron entry after upsert: had %d entries, now have %d",
+			entriesAfterLoad, entriesAfterUpsert)
+	}
+
+	if len(s.ListJobs()) != 1 {
+		t.Errorf("expected 1 job in map after upsert, got %d", len(s.ListJobs()))
+	}
+}
+
 func TestCheckAndReload_SelfWriteCooldown(t *testing.T) {
 	dir := t.TempDir()
 	jobsFile := filepath.Join(dir, "cron_jobs.json")

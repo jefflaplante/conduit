@@ -149,12 +149,25 @@ func (g *Gateway) initializeAgentHeartbeat(cfg *config.Config) error {
 	// Create the main agent heartbeat job
 	jobID := "agent_heartbeat_main"
 
-	// Check if job already exists (avoid duplicates on restart)
+	// Check if the stable-ID job already exists (normal restart — no action needed).
 	existingJobs := g.scheduler.ListJobs()
 	for _, job := range existingJobs {
 		if job.ID == jobID {
 			log.Printf("[AgentHeartbeat] Job %s already exists, skipping auto-creation", jobID)
 			return nil
+		}
+	}
+
+	// Migrate legacy heartbeat jobs: earlier releases used a timestamp-based ID
+	// (e.g. "heartbeat_<nanoseconds>") so the stable-ID check above never matched,
+	// causing a second job to be registered on every restart.  Remove any such
+	// legacy jobs before creating the canonical one.
+	for _, job := range existingJobs {
+		if strings.HasPrefix(job.ID, "heartbeat_") {
+			log.Printf("[AgentHeartbeat] Removing legacy heartbeat job %s before registering canonical job %s", job.ID, jobID)
+			if err := g.scheduler.RemoveJob(job.ID); err != nil {
+				log.Printf("[AgentHeartbeat] Warning: failed to remove legacy job %s: %v", job.ID, err)
+			}
 		}
 	}
 
