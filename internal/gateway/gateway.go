@@ -102,6 +102,10 @@ type Gateway struct {
 	// Rate limiting
 	rateLimitMiddleware *middleware.RateLimitMiddleware
 
+	// Fuel gauge: rolling-window AI token usage tracker that shadows every
+	// call made through r.ai. Fed via ai.UsageTracker's observer hook.
+	tokenWindow *monitoring.TokenWindowTracker
+
 	// Monitoring and heartbeat
 	gatewayMetrics       *monitoring.GatewayMetrics
 	metricsCollector     monitoring.MetricsCollectorInterface
@@ -484,6 +488,14 @@ func New(cfg *config.Config) (*Gateway, error) {
 	gatewayMetrics := monitoring.NewGatewayMetrics()
 	gatewayMetrics.SetVersion(version.Info())
 
+	// Create rolling-window token usage tracker for the fuel gauge and wire
+	// it up as an observer on the AI router's usage tracker so every provider
+	// response is shadowed into the hour/day window counters.
+	tokenWindow := monitoring.NewTokenWindowTracker()
+	if ut := aiRouter.GetUsageTracker(); ut != nil {
+		ut.SetObserver(tokenWindow)
+	}
+
 	// Create event store for heartbeat events
 	eventStore := monitoring.NewMemoryEventStore(1000)
 
@@ -521,6 +533,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		authMiddleware:      authMiddleware,
 		wsAuthenticator:     wsAuthenticator,
 		rateLimitMiddleware: rateLimitMiddleware,
+		tokenWindow:         tokenWindow,
 		gatewayMetrics:      gatewayMetrics,
 		metricsCollector:    metricsCollector,
 		heartbeatService:    heartbeatService,
