@@ -26,7 +26,8 @@ func (t *BrainTool) Description() string {
 	return `Tiered memory system with long-term (LTM), working, and scratchpad storage.
 
 Actions:
-- store: Save a key-value fact to a memory tier (longterm or working)
+- store: Save a single key-value fact to a memory tier (longterm or working)
+- store_bulk: Save many key-value facts in one atomic transaction (array of {key, value, tier?, source?})
 - get: Retrieve a specific fact by key (checks working memory first, then LTM)
 - recall: Fuzzy search across all tiers by query string, ranked by salience. Optional 'context' param biases ranking toward entries whose key/value overlap with context tokens (keyword overlap only, no semantic similarity).
 - list: List all entries matching a key prefix
@@ -38,6 +39,12 @@ Actions:
 - consolidate: Sweep working memory — auto-promote high-salience keys, evict stale ones
 - status: Report entry counts, scratchpad depth, and hottest keys
 - rem_cycle: Run REM sleep consolidation phases (triage, consolidate, prune, integrate, groom)
+
+Auto-extraction from files:
+Files read via the Read tool are scanned for HTML comment blocks of the form
+"<!-- brain-extract ... /brain-extract -->". Each "key: \"value\"" line inside
+the block is auto-stored into working memory (source="file:<relpath>") via
+StoreBulk, so reference docs can publish facts without explicit tool calls.
 
 Typical Workflow:
 1. Store important facts as they come up (tier=working for session-scoped, tier=longterm for persistent)
@@ -52,7 +59,7 @@ func (t *BrainTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"store", "get", "recall", "list", "delete", "push", "pop", "peek", "promote", "consolidate", "status", "rem_cycle"},
+				"enum":        []string{"store", "store_bulk", "get", "recall", "list", "delete", "push", "pop", "peek", "promote", "consolidate", "status", "rem_cycle"},
 				"description": "Action to perform on the brain memory system",
 			},
 			"key": map[string]interface{}{
@@ -105,6 +112,20 @@ func (t *BrainTool) Parameters() map[string]interface{} {
 				"type":        "boolean",
 				"description": "Re-extract groom data even if hashes match (default: false)",
 			},
+			"entries": map[string]interface{}{
+				"type":        "array",
+				"description": "Array of entries for store_bulk action (at least one required)",
+				"items": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"key":    map[string]interface{}{"type": "string", "description": "Memory key"},
+						"value":  map[string]interface{}{"type": "string", "description": "Value to store"},
+						"tier":   map[string]interface{}{"type": "string", "enum": []string{"longterm", "working"}, "description": "Memory tier (default: working)"},
+						"source": map[string]interface{}{"type": "string", "description": "Source label (default: tool)"},
+					},
+					"required": []string{"key", "value"},
+				},
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -124,6 +145,8 @@ func (t *BrainTool) Execute(ctx context.Context, args map[string]interface{}) (*
 	switch action {
 	case "store":
 		return t.handleStore(ctx, args, brain)
+	case "store_bulk":
+		return t.handleStoreBulk(ctx, args, brain)
 	case "get":
 		return t.handleGet(ctx, args, brain)
 	case "recall":
@@ -178,6 +201,53 @@ func (t *BrainTool) handleStore(ctx context.Context, args map[string]interface{}
 	return &types.ToolResult{
 		Success: true,
 		Content: fmt.Sprintf("Stored key=%q in %s memory (source=%s)", key, tier, source),
+	}, nil
+}
+
+func (t *BrainTool) handleStoreBulk(ctx context.Context, args map[string]interface{}, brain types.BrainService) (*types.ToolResult, error) {
+	raw, ok := args["entries"].([]interface{})
+	if !ok || len(raw) == 0 {
+		return &types.ToolResult{Success: false, Error: "entries is required for store_bulk (non-empty array)"}, nil
+	}
+	entries := make([]types.BrainBulkEntry, 0, len(raw))
+	for i, item := range raw {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("entries[%d] must be an object", i)}, nil
+		}
+		key, _ := m["key"].(string)
+		value, _ := m["value"].(string)
+		if key == "" || value == "" {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("entries[%d]: key and value are required", i)}, nil
+		}
+		tier := types.BrainTierWorking
+		if t, ok := m["tier"].(string); ok && t != "" {
+			switch strings.ToLower(t) {
+			case "longterm":
+				tier = types.BrainTierLongTerm
+			case "working":
+				tier = types.BrainTierWorking
+			default:
+				return &types.ToolResult{Success: false, Error: fmt.Sprintf("entries[%d]: invalid tier %q (use longterm or working)", i, t)}, nil
+			}
+		}
+		source, _ := m["source"].(string)
+		if source == "" {
+			source = "tool"
+		}
+		entries = append(entries, types.BrainBulkEntry{
+			Key:    key,
+			Value:  value,
+			Tier:   tier,
+			Source: source,
+		})
+	}
+	if err := brain.StoreBulk(ctx, entries); err != nil {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("store_bulk failed: %v", err)}, nil
+	}
+	return &types.ToolResult{
+		Success: true,
+		Content: fmt.Sprintf("Stored %d entries in bulk", len(entries)),
 	}, nil
 }
 
@@ -398,7 +468,7 @@ func (t *BrainTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *
 	} else {
 		brainDep.Available = true
 		brainDep.Status = "connected"
-		result.Capabilities = []string{"store", "get", "recall", "list", "delete", "push", "pop", "peek", "promote", "consolidate", "status"}
+		result.Capabilities = []string{"store", "store_bulk", "get", "recall", "list", "delete", "push", "pop", "peek", "promote", "consolidate", "status"}
 
 		// Check REM cycle availability
 		remDep := types.DependencyStatus{
