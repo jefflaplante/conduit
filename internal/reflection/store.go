@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"conduit/internal/database"
 )
 
 // ToolStat holds aggregated tool outcome statistics for REM phase analysis.
@@ -41,25 +43,28 @@ func (s *ReflectionStore) Insert(ctx context.Context, entry *ReflectionEntry) er
 		return fmt.Errorf("marshal related_keys: %w", err)
 	}
 
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO brain_reflections (
-			id, session_key, timestamp, source, type, tool, outcome,
-			retry_count, duration_ms, insight, score, tags, related_keys, rem_processed
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-		entry.ID,
-		entry.SessionKey,
-		entry.Timestamp.UTC().Format("2006-01-02 15:04:05"),
-		entry.Source,
-		string(entry.Type),
-		nullableString(entry.Tool),
-		string(entry.Outcome),
-		entry.RetryCount,
-		entry.Duration.Milliseconds(),
-		nullableString(entry.Insight),
-		entry.Score,
-		tagsJSON,
-		relatedJSON,
-	)
+	err = database.RetryOnBusy(5, func() error {
+		_, execErr := s.db.ExecContext(ctx, `
+			INSERT INTO brain_reflections (
+				id, session_key, timestamp, source, type, tool, outcome,
+				retry_count, duration_ms, insight, score, tags, related_keys, rem_processed
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+			entry.ID,
+			entry.SessionKey,
+			entry.Timestamp.UTC().Format("2006-01-02 15:04:05"),
+			entry.Source,
+			string(entry.Type),
+			nullableString(entry.Tool),
+			string(entry.Outcome),
+			entry.RetryCount,
+			entry.Duration.Milliseconds(),
+			nullableString(entry.Insight),
+			entry.Score,
+			tagsJSON,
+			relatedJSON,
+		)
+		return execErr
+	})
 	if err != nil {
 		return fmt.Errorf("insert reflection: %w", err)
 	}
