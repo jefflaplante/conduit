@@ -243,6 +243,47 @@ It must be your entire message — no other text, no markdown wrapping, no code 
 `, SILENT_REPLY_TOKEN)
 }
 
+// buildWakeContextSection emits a short P1 note telling the LLM that this turn was
+// triggered by a session wake (e.g. a sub-agent callback or another inter-session
+// message) rather than a fresh user message. When wakeSource is empty this returns
+// the empty string so the section vanishes on normal turns.
+func buildWakeContextSection(wakeSource string) string {
+	if wakeSource == "" {
+		return ""
+	}
+	switch wakeSource {
+	case "sub_agent_announced":
+		return fmt.Sprintf(`## Wake Context
+This turn was triggered by a sub-agent callback. The "user" message is the sub-agent's result delivered back to this session. The raw text has ALREADY been posted to the human's channel — they have seen it.
+Decide whether any follow-up action or commentary is warranted. If not, reply with %s — do NOT repeat the sub-agent's output back to the human.
+`, SILENT_REPLY_TOKEN)
+	case "sub_agent_silent":
+		return fmt.Sprintf(`## Wake Context
+This turn was triggered by a sub-agent callback. The "user" message is the sub-agent's result. The human has NOT seen this output — you are the only path for it to reach them.
+If the result is useful to the human, summarize or relay it now. Use %s only when the result is genuinely not worth surfacing.
+`, SILENT_REPLY_TOKEN)
+	case "sub_agent_callback":
+		// Generic sub-agent callback (legacy / unknown announce state). Err toward surfacing.
+		return fmt.Sprintf(`## Wake Context
+This turn was triggered by a sub-agent callback — the "user" message is the sub-agent's result delivered back to this session, not a new human request.
+React appropriately: if the result requires follow-up action or is worth reporting to the human, respond. If it's purely informational and the human has already seen it, reply with %s.
+`, SILENT_REPLY_TOKEN)
+	case "inter_session":
+		return fmt.Sprintf(`## Wake Context
+This turn was triggered by another session sending a message to this one. Treat the "user" message as an inter-session callback, not a direct human request.
+If follow-up is warranted, respond. Otherwise reply with %s.
+`, SILENT_REPLY_TOKEN)
+	case "heartbeat":
+		return `## Wake Context
+This turn was triggered by a heartbeat. Follow heartbeat response rules below.
+`
+	default:
+		return fmt.Sprintf(`## Wake Context
+This turn was triggered by a session wake (source: %q). The incoming "user" message is not a direct human request; decide whether follow-up is warranted.
+`, wakeSource)
+	}
+}
+
 // buildHeartbeatsSection returns detailed heartbeat instructions
 func buildHeartbeatsSection(params *SectionParams) string {
 	if params.IsMinimal {

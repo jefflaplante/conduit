@@ -13,6 +13,7 @@ import (
 	"conduit/internal/config"
 	"conduit/internal/sessions"
 	"conduit/internal/skills"
+	"conduit/internal/tools/types"
 	"conduit/internal/workspace"
 )
 
@@ -367,12 +368,15 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 	// P1=critical (never dropped), P2=grounding data and reference, P3=behavioral rules, P4=cosmetic/optional.
 	// Within each priority, declaration order is preserved by stable sort.
 	// Ordering principle: data/context before instructions (per Anthropic prompt engineering guidelines).
+	wakeSource := types.WakeSource(ctx)
+
 	raw := []promptSection{
 		// P1 — Critical: identity and runtime facts (never dropped)
 		{name: "Identity", priority: 1, build: func() string { return pb.buildIdentitySection(isOAuth) }},
 		{name: "Runtime", priority: 1, build: func() string {
 			return buildRuntimeSection(params, pb.buildRuntimeInfo(session))
 		}},
+		{name: "Wake Context", priority: 1, build: func() string { return buildWakeContextSection(wakeSource) }},
 
 		// P2 — Grounding data: project context, memory, tool availability (reference)
 		{name: "Project Context", priority: 2, build: func() string { return pb.buildWorkspaceContextSection(ctx, session) }},
