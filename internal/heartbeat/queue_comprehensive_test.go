@@ -507,13 +507,17 @@ func TestAlertQueueHealthCheckComprehensive(t *testing.T) {
 		}
 	})
 
-	// Test queue with excessive alerts
+	// Test queue with excessive alerts.
+	// AddAlert is O(N²) in the number of prior alerts because it rewrites the
+	// whole JSON file on each call. 1000 iterations can push this past the
+	// default 5-minute test deadline under -race on loaded hardware. 200 is
+	// enough to exercise the "many alerts" code path while staying fast.
 	t.Run("overloaded_queue", func(t *testing.T) {
 		overloadedQueuePath := filepath.Join(tempDir, "overloaded_queue.json")
 		overloadedQueue := NewSharedAlertQueue(overloadedQueuePath)
 
-		// Add many alerts to simulate overload
-		for i := 0; i < 1000; i++ {
+		const overloadAlerts = 200
+		for i := 0; i < overloadAlerts; i++ {
 			alert := Alert{
 				ID:         fmt.Sprintf("overload-alert-%d", i),
 				Source:     "overload-test",

@@ -58,39 +58,32 @@ func TestRestore_FileSizeLimit(t *testing.T) {
 }
 
 func TestRestore_FileSizeLimitExceeded(t *testing.T) {
+	// Shrink the cap for this test so we can exercise the limit path without
+	// allocating a real 1GB buffer (which OOMs under -race on tight CI hosts).
+	orig := maxExtractFileSize
+	maxExtractFileSize = 64 * 1024 // 64 KB
+	t.Cleanup(func() { maxExtractFileSize = orig })
+
 	tmpDir := t.TempDir()
 	dest := filepath.Join(tmpDir, "large.bin")
 
-	// Create a tar entry that claims a very large size (larger than our limit)
+	// Create a tar entry that claims a size larger than our (shrunk) limit.
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 
-	// Write a header claiming a file larger than maxExtractFileSize
 	hdr := &tar.Header{
 		Name: "test/huge.bin",
 		Mode: 0644,
-		Size: maxExtractFileSize + 1024, // 1GB + 1KB
+		Size: maxExtractFileSize + 1024, // cap + 1KB
 	}
 	if err := tw.WriteHeader(hdr); err != nil {
 		t.Fatal(err)
 	}
 
-	// Write exactly maxExtractFileSize + 1 bytes of data to trigger the limit
-	// We can't write the full declared size in a test, but we write enough
-	// to exceed our cap.
-	chunk := bytes.Repeat([]byte("B"), 1024*1024) // 1MB chunks
-	written := int64(0)
-	// Write just over maxExtractFileSize
-	for written <= maxExtractFileSize {
-		n := int64(len(chunk))
-		if written+n > hdr.Size {
-			n = hdr.Size - written
-			chunk = chunk[:n]
-		}
-		if _, err := tw.Write(chunk); err != nil {
-			t.Fatal(err)
-		}
-		written += n
+	// Write just over maxExtractFileSize bytes of data to trigger the limit.
+	payload := bytes.Repeat([]byte("B"), int(hdr.Size))
+	if _, err := tw.Write(payload); err != nil {
+		t.Fatal(err)
 	}
 	tw.Close()
 

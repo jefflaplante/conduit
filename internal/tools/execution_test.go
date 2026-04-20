@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -123,6 +124,12 @@ func TestExecutionEngine_ExecuteSingle(t *testing.T) {
 func TestExecutionEngine_ExecuteParallel(t *testing.T) {
 	registry := NewMockRegistry()
 
+	// Track peak concurrency during the run. This is the real signal that the
+	// engine is running tools in parallel — relying on wall-clock elapsed time
+	// is too flaky under -race on loaded CI hardware.
+	var inFlight atomic.Int32
+	var peakInFlight atomic.Int32
+
 	// Add multiple tools
 	for i := 1; i <= 3; i++ {
 		tool := &MockTool{
@@ -130,7 +137,15 @@ func TestExecutionEngine_ExecuteParallel(t *testing.T) {
 			description: fmt.Sprintf("Test tool %d", i),
 			parameters:  map[string]interface{}{"type": "object"},
 			executeFunc: func(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-				// Simulate some work
+				cur := inFlight.Add(1)
+				defer inFlight.Add(-1)
+				for {
+					peak := peakInFlight.Load()
+					if cur <= peak || peakInFlight.CompareAndSwap(peak, cur) {
+						break
+					}
+				}
+				// Simulate some work so parallel scheduling has time to stack up.
 				time.Sleep(10 * time.Millisecond)
 				return &ToolResult{
 					Success: true,
@@ -149,9 +164,7 @@ func TestExecutionEngine_ExecuteParallel(t *testing.T) {
 		{ID: "3", Name: "tool_3", Args: map[string]interface{}{}},
 	}
 
-	start := time.Now()
 	results := engine.executeParallel(context.Background(), calls)
-	elapsed := time.Since(start)
 
 	if len(results) != 3 {
 		t.Fatalf("Expected 3 results, got: %d", len(results))
@@ -167,9 +180,10 @@ func TestExecutionEngine_ExecuteParallel(t *testing.T) {
 		}
 	}
 
-	// Should take less time than sequential execution (30ms) due to parallelism
-	if elapsed > 25*time.Millisecond {
-		t.Fatalf("Parallel execution took too long: %v", elapsed)
+	// Engine was configured with maxParallel=2, so we should see at least 2
+	// tools executing simultaneously at some point.
+	if got := peakInFlight.Load(); got < 2 {
+		t.Fatalf("executeParallel did not run tools in parallel: peak in-flight = %d, want >= 2", got)
 	}
 }
 

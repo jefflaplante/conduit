@@ -14,7 +14,10 @@ import (
 func setupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 
-	dbPath := filepath.Join(t.TempDir(), "test.db")
+	// Include a busy_timeout so the watcher's writes retry transient locks
+	// instead of failing with SQLITE_BUSY. Under -race, goroutine scheduling
+	// makes these collisions more common and otherwise surfaces as a flake.
+	dbPath := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("failed to open test db: %v", err)

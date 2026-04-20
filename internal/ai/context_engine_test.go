@@ -646,26 +646,35 @@ func TestRetrieveContext_SearchTimeout(t *testing.T) {
 // --- Cache eviction ---
 
 func TestCacheEviction_OnWrite(t *testing.T) {
+	// Use a TTL long enough to outlast the fill loop even under the race detector,
+	// so every fill entry is live while we load the cache. The explicit sleep below
+	// is what causes expiration — not the fill itself. A sub-ms TTL made this test
+	// flaky because entries started expiring mid-fill and prior evictions would
+	// leave a random final size.
+	const ttl = 100 * time.Millisecond
 	engine := NewContextEngine(
-		WithCacheTTL(1 * time.Millisecond), // Very short TTL
+		WithCacheTTL(ttl),
 	)
 
-	// Fill cache with many entries
+	// Fill cache with many entries. With len>100, each subsequent write triggers
+	// the expired-scan branch — but nothing should evict yet because every entry
+	// is still within TTL.
 	for i := 0; i < 150; i++ {
 		key := fmt.Sprintf("query-%d", i)
 		engine.putCached(key, &RoutingContext{Source: "test"})
 	}
 
-	// Wait for all entries to expire
-	time.Sleep(5 * time.Millisecond)
+	// Wait past the TTL so every filled entry is now expired.
+	time.Sleep(2 * ttl)
 
-	// Writing a new entry should trigger eviction of expired entries
+	// Writing a new entry should trigger eviction of all the expired entries,
+	// leaving only "new-query" behind.
 	engine.putCached("new-query", &RoutingContext{Source: "new"})
 
 	engine.cacheMu.RLock()
 	cacheSize := len(engine.cache)
 	engine.cacheMu.RUnlock()
 
-	// After eviction, only the new entry (and possibly a few not-yet-expired) should remain
-	assert.LessOrEqual(t, cacheSize, 10) // Most expired entries should be removed
+	// After eviction, only the new entry should remain.
+	assert.Equal(t, 1, cacheSize)
 }
