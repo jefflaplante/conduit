@@ -139,6 +139,48 @@ func TestValidateSemantic_AIAPIKeyOnly(t *testing.T) {
 	}
 }
 
+// TestValidateSemantic_AITemplateMode_ExpandedToEmpty documents the "neither
+// set" acceptance path that is the core of conduit-l4w0.
+//
+// config.Load uses os.ExpandEnv to expand ${ENV_VAR} placeholders.  When the
+// referenced variable is absent from the environment, os.ExpandEnv returns "".
+// So a template config like:
+//
+//	"api_key": "${ANTHROPIC_API_KEY}"
+//
+// becomes api_key="" after Load — indistinguishable from "no key configured".
+// ValidateSemantic must NOT reject this case; the operator is expected to
+// supply credentials at runtime (env export, secrets_file, etc.).  The first
+// failed AI call will surface a clear "no credentials" error at the right layer.
+func TestValidateSemantic_AITemplateMode_ExpandedToEmpty(t *testing.T) {
+	// Simulate what config.Load sees after os.ExpandEnv with an unset var:
+	// the placeholder collapses to "" — neither api_key nor oauth_token is set.
+	cfg := minimalValidConfig()
+	cfg.AI.Providers[0].APIKey = "" // post-expansion of "${ANTHROPIC_API_KEY}" when unset
+	cfg.AI.Providers[0].Auth = nil
+	if err := cfg.ValidateSemantic(); err != nil {
+		t.Errorf("template-mode provider (both credentials empty after env expansion) "+
+			"must be valid — credentials are supplied at runtime; got: %v", err)
+	}
+}
+
+// TestValidateSemantic_AITemplateMode_BothPlaceholdersRaw verifies that even
+// when both api_key AND oauth_token are raw placeholder strings (as they appear
+// in the Default() config before any env expansion), the validator does not
+// flag a "both set" conflict, because isUnexpandedPlaceholder treats them as
+// "not configured".
+func TestValidateSemantic_AITemplateMode_BothPlaceholdersRaw(t *testing.T) {
+	cfg := minimalValidConfig()
+	cfg.AI.Providers[0].APIKey = "${ANTHROPIC_API_KEY}"
+	cfg.AI.Providers[0].Auth = &AuthConfig{
+		Type:       "oauth",
+		OAuthToken: "${ANTHROPIC_OAUTH_TOKEN}",
+	}
+	if err := cfg.ValidateSemantic(); err != nil {
+		t.Errorf("both-unexpanded-placeholder config should not trigger 'both set' error; got: %v", err)
+	}
+}
+
 func TestValidateSemantic_NonAnthropicProviderNoKey(t *testing.T) {
 	// Non-anthropic providers are not subject to the credential check.
 	cfg := minimalValidConfig()
