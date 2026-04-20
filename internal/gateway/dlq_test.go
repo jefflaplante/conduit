@@ -26,9 +26,9 @@ func TestRecordIngestDrop_WritesDLQAndIncrementsMetric(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	gw := &Gateway{
-		logger:         logger,
-		sessions:       store,
-		gatewayMetrics: metrics,
+		logger:     logger,
+		sessions:   store,
+		monitoring: &MonitoringService{GatewayMetrics: metrics},
 	}
 
 	msg := &protocol.IncomingMessage{
@@ -102,9 +102,9 @@ func TestRecordWebSocketDrop_WritesDLQAndIncrementsMetric(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	gw := &Gateway{
-		logger:         logger,
-		sessions:       store,
-		gatewayMetrics: metrics,
+		logger:     logger,
+		sessions:   store,
+		monitoring: &MonitoringService{GatewayMetrics: metrics},
 	}
 
 	client := &Client{ID: "client-1", UserID: "user-7"}
@@ -148,10 +148,10 @@ func TestProcessMessages_DropsWhenSemaphoreFull(t *testing.T) {
 	sem <- struct{}{}
 
 	gw := &Gateway{
-		logger:         logger,
-		sessions:       store,
-		gatewayMetrics: metrics,
-		msgSemaphore:   sem,
+		logger:       logger,
+		sessions:     store,
+		monitoring:   &MonitoringService{GatewayMetrics: metrics},
+		msgSemaphore: sem,
 	}
 
 	msg := &protocol.IncomingMessage{

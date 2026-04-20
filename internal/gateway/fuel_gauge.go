@@ -109,8 +109,8 @@ func (g *Gateway) GetFuelGauge(topN int) FuelGauge {
 		}
 	}
 
-	if g.tokenWindow != nil {
-		gauge.TokenUsage = g.tokenWindow.Snapshot()
+	if g.monitoring != nil && g.monitoring.TokenWindow != nil {
+		gauge.TokenUsage = g.monitoring.TokenWindow.Snapshot()
 	} else {
 		gauge.TokenUsage = monitoring.TokenUsageSnapshot{TakenAt: now}
 	}

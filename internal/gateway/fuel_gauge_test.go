@@ -14,7 +14,7 @@ func TestFuelGaugeToMap_Shape(t *testing.T) {
 	gw, _ := newTestGatewayWithSessions(t)
 	tw := monitoring.NewTokenWindowTracker()
 	tw.Record(100, 50, 5, 2)
-	gw.tokenWindow = tw
+	gw.monitoring.TokenWindow = tw
 
 	m := gw.GetFuelGauge(0).ToMap()
 
@@ -66,7 +66,7 @@ func TestGetFuelGaugeMap_ViaInterface(t *testing.T) {
 	gw, _ := newTestGatewayWithSessions(t)
 	tw := monitoring.NewTokenWindowTracker()
 	tw.Record(200, 100, 0, 0)
-	gw.tokenWindow = tw
+	gw.monitoring.TokenWindow = tw
 
 	m := gw.GetFuelGaugeMap(0)
 	if m == nil {
@@ -123,7 +123,7 @@ func TestGetFuelGauge_ExposesTokenWindow(t *testing.T) {
 	tr := monitoring.NewTokenWindowTracker()
 	tr.Record(1000, 500, 10, 5)
 	tr.Record(250, 125, 0, 0)
-	gw.tokenWindow = tr
+	gw.monitoring.TokenWindow = tr
 
 	gauge := gw.GetFuelGauge(0)
 	if !gauge.HasTokenTraffic() {
@@ -168,7 +168,7 @@ func TestGetFuelGauge_IntegratedWithAIRouterObserver(t *testing.T) {
 	// shows up in the fuel gauge.
 	gw, _ := newTestGatewayWithSessions(t)
 	tw := monitoring.NewTokenWindowTracker()
-	gw.tokenWindow = tw
+	gw.monitoring.TokenWindow = tw
 
 	// Feed through the observer path that ai.UsageTracker uses. Arguments
 	// mirror the RecordUsage signature: inputTokens, outputTokens,

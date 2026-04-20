@@ -56,12 +56,14 @@ func createTestGatewayWithAuth(t *testing.T) (*Gateway, *auth.TokenStorage) {
 	testLogger := logging.New("info", "text")
 
 	gw := &Gateway{
-		config:              cfg,
-		logger:              testLogger,
-		sessions:            sessionStore,
-		gatewayMetrics:      gatewayMetrics,
-		metricsCollector:    metricsCollector,
-		eventStore:          eventStore,
+		config:   cfg,
+		logger:   testLogger,
+		sessions: sessionStore,
+		monitoring: &MonitoringService{
+			GatewayMetrics:   gatewayMetrics,
+			MetricsCollector: metricsCollector,
+			EventStore:       eventStore,
+		},
 		rateLimitMiddleware: rateLimitMiddleware,
 		authStorage:         authStorage,
 		clients:             make(map[string]*Client),

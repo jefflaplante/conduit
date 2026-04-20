@@ -16,9 +16,11 @@ func TestInitializeAgentHeartbeat(t *testing.T) {
 	mockHBI := newMockHeartbeatIntegration(mockSched)
 	// Create a mock gateway with minimal setup for testing
 	gateway := &Gateway{
-		scheduler:            mockSched,
-		metricsCollector:     newMockMetricsCollector(),
-		heartbeatIntegration: mockHBI,
+		scheduler: mockSched,
+		monitoring: &MonitoringService{
+			MetricsCollector:     newMockMetricsCollector(),
+			HeartbeatIntegration: mockHBI,
+		},
 	}
 
 	tests := []struct {
@@ -76,7 +78,7 @@ func TestInitializeAgentHeartbeat(t *testing.T) {
 			mockSched := newMockScheduler()
 			mockHBI := newMockHeartbeatIntegration(mockSched)
 			gateway.scheduler = mockSched
-			gateway.heartbeatIntegration = mockHBI
+			gateway.monitoring.HeartbeatIntegration = mockHBI
 
 			err := gateway.initializeAgentHeartbeat(tt.config)
 
@@ -131,8 +133,10 @@ func TestUpdateHeartbeatJobMetrics(t *testing.T) {
 	}
 
 	gateway := &Gateway{
-		scheduler:        mockSched,
-		metricsCollector: mockMetrics,
+		scheduler: mockSched,
+		monitoring: &MonitoringService{
+			MetricsCollector: mockMetrics,
+		},
 	}
 
 	gateway.updateHeartbeatJobMetrics()
@@ -357,9 +361,11 @@ func TestHeartbeatScheduleFormat(t *testing.T) {
 			mockSched := newMockScheduler()
 			mockHBI := newMockHeartbeatIntegration(mockSched)
 			gateway := &Gateway{
-				scheduler:            mockSched,
-				metricsCollector:     newMockMetricsCollector(),
-				heartbeatIntegration: mockHBI,
+				scheduler: mockSched,
+				monitoring: &MonitoringService{
+					MetricsCollector:     newMockMetricsCollector(),
+					HeartbeatIntegration: mockHBI,
+				},
 			}
 
 			cfg := &config.Config{
@@ -447,9 +453,11 @@ func TestHeartbeatTargetConfiguration(t *testing.T) {
 			mockSched := newMockScheduler()
 			mockHBI := newMockHeartbeatIntegration(mockSched)
 			gateway := &Gateway{
-				scheduler:            mockSched,
-				metricsCollector:     newMockMetricsCollector(),
-				heartbeatIntegration: mockHBI,
+				scheduler: mockSched,
+				monitoring: &MonitoringService{
+					MetricsCollector:     newMockMetricsCollector(),
+					HeartbeatIntegration: mockHBI,
+				},
 			}
 
 			cfg := &config.Config{
