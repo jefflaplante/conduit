@@ -47,6 +47,7 @@ type PruneResult struct {
 	Orphaned           []string
 	ReflectionsGroomed int
 	ExpiredDeleted     int // Entries deleted because their TTL expired.
+	ColdEvicted        int `json:"cold_evicted,omitempty"`
 }
 
 type ArchiveRecord struct {
@@ -155,6 +156,7 @@ func (r *REMReport) WriteLog(logPath string) error {
 		sb.WriteString("## Phase 3: Pruning\n\n")
 		sb.WriteString(fmt.Sprintf("- Archived: %d entries\n", len(r.Pruning.Archived)))
 		sb.WriteString(fmt.Sprintf("- Orphaned: %d entries\n", len(r.Pruning.Orphaned)))
+		sb.WriteString(fmt.Sprintf("- Cold-evicted (unused, aged): %d entries\n", r.Pruning.ColdEvicted))
 		sb.WriteString(fmt.Sprintf("- Reflections groomed: %d\n\n", r.Pruning.ReflectionsGroomed))
 
 		if len(r.Pruning.Archived) > 0 {

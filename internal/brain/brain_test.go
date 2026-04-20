@@ -992,3 +992,90 @@ func TestStore_NoTTL_Unchanged(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Nil(t, got.ExpiresAt, "entry stored without TTL must have nil ExpiresAt")
 }
+
+// TestRecallBumpsAccessCountLTM verifies that Recall bumps access_count for LTM entries
+// it returns — so heat-tracking captures read-by-search access, not just direct Get.
+func TestRecallBumpsAccessCountLTM(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	require.NoError(t, b.Store(ctx, "recall.target", "alpha beta gamma", TierLongTerm, "test"))
+
+	// Initial Store sets access_count = 1.
+	var before int
+	require.NoError(t, b.db.QueryRow(
+		`SELECT access_count FROM brain_ltm WHERE key = ?`, "recall.target").Scan(&before))
+	assert.GreaterOrEqual(t, before, 1)
+
+	// Recall should bump it.
+	results, err := b.Recall(ctx, "alpha", 10)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(results), 1)
+
+	var after int
+	require.NoError(t, b.db.QueryRow(
+		`SELECT access_count FROM brain_ltm WHERE key = ?`, "recall.target").Scan(&after))
+	assert.Greater(t, after, before, "access_count should increase after Recall hit")
+}
+
+// TestRecallBumpsAccessCountWM verifies that Recall bumps AccessCount on matched WM entries.
+func TestRecallBumpsAccessCountWM(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	require.NoError(t, b.Store(ctx, "wm.target", "alpha beta", TierWorking, "test"))
+
+	// Initial WM AccessCount is 1.
+	entry, err := b.Get(ctx, "wm.target")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	before := entry.AccessCount
+
+	// Recall hit bumps it.
+	_, err = b.Recall(ctx, "beta", 10)
+	require.NoError(t, err)
+
+	// Fetch via WorkingMemoryEntries to avoid Get's own bump.
+	entries := b.WorkingMemoryEntries(ctx)
+	var found *Entry
+	for _, e := range entries {
+		if e.Key == "wm.target" {
+			found = e
+			break
+		}
+	}
+	require.NotNil(t, found)
+	assert.Greater(t, found.AccessCount, before, "WM AccessCount should increase after Recall hit")
+}
+
+// TestStatusColdestKeys verifies that Status returns the bottom-N LTM keys by access_count.
+func TestStatusColdestKeys(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	// Seed 6 LTM entries with distinct access_counts so ordering is unambiguous.
+	// Directly UPDATE access_count to bypass the Store/Get upsert logic.
+	for i := 0; i < 6; i++ {
+		key := fmt.Sprintf("ltm.key%d", i)
+		require.NoError(t, b.Store(ctx, key, fmt.Sprintf("v%d", i), TierLongTerm, "test"))
+		_, err := b.db.Exec(`UPDATE brain_ltm SET access_count = ? WHERE key = ?`, i*10, key)
+		require.NoError(t, err)
+	}
+
+	status, err := b.Status(ctx)
+	require.NoError(t, err)
+	require.Len(t, status.ColdestKeys, 5, "ColdestKeys should return up to 5 entries")
+	// Bottom-5 by ascending access_count: ltm.key0 (0), ltm.key1 (10), ..., ltm.key4 (40).
+	assert.Equal(t, "ltm.key0", status.ColdestKeys[0])
+	assert.Equal(t, "ltm.key1", status.ColdestKeys[1])
+	// ltm.key5 has the highest access_count — should NOT be in ColdestKeys.
+	for _, k := range status.ColdestKeys {
+		assert.NotEqual(t, "ltm.key5", k)
+	}
+}
+
+// TestHeatPromotionThresholdOption verifies the option sets the threshold.
+func TestHeatPromotionThresholdOption(t *testing.T) {
+	b := newTestBrain(t, WithHeatPromotionThreshold(7))
+	assert.Equal(t, 7, b.HeatPromotionThreshold())
+}

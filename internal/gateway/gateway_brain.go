@@ -113,7 +113,8 @@ func (a *brainAdapter) Status(ctx context.Context) (*types.BrainStatus, error) {
 	return &types.BrainStatus{
 		LTMEntries: s.LTMEntries, WMEntries: s.WMEntries,
 		ScratchDepth: s.ScratchDepth, AvgSalience: s.AvgSalience,
-		HottestKeys: s.HottestKeys, ExpiringSoon: s.ExpiringSoon,
+		HottestKeys: s.HottestKeys, ColdestKeys: s.ColdestKeys,
+		ExpiringSoon: s.ExpiringSoon,
 	}, nil
 }
 
@@ -219,8 +220,10 @@ func convertREMReport(r *rem.REMReport) *types.REMCycleReport {
 
 	if r.Pruning != nil {
 		result.Pruning = map[string]interface{}{
-			"archived": r.Pruning.Archived,
-			"orphaned": r.Pruning.Orphaned,
+			"archived":            r.Pruning.Archived,
+			"orphaned":            r.Pruning.Orphaned,
+			"cold_evicted":        r.Pruning.ColdEvicted,
+			"reflections_groomed": r.Pruning.ReflectionsGroomed,
 		}
 	}
 
