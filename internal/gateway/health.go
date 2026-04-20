@@ -55,8 +55,8 @@ type DiagnosticEvent struct {
 // Enhanced health check endpoint with more detailed information
 func (g *Gateway) handleHealthEnhanced(w http.ResponseWriter, r *http.Request) {
 	// Always update system metrics first
-	if g.gatewayMetrics != nil {
-		g.gatewayMetrics.UpdateSystemMetrics()
+	if g.monitoring.GatewayMetrics != nil {
+		g.monitoring.GatewayMetrics.UpdateSystemMetrics()
 	}
 
 	uptime := "unknown"
@@ -65,12 +65,12 @@ func (g *Gateway) handleHealthEnhanced(w http.ResponseWriter, r *http.Request) {
 
 	if g.shutdownMgr != nil && g.shutdownMgr.IsDraining() {
 		status = "draining"
-	} else if g.gatewayMetrics != nil {
-		uptime = g.gatewayMetrics.GetUptime().String()
-		if g.gatewayMetrics.Version != "" {
-			versionInfo = g.gatewayMetrics.Version
+	} else if g.monitoring.GatewayMetrics != nil {
+		uptime = g.monitoring.GatewayMetrics.GetUptime().String()
+		if g.monitoring.GatewayMetrics.Version != "" {
+			versionInfo = g.monitoring.GatewayMetrics.Version
 		}
-		if !g.gatewayMetrics.IsHealthy() {
+		if !g.monitoring.GatewayMetrics.IsHealthy() {
 			status = "degraded"
 		}
 	}
@@ -107,17 +107,17 @@ func (g *Gateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	if g.metricsCollector != nil {
+	if g.monitoring.MetricsCollector != nil {
 		// Use the collector to gather fresh metrics
-		if _, err := g.metricsCollector.CollectMetrics(ctx); err != nil {
+		if _, err := g.monitoring.MetricsCollector.CollectMetrics(ctx); err != nil {
 			log.Printf("[Metrics] Error collecting metrics: %v", err)
 		}
 	}
 
 	// Get the current metrics snapshot
 	var metrics *monitoring.MetricsSnapshot
-	if g.gatewayMetrics != nil {
-		snapshot := g.gatewayMetrics.Snapshot()
+	if g.monitoring.GatewayMetrics != nil {
+		snapshot := g.monitoring.GatewayMetrics.Snapshot()
 		metrics = &snapshot
 	} else {
 		// Fallback to basic metrics
@@ -143,8 +143,8 @@ func (g *Gateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	// Check database health
 	response.Database.Connected = true
-	if g.metricsCollector != nil {
-		if err := g.metricsCollector.ValidateDatabase(ctx); err != nil {
+	if g.monitoring.MetricsCollector != nil {
+		if err := g.monitoring.MetricsCollector.ValidateDatabase(ctx); err != nil {
 			response.Database.Connected = false
 			response.Database.Error = "database unavailable"
 			log.Printf("[Metrics] Database validation failed: %v", err)
@@ -152,8 +152,8 @@ func (g *Gateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get heartbeat metrics
-	if g.metricsCollector != nil {
-		heartbeatMetrics := g.metricsCollector.GetHeartbeatMetrics()
+	if g.monitoring.MetricsCollector != nil {
+		heartbeatMetrics := g.monitoring.MetricsCollector.GetHeartbeatMetrics()
 		response.Heartbeat.TotalJobs = heartbeatMetrics.TotalJobs
 		response.Heartbeat.EnabledJobs = heartbeatMetrics.EnabledJobs
 		response.Heartbeat.LastExecution = heartbeatMetrics.LastExecution
@@ -163,9 +163,9 @@ func (g *Gateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get last activity information
-	if g.metricsCollector != nil {
-		response.LastActivity = g.metricsCollector.GetLastActivityTime()
-		response.IsIdle = g.metricsCollector.IsIdle(5 * time.Minute)
+	if g.monitoring.MetricsCollector != nil {
+		response.LastActivity = g.monitoring.MetricsCollector.GetLastActivityTime()
+		response.IsIdle = g.monitoring.MetricsCollector.IsIdle(5 * time.Minute)
 	} else {
 		response.LastActivity = time.Now()
 		response.IsIdle = false
@@ -237,8 +237,8 @@ func (g *Gateway) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	var events []*monitoring.HeartbeatEvent
 	var err error
 
-	if g.eventStore != nil {
-		events, err = g.eventStore.Query(filter)
+	if g.monitoring.EventStore != nil {
+		events, err = g.monitoring.EventStore.Query(filter)
 		if err != nil {
 			log.Printf("[Diagnostics] Error querying events: %v", err)
 			http.Error(w, "Error querying events", http.StatusInternalServerError)
@@ -267,9 +267,9 @@ func (g *Gateway) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add current system state to response
-	if g.gatewayMetrics != nil {
-		response.SystemInfo["status"] = g.gatewayMetrics.Status
-		response.SystemInfo["uptime_seconds"] = g.gatewayMetrics.UptimeSeconds
+	if g.monitoring.GatewayMetrics != nil {
+		response.SystemInfo["status"] = g.monitoring.GatewayMetrics.Status
+		response.SystemInfo["uptime_seconds"] = g.monitoring.GatewayMetrics.UptimeSeconds
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -293,15 +293,15 @@ func (g *Gateway) handlePrometheusMetrics(w http.ResponseWriter, r *http.Request
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	if g.metricsCollector != nil {
-		if _, err := g.metricsCollector.CollectMetrics(ctx); err != nil {
+	if g.monitoring.MetricsCollector != nil {
+		if _, err := g.monitoring.MetricsCollector.CollectMetrics(ctx); err != nil {
 			log.Printf("[Prometheus] Error collecting metrics: %v", err)
 		}
 	}
 
 	var metrics *monitoring.MetricsSnapshot
-	if g.gatewayMetrics != nil {
-		snapshot := g.gatewayMetrics.Snapshot()
+	if g.monitoring.GatewayMetrics != nil {
+		snapshot := g.monitoring.GatewayMetrics.Snapshot()
 		metrics = &snapshot
 	} else {
 		fallback := monitoring.NewGatewayMetrics()

@@ -30,7 +30,6 @@ import (
 	"conduit/internal/logging"
 	"conduit/internal/mcp"
 	"conduit/internal/middleware"
-	"conduit/internal/monitoring"
 	"conduit/internal/mqtt"
 	"conduit/internal/reflection"
 	"conduit/internal/scheduler"
@@ -102,20 +101,10 @@ type Gateway struct {
 	// Rate limiting
 	rateLimitMiddleware *middleware.RateLimitMiddleware
 
-	// Fuel gauge: rolling-window AI token usage tracker that shadows every
-	// call made through r.ai. Fed via ai.UsageTracker's observer hook.
-	tokenWindow *monitoring.TokenWindowTracker
-
-	// Monitoring and heartbeat
-	gatewayMetrics       *monitoring.GatewayMetrics
-	metricsCollector     monitoring.MetricsCollectorInterface
-	heartbeatService     *monitoring.HeartbeatService
-	heartbeatIntegration heartbeat.HeartbeatIntegrationInterface
-	eventStore           monitoring.EventStore
-
-	// Alert audit trail (conduit-1rp3): registry is wired with the auditor at
-	// startup so every delivery attempt is persisted to alert_history.
-	deliveryRegistry *heartbeat.DeliveryRegistry
+	// Monitoring: metrics, heartbeat, event store, token-window fuel gauge,
+	// and the alert delivery registry/audit trail. See MonitoringService
+	// (monitoring_service.go) for the full surface.
+	monitoring *MonitoringService
 
 	// WebSocket handling
 	upgrader    websocket.Upgrader
@@ -488,38 +477,12 @@ func New(cfg *config.Config) (*Gateway, error) {
 		},
 	})
 
-	// Initialize monitoring system
-	gatewayMetrics := monitoring.NewGatewayMetrics()
-	gatewayMetrics.SetVersion(version.Info())
-
-	// Create rolling-window token usage tracker for the fuel gauge and wire
-	// it up as an observer on the AI router's usage tracker so every provider
-	// response is shadowed into the hour/day window counters.
-	tokenWindow := monitoring.NewTokenWindowTracker()
-	if ut := aiRouter.GetUsageTracker(); ut != nil {
-		ut.SetObserver(tokenWindow)
-	}
-
-	// Create event store for heartbeat events
-	eventStore := monitoring.NewMemoryEventStore(1000)
-
-	// Create metrics collector
-	metricsCollector := monitoring.NewMetricsCollector(monitoring.CollectorDependencies{
-		SessionStore:   sessionStore,
-		GatewayMetrics: gatewayMetrics,
-	})
-
-	// Create heartbeat service
-	var heartbeatService *monitoring.HeartbeatService
-	if cfg.Heartbeat.Enabled {
-		heartbeatService = monitoring.NewHeartbeatService(monitoring.HeartbeatDependencies{
-			Config:     cfg.Heartbeat,
-			Collector:  metricsCollector,
-			EventStore: eventStore,
-		})
-		logger.Info("heartbeat service configured", "interval_seconds", cfg.Heartbeat.IntervalSeconds)
-	} else {
-		logger.Debug("heartbeat service disabled in configuration")
+	// Initialize monitoring subsystem (metrics, heartbeat, event store,
+	// token-window fuel gauge). Heartbeat integration and delivery registry
+	// are wired in later once scheduler and channel sender exist.
+	monitoringSvc, err := NewMonitoringService(cfg, logger, sessionStore, aiRouter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create monitoring service: %w", err)
 	}
 
 	gw := &Gateway{
@@ -537,11 +500,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		authMiddleware:      authMiddleware,
 		wsAuthenticator:     wsAuthenticator,
 		rateLimitMiddleware: rateLimitMiddleware,
-		tokenWindow:         tokenWindow,
-		gatewayMetrics:      gatewayMetrics,
-		metricsCollector:    metricsCollector,
-		heartbeatService:    heartbeatService,
-		eventStore:          eventStore,
+		monitoring:          monitoringSvc,
 		clients:             make(map[string]*Client),
 		activeRequests:      make(map[string]context.CancelFunc),
 		msgSemaphore:        make(chan struct{}, MaxConcurrentRequests),
@@ -926,18 +885,17 @@ func New(cfg *config.Config) (*Gateway, error) {
 	gw.scheduler = scheduler.New(workspaceDir, gw.executeScheduledJob)
 
 	// Initialize heartbeat integration
-	hbIntegration := heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, metricsCollector, cfg.AgentHeartbeat.Model, cfg.AgentHeartbeat.TimeoutSeconds)
+	hbIntegration := heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, gw.monitoring.MetricsCollector, cfg.AgentHeartbeat.Model, cfg.AgentHeartbeat.TimeoutSeconds)
 	if gw.brainService != nil {
 		hbIntegration.SetBrainWriter(newHeartbeatBrainWriter(gw.brainService))
 		logger.Info("heartbeat Brain writer enabled for sense.alerts.* namespace")
 	}
-	gw.heartbeatIntegration = hbIntegration
+	gw.monitoring.WireHeartbeatIntegration(hbIntegration)
 
 	// Wire alert auditor (conduit-1rp3): create a DeliveryRegistry and attach
 	// an AlertAuditor backed by the same DB so every delivery attempt is
 	// persisted to the alert_history table (migration #8).
-	gw.deliveryRegistry = heartbeat.NewDeliveryRegistry()
-	gw.deliveryRegistry.SetAuditor(heartbeat.NewAlertAuditor(sessionStore.DB()))
+	gw.monitoring.WireDeliveryRegistry(sessionStore.DB())
 	logger.Info("alert auditor wired to delivery registry")
 
 	// NOTE: initializeAgentHeartbeat is called AFTER scheduler.Start() in the Run() method
@@ -975,7 +933,7 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 	// Check if this is a heartbeat job
 	if heartbeat.IsHeartbeatJob(job) {
 		g.logger.Debug("routing to heartbeat execution framework", "job_id", job.ID)
-		return g.heartbeatIntegration.ExecuteHeartbeat(ctx, job)
+		return g.monitoring.HeartbeatIntegration.ExecuteHeartbeat(ctx, job)
 	}
 
 	// Handle regular cron jobs (existing logic)
@@ -1229,11 +1187,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start heartbeat service
-	if g.heartbeatService != nil {
-		if err := g.heartbeatService.Start(ctx); err != nil {
-			g.logger.Warn("failed to start heartbeat service", "error", err)
-		}
+	// Start monitoring subsystem (heartbeat service + any future lifecycle).
+	if err := g.monitoring.Start(ctx); err != nil {
+		g.logger.Warn("failed to start monitoring service", "error", err)
 	}
 
 	// Start session state cleanup loop (prevents memory leak from abandoned sessions)
@@ -1375,12 +1331,12 @@ func (g *Gateway) Start(ctx context.Context) error {
 					Sessions:     g.sessions,
 					AI:           g.ai,
 					Tools:        g.tools,
-					Metrics:      g.metricsCollector,
+					Metrics:      g.monitoring.MetricsCollector,
 					ModelAliases: g.getModelAliases(),
 					AgentName:    g.config.Agent.Name,
 					Version:      version.Info(),
 					GitCommit:    version.GitCommit,
-					UptimeFunc:   func() int64 { return int64(g.gatewayMetrics.GetUptime().Seconds()) },
+					UptimeFunc:   func() int64 { return int64(g.monitoring.GatewayMetrics.GetUptime().Seconds()) },
 					ToolCount:    toolCount,
 					SkillCount:   skillCount,
 				})
@@ -1439,11 +1395,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 		g.sshServer.Close()
 	}
 
-	// Stop heartbeat service
-	if g.heartbeatService != nil {
-		if err := g.heartbeatService.Stop(); err != nil {
-			g.logger.Error("error stopping heartbeat service", "error", err)
-		}
+	// Stop monitoring subsystem (heartbeat service + any future lifecycle).
+	if err := g.monitoring.Stop(); err != nil {
+		g.logger.Error("error stopping monitoring service", "error", err)
 	}
 
 	// Stop scheduler
@@ -1607,8 +1561,8 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	g.clientMu.Unlock()
 
 	// Update metrics
-	if g.metricsCollector != nil {
-		g.metricsCollector.UpdateWebSocketConnections(clientCount)
+	if g.monitoring.MetricsCollector != nil {
+		g.monitoring.MetricsCollector.UpdateWebSocketConnections(clientCount)
 	}
 
 	g.logger.Info("client connected", "client_id", client.ID, "auth", authResult.AuthInfo.ClientName)
@@ -1630,7 +1584,7 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		AssistantName: g.config.Agent.Name,
 		Version:       version.Info(),
 		GitCommit:     version.GitCommit,
-		UptimeSeconds: int64(g.gatewayMetrics.GetUptime().Seconds()),
+		UptimeSeconds: int64(g.monitoring.GatewayMetrics.GetUptime().Seconds()),
 		ModelAliases:  g.getModelAliases(),
 		ToolCount:     toolCount,
 		SkillCount:    skillCount,
@@ -1725,8 +1679,8 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 		g.wsConnCount.Add(-1)
 
 		// Update metrics
-		if g.metricsCollector != nil {
-			g.metricsCollector.UpdateWebSocketConnections(clientCount)
+		if g.monitoring.MetricsCollector != nil {
+			g.monitoring.MetricsCollector.UpdateWebSocketConnections(clientCount)
 		}
 
 		client.Conn.Close()
@@ -1887,8 +1841,8 @@ func (g *Gateway) recordIngestDrop(msg *protocol.IncomingMessage, reason string)
 	g.logger.Warn("request backpressure: dropping channel message",
 		"channel_id", msg.ChannelID, "reason", reason)
 
-	if g.gatewayMetrics != nil {
-		g.gatewayMetrics.IncrementIngestDrop(msg.ChannelID)
+	if g.monitoring != nil && g.monitoring.GatewayMetrics != nil {
+		g.monitoring.GatewayMetrics.IncrementIngestDrop(msg.ChannelID)
 	}
 	if g.sessions != nil {
 		if err := writeIngestDLQ(g.sessions.DB(), msg, reason); err != nil {
@@ -1905,8 +1859,8 @@ func (g *Gateway) recordWebSocketDrop(client *Client, msg *protocol.ChatMessage,
 	g.logger.Warn("request backpressure: dropping chat message",
 		"client_id", client.ID, "reason", reason)
 
-	if g.gatewayMetrics != nil {
-		g.gatewayMetrics.IncrementIngestDrop("websocket")
+	if g.monitoring != nil && g.monitoring.GatewayMetrics != nil {
+		g.monitoring.GatewayMetrics.IncrementIngestDrop("websocket")
 	}
 	if g.sessions != nil {
 		if err := writeClientChatDLQ(g.sessions.DB(), client.ID, client.UserID, msg.SessionKey, msg.Text, reason); err != nil {
@@ -1928,8 +1882,8 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		"request_id", reqID)
 
 	// Track activity in metrics collector
-	if g.metricsCollector != nil {
-		g.metricsCollector.MarkActivity()
+	if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
+		g.monitoring.MetricsCollector.MarkActivity()
 	}
 
 	// Get or create session
@@ -2033,8 +1987,8 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		g.activeRequestsMu.Unlock()
 
 		// Update metrics
-		if g.metricsCollector != nil {
-			g.metricsCollector.UpdateActiveRequests(requestCount)
+		if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
+			g.monitoring.MetricsCollector.UpdateActiveRequests(requestCount)
 		}
 
 		// Ensure we clean up when done
@@ -2045,8 +1999,8 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 			g.activeRequestsMu.Unlock()
 
 			// Update metrics on cleanup
-			if g.metricsCollector != nil {
-				g.metricsCollector.UpdateActiveRequests(finalRequestCount)
+			if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
+				g.monitoring.MetricsCollector.UpdateActiveRequests(finalRequestCount)
 			}
 		}()
 

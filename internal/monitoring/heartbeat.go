@@ -10,7 +10,9 @@ import (
 	"conduit/internal/config"
 )
 
-// MetricsCollectorInterface defines the methods needed by HeartbeatService and Gateway
+// MetricsCollectorInterface defines the methods needed by HeartbeatService and Gateway.
+// Includes heartbeat outcome recording so callers can pass a single interface value
+// to both the heartbeat service and the heartbeat execution integration layer.
 type MetricsCollectorInterface interface {
 	IsIdle(duration time.Duration) bool
 	MarkActivity()
@@ -23,6 +25,8 @@ type MetricsCollectorInterface interface {
 	UpdateQueueDepth(depth int)
 	UpdateHeartbeatJobs(total, enabled int)
 	GetHeartbeatMetrics() HeartbeatMetrics
+	MarkHeartbeatSuccess()
+	MarkHeartbeatError()
 }
 
 // HeartbeatService manages the background heartbeat goroutine

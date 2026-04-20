@@ -65,7 +65,7 @@ func createTestGatewayForIntegration(t *testing.T) *Gateway {
 	}
 
 	for _, event := range events {
-		gw.eventStore.Store(event)
+		gw.monitoring.EventStore.Store(event)
 	}
 
 	return gw
@@ -73,25 +73,25 @@ func createTestGatewayForIntegration(t *testing.T) *Gateway {
 
 func setupTestData(gw *Gateway) {
 	// Populate metrics with realistic test data
-	gw.gatewayMetrics.UpdateSessionCount(25, 10, 5, 10, 100)
-	gw.gatewayMetrics.UpdateQueueMetrics(15, 8)
-	gw.gatewayMetrics.UpdateWebhookMetrics(12, 10)
+	gw.monitoring.GatewayMetrics.UpdateSessionCount(25, 10, 5, 10, 100)
+	gw.monitoring.GatewayMetrics.UpdateQueueMetrics(15, 8)
+	gw.monitoring.GatewayMetrics.UpdateWebhookMetrics(12, 10)
 
 	// Increment counters
 	for i := 0; i < 50; i++ {
-		gw.gatewayMetrics.IncrementCompleted()
+		gw.monitoring.GatewayMetrics.IncrementCompleted()
 	}
 	for i := 0; i < 5; i++ {
-		gw.gatewayMetrics.IncrementFailed()
+		gw.monitoring.GatewayMetrics.IncrementFailed()
 	}
 
 	// Update system metrics
-	gw.gatewayMetrics.UpdateSystemMetrics()
+	gw.monitoring.GatewayMetrics.UpdateSystemMetrics()
 
 	// Mark activity in collector
-	gw.metricsCollector.MarkActivity()
-	gw.metricsCollector.UpdateWebSocketConnections(12)
-	gw.metricsCollector.UpdateActiveRequests(8)
+	gw.monitoring.MetricsCollector.MarkActivity()
+	gw.monitoring.MetricsCollector.UpdateWebSocketConnections(12)
+	gw.monitoring.MetricsCollector.UpdateActiveRequests(8)
 }
 
 func createTestServer(gw *Gateway) *httptest.Server {
