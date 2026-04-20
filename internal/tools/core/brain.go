@@ -61,7 +61,7 @@ Actions:
 - peek: View the top value without removing it
 - promote: Move a working-memory key to long-term storage
 - consolidate: Sweep working memory — auto-promote high-salience keys, evict stale ones
-- status: Report entry counts, scratchpad depth, and hottest keys
+- status: Report entry counts, scratchpad depth, and both the hottest keys (by salience) and the coldest keys (by access_count)
 - rem_cycle: Run REM sleep consolidation phases (triage, consolidate, prune, integrate, groom)
 
 Auto-extraction from files:
@@ -576,7 +576,7 @@ func (t *BrainTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *
 				Args: map[string]interface{}{
 					"action": "status",
 				},
-				Expected: "Returns entry counts and hottest keys",
+				Expected: "Returns entry counts, hottest keys, and coldest keys",
 			},
 		}
 	}

@@ -47,7 +47,9 @@ func (r *REMCycle) Consolidate(ctx context.Context, dryRun bool) (*Consolidation
 	return result, nil
 }
 
-// promoteHighSalienceEntries promotes WM entries with high salience to LTM
+// promoteHighSalienceEntries promotes WM entries with high salience to LTM.
+// Also promotes entries with AccessCount >= HeatPromotionThreshold regardless of salience,
+// so frequently-used keys get persisted even if the salience formula under-values them.
 func (r *REMCycle) promoteHighSalienceEntries(ctx context.Context, result *ConsolidationResult, dryRun bool) error {
 	entries := r.brain.WorkingMemoryEntries(ctx)
 	if len(entries) == 0 {
@@ -59,16 +61,29 @@ func (r *REMCycle) promoteHighSalienceEntries(ctx context.Context, result *Conso
 		threshold = 0.6
 	}
 
+	heatThreshold := r.brain.HeatPromotionThreshold()
+	if heatThreshold <= 0 {
+		heatThreshold = 3
+	}
+
+	promoted := make(map[string]bool)
 	for _, entry := range entries {
-		if entry.Salience >= threshold {
-			if !dryRun {
-				if err := r.brain.Promote(ctx, entry.Key); err != nil {
-					// Entry may have been removed between snapshot and promote, skip
-					continue
-				}
-			}
-			result.Promoted = append(result.Promoted, entry.Key)
+		salienceHit := entry.Salience >= threshold
+		heatHit := entry.AccessCount >= heatThreshold
+		if !salienceHit && !heatHit {
+			continue
 		}
+		if promoted[entry.Key] {
+			continue
+		}
+		if !dryRun {
+			if err := r.brain.Promote(ctx, entry.Key); err != nil {
+				// Entry may have been removed between snapshot and promote, skip
+				continue
+			}
+		}
+		result.Promoted = append(result.Promoted, entry.Key)
+		promoted[entry.Key] = true
 	}
 
 	return nil

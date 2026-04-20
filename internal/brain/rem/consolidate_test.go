@@ -2,10 +2,13 @@ package rem
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"conduit/internal/brain"
+	"conduit/internal/database"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -302,4 +305,57 @@ func TestConsolidate_PrunesExpiredBeforePromotion(t *testing.T) {
 	// Surviving entry remains.
 	require.NoError(t, rem.db.QueryRow("SELECT COUNT(*) FROM brain_ltm WHERE key = 'keep.ltm'").Scan(&cnt))
 	assert.Equal(t, 1, cnt)
+}
+
+// TestConsolidate_HeatBasedPromotion proves that an entry with AccessCount >= heat
+// threshold is promoted to LTM even when its salience is below the consolidate threshold.
+func TestConsolidate_HeatBasedPromotion(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "brain.db")
+
+	// Build a Brain with very low heat threshold + high recency decay + zero weights
+	// so salience stays well below the consolidate threshold.
+	b, err := brain.New(dbPath,
+		brain.WithHeatPromotionThreshold(3),
+		brain.WithAccessWeight(0.0),
+		brain.WithRecencyWeight(0.0),
+		brain.WithTierWeight(0.0),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { b.Close() })
+
+	db, err := sql.Open("sqlite", database.BuildDSN(dbPath))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	config := REMConfig{
+		PruneAgeDays:         30,
+		SalienceDecayRate:    0.1,
+		ConsolidateThreshold: 0.6, // high salience bar
+		MaxLTMEntries:        10000,
+		WorkspaceDir:         tmpDir,
+	}
+	r := NewREMCycle(b, db, config)
+
+	ctx := brain.WithUserID(context.Background(), "heatuser")
+
+	// Seed WM with a low-salience entry that nonetheless has been accessed often.
+	require.NoError(t, b.Store(ctx, "hot.by.count", "fact", brain.TierWorking, "tool"))
+	for i := 0; i < 5; i++ {
+		_, _ = b.Get(ctx, "hot.by.count")
+	}
+
+	// Confirm salience is below the consolidate threshold but AccessCount >= heat threshold.
+	entry, err := b.Get(ctx, "hot.by.count")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Less(t, entry.Salience, config.ConsolidateThreshold,
+		"test precondition: salience must be below consolidate threshold")
+	assert.GreaterOrEqual(t, entry.AccessCount, 3, "test precondition: AccessCount must meet heat threshold")
+
+	result, err := r.Consolidate(ctx, false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Contains(t, result.Promoted, "hot.by.count",
+		"entry with AccessCount >= heat threshold should be promoted despite low salience")
 }

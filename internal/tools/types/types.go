@@ -221,12 +221,13 @@ type BrainEntry struct {
 
 // BrainStatus reports the current state of the brain service.
 type BrainStatus struct {
-	LTMEntries    int      `json:"ltm_entries"`
-	WMEntries     int      `json:"wm_entries"`
-	ScratchDepth  int      `json:"scratch_depth"`
-	AvgSalience   float64  `json:"avg_salience,omitempty"`
-	HottestKeys   []string `json:"hottest_keys,omitempty"`
-	ExpiringSoon  int      `json:"expiring_soon,omitempty"`
+	LTMEntries   int      `json:"ltm_entries"`
+	WMEntries    int      `json:"wm_entries"`
+	ScratchDepth int      `json:"scratch_depth"`
+	AvgSalience  float64  `json:"avg_salience,omitempty"`
+	HottestKeys  []string `json:"hottest_keys,omitempty"`
+	ColdestKeys  []string `json:"coldest_keys,omitempty"`
+	ExpiringSoon int      `json:"expiring_soon,omitempty"`
 }
 
 // ConsolidationReport summarizes a consolidation sweep.

@@ -240,6 +240,80 @@ func TestPrune_ArchivePreservesMetadata(t *testing.T) {
 	assert.Equal(t, 0.05, salience)
 }
 
+// TestPrune_ColdLTMEvicted verifies that LTM entries with access_count = 0 and
+// created_at older than 30 days are evicted and counted in ColdEvicted.
+func TestPrune_ColdLTMEvicted(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+
+	// Insert a "cold-aged" entry directly: access_count=0, created_at=31d ago.
+	oldTime := time.Now().Add(-31 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+	_, err := rem.db.Exec(`
+		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
+		VALUES (?, ?, ?, ?, ?, 0, 0.5)
+	`, "cold.aged", "never-used value", "test", oldTime, oldTime)
+	require.NoError(t, err)
+
+	// Insert a recent entry (shouldn't be evicted — too young).
+	require.NoError(t, b.Store(ctx, "fresh.key", "recent", brain.TierLongTerm, "test"))
+
+	// Insert an aged but accessed entry (shouldn't be evicted — access_count > 0).
+	_, err = rem.db.Exec(`
+		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
+		VALUES (?, ?, ?, ?, ?, 5, 0.5)
+	`, "aged.used", "still useful", "test", oldTime, oldTime)
+	require.NoError(t, err)
+
+	result, err := rem.Prune(ctx, false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Equal(t, 1, result.ColdEvicted, "exactly one cold-aged entry should be evicted")
+
+	// Verify cold.aged is gone from LTM.
+	var count int
+	require.NoError(t, rem.db.QueryRow(
+		`SELECT COUNT(*) FROM brain_ltm WHERE key = ?`, "cold.aged").Scan(&count))
+	assert.Equal(t, 0, count, "cold.aged should be deleted from LTM")
+
+	// Verify fresh.key and aged.used are still present.
+	require.NoError(t, rem.db.QueryRow(
+		`SELECT COUNT(*) FROM brain_ltm WHERE key = ?`, "fresh.key").Scan(&count))
+	assert.Equal(t, 1, count, "fresh.key should not be evicted")
+	require.NoError(t, rem.db.QueryRow(
+		`SELECT COUNT(*) FROM brain_ltm WHERE key = ?`, "aged.used").Scan(&count))
+	assert.Equal(t, 1, count, "aged.used (access_count>0) should not be evicted")
+}
+
+// TestPrune_ColdLTMDryRun verifies that dry-run mode reports but doesn't delete.
+func TestPrune_ColdLTMDryRun(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+
+	oldTime := time.Now().Add(-31 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+	_, err := rem.db.Exec(`
+		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
+		VALUES (?, ?, ?, ?, ?, 0, 0.5)
+	`, "cold.dryrun", "never-used", "test", oldTime, oldTime)
+	require.NoError(t, err)
+
+	result, err := rem.Prune(ctx, true)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Equal(t, 1, result.ColdEvicted, "dry-run should count cold-aged entries")
+
+	// Verify the entry is still in the DB.
+	var count int
+	require.NoError(t, rem.db.QueryRow(
+		`SELECT COUNT(*) FROM brain_ltm WHERE key = ?`, "cold.dryrun").Scan(&count))
+	assert.Equal(t, 1, count, "dry-run must not delete the entry")
+}
+
 func TestIsFilePath(t *testing.T) {
 	tests := []struct {
 		source   string
