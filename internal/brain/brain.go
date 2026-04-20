@@ -49,6 +49,7 @@ type Status struct {
 	ScratchDepth int      `json:"scratch_depth"`
 	AvgSalience  float64  `json:"avg_salience,omitempty"`
 	HottestKeys  []string `json:"hottest_keys,omitempty"`
+	ColdestKeys  []string `json:"coldest_keys,omitempty"`
 }
 
 type Option func(*Brain)
@@ -64,6 +65,7 @@ func WithRecencyWeight(w float64) Option             { return func(b *Brain) { b
 func WithTierWeight(w float64) Option                { return func(b *Brain) { b.tierWeight = w } }
 func WithRecencyDecayRate(r float64) Option          { return func(b *Brain) { b.recencyDecayRate = r } }
 func WithAccessCountCap(n int) Option                { return func(b *Brain) { b.accessCountCap = n } }
+func WithHeatPromotionThreshold(n int) Option        { return func(b *Brain) { b.heatPromotionThreshold = n } }
 
 type Brain struct {
 	mu      sync.RWMutex
@@ -71,17 +73,18 @@ type Brain struct {
 	scratch map[string][]string          // userID -> LIFO stack
 	db      *sql.DB
 
-	maxLTMEntries        int
-	autoFlushInterval    time.Duration
-	consolidateThreshold float64
-	evictThreshold       float64
-	autoPromote          bool
-	wmGracePeriod        time.Duration
-	accessWeight         float64
-	recencyWeight        float64
-	tierWeight           float64
-	recencyDecayRate     float64
-	accessCountCap       int
+	maxLTMEntries          int
+	autoFlushInterval      time.Duration
+	consolidateThreshold   float64
+	evictThreshold         float64
+	autoPromote            bool
+	wmGracePeriod          time.Duration
+	accessWeight           float64
+	recencyWeight          float64
+	tierWeight             float64
+	recencyDecayRate       float64
+	accessCountCap         int
+	heatPromotionThreshold int
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -102,21 +105,22 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 	}
 
 	b := &Brain{
-		working:              make(map[string]map[string]*Entry),
-		scratch:              make(map[string][]string),
-		db:                   db,
-		maxLTMEntries:        10000,
-		autoFlushInterval:    10 * time.Minute,
-		consolidateThreshold: 0.6,
-		evictThreshold:       0.1,
-		autoPromote:          true,
-		wmGracePeriod:        5 * time.Minute,
-		accessWeight:         0.4,
-		recencyWeight:        0.4,
-		tierWeight:           0.2,
-		recencyDecayRate:     1.0,
-		accessCountCap:       100,
-		stopCh:               make(chan struct{}),
+		working:                make(map[string]map[string]*Entry),
+		scratch:                make(map[string][]string),
+		db:                     db,
+		maxLTMEntries:          10000,
+		autoFlushInterval:      10 * time.Minute,
+		consolidateThreshold:   0.6,
+		evictThreshold:         0.1,
+		autoPromote:            true,
+		wmGracePeriod:          5 * time.Minute,
+		accessWeight:           0.4,
+		recencyWeight:          0.4,
+		tierWeight:             0.2,
+		recencyDecayRate:       1.0,
+		accessCountCap:         100,
+		heatPromotionThreshold: 3,
+		stopCh:                 make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(b)
@@ -274,10 +278,13 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 	userID := userIDFromCtx(ctx)
 	parentID := parentUserIDFromCtx(ctx)
 
+	// First pass: identify matching WM entries under RLock.
+	var wmHits []*Entry
 	b.mu.RLock()
 	if wm, ok := b.working[userID]; ok {
 		for _, entry := range wm {
 			if ms := queryMatchScore(entry, terms); ms > 0 {
+				wmHits = append(wmHits, entry)
 				scored = append(scored, scoredEntry{entry, ms})
 				seen[entry.Key] = true
 			}
@@ -298,6 +305,18 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 		}
 	}
 	b.mu.RUnlock()
+
+	// Second pass: bump AccessCount/AccessedAt on our own WM hits under write lock.
+	if len(wmHits) > 0 {
+		now := time.Now()
+		b.mu.Lock()
+		for _, entry := range wmHits {
+			entry.AccessedAt = now
+			entry.AccessCount++
+			entry.Salience = b.computeSalience(entry)
+		}
+		b.mu.Unlock()
+	}
 
 	// Build OR-joined SQL query with per-term match counting.
 	var whereClauses []string
@@ -327,6 +346,7 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 		return nil, fmt.Errorf("recall LTM: %w", err)
 	}
 	defer rows.Close()
+	var ltmHitKeys []string
 	for rows.Next() {
 		entry := &Entry{Tier: TierLongTerm}
 		var matchCount int
@@ -340,7 +360,30 @@ func (b *Brain) Recall(ctx context.Context, query string, limit int) ([]*Entry, 
 			ms := float64(matchCount) / float64(len(terms))
 			scored = append(scored, scoredEntry{entry, ms})
 			seen[entry.Key] = true
+			ltmHitKeys = append(ltmHitKeys, entry.Key)
 		}
+	}
+	rows.Close()
+
+	// Bump access_count/accessed_at for the LTM rows we matched (best-effort).
+	// Batched UPDATE keeps lock contention minimal; RetryOnBusy for robustness.
+	if len(ltmHitKeys) > 0 {
+		placeholders := strings.Repeat("?,", len(ltmHitKeys))
+		placeholders = placeholders[:len(placeholders)-1]
+		updateSQL := fmt.Sprintf(
+			"UPDATE brain_ltm SET access_count = access_count + 1, accessed_at = ? WHERE key IN (%s)",
+			placeholders,
+		)
+		nowStr := time.Now().UTC().Format("2006-01-02 15:04:05")
+		updateArgs := make([]interface{}, 0, len(ltmHitKeys)+1)
+		updateArgs = append(updateArgs, nowStr)
+		for _, k := range ltmHitKeys {
+			updateArgs = append(updateArgs, k)
+		}
+		_ = database.RetryOnBusy(5, func() error {
+			_, err := b.db.Exec(updateSQL, updateArgs...)
+			return err
+		})
 	}
 
 	// Sort by blended score: match relevance (60%) + salience (40%).
@@ -582,13 +625,24 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 	var hottestKeys []string
 	rows, err := b.db.Query("SELECT key FROM brain_ltm ORDER BY salience DESC LIMIT 5")
 	if err == nil {
-		defer rows.Close()
 		for rows.Next() {
 			var key string
 			if rows.Scan(&key) == nil {
 				hottestKeys = append(hottestKeys, key)
 			}
 		}
+		rows.Close()
+	}
+	var coldestKeys []string
+	coldRows, err := b.db.Query("SELECT key FROM brain_ltm ORDER BY access_count ASC, accessed_at ASC LIMIT 5")
+	if err == nil {
+		for coldRows.Next() {
+			var key string
+			if coldRows.Scan(&key) == nil {
+				coldestKeys = append(coldestKeys, key)
+			}
+		}
+		coldRows.Close()
 	}
 	avgSalience := 0.0
 	if wmCount > 0 {
@@ -596,12 +650,16 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 	}
 	return &Status{
 		LTMEntries: ltmCount, WMEntries: wmCount, ScratchDepth: scratchDepth,
-		AvgSalience: avgSalience, HottestKeys: hottestKeys,
+		AvgSalience: avgSalience, HottestKeys: hottestKeys, ColdestKeys: coldestKeys,
 	}, nil
 }
 
 // DB returns the underlying database connection for external indexers.
 func (b *Brain) DB() *sql.DB { return b.db }
+
+// HeatPromotionThreshold returns the minimum AccessCount at which a working-memory
+// entry should be promoted to LTM regardless of its salience score.
+func (b *Brain) HeatPromotionThreshold() int { return b.heatPromotionThreshold }
 
 func (b *Brain) Close() error {
 	close(b.stopCh)

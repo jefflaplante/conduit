@@ -127,7 +127,16 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 		}
 	}
 
-	// 4. Groom old processed reflection entries
+	// 4. Evict cold LTM entries: access_count == 0 AND older than 30 days.
+	// Runs independently of the salience+age sweep above — tracks never-accessed
+	// facts that may never be useful even if their salience is non-trivial.
+	coldEvicted, err := r.evictColdLTM(ctx, dryRun)
+	if err != nil {
+		return result, fmt.Errorf("evict cold LTM: %w", err)
+	}
+	result.ColdEvicted = coldEvicted
+
+	// 5. Groom old processed reflection entries
 	groomed, err := r.groomReflections(ctx, dryRun)
 	if err != nil {
 		return result, fmt.Errorf("groom reflections: %w", err)
@@ -135,6 +144,36 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 	result.ReflectionsGroomed = groomed
 
 	return result, nil
+}
+
+// evictColdLTM deletes LTM entries that were created >30 days ago and have never
+// been accessed (access_count == 0). These are reported separately from salience-based
+// archival so the report is transparent about why each entry was removed.
+func (r *REMCycle) evictColdLTM(ctx context.Context, dryRun bool) (int, error) {
+	cutoff := time.Now().Add(-30 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+
+	if dryRun {
+		var count int
+		err := r.db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM brain_ltm WHERE access_count = 0 AND created_at < ?",
+			cutoff).Scan(&count)
+		if err != nil {
+			return 0, fmt.Errorf("count cold LTM candidates: %w", err)
+		}
+		return count, nil
+	}
+
+	res, err := r.db.ExecContext(ctx,
+		"DELETE FROM brain_ltm WHERE access_count = 0 AND created_at < ?",
+		cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete cold LTM: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("cold LTM rows affected: %w", err)
+	}
+	return int(n), nil
 }
 
 // groomReflections deletes processed reflection entries older than retention days.
