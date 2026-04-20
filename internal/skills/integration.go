@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 )
 
 // SkillIntegrator handles integration of skills with the tool system
@@ -366,5 +367,57 @@ func (i *SkillIntegrator) BuildSkillsContext(skills []Skill) string {
 		context = append(context, skillInfo)
 	}
 
+	// Append auto-loaded dependency content for each skill that declared any.
+	// This makes declared reference files (e.g. ha-entities.md) part of the
+	// system prompt without requiring the agent to read them explicitly.
+	depBlock := BuildDependencyContext(skills)
+	if depBlock != "" {
+		context = append(context, depBlock)
+	}
+
 	return fmt.Sprintf("%s\n", context)
+}
+
+// BuildDependencyContext concatenates the content of all auto-loaded
+// dependencies for the given skills. Missing or skipped deps are noted inline
+// so the agent knows the file was declared but unavailable. Returns "" if no
+// skill has any dependencies.
+func BuildDependencyContext(skills []Skill) string {
+	hasAny := false
+	for _, s := range skills {
+		if len(s.Dependencies) > 0 {
+			hasAny = true
+			break
+		}
+	}
+	if !hasAny {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n### Skill Dependencies (auto-loaded)\n")
+	b.WriteString("Reference files declared by the above skills have been inlined below.\n\n")
+
+	for _, skill := range skills {
+		if len(skill.Dependencies) == 0 {
+			continue
+		}
+		for _, dep := range skill.Dependencies {
+			header := fmt.Sprintf("#### %s — %s\n", skill.Name, dep.Path)
+			switch {
+			case dep.Missing:
+				b.WriteString(header)
+				b.WriteString("_(declared dependency not found on disk; skill still active)_\n\n")
+			case dep.Skipped:
+				b.WriteString(header)
+				b.WriteString(fmt.Sprintf("_(skipped: %s)_\n\n", dep.SkipReason))
+			case dep.Content != "":
+				b.WriteString(header)
+				b.WriteString(strings.TrimRight(dep.Content, "\n"))
+				b.WriteString("\n\n")
+			}
+		}
+	}
+
+	return b.String()
 }
