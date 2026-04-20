@@ -45,6 +45,18 @@ type UsageSnapshot struct {
 	Snapshot  time.Time                       `json:"snapshot"`
 }
 
+// UsageObserver is notified after every successful or failed RecordUsage
+// / RecordError call. It is intended as a lightweight fan-out hook so
+// external systems (e.g. the monitoring.TokenWindowTracker that powers the
+// fuel gauge) can shadow every recording without each call site needing to
+// know about them.
+//
+// Implementations must be safe for concurrent invocation.
+type UsageObserver interface {
+	OnUsage(provider, model string, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens int, latencyMs int64)
+	OnError(provider, model string)
+}
+
 // UsageTracker tracks AI provider usage metrics in memory.
 // Thread-safe via mutex.
 type UsageTracker struct {
@@ -52,6 +64,7 @@ type UsageTracker struct {
 	providers map[string]*ProviderUsageRecord
 	models    map[string]*ModelUsageRecord
 	startTime time.Time
+	observer  UsageObserver
 }
 
 // NewUsageTracker creates a new usage tracker.
@@ -118,6 +131,23 @@ func (ut *UsageTracker) RecordUsage(provider, model string, inputTokens, outputT
 	if totalInputForRate > 0 {
 		mr.CacheHitRate = float64(mr.TotalCacheReadTokens) / float64(totalInputForRate)
 	}
+
+	// Fan out to observer (e.g. rolling-window fuel-gauge tracker). Copy
+	// of the observer pointer is grabbed under the main lock; the call
+	// itself is made while holding the lock which is fine because observer
+	// implementations are expected to be cheap and non-reentrant.
+	if ut.observer != nil {
+		ut.observer.OnUsage(provider, model, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens, latencyMs)
+	}
+}
+
+// SetObserver installs an observer callback. Pass nil to clear.
+// Only one observer is supported; if multiple fan-outs are needed callers
+// should compose them into a single UsageObserver implementation.
+func (ut *UsageTracker) SetObserver(o UsageObserver) {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	ut.observer = o
 }
 
 // RecordError records an API call error.
@@ -141,6 +171,10 @@ func (ut *UsageTracker) RecordError(provider, model string) {
 		}
 		mr.ErrorCount++
 		mr.TotalRequests++
+	}
+
+	if ut.observer != nil {
+		ut.observer.OnError(provider, model)
 	}
 }
 
