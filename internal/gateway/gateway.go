@@ -25,7 +25,6 @@ import (
 	"conduit/internal/channels/telegram"
 	tuiAdapter "conduit/internal/channels/tui"
 	"conduit/internal/config"
-	"conduit/internal/fts"
 	"conduit/internal/heartbeat"
 	"conduit/internal/logging"
 	"conduit/internal/mcp"
@@ -33,7 +32,6 @@ import (
 	"conduit/internal/mqtt"
 	"conduit/internal/reflection"
 	"conduit/internal/scheduler"
-	"conduit/internal/searchdb"
 	"conduit/internal/sessions"
 	"conduit/internal/skills"
 	"conduit/internal/stt"
@@ -43,7 +41,6 @@ import (
 	"conduit/internal/tools/schema"
 	"conduit/internal/tools/types"
 	"conduit/internal/tui"
-	vecgoservice "conduit/internal/vecgo"
 	"conduit/internal/vecgo/embedding"
 
 	"github.com/jefflaplante/vecgo/embedder"
@@ -119,21 +116,10 @@ type Gateway struct {
 	// unbounded goroutine growth under load. Sized via MaxConcurrentRequests.
 	msgSemaphore chan struct{}
 
-	// FTS5 full-text search
-	ftsIndexer  *fts.Indexer
-	ftsSearcher *fts.Searcher
-	ftsWatcher  *fts.Watcher
-
-	// Search database (separate from gateway.db)
-	searchDB       *searchdb.SearchDB
-	beadsIndexer   *searchdb.BeadsIndexer
-	brainIndexer   *searchdb.BrainIndexer
-	messageSyncer  *searchdb.MessageSyncer
-	asyncMsgSyncer *searchdb.AsyncMessageSyncer
-
-	// Vector/semantic search (optional)
-	vectorService *vecgoservice.Service
-	vectorIndexer *vecgoservice.Indexer
+	// Search: FTS5 indexer/searcher/watcher, dedicated search.db with
+	// beads/brain/message indexers, and optional vector/semantic search
+	// (extracted into SearchService; see search_service.go).
+	search *SearchService
 
 	// MQTT event ingest (optional)
 	mqttService *mqtt.Service
@@ -508,153 +494,15 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Now inject dependencies into tools registry to break the cycle
 	// This triggers tool registration
 
-	// Initialize search database (separate from gateway.db)
-	// This consolidates FTS5 indices into search.db for better separation of concerns
-	ftsWorkspaceDir := cfg.Workspace.ContextDir
-	if ftsWorkspaceDir == "" {
-		ftsWorkspaceDir = "./workspace"
+	// Initialize search subsystem: FTS5 indices, dedicated search.db with
+	// beads/message indexers, and optional vector/semantic search.
+	// Brain indexer is attached later (after brain service is built) via
+	// gw.search.WireBrainIndexer.
+	searchSvc, err := NewSearchService(cfg, logger, sessionStore)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize search service: %w", err)
 	}
-
-	var ftsIndexer *fts.Indexer
-	var ftsSearcher *fts.Searcher
-
-	if cfg.Search.IsEnabled() {
-		searchDBPath := cfg.Search.Path // Empty means derive from gateway.db path
-		sdb, err := searchdb.NewSearchDB(searchDBPath, cfg.Database.Path, sessionStore.DB())
-		if err != nil {
-			logger.Warn("failed to initialize search database, falling back to gateway.db", "error", err)
-			// Fall back to using gateway.db for FTS (backward compatibility)
-			ftsIndexer = fts.NewIndexer(sessionStore.DB(), ftsWorkspaceDir)
-			ftsSearcher = fts.NewSearcher(sessionStore.DB())
-		} else {
-			gw.searchDB = sdb
-
-			// Use search.db for FTS operations
-			ftsIndexer = fts.NewIndexer(sdb.DB(), ftsWorkspaceDir)
-			ftsSearcher = fts.NewSearcher(sdb.DB())
-
-			// Initialize beads indexer
-			beadsDir := cfg.Search.BeadsDir
-			if beadsDir == "" {
-				beadsDir = ".beads"
-			}
-			gw.beadsIndexer = searchdb.NewBeadsIndexer(sdb.DB(), beadsDir)
-
-			// Initialize message syncer and wire callbacks
-			gw.messageSyncer = searchdb.NewMessageSyncer(sdb.DB(), sessionStore.DB())
-			gw.asyncMsgSyncer = searchdb.NewAsyncMessageSyncer(gw.messageSyncer, 256)
-			sessionStore.SetMessageCallbacks(
-				gw.asyncMsgSyncer.MessageAddedCallback(),  // non-blocking
-				gw.messageSyncer.SessionClearedCallback(), // session clear stays synchronous (rare)
-			)
-
-			// Run initial sync operations
-			indexCtx, indexCancel := context.WithTimeout(context.Background(), 60*time.Second)
-
-			// Sync messages from gateway.db to search.db
-			if err := gw.messageSyncer.FullSync(indexCtx); err != nil {
-				logger.Warn("initial message sync failed", "error", err)
-			}
-
-			// Index beads
-			if err := gw.beadsIndexer.IndexBeads(indexCtx); err != nil {
-				logger.Warn("initial beads indexing failed", "error", err)
-			}
-
-			indexCancel()
-			logger.Info("search database initialized", "path", sdb.Path())
-		}
-	} else {
-		// Search disabled - use gateway.db (backward compatibility)
-		ftsIndexer = fts.NewIndexer(sessionStore.DB(), ftsWorkspaceDir)
-		ftsSearcher = fts.NewSearcher(sessionStore.DB())
-		logger.Debug("search database disabled, using gateway.db for FTS")
-	}
-
-	gw.ftsIndexer = ftsIndexer
-	gw.ftsSearcher = ftsSearcher
-
-	// Run initial workspace indexing
-	indexCtx, indexCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := ftsIndexer.IndexWorkspace(indexCtx); err != nil {
-		logger.Warn("initial FTS5 workspace indexing failed", "error", err)
-	}
-	indexCancel()
-
-	// Start fsnotify watcher for incremental FTS indexing
-	if ftsWorkspaceDir != "" {
-		w, err := fts.NewWatcher(ftsIndexer, ftsWorkspaceDir)
-		if err != nil {
-			logger.Warn("FTS file watcher failed to start, falling back to polling", "error", err)
-		} else {
-			gw.ftsWatcher = w
-		}
-	}
-
-	// Initialize vector/semantic search service.
-	// Batteries-included: auto-enables when Ollama is available at localhost,
-	// even without vector.enabled=true in config. Set vector.enabled=false
-	// explicitly only if you need to force-disable it.
-	if cfg.Vector.Enabled || shouldAutoEnableVecgo(cfg.Vector, logger) {
-		emb, providerName := resolveEmbedder(cfg.Vector, logger)
-		if emb == nil {
-			if cfg.Vector.Enabled {
-				logger.Warn("vector search disabled: no embedding provider available", "provider", providerName)
-			}
-		} else {
-			vectorDBPath := cfg.Vector.Path
-			if vectorDBPath == "" {
-				vectorDBPath = config.DeriveVectorDBPath(cfg.Database.Path)
-			}
-			vecCfg := vecgoservice.Config{
-				DBPath:    vectorDBPath,
-				ChunkSize: cfg.Vector.ChunkSize,
-				EmbedDims: emb.Dimensions(),
-				Embedder:  emb,
-			}
-			vectorSvc, vecErr := vecgoservice.NewService(vecCfg)
-			if vecErr != nil {
-				logger.Warn("failed to initialize vector search, continuing without", "error", vecErr)
-			} else {
-				gw.vectorService = vectorSvc
-				embedTimeout := time.Duration(cfg.Vector.EmbedTimeout) * time.Second
-				embedPacing := time.Duration(cfg.Vector.EmbedPacing) * time.Second
-				if cfg.Vector.EmbedPacing <= 0 {
-					embedPacing = 2 * time.Second
-				}
-				gw.vectorIndexer = vecgoservice.NewIndexer(vectorSvc, vecgoservice.IndexerConfig{
-					WorkspaceDir: ftsWorkspaceDir,
-					DBPath:       vectorSvc.DBPath(),
-					PollInterval: 30 * time.Second,
-					EmbedTimeout: embedTimeout,
-					EmbedPacing:  embedPacing,
-				})
-				logger.Info("vector search initialized", "provider", providerName, "dims", emb.Dimensions(), "path", vectorDBPath)
-
-				// Async: probe embedder readiness, then start indexer.
-				// This avoids blocking gateway startup on slow Ollama model loading.
-				go func() {
-					type pinger interface {
-						Ping(ctx context.Context) error
-					}
-					if p, ok := emb.(pinger); ok {
-						probeCtx, probeCancel := context.WithTimeout(context.Background(), 30*time.Second)
-						if err := p.Ping(probeCtx); err != nil {
-							logger.Warn("vector embedder readiness probe failed; indexing deferred to poll cycle",
-								"provider", providerName, "error", err)
-						} else {
-							logger.Info("vector embedder readiness probe passed", "provider", providerName)
-						}
-						probeCancel()
-					}
-
-					if err := gw.vectorIndexer.Start(context.Background()); err != nil {
-						logger.Error("vector indexer failed to start", "error", err)
-					}
-				}()
-			}
-		}
-	}
+	gw.search = searchSvc
 
 	// Initialize optional MQTT event ingest service
 	if cfg.MQTT.Enabled {
@@ -768,8 +616,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 	// Build VectorService interface value (nil if disabled)
 	var vectorSearch types.VectorService
-	if gw.vectorService != nil {
-		vectorSearch = gw.vectorService
+	if gw.search.VectorService != nil {
+		vectorSearch = gw.search.VectorService
 	}
 
 	// Build MQTTService interface value (nil if disabled)
@@ -786,12 +634,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 	// Build BrainFTSSearcher interface value (nil if brain or search DB unavailable)
 	var brainFTS types.BrainFTSSearcher
-	if gw.brainService != nil && gw.searchDB != nil {
-		gw.brainIndexer = searchdb.NewBrainIndexer(gw.searchDB.DB(), gw.brainService.DB())
-		if err := gw.brainIndexer.IndexBrain(context.Background()); err != nil {
-			logger.Warn("initial brain FTS5 index failed", "error", err)
-		}
-		brainFTS = gw.brainIndexer
+	if gw.brainService != nil && gw.search.SearchDB != nil {
+		gw.search.WireBrainIndexer(context.Background(), gw.brainService.DB())
+		brainFTS = gw.search.BrainIndexer
 	}
 
 	// Build REMCycleRunner interface value (nil if REM cycle not initialized)
@@ -820,9 +665,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 		WebClient:     &http.Client{Timeout: 30 * time.Second},
 		ChannelSender: gw, // Gateway implements ChannelSender interface
 		Gateway:       gw, // Gateway implements GatewayService interface
-		Searcher:      ftsSearcher,
+		Searcher:      gw.search.FTSSearcher,
 		VectorSearch:  vectorSearch,
-		VectorIndexer: gw.vectorIndexer,
+		VectorIndexer: gw.search.VectorIndexer,
 		MQTTService:   mqttSvc,
 		Brain:         brainSvcAdapter,
 		BrainFTS:      brainFTS,
@@ -883,7 +728,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		"workspace_enabled", workspaceContext != nil,
 		"skills_enabled", skillsManager != nil && skillsManager.IsEnabled(),
 		"tool_count", len(aiTools),
-		"vector_search_enabled", gw.vectorService != nil,
+		"vector_search_enabled", gw.search.VectorService != nil,
 		"mqtt_enabled", gw.mqttService != nil,
 		"brain_enabled", gw.brainService != nil,
 		"reflection_enabled", gw.reflectionStore != nil,
@@ -1112,7 +957,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 		limitRequestBody(http.HandlerFunc(g.handleTestMessage), MaxRequestBodySize))))
 
 	// Vector API endpoints (registered unconditionally; handlers return 503 when disabled)
-	vectorAPI := &VectorAPI{vectorService: g.vectorService}
+	vectorAPI := &VectorAPI{vectorService: g.search.VectorService}
 	mux.Handle("/api/vector/search", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
 		limitRequestBody(http.HandlerFunc(vectorAPI.handleSearch), MaxRequestBodySize))))
 	mux.Handle("/api/vector/index", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
@@ -1188,52 +1033,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 		go g.refreshBeadsPeriodic(ctx, 5*time.Minute)
 	}
 
-	// Start fsnotify watcher for real-time FTS indexing of .md file changes
-	if g.ftsWatcher != nil {
-		go g.ftsWatcher.Run(ctx)
-		g.logger.Info("FTS file watcher started")
-	}
-
-	// Periodic safety-net re-indexing (every 30 minutes).
-	// The fsnotify watcher handles real-time .md changes; this catches anything
-	// it might miss (e.g., files changed while watcher was down) plus beads/messages.
-	if g.ftsIndexer != nil {
-		go func() {
-			ticker := time.NewTicker(30 * time.Minute)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					// Full workspace re-index as safety net
-					if err := g.ftsIndexer.IndexWorkspace(ctx); err != nil {
-						g.logger.Warn("FTS5 periodic re-index failed", "error", err)
-					}
-
-					// Re-index beads if available
-					if g.beadsIndexer != nil {
-						if err := g.beadsIndexer.IndexBeads(ctx); err != nil {
-							g.logger.Warn("beads periodic re-index failed", "error", err)
-						}
-					}
-
-					// Re-index brain LTM if available
-					if g.brainIndexer != nil {
-						if err := g.brainIndexer.IndexBrain(ctx); err != nil {
-							g.logger.Warn("brain periodic re-index failed", "error", err)
-						}
-					}
-
-					// Run incremental message sync as safety net
-					if g.messageSyncer != nil {
-						if err := g.messageSyncer.IncrementalSync(ctx); err != nil {
-							g.logger.Warn("message incremental sync failed", "error", err)
-						}
-					}
-				}
-			}
-		}()
+	// Start search subsystem: FTS file watcher and periodic safety-net
+	// re-index loop (fsnotify handles real-time .md changes; the periodic
+	// loop catches anything missed plus beads/brain/message re-indexing).
+	if err := g.search.Start(ctx); err != nil {
+		g.logger.Warn("failed to start search service", "error", err)
 	}
 
 	// Session wakeup listener: re-activates sessions when inter-session messages arrive.
@@ -1387,9 +1191,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 
 	// Drain async message syncer before closing search DB
-	if g.asyncMsgSyncer != nil {
-		g.asyncMsgSyncer.Close()
-	}
+	g.search.DrainAsyncSyncer()
 
 	// Stop MCP server and clean up .mcp.json
 	if g.mcpServer != nil {
@@ -1408,17 +1210,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 		g.mqttService.Stop()
 	}
 
-	// Stop vector indexer before closing the service it references
-	if g.vectorIndexer != nil {
-		g.vectorIndexer.Stop()
-	}
-
-	// Close vector search service
-	if g.vectorService != nil {
-		if err := g.vectorService.Close(); err != nil {
-			g.logger.Error("error closing vector service", "error", err)
-		}
-	}
+	// Stop vector indexer before closing the service it references, then
+	// close the vector search service (no-op when disabled).
+	g.search.StopVector()
 
 	// Close brain service
 	if g.brainService != nil {
