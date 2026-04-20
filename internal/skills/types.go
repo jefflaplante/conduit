@@ -6,13 +6,34 @@ import (
 
 // Skill represents a discovered and parsed Conduit skill
 type Skill struct {
-	Name        string           `json:"name" yaml:"name"`
-	Description string           `json:"description" yaml:"description"`
-	Location    string           `json:"location"`
-	Content     string           `json:"content"`
-	Scripts     []SkillScript    `json:"scripts"`
-	References  []SkillReference `json:"references"`
-	Metadata    SkillMetadata    `json:"metadata"`
+	Name         string            `json:"name" yaml:"name"`
+	Description  string            `json:"description" yaml:"description"`
+	Location     string            `json:"location"`
+	Content      string            `json:"content"`
+	Scripts      []SkillScript     `json:"scripts"`
+	References   []SkillReference  `json:"references"`
+	Dependencies []SkillDependency `json:"dependencies,omitempty"`
+	Metadata     SkillMetadata     `json:"metadata"`
+}
+
+// SkillDependency represents a reference file auto-loaded with the skill.
+// Paths are declared in the skill's Dependencies section (e.g. "reference/ha-entities.md")
+// and resolved relative to the skill directory at load time.
+type SkillDependency struct {
+	// Path is the dependency path exactly as declared in SKILL.md (relative to skill dir).
+	Path string `json:"path"`
+	// ResolvedPath is the absolute filesystem path after resolving against skill location.
+	ResolvedPath string `json:"resolved_path,omitempty"`
+	// Content is the file contents (empty when Missing or Skipped is true).
+	Content string `json:"-"`
+	// Size is the file size in bytes (0 if missing).
+	Size int64 `json:"size,omitempty"`
+	// Missing is true when the dep file could not be found at resolve time.
+	Missing bool `json:"missing,omitempty"`
+	// Skipped is true when the dep was skipped (e.g. too large, unsafe path).
+	Skipped bool `json:"skipped,omitempty"`
+	// SkipReason describes why the dep was skipped.
+	SkipReason string `json:"skip_reason,omitempty"`
 }
 
 // SkillMetadata contains Conduit-specific skill configuration
