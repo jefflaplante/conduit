@@ -63,6 +63,7 @@ func newTestGatewayWithSessions(t *testing.T) (*Gateway, *sessions.Store) {
 				},
 			},
 		},
+		monitoring: &MonitoringService{},
 	}
 	return gw, store
 }

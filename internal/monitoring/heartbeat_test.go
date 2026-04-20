@@ -78,6 +78,14 @@ func (m *mockCollector) GetHeartbeatMetrics() HeartbeatMetrics {
 	return HeartbeatMetrics{}
 }
 
+func (m *mockCollector) MarkHeartbeatSuccess() {
+	// no-op for mock
+}
+
+func (m *mockCollector) MarkHeartbeatError() {
+	// no-op for mock
+}
+
 // Simulate idle system
 func (m *mockCollector) setIdle(duration time.Duration) {
 	m.lastActivity = time.Now().Add(-duration)

@@ -102,26 +102,26 @@ func (g *Gateway) GetSchedulerStatus() map[string]interface{} {
 
 // ScheduleHeartbeatJob schedules a new heartbeat job using the HEARTBEAT.md execution framework
 func (g *Gateway) ScheduleHeartbeatJob(schedule, target, model string, enabled bool) error {
-	if g.heartbeatIntegration == nil {
+	if g.monitoring == nil || g.monitoring.HeartbeatIntegration == nil {
 		return fmt.Errorf("heartbeat integration not available")
 	}
-	return g.heartbeatIntegration.ScheduleHeartbeatJob(schedule, target, model, enabled)
+	return g.monitoring.HeartbeatIntegration.ScheduleHeartbeatJob(schedule, target, model, enabled)
 }
 
 // GetHeartbeatJobCount returns the number of active heartbeat jobs
 func (g *Gateway) GetHeartbeatJobCount() int {
-	if g.heartbeatIntegration == nil {
+	if g.monitoring == nil || g.monitoring.HeartbeatIntegration == nil {
 		return 0
 	}
-	return g.heartbeatIntegration.GetHeartbeatJobCount()
+	return g.monitoring.HeartbeatIntegration.GetHeartbeatJobCount()
 }
 
 // RemoveHeartbeatJobs removes all heartbeat jobs from the scheduler
 func (g *Gateway) RemoveHeartbeatJobs() error {
-	if g.heartbeatIntegration == nil {
+	if g.monitoring == nil || g.monitoring.HeartbeatIntegration == nil {
 		return fmt.Errorf("heartbeat integration not available")
 	}
-	return g.heartbeatIntegration.RemoveHeartbeatJobs()
+	return g.monitoring.HeartbeatIntegration.RemoveHeartbeatJobs()
 }
 
 // initializeAgentHeartbeat sets up automatic agent heartbeat jobs based on configuration
@@ -187,7 +187,7 @@ func (g *Gateway) initializeAgentHeartbeat(cfg *config.Config) error {
 
 // updateHeartbeatJobMetrics updates the metrics collector with current heartbeat job counts
 func (g *Gateway) updateHeartbeatJobMetrics() {
-	if g.metricsCollector == nil || g.scheduler == nil {
+	if g.monitoring == nil || g.monitoring.MetricsCollector == nil || g.scheduler == nil {
 		return
 	}
 
@@ -205,7 +205,7 @@ func (g *Gateway) updateHeartbeatJobMetrics() {
 		}
 	}
 
-	g.metricsCollector.UpdateHeartbeatJobs(total, enabled)
+	g.monitoring.MetricsCollector.UpdateHeartbeatJobs(total, enabled)
 }
 
 // initializeREMCycle sets up automatic REM sleep cycle job based on configuration

@@ -19,11 +19,10 @@ func TestAlertAuditorWiring_AuditsDelivery(t *testing.T) {
 	gw, store := newTestGatewayWithSessions(t)
 
 	// Replicate the wiring from Gateway.New (conduit-1rp3).
-	gw.deliveryRegistry = heartbeat.NewDeliveryRegistry()
-	gw.deliveryRegistry.SetAuditor(heartbeat.NewAlertAuditor(store.DB()))
+	gw.monitoring.WireDeliveryRegistry(store.DB())
 
 	// Register a no-op deliverer so the call succeeds.
-	gw.deliveryRegistry.Register(&nopDeliverer{})
+	gw.monitoring.DeliveryRegistry.Register(&nopDeliverer{})
 
 	alert := heartbeat.Alert{
 		ID:       "test-1rp3",
@@ -34,7 +33,7 @@ func TestAlertAuditorWiring_AuditsDelivery(t *testing.T) {
 	}
 	target := config.AlertTarget{Name: "test-target", Type: "nop"}
 
-	if err := gw.deliveryRegistry.DeliverAlert(context.Background(), alert, target); err != nil {
+	if err := gw.monitoring.DeliveryRegistry.DeliverAlert(context.Background(), alert, target); err != nil {
 		t.Fatalf("DeliverAlert: %v", err)
 	}
 

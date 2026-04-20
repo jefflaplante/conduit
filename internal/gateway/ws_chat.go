@@ -51,8 +51,8 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	log.Printf("WebSocket chat from %s: %d chars (session: %s)", client.ID, len(msg.Text), msg.SessionKey)
 
 	// Track activity
-	if g.metricsCollector != nil {
-		g.metricsCollector.MarkActivity()
+	if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
+		g.monitoring.MetricsCollector.MarkActivity()
 	}
 
 	// Determine user ID: prefer message field, fall back to client field
@@ -137,8 +137,8 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	requestCount := len(g.activeRequests)
 	g.activeRequestsMu.Unlock()
 
-	if g.metricsCollector != nil {
-		g.metricsCollector.UpdateActiveRequests(requestCount)
+	if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
+		g.monitoring.MetricsCollector.UpdateActiveRequests(requestCount)
 	}
 
 	defer func() {
@@ -146,8 +146,8 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		delete(g.activeRequests, session.Key)
 		finalCount := len(g.activeRequests)
 		g.activeRequestsMu.Unlock()
-		if g.metricsCollector != nil {
-			g.metricsCollector.UpdateActiveRequests(finalCount)
+		if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
+			g.monitoring.MetricsCollector.UpdateActiveRequests(finalCount)
 		}
 	}()
 

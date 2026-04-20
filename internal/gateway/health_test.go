@@ -60,12 +60,14 @@ func createTestGateway(t *testing.T) *Gateway {
 	testLogger := logging.New("info", "text")
 
 	return &Gateway{
-		config:              cfg,
-		logger:              testLogger,
-		sessions:            sessionStore,
-		gatewayMetrics:      gatewayMetrics,
-		metricsCollector:    metricsCollector,
-		eventStore:          eventStore,
+		config:   cfg,
+		logger:   testLogger,
+		sessions: sessionStore,
+		monitoring: &MonitoringService{
+			GatewayMetrics:   gatewayMetrics,
+			MetricsCollector: metricsCollector,
+			EventStore:       eventStore,
+		},
 		rateLimitMiddleware: rateLimitMiddleware,
 	}
 }
@@ -86,7 +88,7 @@ func TestHandleHealthEnhanced(t *testing.T) {
 			expectStatus:  http.StatusOK,
 			expectHealthy: true,
 			setupGateway: func(g *Gateway) {
-				g.gatewayMetrics.SetStatus("healthy")
+				g.monitoring.GatewayMetrics.SetStatus("healthy")
 			},
 		},
 		{
@@ -95,7 +97,7 @@ func TestHandleHealthEnhanced(t *testing.T) {
 			expectStatus:  http.StatusServiceUnavailable,
 			expectHealthy: false,
 			setupGateway: func(g *Gateway) {
-				g.gatewayMetrics.SetStatus("degraded")
+				g.monitoring.GatewayMetrics.SetStatus("degraded")
 			},
 		},
 		{
@@ -104,7 +106,7 @@ func TestHandleHealthEnhanced(t *testing.T) {
 			expectStatus:  http.StatusOK, // Our endpoint doesn't check method
 			expectHealthy: true,          // Status is still healthy
 			setupGateway: func(g *Gateway) {
-				g.gatewayMetrics.SetStatus("healthy")
+				g.monitoring.GatewayMetrics.SetStatus("healthy")
 			},
 		},
 	}
@@ -179,10 +181,10 @@ func TestHandleMetrics(t *testing.T) {
 	}
 
 	// Setup queue metrics (these aren't overwritten by collector)
-	gw.metricsCollector.UpdateQueueDepth(3)
-	gw.gatewayMetrics.IncrementCompleted()
-	gw.gatewayMetrics.IncrementFailed()
-	gw.metricsCollector.UpdateWebSocketConnections(4)
+	gw.monitoring.MetricsCollector.UpdateQueueDepth(3)
+	gw.monitoring.GatewayMetrics.IncrementCompleted()
+	gw.monitoring.GatewayMetrics.IncrementFailed()
+	gw.monitoring.MetricsCollector.UpdateWebSocketConnections(4)
 
 	tests := []struct {
 		name         string
@@ -271,9 +273,9 @@ func TestHandleDiagnostics(t *testing.T) {
 	event2 := monitoring.NewHeartbeatEvent(monitoring.EventTypeStatusChange, monitoring.SeverityWarning, "Status changed", "test")
 	event3 := monitoring.NewHeartbeatEvent(monitoring.EventTypeMetricAlert, monitoring.SeverityError, "High memory usage", "test")
 
-	gw.eventStore.Store(event1)
-	gw.eventStore.Store(event2)
-	gw.eventStore.Store(event3)
+	gw.monitoring.EventStore.Store(event1)
+	gw.monitoring.EventStore.Store(event2)
+	gw.monitoring.EventStore.Store(event3)
 
 	tests := []struct {
 		name         string
@@ -393,10 +395,10 @@ func TestHandlePrometheusMetrics(t *testing.T) {
 	}
 
 	// Setup queue metrics
-	gw.metricsCollector.UpdateQueueDepth(7)
-	gw.gatewayMetrics.IncrementCompleted()
-	gw.gatewayMetrics.IncrementCompleted()
-	gw.gatewayMetrics.IncrementFailed()
+	gw.monitoring.MetricsCollector.UpdateQueueDepth(7)
+	gw.monitoring.GatewayMetrics.IncrementCompleted()
+	gw.monitoring.GatewayMetrics.IncrementCompleted()
+	gw.monitoring.GatewayMetrics.IncrementFailed()
 
 	tests := []struct {
 		name         string
@@ -532,14 +534,16 @@ func TestRateLimitingOnHealthEndpoints(t *testing.T) {
 	})
 
 	gw := &Gateway{
-		config:         cfg,
-		sessions:       sessionStore,
-		gatewayMetrics: monitoring.NewGatewayMetrics(),
-		metricsCollector: monitoring.NewMetricsCollector(monitoring.CollectorDependencies{
-			SessionStore:   sessionStore,
+		config:   cfg,
+		sessions: sessionStore,
+		monitoring: &MonitoringService{
 			GatewayMetrics: monitoring.NewGatewayMetrics(),
-		}),
-		eventStore:          monitoring.NewMemoryEventStore(100),
+			MetricsCollector: monitoring.NewMetricsCollector(monitoring.CollectorDependencies{
+				SessionStore:   sessionStore,
+				GatewayMetrics: monitoring.NewGatewayMetrics(),
+			}),
+			EventStore: monitoring.NewMemoryEventStore(100),
+		},
 		rateLimitMiddleware: rateLimitMiddleware,
 	}
 
@@ -775,12 +779,14 @@ func createTestGatewayWithDiagnosticsConfig(t *testing.T, requireAuth bool, heal
 	testLogger := logging.New("info", "text")
 
 	gw := &Gateway{
-		config:              cfg,
-		logger:              testLogger,
-		sessions:            sessionStore,
-		gatewayMetrics:      gatewayMetrics,
-		metricsCollector:    metricsCollector,
-		eventStore:          eventStore,
+		config:   cfg,
+		logger:   testLogger,
+		sessions: sessionStore,
+		monitoring: &MonitoringService{
+			GatewayMetrics:   gatewayMetrics,
+			MetricsCollector: metricsCollector,
+			EventStore:       eventStore,
+		},
 		rateLimitMiddleware: rateLimitMiddleware,
 		authMiddleware:      authMiddleware,
 	}
@@ -815,13 +821,15 @@ func (m *mockFailingCollector) UpdateHeartbeatJobs(total, enabled int)   {}
 func (m *mockFailingCollector) GetHeartbeatMetrics() monitoring.HeartbeatMetrics {
 	return monitoring.HeartbeatMetrics{}
 }
+func (m *mockFailingCollector) MarkHeartbeatSuccess() {}
+func (m *mockFailingCollector) MarkHeartbeatError()   {}
 
 func TestMetricsEndpoint_SanitizesDatabaseErrors(t *testing.T) {
 	gw := createTestGateway(t)
 
 	// Replace the metrics collector with one that returns a detailed database error
 	sensitiveErr := fmt.Errorf("FATAL: password authentication failed for user \"conduit\" at 192.168.1.50:5432/conduit_db")
-	gw.metricsCollector = &mockFailingCollector{dbErr: sensitiveErr}
+	gw.monitoring.MetricsCollector = &mockFailingCollector{dbErr: sensitiveErr}
 
 	req, err := http.NewRequest("GET", "/metrics", nil)
 	if err != nil {
