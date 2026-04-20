@@ -215,6 +215,35 @@ func GetMigrations() []Migration {
 				CREATE INDEX IF NOT EXISTS idx_ingest_dlq_channel_id ON ingest_dlq (channel_id);
 			`,
 		},
+		{
+			Version: 8,
+			Name:    "create_alert_history_table",
+			SQL: `
+				-- Historical record of alerts fired and actions taken.
+				-- Needed for SRE compliance and post-mortems (conduit-2uvp).
+				-- Write path: heartbeat delivery registry records every attempted
+				-- delivery (success or failure). Query path is intentionally
+				-- minimal (ListRecent); follow-up tickets may add filtering,
+				-- retention, CLI / HTTP surfaces.
+				CREATE TABLE IF NOT EXISTS alert_history (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					fired_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					alert_type TEXT NOT NULL,
+					severity TEXT NOT NULL,
+					source TEXT,
+					message TEXT NOT NULL,
+					details TEXT,
+					action_taken TEXT,
+					action_result TEXT
+				);
+
+				-- "Recent alerts" queries use fired_at DESC.
+				CREATE INDEX IF NOT EXISTS idx_alert_history_fired_at ON alert_history (fired_at DESC);
+				-- Filter queries by type / severity.
+				CREATE INDEX IF NOT EXISTS idx_alert_history_alert_type ON alert_history (alert_type);
+				CREATE INDEX IF NOT EXISTS idx_alert_history_severity ON alert_history (severity);
+			`,
+		},
 	}
 }
 

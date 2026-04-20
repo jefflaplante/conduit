@@ -3,6 +3,7 @@ package heartbeat
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -24,6 +25,7 @@ type Deliverer interface {
 type DeliveryRegistry struct {
 	deliverers map[string]Deliverer
 	breaker    *CircuitBreaker
+	auditor    *AlertAuditor
 	mu         sync.RWMutex
 }
 
@@ -33,6 +35,15 @@ func NewDeliveryRegistry() *DeliveryRegistry {
 		deliverers: make(map[string]Deliverer),
 		breaker:    NewCircuitBreaker(3, 5*time.Minute),
 	}
+}
+
+// SetAuditor attaches an AlertAuditor that records every alert delivery attempt
+// to the alert_history audit trail. Passing nil disables auditing. Auditing is
+// best-effort: audit failures are logged elsewhere but do not prevent delivery.
+func (r *DeliveryRegistry) SetAuditor(a *AlertAuditor) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.auditor = a
 }
 
 // Register adds a deliverer to the registry.
@@ -64,10 +75,17 @@ func (r *DeliveryRegistry) Types() []string {
 
 // DeliverAlert routes an alert to the appropriate deliverer based on target type.
 // Respects circuit breaker state and records success/failure.
+//
+// Every attempted delivery is written to the alert_history audit trail (if an
+// auditor is attached): this covers the happy path, delivery failures, and
+// circuit-breaker short-circuits. Audit write failures are logged but do not
+// affect the delivery outcome — the audit trail is best-effort.
 func (r *DeliveryRegistry) DeliverAlert(ctx context.Context, alert Alert, target config.AlertTarget) error {
 	// Check circuit breaker before attempting delivery
 	if r.breaker.IsOpen(target.Name) {
-		return fmt.Errorf("circuit breaker open for target %s: delivery suspended", target.Name)
+		err := fmt.Errorf("circuit breaker open for target %s: delivery suspended", target.Name)
+		r.auditDelivery(ctx, alert, target, "circuit_breaker_open", err)
+		return err
 	}
 
 	r.mu.RLock()
@@ -75,7 +93,9 @@ func (r *DeliveryRegistry) DeliverAlert(ctx context.Context, alert Alert, target
 	r.mu.RUnlock()
 
 	if !ok {
-		return fmt.Errorf("no deliverer registered for type: %s", target.Type)
+		err := fmt.Errorf("no deliverer registered for type: %s", target.Type)
+		r.auditDelivery(ctx, alert, target, "no_deliverer", err)
+		return err
 	}
 
 	// Attempt delivery
@@ -84,11 +104,71 @@ func (r *DeliveryRegistry) DeliverAlert(ctx context.Context, alert Alert, target
 	// Record result with circuit breaker
 	if err != nil {
 		r.breaker.RecordFailure(target.Name)
-		return fmt.Errorf("delivery failed for target %s: %w", target.Name, err)
+		wrapped := fmt.Errorf("delivery failed for target %s: %w", target.Name, err)
+		r.auditDelivery(ctx, alert, target, "delivered", wrapped)
+		return wrapped
 	}
 
 	r.breaker.RecordSuccess(target.Name)
+	r.auditDelivery(ctx, alert, target, "delivered", nil)
 	return nil
+}
+
+// auditDelivery records a delivery attempt to the alert_history table. action
+// is the operation taken (e.g. "delivered", "circuit_breaker_open",
+// "no_deliverer"). A nil deliveryErr records a successful outcome.
+func (r *DeliveryRegistry) auditDelivery(ctx context.Context, alert Alert, target config.AlertTarget, action string, deliveryErr error) {
+	r.mu.RLock()
+	auditor := r.auditor
+	r.mu.RUnlock()
+
+	if auditor == nil {
+		return
+	}
+
+	result := "success"
+	if deliveryErr != nil {
+		result = "error: " + deliveryErr.Error()
+	}
+
+	// Source defaults to the alert's source, falling back to component/type so
+	// downstream queries are never empty. For heartbeat-originated alerts this
+	// is the heartbeat job/task name.
+	source := alert.Source
+	if source == "" {
+		source = alert.Component
+	}
+	if source == "" {
+		source = alert.Type
+	}
+
+	entry := AlertHistoryEntry{
+		AlertType:    alert.Type,
+		Severity:     alert.Severity.String(),
+		Source:       source,
+		Message:      alert.Message,
+		ActionTaken:  action + ":" + target.Name + "(" + target.Type + ")",
+		ActionResult: result,
+		Details: map[string]any{
+			"alert_id":    alert.ID,
+			"title":       alert.Title,
+			"component":   alert.Component,
+			"category":    alert.Category,
+			"tags":        alert.Tags,
+			"target_name": target.Name,
+			"target_type": target.Type,
+		},
+	}
+	if entry.AlertType == "" {
+		// alert_history.alert_type is NOT NULL; fall back to a sensible value.
+		entry.AlertType = "heartbeat"
+	}
+
+	if err := auditor.RecordAlert(ctx, entry); err != nil {
+		// Non-fatal — log via log package; avoid a hard dependency on a logger
+		// here so this function stays self-contained.
+		log.Printf("[AlertAudit] failed to record alert history for target %s: %v", target.Name, err)
+	}
 }
 
 // CircuitBreakerState returns the state of the circuit breaker for a target.
