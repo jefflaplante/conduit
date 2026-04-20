@@ -119,6 +119,9 @@ func (m *mockGatewayService) GetSystemPromptDebug(ctx context.Context, sessionKe
 func (m *mockGatewayService) GetContextBudget(ctx context.Context, sessionKey string) (map[string]interface{}, error) {
 	return nil, nil
 }
+func (m *mockGatewayService) GetFuelGaugeMap(topN int) map[string]interface{} {
+	return nil
+}
 func (m *mockGatewayService) ReloadSkillTools(ctx context.Context) (int, error) {
 	return 0, nil
 }

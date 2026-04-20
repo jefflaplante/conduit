@@ -51,6 +51,14 @@ type GatewayService interface {
 	// the concrete ContextBudget struct (avoids cross-package coupling).
 	GetContextBudget(ctx context.Context, sessionKey string) (map[string]interface{}, error)
 
+	// GetFuelGaugeMap returns a point-in-time snapshot of rate-limit headroom
+	// and rolling-window AI token consumption as a JSON-serializable map.
+	// topN caps the number of per-tier rate-limit identifiers returned
+	// (most-pressured first); pass 0 or a negative value to include all.
+	// Returns the snapshot as a map to avoid cross-package coupling with the
+	// gateway.FuelGauge struct.
+	GetFuelGaugeMap(topN int) map[string]interface{}
+
 	// Skill hot-reload
 	ReloadSkillTools(ctx context.Context) (int, error)
 
