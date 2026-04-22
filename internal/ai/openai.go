@@ -18,6 +18,20 @@ import (
 
 const defaultOpenAIURL = "https://api.openai.com/v1/chat/completions"
 
+const (
+	maxRetries     = 3
+	retryBaseDelay = 2 * time.Second
+)
+
+// isRetryableStatus returns true for HTTP status codes that warrant a retry.
+func isRetryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || // 429
+		code == http.StatusBadGateway || // 502
+		code == http.StatusServiceUnavailable || // 503
+		code == http.StatusGatewayTimeout || // 504
+		code == 500 // Internal Server Error
+}
+
 // OpenAIProvider implements the OpenAI API (and any OpenAI-compatible server)
 type OpenAIProvider struct {
 	name    string
@@ -107,16 +121,51 @@ func (o *OpenAIProvider) GenerateResponse(ctx context.Context, req *GenerateRequ
 		httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
 	}
 
-	resp, err := o.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+	var lastErr error
+	var resp *http.Response
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := retryBaseDelay * time.Duration(1<<(attempt-1))
+			log.Printf("[OpenAI] Retry %d/%d after %v for status error", attempt, maxRetries, delay)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			// Rebuild request body (previous Do consumed it)
+			httpReq, err = http.NewRequestWithContext(ctx, "POST", o.baseURL, bytes.NewBuffer(reqBody))
+			if err != nil {
+				return nil, fmt.Errorf("failed to create request: %w", err)
+			}
+			httpReq.Header.Set("Content-Type", "application/json")
+			if o.apiKey != "" {
+				httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
+			}
+		}
+
+		resp, err = o.client.Do(httpReq)
+		if err != nil {
+			return nil, fmt.Errorf("request failed: %w", err)
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			break // success
+		}
+
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		lastErr = fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
+
+		if !isRetryableStatus(resp.StatusCode) {
+			return nil, lastErr // non-retryable, fail immediately
+		}
+		// retryable — loop continues
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
+		return nil, lastErr
 	}
+	defer resp.Body.Close()
 
 	var openaiResp map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&openaiResp); err != nil {
@@ -173,16 +222,53 @@ func (o *OpenAIProvider) GenerateResponseStreaming(ctx context.Context, req *Gen
 
 	log.Printf("[OpenAI] Streaming request: model=%s, url=%s", model, o.baseURL)
 
-	resp, err := o.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+	var lastErr error
+	var resp *http.Response
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := retryBaseDelay * time.Duration(1<<(attempt-1))
+			log.Printf("[OpenAI] Streaming retry %d/%d after %v for status error", attempt, maxRetries, delay)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			// Rebuild request body (previous Do consumed it)
+			httpReq, err = http.NewRequestWithContext(ctx, "POST", o.baseURL, bytes.NewBuffer(reqBody))
+			if err != nil {
+				return nil, fmt.Errorf("failed to create request: %w", err)
+			}
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("Accept", "text/event-stream")
+			if o.apiKey != "" {
+				httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
+			}
+		}
+
+		resp, err = o.client.Do(httpReq)
+		if err != nil {
+			return nil, fmt.Errorf("request failed: %w", err)
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			break // success
+		}
+
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		lastErr = fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
+
+		if !isRetryableStatus(resp.StatusCode) {
+			return nil, lastErr // non-retryable, fail immediately
+		}
+		log.Printf("[OpenAI] Streaming retryable error: %v", lastErr)
+		// retryable — loop continues
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
+		return nil, lastErr
 	}
+	defer resp.Body.Close()
 
 	return o.parseOpenAISSEStream(resp.Body, onDelta)
 }
