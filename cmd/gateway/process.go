@@ -10,8 +10,31 @@ import (
 	"syscall"
 	"time"
 
+	"conduit/internal/config"
+
 	"github.com/spf13/cobra"
 )
+
+// defaultStatusPort is the fallback health-check port used when no --port
+// flag is given and the config file cannot be read.
+const defaultStatusPort = 18789
+
+// resolveStatusPort returns the port for the /health check. Precedence:
+//  1. --port flag if explicitly set by the user
+//  2. port from the loaded config file (--config / cfgFile)
+//  3. defaultStatusPort
+func resolveStatusPort(cmd *cobra.Command) int {
+	if cmd.Flags().Changed("port") {
+		p, _ := cmd.Flags().GetInt("port")
+		return p
+	}
+	if cfgFile != "" {
+		if cfg, err := config.Load(cfgFile); err == nil && cfg.Port > 0 {
+			return cfg.Port
+		}
+	}
+	return defaultStatusPort
+}
 
 // isAncestorPID reports whether candidate is pid or any ancestor of pid by
 // walking /proc/<pid>/status PPid fields. Guards against the footgun where
@@ -104,7 +127,7 @@ var processStatusCmd = &cobra.Command{
 		}
 		fmt.Printf("Conduit is running (PID %d)\n", pid)
 
-		statusPort, _ := cmd.Flags().GetInt("port")
+		statusPort := resolveStatusPort(cmd)
 		client := &http.Client{Timeout: 2 * time.Second}
 		resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", statusPort))
 		if err != nil {
@@ -149,7 +172,7 @@ func resolvePidfilePath() string {
 }
 
 func init() {
-	processStatusCmd.Flags().Int("port", 18789, "gateway port for health check")
+	processStatusCmd.Flags().Int("port", defaultStatusPort, "gateway port for health check (defaults to config.json port)")
 	rootCmd.AddCommand(restartCmd)
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(processStatusCmd)
