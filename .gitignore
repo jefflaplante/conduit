@@ -102,3 +102,4 @@ PRIVATE/
 *.jsonl.bak
 issues-bak.jsonl
 .claude/worktrees/
+/gateway
