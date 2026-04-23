@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 
@@ -240,13 +241,55 @@ func splitLines(data []byte) [][]byte {
 	return lines
 }
 
-// redactSecrets attempts to redact sensitive information from strings
+// secretPatterns are compiled regex patterns for detecting sensitive values in strings.
+// Each pattern uses a named capture group "secret" to identify the portion to redact.
+// Order matters: more specific patterns first.
+var secretPatterns = []*regexp.Regexp{
+	// URL credentials: https://user:password@host, postgres://user:pass@host
+	regexp.MustCompile(`(?i)(://[^:\s]+:)(?P<secret>[^@\s]+)(@)`),
+	// "Bearer <token>" — captures the token after Bearer
+	regexp.MustCompile(`(?i)\bBearer\s+(?P<secret>\S+)`),
+	// Common CLI flags: --password=foo, --token=bar, --api-key=val
+	regexp.MustCompile(`(?i)(?:-{1,2})(?:password|passwd|token|secret|api[_-]?key|key|auth)\s*[=\s]\s*["']?(?P<secret>[^\s"']+)["']?`),
+	// Environment variable assignments: API_KEY=abc123, SECRET="value"
+	regexp.MustCompile(`(?i)\b[A-Z][A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|AUTH|CREDENTIAL)\b\s*=\s*["']?(?P<secret>[^\s"']+)["']?`),
+	// JSON/structured data: "token": "value", "password":"val"
+	regexp.MustCompile(`(?i)["']?(?:password|passwd|token|secret|api[_-]?key|apikey|credential)["']?\s*[:=]\s*["'](?P<secret>[^"']+)["']`),
+	// Standalone keyword=value (not after --): password=value, token = value (requires leading whitespace/start)
+	regexp.MustCompile(`(?m)(?:^|\s)(?:password|passwd|token|secret|api[_-]?key|apikey)\s*[:=]\s*["']?(?P<secret>[^\s"']+)["']?`),
+	// Long opaque strings (64+ chars) that look like API keys/tokens
+	regexp.MustCompile(`(?P<secret>[A-Za-z0-9+/=_-]{64,})`),
+}
+
+// redactSecrets replaces detected sensitive values in s with [REDACTED].
+// It targets common patterns: URL credentials, auth headers/flags, env vars,
+// and opaque token-like strings.
 func redactSecrets(s string) string {
-	// TODO: Implement secret redaction patterns
-	// This is a placeholder for future implementation
-	// Could use patterns like:
-	// - Password/token patterns
-	// - API key patterns
-	// - SSH key patterns
+	for _, pat := range secretPatterns {
+		s = pat.ReplaceAllStringFunc(s, func(match string) string {
+			// Find the named group "secret" within the match
+			groups := pat.FindStringSubmatch(match)
+			secretIdx := pat.SubexpIndex("secret")
+			if secretIdx < 0 || secretIdx >= len(groups) {
+				return match
+			}
+			secret := groups[secretIdx]
+			if secret == "" {
+				return match
+			}
+			// Replace only the secret portion within the full match
+			return stringsReplace(match, secret, "[REDACTED]")
+		})
+	}
+	return s
+}
+
+// stringsReplace replaces the first occurrence of old with new in s.
+func stringsReplace(s, old, new string) string {
+	for i := 0; i <= len(s)-len(old); i++ {
+		if s[i:i+len(old)] == old {
+			return s[:i] + new + s[i+len(old):]
+		}
+	}
 	return s
 }
