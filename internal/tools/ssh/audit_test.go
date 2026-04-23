@@ -526,3 +526,141 @@ func TestSplitLines(t *testing.T) {
 		})
 	}
 }
+
+func TestRedactSecrets(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "no secrets",
+			input:    "ls -la /home/user",
+			expected: "ls -la /home/user",
+		},
+		{
+			name:     "url with password",
+			input:    "curl https://admin:s3cret@api.example.com/v1/data",
+			expected: "curl https://admin:[REDACTED]@api.example.com/v1/data",
+		},
+		{
+			name:     "bearer token",
+			input:    "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abc123def456",
+			expected: "Authorization: Bearer [REDACTED]",
+		},
+		{
+			name:     "api key flag long form",
+			input:    "terraform apply --api-key=sk-ant-api03-longkeyvalue1234567890abcdef",
+			expected: "terraform apply --api-key=[REDACTED]",
+		},
+		{
+			name:     "password flag",
+			input:    "mysql -u root --password=hunter2 database",
+			expected: "mysql -u root --password=[REDACTED] database",
+		},
+		{
+			name:     "env var assignment",
+			input:    "export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+			expected: "export AWS_SECRET_ACCESS_KEY=[REDACTED]",
+		},
+		{
+			name:     "token env var",
+			input:    `GITHUB_TOKEN="ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh"`,
+			expected: `GITHUB_TOKEN="[REDACTED]"`,
+		},
+		{
+			name:     "long opaque string 64+ chars",
+			input:    "key: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a7b8c9d0e1f2",
+			expected: "key: [REDACTED]",
+		},
+		{
+			name:     "multiple secrets in one line",
+			input:    "API_KEY=abc123 --password=secret https://user:pass@host.com",
+			expected: "API_KEY=[REDACTED] --password=[REDACTED] https://user:[REDACTED]@host.com",
+		},
+		{
+			name:     "short flags not false-positive",
+			input:    "ssh -p 22 user@host.com",
+			expected: "ssh -p 22 user@host.com",
+		},
+		{
+			name:     "postgres connection string",
+			input:    "postgres://dbuser:dbpass123@localhost:5432/mydb",
+			expected: "postgres://dbuser:[REDACTED]@localhost:5432/mydb",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "password equals with spaces",
+			input:    "password = mySecretValue123",
+			expected: "password = [REDACTED]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := redactSecrets(tt.input)
+			if result != tt.expected {
+				t.Errorf("redactSecrets mismatch:\n  input:    %q\n  expected: %q\n  got:      %q", tt.input, tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestRedactSecretsIntegration(t *testing.T) {
+	// Test that redaction works through the full LogExecution path
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "audit.jsonl")
+
+	logger, err := NewAuditLogger(config.SSHAuditConfig{
+		Enabled:       true,
+		LogPath:       logPath,
+		RedactSecrets: true,
+		LogOutput:     true,
+	})
+	if err != nil {
+		t.Fatalf("failed to create logger: %v", err)
+	}
+	defer logger.Close()
+
+	entry := &AuditEntry{
+		Host:    "server.example.com",
+		Command: "curl -H 'Authorization: Bearer sk-abc123def456' https://user:pass@api.example.com/endpoint",
+		Stdout:  `{"token": "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"}`,
+		Stderr:  "",
+	}
+
+	if err := logger.LogExecution(entry); err != nil {
+		t.Fatalf("failed to log entry: %v", err)
+	}
+
+	// Read back and verify secrets are redacted
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("failed to read log: %v", err)
+	}
+
+	var logged AuditEntry
+	if err := json.Unmarshal(data, &logged); err != nil {
+		t.Fatalf("failed to parse log: %v", err)
+	}
+
+	// Command should have both secrets redacted
+	if strings.Contains(logged.Command, "sk-abc123def456") {
+		t.Error("Bearer token not redacted in command")
+	}
+	if strings.Contains(logged.Command, "user:pass@") {
+		t.Error("URL password not redacted in command")
+	}
+	if !strings.Contains(logged.Command, "[REDACTED]") {
+		t.Error("expected [REDACTED] in command")
+	}
+
+	// Stdout should have token redacted
+	if strings.Contains(logged.Stdout, "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+		t.Error("GitHub token not redacted in stdout")
+	}
+}
