@@ -66,6 +66,17 @@ func (a *brainAdapter) RecallWithContext(ctx context.Context, query string, limi
 	return convertEntries(entries), nil
 }
 
+func (a *brainAdapter) RecallWithCluster(ctx context.Context, query string, limit int) (*types.BrainClusterResult, error) {
+	result, err := a.b.RecallWithCluster(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	return &types.BrainClusterResult{
+		Direct:  convertEntries(result.Direct),
+		Cluster: convertEntries(result.Cluster),
+	}, nil
+}
+
 func (a *brainAdapter) List(ctx context.Context, prefix string, sourcePrefix string) ([]*types.BrainEntry, error) {
 	entries, err := a.b.List(ctx, prefix, sourcePrefix)
 	if err != nil {

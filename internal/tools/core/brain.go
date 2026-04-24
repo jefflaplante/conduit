@@ -83,7 +83,7 @@ func (t *BrainTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"store", "store_bulk", "get", "recall", "list", "delete", "push", "pop", "peek", "promote", "consolidate", "status", "rem_cycle"},
+				"enum":        []string{"store", "store_bulk", "get", "recall", "recall_cluster", "list", "delete", "push", "pop", "peek", "promote", "consolidate", "status", "rem_cycle"},
 				"description": "Action to perform on the brain memory system",
 			},
 			"key": map[string]interface{}{
@@ -179,6 +179,8 @@ func (t *BrainTool) Execute(ctx context.Context, args map[string]interface{}) (*
 		return t.handleGet(ctx, args, brain)
 	case "recall":
 		return t.handleRecall(ctx, args, brain)
+	case "recall_cluster":
+		return t.handleRecallCluster(ctx, args, brain)
 	case "list":
 		return t.handleList(ctx, args, brain)
 	case "delete":
@@ -327,6 +329,26 @@ func (t *BrainTool) handleRecall(ctx context.Context, args map[string]interface{
 		return &types.ToolResult{Success: true, Content: fmt.Sprintf("No entries matching query=%q", query)}, nil
 	}
 	data, _ := json.Marshal(entries)
+	return &types.ToolResult{Success: true, Content: string(data)}, nil
+}
+
+func (t *BrainTool) handleRecallCluster(ctx context.Context, args map[string]interface{}, brain types.BrainService) (*types.ToolResult, error) {
+	query, _ := args["query"].(string)
+	if query == "" {
+		return &types.ToolResult{Success: false, Error: "query is required for recall_cluster"}, nil
+	}
+	limit := 20
+	if l, ok := args["limit"].(float64); ok && l > 0 {
+		limit = int(l)
+	}
+	result, err := brain.RecallWithCluster(ctx, query, limit)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("recall_cluster failed: %v", err)}, nil
+	}
+	if len(result.Direct) == 0 && len(result.Cluster) == 0 {
+		return &types.ToolResult{Success: true, Content: fmt.Sprintf("No entries matching query=%q (no cluster expansion)", query)}, nil
+	}
+	data, _ := json.Marshal(result)
 	return &types.ToolResult{Success: true, Content: string(data)}, nil
 }
 
@@ -510,7 +532,7 @@ func (t *BrainTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *
 	} else {
 		brainDep.Available = true
 		brainDep.Status = "connected"
-		result.Capabilities = []string{"store", "store_bulk", "get", "recall", "list", "delete", "push", "pop", "peek", "promote", "consolidate", "status"}
+		result.Capabilities = []string{"store", "store_bulk", "get", "recall", "recall_cluster", "list", "delete", "push", "pop", "peek", "promote", "consolidate", "status"}
 
 		// Check REM cycle availability
 		remDep := types.DependencyStatus{
