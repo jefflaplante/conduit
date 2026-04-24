@@ -31,6 +31,7 @@ type Entry struct {
 	AccessedAt  time.Time  `json:"accessed_at"`
 	AccessCount int        `json:"access_count"`
 	Salience    float64    `json:"salience"`
+	Warmth      float64    `json:"warmth,omitempty"`
 	Source      string     `json:"source,omitempty"`
 	Stale       bool       `json:"stale,omitempty"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
@@ -110,6 +111,14 @@ func WithRecencyDecayRate(r float64) Option          { return func(b *Brain) { b
 func WithAccessCountCap(n int) Option                { return func(b *Brain) { b.accessCountCap = n } }
 func WithHeatPromotionThreshold(n int) Option        { return func(b *Brain) { b.heatPromotionThreshold = n } }
 
+// WithSpreadingDecay sets the activation decay factor (distance-1 multiplier).
+// For each edge traversal the boost is multiplied by d. Default: 0.5.
+func WithSpreadingDecay(d float64) Option { return func(b *Brain) { b.spreadingDecay = d } }
+
+// WithSpreadingEnabled enables or disables spreading activation globally.
+// Default: true.
+func WithSpreadingEnabled(enabled bool) Option { return func(b *Brain) { b.spreadingEnabled = enabled } }
+
 type Brain struct {
 	mu      sync.RWMutex
 	working map[string]map[string]*Entry // userID -> key -> entry
@@ -128,6 +137,10 @@ type Brain struct {
 	recencyDecayRate       float64
 	accessCountCap         int
 	heatPromotionThreshold int
+
+	// Spreading activation
+	spreadingEnabled bool
+	spreadingDecay   float64
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -163,6 +176,8 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 		recencyDecayRate:       1.0,
 		accessCountCap:         100,
 		heatPromotionThreshold: 3,
+		spreadingEnabled:       true,
+		spreadingDecay:         0.5,
 		stopCh:                 make(chan struct{}),
 	}
 	for _, opt := range opts {
@@ -438,7 +453,12 @@ func (b *Brain) Get(ctx context.Context, key string) (*Entry, error) {
 		}
 	}
 	b.mu.RUnlock()
-	return b.getLTM(key)
+	entry, err := b.getLTM(key)
+	if err == nil && entry != nil {
+		// Fire-and-forget: spread activation to neighbours. Errors are non-fatal.
+		_ = b.spreadActivation([]string{key})
+	}
+	return entry, err
 }
 
 func (b *Brain) getLTM(key string) (*Entry, error) {
@@ -452,13 +472,13 @@ func (b *Brain) getLTM(key string) (*Entry, error) {
 				(0.8 * ?),
 				salience, 0.5)
 		WHERE key = ? AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))
-		RETURNING key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at
+		RETURNING key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at, warmth
 	`, b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight, key)
 	entry := &Entry{Tier: TierLongTerm}
 	var staleInt int
 	var expiresAt sql.NullTime
 	err := row.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-		&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAt)
+		&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAt, &entry.Warmth)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -575,10 +595,10 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	}
 
 	sqlQuery := fmt.Sprintf(
-		`SELECT key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at,
+		`SELECT key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at, warmth,
 		(%s) AS match_count
 		FROM brain_ltm WHERE (%s) AND (expires_at IS NULL OR expires_at > strftime('%%Y-%%m-%%d %%H:%%M:%%f', 'now'))
-		ORDER BY match_count DESC, salience DESC LIMIT ?`,
+		ORDER BY match_count DESC, salience + warmth DESC LIMIT ?`,
 		strings.Join(matchExprs, " + "),
 		strings.Join(whereClauses, " OR "),
 	)
@@ -597,7 +617,7 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 		var staleInt int
 		var expiresAtNT sql.NullTime
 		if err := rows.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAtNT, &matchCount); err != nil {
+			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAtNT, &entry.Warmth, &matchCount); err != nil {
 			continue
 		}
 		entry.Stale = staleInt != 0
@@ -635,11 +655,11 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 		})
 	}
 
-	// Sort by blended score: match relevance (60%) + salience (40%),
+	// Sort by blended score: match relevance (50%) + salience (30%) + warmth (20%),
 	// with an optional context-overlap boost of (1 + defaultContextWeight).
 	sort.Slice(scored, func(i, j int) bool {
-		si := (scored[i].matchScore * 0.6) + (scored[i].entry.Salience * 0.4)
-		sj := (scored[j].matchScore * 0.6) + (scored[j].entry.Salience * 0.4)
+		si := (scored[i].matchScore * 0.5) + (scored[i].entry.Salience * 0.3) + (scored[i].entry.Warmth * 0.2)
+		sj := (scored[j].matchScore * 0.5) + (scored[j].entry.Salience * 0.3) + (scored[j].entry.Warmth * 0.2)
 		if len(contextTerms) > 0 {
 			if entryMatchesAnyTerm(scored[i].entry, contextTerms) {
 				si *= 1 + defaultContextWeight
@@ -658,6 +678,24 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	for i, s := range scored {
 		results[i] = s.entry
 	}
+
+	// Spread activation from the top results (limit to top 3 to avoid cascade).
+	if len(results) > 0 {
+		topN := 3
+		if len(results) < topN {
+			topN = len(results)
+		}
+		spreadKeys := make([]string, 0, topN)
+		for i := 0; i < topN; i++ {
+			if results[i].Tier == TierLongTerm {
+				spreadKeys = append(spreadKeys, results[i].Key)
+			}
+		}
+		if len(spreadKeys) > 0 {
+			_ = b.spreadActivation(spreadKeys)
+		}
+	}
+
 	return results, nil
 }
 
@@ -1129,5 +1167,14 @@ func (b *Brain) autoFlush() {
 		if len(wm) == 0 {
 			delete(b.working, userID)
 		}
+	}
+
+	// Decay LTM warmth: multiply by 0.95 each flush cycle (~10 min default).
+	// Entries below the dust threshold are zeroed to avoid float accumulation.
+	if b.spreadingEnabled {
+		_ = database.RetryOnBusy(3, func() error {
+			_, err := b.db.Exec(`UPDATE brain_ltm SET warmth = CASE WHEN warmth * 0.95 < 0.01 THEN 0.0 ELSE warmth * 0.95 END WHERE warmth > 0.0`)
+			return err
+		})
 	}
 }

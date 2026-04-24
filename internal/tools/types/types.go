@@ -239,6 +239,14 @@ type ConsolidationReport struct {
 	EvictedKeys   []string `json:"evicted_keys,omitempty"`
 }
 
+// BrainClusterResult holds the result of a namespace-clustered recall.
+// Direct entries matched the query keywords; Cluster entries share a namespace
+// prefix with a direct match but didn't match the keywords themselves.
+type BrainClusterResult struct {
+	Direct  []*BrainEntry `json:"direct"`
+	Cluster []*BrainEntry `json:"cluster"`
+}
+
 // BrainBulkEntry is a single entry passed to BrainService.StoreBulk. Tier
 // defaults to BrainTierWorking when empty; BrainTierScratch is rejected.
 type BrainBulkEntry struct {
@@ -262,6 +270,10 @@ type BrainService interface {
 	// token get a ranking boost; it never filters results. An empty contextStr
 	// is equivalent to Recall.
 	RecallWithContext(ctx context.Context, query string, limit int, contextStr string) ([]*BrainEntry, error)
+	// RecallWithCluster performs a recall augmented by namespace clustering.
+	// Returns both direct keyword matches and neighbouring entries that share
+	// a namespace prefix with direct matches (BFS expansion).
+	RecallWithCluster(ctx context.Context, query string, limit int) (*BrainClusterResult, error)
 	List(ctx context.Context, prefix string, sourcePrefix string) ([]*BrainEntry, error)
 	Delete(ctx context.Context, key string) error
 	Push(ctx context.Context, userID, value string) error

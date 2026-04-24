@@ -57,6 +57,9 @@ func (f *fakeBrainService) Recall(ctx context.Context, query string, limit int) 
 func (f *fakeBrainService) RecallWithContext(ctx context.Context, query string, limit int, recallContext string) ([]*types.BrainEntry, error) {
 	return nil, nil
 }
+func (f *fakeBrainService) RecallWithCluster(ctx context.Context, query string, limit int) (*types.BrainClusterResult, error) {
+	return nil, nil
+}
 func (f *fakeBrainService) List(ctx context.Context, prefix, sourcePrefix string) ([]*types.BrainEntry, error) {
 	return nil, nil
 }

@@ -93,6 +93,12 @@ var migrations = []migration{
 		SQL: `ALTER TABLE brain_ltm ADD COLUMN expires_at DATETIME;
 		CREATE INDEX IF NOT EXISTS idx_brain_ltm_expires_at ON brain_ltm(expires_at);`,
 	},
+	// Migration 6: Spreading activation — transient warmth for recently-activated neighbours
+	{
+		Version: 6,
+		SQL: `ALTER TABLE brain_ltm ADD COLUMN warmth REAL NOT NULL DEFAULT 0.0;
+		CREATE INDEX IF NOT EXISTS idx_brain_ltm_warmth ON brain_ltm(warmth);`,
+	},
 }
 
 func runMigrations(db *sql.DB) error {
