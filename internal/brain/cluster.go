@@ -200,7 +200,7 @@ func (b *Brain) clusterNeighbours(seedKeys []string, matchedKeys map[string]bool
 // It delegates to RecallWithContext which now internally performs cluster
 // expansion when spreadingEnabled is true. The combined results are then
 // separated into direct matches and cluster-expanded entries based on the
-// ClusterExpanded flag.
+// ClusterHit flag.
 //
 // When spreadingEnabled is false, no cluster expansion occurs in
 // RecallWithContext, so this method returns only direct matches with an
@@ -211,7 +211,7 @@ func (b *Brain) RecallWithCluster(ctx context.Context, query string, limit int) 
 	}
 
 	// RecallWithContext now performs cluster expansion internally when
-	// spreading is enabled, returning a combined list with ClusterExpanded flags.
+	// spreading is enabled, returning a combined list with ClusterHit flags.
 	combinedResults, err := b.RecallWithContext(ctx, query, limit, "")
 	if err != nil {
 		return nil, fmt.Errorf("cluster recall base: %w", err)
@@ -225,7 +225,7 @@ func (b *Brain) RecallWithCluster(ctx context.Context, query string, limit int) 
 
 	// Separate combined results into direct and cluster based on the flag.
 	for _, e := range combinedResults {
-		if e.ClusterExpanded {
+		if e.ClusterHit {
 			result.Cluster = append(result.Cluster, e)
 		} else {
 			result.Direct = append(result.Direct, e)

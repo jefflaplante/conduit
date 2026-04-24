@@ -147,7 +147,7 @@ func convertEntry(e *brain.Entry) *types.BrainEntry {
 		Key: e.Key, Value: e.Value, Tier: types.BrainTier(e.Tier),
 		CreatedAt: e.CreatedAt, AccessedAt: e.AccessedAt,
 		AccessCount: e.AccessCount, Salience: e.Salience, Warmth: e.Warmth,
-		Source: e.Source, Stale: e.Stale, ClusterExpanded: e.ClusterExpanded,
+		Source: e.Source, Stale: e.Stale, ClusterHit: e.ClusterHit,
 		ExpiresAt: e.ExpiresAt,
 	}
 }

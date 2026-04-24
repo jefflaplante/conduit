@@ -333,7 +333,7 @@ func (t *BrainTool) handleRecall(ctx context.Context, args map[string]interface{
 	// cluster expansion (associative) vs direct keyword match.
 	var direct, cluster []*types.BrainEntry
 	for _, e := range entries {
-		if e.ClusterExpanded {
+		if e.ClusterHit {
 			cluster = append(cluster, e)
 		} else {
 			direct = append(direct, e)
