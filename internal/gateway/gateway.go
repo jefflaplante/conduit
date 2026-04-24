@@ -145,6 +145,18 @@ type Client struct {
 	TokenID    string // auth token ID used for this connection (for revocation)
 	Conn       *websocket.Conn
 	Send       chan []byte
+
+	// CloseFrame carries an out-of-band signal from off-goroutine callers
+	// (e.g. RevokeClientByToken running on the auth-revoke hook) asking the
+	// send-pump to emit a WebSocket close frame with a specific payload
+	// before exiting. The send-pump is the only goroutine that calls
+	// Conn.Write*, so routing close frames through here guarantees
+	// serialization and avoids the race where a revoker would call
+	// WriteControl/Close concurrently with an in-flight WriteMessage on
+	// the pump. Buffered size 1: duplicate revokes coalesce harmlessly
+	// (first non-blocking send wins, the rest drop). nil on pre-existing
+	// test fixtures is tolerated.
+	CloseFrame chan []byte
 }
 
 // New creates a new Gateway instance
@@ -664,12 +676,13 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		ID:      fmt.Sprintf("client_%d", time.Now().UnixNano()),
-		Role:    authResult.AuthInfo.ClientName, // Store authenticated client name
-		UserID:  authResult.AuthInfo.ClientName, // Default user identity from auth
-		TokenID: authResult.AuthInfo.TokenID,    // Track token for revocation
-		Conn:    conn,
-		Send:    make(chan []byte, 256),
+		ID:         fmt.Sprintf("client_%d", time.Now().UnixNano()),
+		Role:       authResult.AuthInfo.ClientName, // Store authenticated client name
+		UserID:     authResult.AuthInfo.ClientName, // Default user identity from auth
+		TokenID:    authResult.AuthInfo.TokenID,    // Track token for revocation
+		Conn:       conn,
+		Send:       make(chan []byte, 256),
+		CloseFrame: make(chan []byte, 1),
 	}
 
 	g.ws.ClientMu.Lock()
