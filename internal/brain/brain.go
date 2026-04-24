@@ -1221,5 +1221,8 @@ func (b *Brain) autoFlush() {
 			return err
 		})
 		_ = b.flushPendingEdges()
+		// Decay edge confidence for idle edges (not traversed in 6h+).
+		// Pairs with confidence below 0.1 are pruned to keep the graph lean.
+		_ = b.DecayEdgeConfidence(0.95, 0.1, 6*time.Hour)
 	}
 }

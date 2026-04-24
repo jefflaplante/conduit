@@ -99,6 +99,12 @@ var migrations = []migration{
 		SQL: `ALTER TABLE brain_ltm ADD COLUMN warmth REAL NOT NULL DEFAULT 0.0;
 		CREATE INDEX IF NOT EXISTS idx_brain_ltm_warmth ON brain_ltm(warmth);`,
 	},
+	// Migration 7: Edge traversal tracking for confidence decay
+	{
+		Version: 7,
+		SQL: `ALTER TABLE brain_relationships ADD COLUMN last_traversed_at DATETIME;
+		CREATE INDEX IF NOT EXISTS idx_brain_rel_last_traversed ON brain_relationships(last_traversed_at);`,
+	},
 }
 
 func runMigrations(db *sql.DB) error {
