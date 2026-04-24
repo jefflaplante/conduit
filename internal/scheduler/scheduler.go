@@ -66,6 +66,20 @@ type Scheduler struct {
 	jobsLoaded      bool      // True after successful loadJobs; prevents saveJobs from wiping unloaded data
 	lastContentHash [32]byte  // SHA-256 of last known jobs file content
 	lastWriteTime   time.Time // Timestamp of our own saveJobs() calls
+
+	// wg tracks long-running goroutines (currently watchJobsFile) so Stop()
+	// can wait for them to exit before returning. Without this, callers that
+	// re-initialise the scheduler immediately after Stop() can collide with
+	// a still-running file-read.
+	wg sync.WaitGroup
+
+	// watchInterval is the period between watchJobsFile polls. Defaults to
+	// 30s in New(); tests may override it for fast shutdown verification.
+	watchInterval time.Duration
+
+	// watchExited is an optional channel that watchJobsFile sends on right
+	// before returning. Used by tests to assert synchronous shutdown.
+	watchExited chan struct{}
 }
 
 // New creates a new scheduler
@@ -80,6 +94,7 @@ func New(workspaceDir string, executor JobExecutor) *Scheduler {
 		ctx:           ctx,
 		cancel:        cancel,
 		crontagMarker: CrontabMarker,
+		watchInterval: 30 * time.Second,
 	}
 }
 
@@ -152,7 +167,10 @@ func (s *Scheduler) Start() error {
 	// Start the cron scheduler
 	s.cron.Start()
 
-	// Start file watcher for hot-reload
+	// Start file watcher for hot-reload. wg.Add must happen before the go
+	// statement so Stop() cannot race past Wait() before the goroutine
+	// registers itself.
+	s.wg.Add(1)
 	go s.watchJobsFile()
 
 	log.Printf("[Scheduler] Started with %d jobs (%d Go, %d system)",
@@ -161,11 +179,15 @@ func (s *Scheduler) Start() error {
 	return nil
 }
 
-// Stop stops the scheduler
+// Stop stops the scheduler. It cancels the scheduler context, drains the cron
+// runner, and waits synchronously for the watchJobsFile goroutine to exit so
+// callers may safely re-initialise the scheduler immediately after Stop()
+// returns without colliding with an in-flight file-read.
 func (s *Scheduler) Stop() {
 	s.cancel()
 	ctx := s.cron.Stop()
 	<-ctx.Done()
+	s.wg.Wait()
 	log.Printf("[Scheduler] Stopped")
 }
 
@@ -617,7 +639,24 @@ func (s *Scheduler) Status() map[string]interface{} {
 
 // watchJobsFile periodically checks cron_jobs.json for external edits.
 func (s *Scheduler) watchJobsFile() {
-	ticker := time.NewTicker(30 * time.Second)
+	defer s.wg.Done()
+	defer func() {
+		// Optional test hook: signal exit so tests can assert synchronous
+		// shutdown without polling. Non-blocking send so a missing/closed
+		// channel can never deadlock production callers.
+		if s.watchExited != nil {
+			select {
+			case s.watchExited <- struct{}{}:
+			default:
+			}
+		}
+	}()
+
+	interval := s.watchInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
