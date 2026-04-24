@@ -126,6 +126,18 @@ func WithSpreadingDecay(d float64) Option { return func(b *Brain) { b.spreadingD
 // Default: true.
 func WithSpreadingEnabled(enabled bool) Option { return func(b *Brain) { b.spreadingEnabled = enabled } }
 
+// WithMatchWeight sets the weight applied to per-entry keyword match score
+// during recall ranking. Default: 0.5.
+func WithMatchWeight(w float64) Option { return func(b *Brain) { b.matchWeight = w } }
+
+// WithSalienceWeight sets the weight applied to entry salience during recall
+// ranking. Default: 0.3.
+func WithSalienceWeight(w float64) Option { return func(b *Brain) { b.salienceWeight = w } }
+
+// WithWarmthWeight sets the weight applied to spreading-activation warmth
+// during recall ranking. Default: 0.2.
+func WithWarmthWeight(w float64) Option { return func(b *Brain) { b.warmthWeight = w } }
+
 type Brain struct {
 	mu      sync.RWMutex
 	working map[string]map[string]*Entry // userID -> key -> entry
@@ -148,6 +160,13 @@ type Brain struct {
 	// Spreading activation
 	spreadingEnabled bool
 	spreadingDecay   float64
+
+	// Recall blended-score weights. Defaults sum to 1.0 (match 0.5, salience 0.3,
+	// warmth 0.2) but aren't forced to — callers can overweight a signal if
+	// metrics show it correlates with perceived usefulness.
+	matchWeight    float64
+	salienceWeight float64
+	warmthWeight   float64
 
 	// pendingEdgeKeys accumulates LTM keys stored since the last autoFlush so
 	// namespace edges can be materialized in batch rather than per-store.
@@ -198,6 +217,9 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 		heatPromotionThreshold: 3,
 		spreadingEnabled:       true,
 		spreadingDecay:         0.5,
+		matchWeight:            0.5,
+		salienceWeight:         0.3,
+		warmthWeight:           0.2,
 		pendingEdgeKeys:        make(map[string]struct{}),
 		stopCh:                 make(chan struct{}),
 	}
@@ -722,11 +744,13 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 		// Cluster expansion failure is non-fatal — continue with direct results.
 	}
 
-	// Sort by blended score: match relevance (50%) + salience (30%) + warmth (20%),
-	// with an optional context-overlap boost of (1 + defaultContextWeight).
+	// Sort by blended score. Weights default to 0.5/0.3/0.2 (match/salience/warmth)
+	// but are configurable via WithMatchWeight / WithSalienceWeight / WithWarmthWeight.
+	// An optional context-overlap boost of (1 + defaultContextWeight) applies last.
+	mw, sw, ww := b.matchWeight, b.salienceWeight, b.warmthWeight
 	sort.Slice(scored, func(i, j int) bool {
-		si := (scored[i].matchScore * 0.5) + (scored[i].entry.Salience * 0.3) + (scored[i].entry.Warmth * 0.2)
-		sj := (scored[j].matchScore * 0.5) + (scored[j].entry.Salience * 0.3) + (scored[j].entry.Warmth * 0.2)
+		si := (scored[i].matchScore * mw) + (scored[i].entry.Salience * sw) + (scored[i].entry.Warmth * ww)
+		sj := (scored[j].matchScore * mw) + (scored[j].entry.Salience * sw) + (scored[j].entry.Warmth * ww)
 		if len(contextTerms) > 0 {
 			if entryMatchesAnyTerm(scored[i].entry, contextTerms) {
 				si *= 1 + defaultContextWeight
