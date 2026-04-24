@@ -2,6 +2,7 @@ package brain
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -222,6 +223,36 @@ func TestSpreadActivationMultipleSources(t *testing.T) {
 	w, err := b.GetWarmth("solar.c")
 	require.NoError(t, err)
 	assert.Greater(t, w, 0.0, "solar.c should have warmth from multiple sources")
+}
+
+// TestAutoFlushNoReentrantLockDeadlock is a regression test for a deadlock
+// where autoFlush held b.mu across a call to flushPendingEdges, which itself
+// re-acquires b.mu. The symptom in production was the gateway hanging on
+// every Brain.Store/Get/Recall while slash commands (which don't hit Brain)
+// kept working. We invoke autoFlush with pending edge work queued and require
+// it to finish in well under the autoFlush period.
+func TestAutoFlushNoReentrantLockDeadlock(t *testing.T) {
+	b := newTestBrain(t, WithSpreadingEnabled(true))
+	ctx := testCtx("user1")
+
+	require.NoError(t, b.Store(ctx, "solar.battery.config", "1", TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "solar.battery.plan", "2", TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "solar.inverter", "3", TierLongTerm, "test"))
+	require.NotEmpty(t, b.pendingEdgeKeys, "expected pending edges queued after Store")
+
+	done := make(chan struct{})
+	go func() {
+		b.autoFlush()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("autoFlush deadlocked — flushPendingEdges tried to re-acquire b.mu")
+	}
+
+	// Post-flush: a concurrent Store must still be able to grab the lock.
+	require.NoError(t, b.Store(ctx, "solar.battery.state", "4", TierLongTerm, "test"))
 }
 
 // TestSpreadActivationWarmthCappedAtOne verifies that warmth is capped at 1.0

@@ -1289,7 +1289,6 @@ func (b *Brain) startAutoFlush() {
 
 func (b *Brain) autoFlush() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	for userID, wm := range b.working {
 		for key, entry := range wm {
 			entry.Salience = b.computeSalience(entry)
@@ -1301,17 +1300,17 @@ func (b *Brain) autoFlush() {
 			delete(b.working, userID)
 		}
 	}
+	b.mu.Unlock()
 
-	// Decay LTM warmth: multiply by 0.95 each flush cycle (~10 min default).
-	// Entries below the dust threshold are zeroed to avoid float accumulation.
+	// The edge/warmth maintenance below must run without b.mu held:
+	// flushPendingEdges re-acquires b.mu, and holding it across DB work blocks
+	// every Store/Get/Recall in the gateway for the duration of the flush.
 	if b.spreadingEnabled {
 		_ = database.RetryOnBusy(3, func() error {
 			_, err := b.db.Exec(`UPDATE brain_ltm SET warmth = CASE WHEN warmth * 0.95 < 0.01 THEN 0.0 ELSE warmth * 0.95 END WHERE warmth > 0.0`)
 			return err
 		})
 		_ = b.flushPendingEdges()
-		// Decay edge confidence for idle edges (not traversed in 6h+).
-		// Pairs with confidence below 0.1 are pruned to keep the graph lean.
 		_ = b.DecayEdgeConfidence(0.95, 0.1, 6*time.Hour)
 	}
 }
