@@ -328,7 +328,22 @@ func (t *BrainTool) handleRecall(ctx context.Context, args map[string]interface{
 	if len(entries) == 0 {
 		return &types.ToolResult{Success: true, Content: fmt.Sprintf("No entries matching query=%q", query)}, nil
 	}
-	data, _ := json.Marshal(entries)
+
+	// Partition so callers can see at a glance which results arrived via
+	// cluster expansion (associative) vs direct keyword match.
+	var direct, cluster []*types.BrainEntry
+	for _, e := range entries {
+		if e.ClusterExpanded {
+			cluster = append(cluster, e)
+		} else {
+			direct = append(direct, e)
+		}
+	}
+	response := map[string]interface{}{"entries": direct}
+	if len(cluster) > 0 {
+		response["cluster"] = cluster
+	}
+	data, _ := json.Marshal(response)
 	return &types.ToolResult{Success: true, Content: string(data)}, nil
 }
 
