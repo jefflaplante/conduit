@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -116,8 +117,8 @@ type Gateway struct {
 	reflectionStore *reflection.ReflectionStore
 
 	// SPAR reflection: session-end detection and metrics
-	farewellDetector  *reflection.FarewellDetector
-	sessionReflector  *reflection.SessionReflector
+	farewellDetector *reflection.FarewellDetector
+	sessionReflector *reflection.SessionReflector
 
 	// SSH server (optional)
 	sshServer *charmssh.Server
@@ -132,8 +133,14 @@ type Gateway struct {
 	// Graceful shutdown
 	shutdownMgr *ShutdownManager
 
-	// Session wakeup: session keys queued for immediate re-activation after inter-session message delivery.
-	sessionWake chan string
+	// Session wakeup: session keys queued for immediate re-activation after
+	// inter-session message delivery. pendingWake tracks which session keys
+	// are already in the sessionWake buffer so repeated wakes for the same
+	// session coalesce into one slot rather than filling the buffer.
+	// See conduit-t38m.
+	sessionWake     chan string
+	pendingWakeMu   sync.Mutex
+	pendingWakeKeys map[string]struct{}
 }
 
 // Client represents a WebSocket client connection
@@ -333,6 +340,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		monitoring:          monitoringSvc,
 		ws:                  wsService,
 		sessionWake:         make(chan string, 64),
+		pendingWakeKeys:     make(map[string]struct{}),
 		mcpServer:           mcpServer,
 		mcpConfigMgr:        mcpConfigMgr,
 		ringBuffer:          debugBuffer,
@@ -551,10 +559,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// Session wakeup listener: re-activates sessions when inter-session messages arrive.
 	// Each wake signal triggers an AI processing loop on the target session in its own goroutine.
+	// When we dequeue a session key we also clear its pendingWake slot so subsequent
+	// wakes can enqueue again (coalescing only applies while a wake is still buffered).
 	go func() {
 		for {
 			select {
 			case sessionKey := <-g.sessionWake:
+				g.clearPendingWake(sessionKey)
 				go g.wakeSession(sessionKey)
 			case <-ctx.Done():
 				return
@@ -1335,4 +1346,3 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		g.channelManager.SendMessage(echoMsg)
 	}
 }
-

@@ -25,6 +25,14 @@ type GatewayMetrics struct {
 	// Populated when msgSemaphore is full and a message cannot be handed off.
 	IngestDrops map[string]int64 `json:"ingest_drops,omitempty"`
 
+	// Session wakeup overflow metrics (conduit-t38m). SessionWakeDrops counts
+	// wake signals dropped because the sessionWake channel was full.
+	// SessionWakeCoalesced counts wake signals that were safely deduped into an
+	// already-pending wake for the same session (not a drop — the work still
+	// runs, just once).
+	SessionWakeDrops     int64 `json:"session_wake_drops,omitempty"`
+	SessionWakeCoalesced int64 `json:"session_wake_coalesced,omitempty"`
+
 	// WebHook metrics (like TS Conduit)
 	WebhookConnections int `json:"webhook_connections"`
 	ActiveWebhooks     int `json:"active_webhooks"`
@@ -83,6 +91,44 @@ func (g *GatewayMetrics) GetIngestDrops() map[string]int64 {
 		out[k] = v
 	}
 	return out
+}
+
+// IncrementSessionWakeDrop increments the counter for wake signals dropped
+// because the sessionWake buffered channel was full and no dedup slot was
+// available. A drop means a target session will only be re-activated on its
+// next natural activation path. See conduit-t38m.
+func (g *GatewayMetrics) IncrementSessionWakeDrop() {
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+
+	g.SessionWakeDrops++
+	g.Timestamp = time.Now()
+}
+
+// IncrementSessionWakeCoalesced increments the counter for wake signals that
+// were coalesced into an already-pending wake for the same session. Unlike
+// drops, coalesced signals are benign — the session will still be woken
+// exactly once for all merged signals.
+func (g *GatewayMetrics) IncrementSessionWakeCoalesced() {
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+
+	g.SessionWakeCoalesced++
+	g.Timestamp = time.Now()
+}
+
+// GetSessionWakeDrops returns the total sessionWake drop counter.
+func (g *GatewayMetrics) GetSessionWakeDrops() int64 {
+	g.mutex.RLock()
+	defer g.mutex.RUnlock()
+	return g.SessionWakeDrops
+}
+
+// GetSessionWakeCoalesced returns the total sessionWake coalesce counter.
+func (g *GatewayMetrics) GetSessionWakeCoalesced() int64 {
+	g.mutex.RLock()
+	defer g.mutex.RUnlock()
+	return g.SessionWakeCoalesced
 }
 
 // UpdateSessionCount updates session counters
@@ -175,26 +221,28 @@ func (g *GatewayMetrics) SetVersion(version string) {
 
 // MetricsSnapshot is a data-only copy of GatewayMetrics, safe to pass by value.
 type MetricsSnapshot struct {
-	ActiveSessions     int              `json:"active_sessions"`
-	ProcessingSessions int              `json:"processing_sessions"`
-	WaitingSessions    int              `json:"waiting_sessions"`
-	IdleSessions       int              `json:"idle_sessions"`
-	TotalSessions      int              `json:"total_sessions"`
-	QueueDepth         int              `json:"queue_depth"`
-	PendingRequests    int              `json:"pending_requests"`
-	CompletedRequests  int64            `json:"completed_requests"`
-	FailedRequests     int64            `json:"failed_requests"`
-	IngestDrops        map[string]int64 `json:"ingest_drops,omitempty"`
-	WebhookConnections int              `json:"webhook_connections"`
-	ActiveWebhooks     int              `json:"active_webhooks"`
-	UptimeSeconds      int64            `json:"uptime_seconds"`
-	MemoryUsageBytes   int64            `json:"memory_usage_bytes"`
-	MemoryUsageMB      float64          `json:"memory_usage_mb"`
-	CPUUsagePercent    float64          `json:"cpu_usage_percent,omitempty"`
-	GoroutineCount     int              `json:"goroutine_count"`
-	Timestamp          time.Time        `json:"timestamp"`
-	Status             string           `json:"status"`
-	Version            string           `json:"version,omitempty"`
+	ActiveSessions       int              `json:"active_sessions"`
+	ProcessingSessions   int              `json:"processing_sessions"`
+	WaitingSessions      int              `json:"waiting_sessions"`
+	IdleSessions         int              `json:"idle_sessions"`
+	TotalSessions        int              `json:"total_sessions"`
+	QueueDepth           int              `json:"queue_depth"`
+	PendingRequests      int              `json:"pending_requests"`
+	CompletedRequests    int64            `json:"completed_requests"`
+	FailedRequests       int64            `json:"failed_requests"`
+	IngestDrops          map[string]int64 `json:"ingest_drops,omitempty"`
+	SessionWakeDrops     int64            `json:"session_wake_drops,omitempty"`
+	SessionWakeCoalesced int64            `json:"session_wake_coalesced,omitempty"`
+	WebhookConnections   int              `json:"webhook_connections"`
+	ActiveWebhooks       int              `json:"active_webhooks"`
+	UptimeSeconds        int64            `json:"uptime_seconds"`
+	MemoryUsageBytes     int64            `json:"memory_usage_bytes"`
+	MemoryUsageMB        float64          `json:"memory_usage_mb"`
+	CPUUsagePercent      float64          `json:"cpu_usage_percent,omitempty"`
+	GoroutineCount       int              `json:"goroutine_count"`
+	Timestamp            time.Time        `json:"timestamp"`
+	Status               string           `json:"status"`
+	Version              string           `json:"version,omitempty"`
 }
 
 // Snapshot returns a thread-safe copy of the current metrics
@@ -211,26 +259,28 @@ func (g *GatewayMetrics) Snapshot() MetricsSnapshot {
 	}
 
 	return MetricsSnapshot{
-		ActiveSessions:     g.ActiveSessions,
-		ProcessingSessions: g.ProcessingSessions,
-		WaitingSessions:    g.WaitingSessions,
-		IdleSessions:       g.IdleSessions,
-		TotalSessions:      g.TotalSessions,
-		QueueDepth:         g.QueueDepth,
-		PendingRequests:    g.PendingRequests,
-		CompletedRequests:  g.CompletedRequests,
-		FailedRequests:     g.FailedRequests,
-		IngestDrops:        drops,
-		WebhookConnections: g.WebhookConnections,
-		ActiveWebhooks:     g.ActiveWebhooks,
-		UptimeSeconds:      g.UptimeSeconds,
-		MemoryUsageBytes:   g.MemoryUsageBytes,
-		MemoryUsageMB:      g.MemoryUsageMB,
-		CPUUsagePercent:    g.CPUUsagePercent,
-		GoroutineCount:     g.GoroutineCount,
-		Timestamp:          g.Timestamp,
-		Status:             g.Status,
-		Version:            g.Version,
+		ActiveSessions:       g.ActiveSessions,
+		ProcessingSessions:   g.ProcessingSessions,
+		WaitingSessions:      g.WaitingSessions,
+		IdleSessions:         g.IdleSessions,
+		TotalSessions:        g.TotalSessions,
+		QueueDepth:           g.QueueDepth,
+		PendingRequests:      g.PendingRequests,
+		CompletedRequests:    g.CompletedRequests,
+		FailedRequests:       g.FailedRequests,
+		IngestDrops:          drops,
+		SessionWakeDrops:     g.SessionWakeDrops,
+		SessionWakeCoalesced: g.SessionWakeCoalesced,
+		WebhookConnections:   g.WebhookConnections,
+		ActiveWebhooks:       g.ActiveWebhooks,
+		UptimeSeconds:        g.UptimeSeconds,
+		MemoryUsageBytes:     g.MemoryUsageBytes,
+		MemoryUsageMB:        g.MemoryUsageMB,
+		CPUUsagePercent:      g.CPUUsagePercent,
+		GoroutineCount:       g.GoroutineCount,
+		Timestamp:            g.Timestamp,
+		Status:               g.Status,
+		Version:              g.Version,
 	}
 }
 
@@ -265,6 +315,8 @@ func (g *GatewayMetrics) Reset() {
 	g.CompletedRequests = 0
 	g.FailedRequests = 0
 	g.IngestDrops = make(map[string]int64)
+	g.SessionWakeDrops = 0
+	g.SessionWakeCoalesced = 0
 	g.WebhookConnections = 0
 	g.ActiveWebhooks = 0
 	g.MemoryUsageBytes = 0
