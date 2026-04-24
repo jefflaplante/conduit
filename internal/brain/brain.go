@@ -34,7 +34,7 @@ type Entry struct {
 	Warmth      float64    `json:"warmth,omitempty"`
 	Source      string     `json:"source,omitempty"`
 	Stale          bool       `json:"stale,omitempty"`
-	ClusterExpanded bool      `json:"cluster_expanded,omitempty"`
+	ClusterHit      bool       `json:"cluster_hit,omitempty"`
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 }
 
@@ -727,7 +727,7 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 			var added int
 			for _, ce := range clusterEntries {
 				if !seen[ce.Key] {
-					ce.ClusterExpanded = true
+					ce.ClusterHit = true
 					scored = append(scored, scoredEntry{entry: ce, matchScore: 0.0})
 					seen[ce.Key] = true
 					added++
