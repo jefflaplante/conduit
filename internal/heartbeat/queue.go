@@ -108,22 +108,26 @@ func (q *SharedAlertQueue) LoadQueue() (*AlertQueue, error) {
 }
 
 // SaveQueue atomically saves the alert queue to disk
-// Uses atomic write (write to temp file, then rename) for reliability
+// Uses atomic write (write to temp file, then rename) for reliability.
+//
+// To avoid blocking all readers/writers during CPU-bound JSON encoding, this
+// public entry point validates, mutates metadata, and marshals BEFORE
+// acquiring the write lock. The lock is then held only for the file I/O
+// (create/write/sync/rename) so concurrent atomic renames remain serialized.
+//
+// Callers that hold the mutex themselves (e.g. AddAlert, UpdateAlertStatus,
+// RemoveProcessedAlerts) must use saveQueueUnlocked instead; its locking
+// contract is unchanged.
 func (q *SharedAlertQueue) SaveQueue(queue *AlertQueue) error {
-	q.mutex.Lock()
-	defer q.mutex.Unlock()
-
-	// Validate queue before saving
+	// Validate queue before saving (no lock required for the passed-in value)
 	if err := queue.Validate(); err != nil {
 		return fmt.Errorf("cannot save invalid alert queue: %w", err)
 	}
 
-	// Ensure directory exists
-	if err := q.ensureDirectoryExists(); err != nil {
-		return err
-	}
-
-	// Update metadata
+	// Update metadata and marshal outside the lock. These mutate the
+	// caller-owned *AlertQueue; if that pointer is shared across goroutines
+	// it was already the caller's responsibility to synchronize — SaveQueue
+	// only guarantees serialization of the on-disk state.
 	queue.LastSync = time.Now()
 	queue.Version++
 
@@ -131,6 +135,16 @@ func (q *SharedAlertQueue) SaveQueue(queue *AlertQueue) error {
 	data, err := json.MarshalIndent(queue, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal alert queue to JSON: %w", err)
+	}
+
+	// Acquire the write lock only for the file I/O phase so we do not block
+	// readers during the (potentially expensive) marshal above.
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+
+	// Ensure directory exists
+	if err := q.ensureDirectoryExists(); err != nil {
+		return err
 	}
 
 	// Use atomic write: write to temp file, then rename
@@ -306,8 +320,13 @@ func (q *SharedAlertQueue) GetPendingAlerts() ([]Alert, error) {
 
 // UpdateAlertStatus updates the status of a specific alert
 func (q *SharedAlertQueue) UpdateAlertStatus(alertID string, status AlertStatus) error {
-	// Load current queue
-	queue, err := q.LoadQueue()
+	// Hold write lock across load-modify-save to prevent TOCTOU races with
+	// concurrent AddAlert / RemoveProcessedAlerts callers.
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+
+	// Load current queue (unlocked variant)
+	queue, err := q.loadQueueUnlocked()
 	if err != nil {
 		return fmt.Errorf("failed to load queue for updating alert status: %w", err)
 	}
@@ -317,8 +336,8 @@ func (q *SharedAlertQueue) UpdateAlertStatus(alertID string, status AlertStatus)
 		return fmt.Errorf("failed to update alert status: %w", err)
 	}
 
-	// Save updated queue
-	if err := q.SaveQueue(queue); err != nil {
+	// Save updated queue (unlocked variant)
+	if err := q.saveQueueUnlocked(queue); err != nil {
 		return fmt.Errorf("failed to save queue after updating alert status: %w", err)
 	}
 
@@ -327,8 +346,14 @@ func (q *SharedAlertQueue) UpdateAlertStatus(alertID string, status AlertStatus)
 
 // RemoveProcessedAlerts removes alerts that have been successfully sent or have expired
 func (q *SharedAlertQueue) RemoveProcessedAlerts() error {
-	// Load current queue
-	queue, err := q.LoadQueue()
+	// Hold write lock across load-modify-save to prevent TOCTOU races with
+	// concurrent AddAlert / UpdateAlertStatus callers. Without this, alerts
+	// added between LoadQueue() and SaveQueue() would be silently dropped.
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+
+	// Load current queue (unlocked variant)
+	queue, err := q.loadQueueUnlocked()
 	if err != nil {
 		return fmt.Errorf("failed to load queue for cleanup: %w", err)
 	}
@@ -346,7 +371,7 @@ func (q *SharedAlertQueue) RemoveProcessedAlerts() error {
 	if len(queue.Alerts) != originalCount ||
 		(queue.SuppressionMap != nil && len(queue.SuppressionMap) > 0) ||
 		(queue.DeduplicationMap != nil && len(queue.DeduplicationMap) > 0) {
-		if err := q.SaveQueue(queue); err != nil {
+		if err := q.saveQueueUnlocked(queue); err != nil {
 			return fmt.Errorf("failed to save queue after cleanup: %w", err)
 		}
 	}
