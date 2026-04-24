@@ -33,8 +33,9 @@ type Entry struct {
 	Salience    float64    `json:"salience"`
 	Warmth      float64    `json:"warmth,omitempty"`
 	Source      string     `json:"source,omitempty"`
-	Stale       bool       `json:"stale,omitempty"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	Stale          bool       `json:"stale,omitempty"`
+	ClusterExpanded bool      `json:"cluster_expanded,omitempty"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 }
 
 type ConsolidationReport struct {
@@ -653,6 +654,25 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 			_, err := b.db.Exec(updateSQL, updateArgs...)
 			return err
 		})
+	}
+
+	// Cluster expansion: when spreading is enabled and we have LTM hits,
+	// expand the result set with namespace-clustered neighbours. These entries
+	// don't match the query keywords but share a namespace prefix with direct
+	// matches. They get a matchScore of 0 but their warmth (from spreading
+	// activation) gives them a natural ranking boost.
+	if b.spreadingEnabled && len(ltmHitKeys) > 0 {
+		clusterEntries, err := b.clusterNeighbours(ltmHitKeys, seen, defaultClusterConfig)
+		if err == nil {
+			for _, ce := range clusterEntries {
+				if !seen[ce.Key] {
+					ce.ClusterExpanded = true
+					scored = append(scored, scoredEntry{entry: ce, matchScore: 0.0})
+					seen[ce.Key] = true
+				}
+			}
+		}
+		// Cluster expansion failure is non-fatal — continue with direct results.
 	}
 
 	// Sort by blended score: match relevance (50%) + salience (30%) + warmth (20%),
