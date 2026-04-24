@@ -989,16 +989,22 @@ func (b *Brain) Consolidate(ctx context.Context, autoPromote bool) (*Consolidati
 	}
 	b.mu.Unlock()
 
+	var promotedKeys []string
 	for _, entry := range toPromote {
 		if err := b.storeLTM(entry.Key, entry.Value, entry.Source, time.Now(), entry.ExpiresAt); err != nil {
 			log.Printf("Brain: failed to promote %q: %v", entry.Key, err)
 			continue
 		}
+		promotedKeys = append(promotedKeys, entry.Key)
 		report.PromotedKeys = append(report.PromotedKeys, entry.Key)
 		report.PromotedCount++
+	}
+	if len(promotedKeys) > 0 {
 		b.mu.Lock()
 		if wm, ok := b.working[userID]; ok {
-			delete(wm, entry.Key)
+			for _, k := range promotedKeys {
+				delete(wm, k)
+			}
 		}
 		b.mu.Unlock()
 	}
