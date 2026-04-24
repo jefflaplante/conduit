@@ -6,9 +6,9 @@ import (
 	"log"
 	"time"
 
+	"conduit/internal/protocol"
 	"conduit/internal/sessions"
 	"conduit/internal/tools/types"
-	"conduit/internal/protocol"
 )
 
 // SendMessage implements the ChannelSender interface for tools
@@ -147,12 +147,58 @@ func (g *Gateway) sendToSessionWakeWithSource(ctx context.Context, sessionKey, l
 
 	log.Printf("[SendToSessionWake] Message delivered to session %s, signalling wake (source=%q)", targetSession.Key, wakeSource)
 
-	// Signal the wake listener (non-blocking: drop if buffer is full rather than blocking the caller)
-	select {
-	case g.sessionWake <- targetSession.Key:
-	default:
-		log.Printf("[SendToSessionWake] Wake channel full, session %s will process on next activation", targetSession.Key)
-	}
+	g.enqueueSessionWake(targetSession.Key)
 
 	return nil
+}
+
+// enqueueSessionWake signals the wake listener for sessionKey.
+//
+// If a wake for the same session is already buffered (pendingWakeKeys slot
+// held), the new signal is coalesced — we just bump the coalesce counter and
+// return. The existing buffered wake will trigger exactly one AI processing
+// loop that picks up whatever messages are in the session by then, which
+// matches the intent of multiple back-to-back wakes.
+//
+// Only when there is no existing pending wake AND the channel is full do we
+// count a real drop: the target session will not be woken until its next
+// natural activation. See conduit-t38m.
+func (g *Gateway) enqueueSessionWake(sessionKey string) {
+	g.pendingWakeMu.Lock()
+	if g.pendingWakeKeys == nil {
+		g.pendingWakeKeys = make(map[string]struct{})
+	}
+	if _, already := g.pendingWakeKeys[sessionKey]; already {
+		g.pendingWakeMu.Unlock()
+		if g.monitoring != nil && g.monitoring.GatewayMetrics != nil {
+			g.monitoring.GatewayMetrics.IncrementSessionWakeCoalesced()
+		}
+		log.Printf("[SendToSessionWake] Wake for session %s already pending, coalescing", sessionKey)
+		return
+	}
+	// Reserve the slot before we attempt the send. If the send fails we back
+	// out. Holding the mutex across the channel send keeps the reservation and
+	// the buffer state consistent with each other — the drainer only clears
+	// the slot under this same mutex.
+	g.pendingWakeKeys[sessionKey] = struct{}{}
+	select {
+	case g.sessionWake <- sessionKey:
+		g.pendingWakeMu.Unlock()
+	default:
+		delete(g.pendingWakeKeys, sessionKey)
+		g.pendingWakeMu.Unlock()
+		if g.monitoring != nil && g.monitoring.GatewayMetrics != nil {
+			g.monitoring.GatewayMetrics.IncrementSessionWakeDrop()
+		}
+		log.Printf("[SendToSessionWake] Wake channel full, session %s will process on next activation", sessionKey)
+	}
+}
+
+// clearPendingWake removes the pending-wake reservation for sessionKey. Called
+// by the wake-listener goroutine in Start() as soon as a key is dequeued from
+// sessionWake, so subsequent wakes can enqueue again.
+func (g *Gateway) clearPendingWake(sessionKey string) {
+	g.pendingWakeMu.Lock()
+	delete(g.pendingWakeKeys, sessionKey)
+	g.pendingWakeMu.Unlock()
 }
