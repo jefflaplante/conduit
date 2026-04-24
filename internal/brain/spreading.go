@@ -116,6 +116,15 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 		return err
 	}
 
+	// Record metrics: one spread event per call, boost samples for averaging.
+	b.mu.Lock()
+	b.spreadEvents++
+	for _, u := range updates {
+		b.totalBoost += u.warmthBoost
+		b.totalBoostCount++
+	}
+	b.mu.Unlock()
+
 	// Stamp last_traversed_at on every edge we scanned. Best-effort: a failure
 	// here only delays decay by one autoFlush cycle, so we don't propagate.
 	if len(traversed) > 0 {
