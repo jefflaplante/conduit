@@ -73,7 +73,21 @@ func (a *Adapter) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down the adapter
+// Stop gracefully shuts down the adapter.
+//
+// We intentionally do NOT close a.incoming or a.outgoing here. Doing so races
+// with concurrent SendMessage / SendIncomingMessage callers: even after they
+// observe a.stopped == false under the read lock, they can race past the
+// RUnlock and land in a select that chooses the channel-send case against a
+// closed channel, which panics. The ctx.Done() case in that select does NOT
+// save us — sending on a closed channel is "ready" for select semantics.
+//
+// Instead we cancel the adapter's context. Senders block on the buffered
+// channel or select ctx.Done() to bail out. The processOutgoing receiver
+// exits via ctx.Done(). Go's GC reclaims the unclosed channels once no
+// goroutine references them. If a downstream close-signal is ever needed,
+// add a dedicated `done chan struct{}` owned by the adapter — never close
+// the message channels senders might still be writing to.
 func (a *Adapter) Stop() error {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
@@ -92,9 +106,6 @@ func (a *Adapter) Stop() error {
 		Message:   "TUI adapter stopped",
 		Timestamp: time.Now(),
 	}
-
-	close(a.incoming)
-	close(a.outgoing)
 
 	log.Printf("[TUIAdapter] Stopped adapter: %s", a.id)
 	return nil
