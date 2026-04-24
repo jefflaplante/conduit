@@ -143,6 +143,11 @@ type Brain struct {
 	spreadingEnabled bool
 	spreadingDecay   float64
 
+	// pendingEdgeKeys accumulates LTM keys stored since the last autoFlush so
+	// namespace edges can be materialized in batch rather than per-store.
+	// Protected by mu.
+	pendingEdgeKeys map[string]struct{}
+
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 }
@@ -179,6 +184,7 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 		heatPromotionThreshold: 3,
 		spreadingEnabled:       true,
 		spreadingDecay:         0.5,
+		pendingEdgeKeys:        make(map[string]struct{}),
 		stopCh:                 make(chan struct{}),
 	}
 	for _, opt := range opts {
@@ -339,6 +345,9 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 				return err
 			})
 		}
+		for _, e := range ltmBatch {
+			b.markPendingEdge(e.Key)
+		}
 	}
 
 	if len(wmBatch) > 0 {
@@ -411,7 +420,22 @@ func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *ti
 			return err
 		})
 	}
+	b.markPendingEdge(key)
 	return nil
+}
+
+// markPendingEdge queues an LTM key for namespace edge materialization on the
+// next autoFlush. No-op when spreading is disabled.
+func (b *Brain) markPendingEdge(key string) {
+	if !b.spreadingEnabled {
+		return
+	}
+	b.mu.Lock()
+	if b.pendingEdgeKeys == nil {
+		b.pendingEdgeKeys = make(map[string]struct{})
+	}
+	b.pendingEdgeKeys[key] = struct{}{}
+	b.mu.Unlock()
 }
 
 func (b *Brain) Get(ctx context.Context, key string) (*Entry, error) {
@@ -1196,5 +1220,6 @@ func (b *Brain) autoFlush() {
 			_, err := b.db.Exec(`UPDATE brain_ltm SET warmth = CASE WHEN warmth * 0.95 < 0.01 THEN 0.0 ELSE warmth * 0.95 END WHERE warmth > 0.0`)
 			return err
 		})
+		_ = b.flushPendingEdges()
 	}
 }
