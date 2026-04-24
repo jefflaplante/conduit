@@ -111,10 +111,17 @@ func (s *WebSocketService) Stop() {
 }
 
 // HandleClientWrite runs the outbound-pump loop for a WebSocket client.
-// It monitors both the client's Send channel and the gateway-lifecycle
-// context bound at Start. When the gateway shuts down, it sends a WebSocket
-// close message and exits, preventing goroutine leaks from long-lived
-// connections.
+// It monitors the client's Send channel, the CloseFrame signal used by
+// off-goroutine callers (e.g. token revocation) to request a specific close
+// frame, and the gateway-lifecycle context bound at Start.
+//
+// Invariant: this goroutine is the ONLY caller of Conn.WriteMessage /
+// Conn.WriteControl for the lifetime of the client. Gorilla's
+// *websocket.Conn requires that at most one goroutine perform writes via
+// the WriteMessage / NextWriter family; routing the revocation close frame
+// through CloseFrame enforces that invariant. On exit the deferred
+// Conn.Close() tears down the underlying net.Conn so the read goroutine
+// also unwinds (conduit-1m5b).
 func (s *WebSocketService) HandleClientWrite(client *Client) {
 	defer client.Conn.Close()
 
@@ -124,7 +131,7 @@ func (s *WebSocketService) HandleClientWrite(client *Client) {
 		case message, ok := <-client.Send:
 			if !ok {
 				// Send channel closed; send WebSocket close frame and exit.
-				client.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				_ = client.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
@@ -134,9 +141,23 @@ func (s *WebSocketService) HandleClientWrite(client *Client) {
 				}
 				return
 			}
+		case payload, ok := <-client.CloseFrame:
+			// Out-of-band close request (token revoke, admin-initiated
+			// disconnect, etc.). Emit the requested close frame and exit;
+			// deferred Conn.Close() will tear down the socket.
+			if !ok {
+				// Channel closed — fall back to empty close frame.
+				_ = client.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			// Short write deadline: we're about to close the conn anyway,
+			// a hung peer shouldn't hold the pump goroutine indefinitely.
+			_ = client.Conn.SetWriteDeadline(time.Now().Add(time.Second))
+			_ = client.Conn.WriteMessage(websocket.CloseMessage, payload)
+			return
 		case <-wsCtx.Done():
 			// Gateway is shutting down; send close frame and exit.
-			client.Conn.WriteMessage(websocket.CloseMessage,
+			_ = client.Conn.WriteMessage(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"))
 			return
 		}
@@ -145,8 +166,17 @@ func (s *WebSocketService) HandleClientWrite(client *Client) {
 
 // RevokeClientByToken closes any WebSocket connection authenticated with the
 // given token ID. Called by Gateway.handleTokenRevocation, which in turn is
-// wired to auth.TokenStorage.OnRevoke at construction. Best-effort: errors
-// from already-closed connections are swallowed.
+// wired to auth.TokenStorage.OnRevoke at construction.
+//
+// The revoke hook runs on an arbitrary goroutine, which historically called
+// Conn.WriteControl+Close directly and raced with the send-pump's
+// WriteMessage calls (gorilla forbids concurrent writers — conduit-1m5b).
+// We now hand the close frame to the send-pump via client.CloseFrame so the
+// pump is the only goroutine that ever calls Conn.Write*.
+//
+// If CloseFrame is nil (test fixtures that don't spin up the pump) or full
+// (a prior revoke already queued a close), we fall back to Conn.Close(),
+// which gorilla documents as safe to call concurrently with writers.
 func (s *WebSocketService) RevokeClientByToken(tokenID string) int {
 	s.ClientMu.RLock()
 	var targets []*Client
@@ -157,15 +187,29 @@ func (s *WebSocketService) RevokeClientByToken(tokenID string) int {
 	}
 	s.ClientMu.RUnlock()
 
+	closeMsg := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "token revoked")
 	for _, c := range targets {
 		if s.logger != nil {
 			s.logger.Debug("closing connection for revoked token",
 				"client_id", c.ID,
 				"token_id", tokenID)
 		}
-		closeMsg := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "token revoked")
-		_ = c.Conn.WriteControl(websocket.CloseMessage, closeMsg, time.Now().Add(time.Second))
-		_ = c.Conn.Close()
+
+		// Hand off to the send-pump. Non-blocking: if the buffer is full
+		// (duplicate revoke) or the channel is nil (legacy test clients),
+		// fall through to Conn.Close() which is safe concurrently with the
+		// pump's writes per gorilla docs.
+		delivered := false
+		if c.CloseFrame != nil {
+			select {
+			case c.CloseFrame <- closeMsg:
+				delivered = true
+			default:
+			}
+		}
+		if !delivered && c.Conn != nil {
+			_ = c.Conn.Close()
+		}
 	}
 
 	return len(targets)
