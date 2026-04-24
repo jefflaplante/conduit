@@ -125,7 +125,11 @@ func (a *brainAdapter) Status(ctx context.Context) (*types.BrainStatus, error) {
 		LTMEntries: s.LTMEntries, WMEntries: s.WMEntries,
 		ScratchDepth: s.ScratchDepth, AvgSalience: s.AvgSalience,
 		HottestKeys: s.HottestKeys, ColdestKeys: s.ColdestKeys,
-		ExpiringSoon: s.ExpiringSoon,
+		ExpiringSoon:    s.ExpiringSoon,
+		SpreadEvents:    s.SpreadEvents,
+		AvgWarmthBoost:  s.AvgWarmthBoost,
+		ClusterHitRate:  s.ClusterHitRate,
+		EdgeCountByType: s.EdgeCountByType,
 	}, nil
 }
 
