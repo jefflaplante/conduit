@@ -746,6 +746,79 @@ func TestLoadJobs_UnparseableScheduleSkipped(t *testing.T) {
 	}
 }
 
+// TestStop_SynchronouslyWaitsForWatchJobsFile is a regression test for
+// conduit-3nsd. Stop() must not return until the watchJobsFile goroutine has
+// actually exited; otherwise a caller that re-initialises the scheduler
+// immediately after Stop() can collide with a still-running file-read.
+func TestStop_SynchronouslyWaitsForWatchJobsFile(t *testing.T) {
+	dir := t.TempDir()
+
+	s := New(dir, nil)
+	// Short watch interval and an exit-signal channel so we can prove the
+	// goroutine has returned, not merely been signalled.
+	s.watchInterval = 10 * time.Millisecond
+	s.watchExited = make(chan struct{}, 1)
+
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	// Give the watcher at least one tick so we know it's actually running
+	// inside its select loop before we Stop.
+	time.Sleep(25 * time.Millisecond)
+
+	stopReturned := make(chan struct{})
+	go func() {
+		s.Stop()
+		close(stopReturned)
+	}()
+
+	select {
+	case <-stopReturned:
+		// Stop() returned. The watch goroutine MUST have exited before Stop
+		// returned; verify by reading the exit signal non-blocking.
+		select {
+		case <-s.watchExited:
+			// good — goroutine signalled exit
+		default:
+			t.Fatal("Stop() returned but watchJobsFile did not signal exit before returning")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Stop() did not return within 500ms — likely deadlock waiting on watchJobsFile")
+	}
+}
+
+// TestStop_Idempotent_AfterRestart verifies that we can Stop and start a new
+// Scheduler in the same process without the previous watchJobsFile goroutine
+// still being live. Re-initialising shortly after Stop must be safe.
+func TestStop_Idempotent_AfterRestart(t *testing.T) {
+	dir := t.TempDir()
+
+	s1 := New(dir, nil)
+	s1.watchInterval = 5 * time.Millisecond
+	s1.watchExited = make(chan struct{}, 1)
+	if err := s1.Start(); err != nil {
+		t.Fatalf("first Start failed: %v", err)
+	}
+	// Let it tick a few times
+	time.Sleep(20 * time.Millisecond)
+	s1.Stop()
+
+	select {
+	case <-s1.watchExited:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("first watchJobsFile did not exit after Stop")
+	}
+
+	// Immediately spin up a second scheduler in the same dir — must not collide.
+	s2 := New(dir, nil)
+	s2.watchInterval = 5 * time.Millisecond
+	if err := s2.Start(); err != nil {
+		t.Fatalf("second Start after Stop failed: %v", err)
+	}
+	s2.Stop()
+}
+
 func TestCheckAndReload_SelfWriteCooldown(t *testing.T) {
 	dir := t.TempDir()
 	jobsFile := filepath.Join(dir, "cron_jobs.json")
