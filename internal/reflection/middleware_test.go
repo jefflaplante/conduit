@@ -277,3 +277,101 @@ func TestIsTimeoutError(t *testing.T) {
 	assert.False(t, IsTimeoutError("permission denied"))
 	assert.False(t, IsTimeoutError(""))
 }
+
+// TestReflectionMiddleware_SkipsInsertWhenCallerNearlyExpired verifies that
+// when the caller's context has less than reflectionInsertMinRemaining time
+// left, the middleware skips the insert entirely (conduit-3fwk).
+func TestReflectionMiddleware_SkipsInsertWhenCallerNearlyExpired(t *testing.T) {
+	store := newTestStore(t)
+	mw := NewReflectionMiddleware(store, DefaultConfig())
+
+	var called bool
+	mw.insertFn = func(_ context.Context, _ *ReflectionEntry) error {
+		called = true
+		return nil
+	}
+
+	// Caller deadline well below the 1s minimum — insert must be skipped.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	mw.recordOutcome(ctx, ToolOutcomeInfo{
+		ToolName:   "ReadFile",
+		SessionKey: "sess-skip",
+		Success:    true,
+		Duration:   10 * time.Millisecond,
+	})
+
+	assert.False(t, called, "insert must be skipped when caller's deadline < 1s")
+}
+
+// TestReflectionMiddleware_CapsInsertTimeoutToCallerDeadline verifies that
+// when the caller has a deadline shorter than the default 5s, the detached
+// insert context's deadline is capped near (and below) the caller's deadline
+// rather than running for the full 5s (conduit-3fwk).
+func TestReflectionMiddleware_CapsInsertTimeoutToCallerDeadline(t *testing.T) {
+	store := newTestStore(t)
+	mw := NewReflectionMiddleware(store, DefaultConfig())
+
+	var insertCtx context.Context
+	mw.insertFn = func(ctx context.Context, _ *ReflectionEntry) error {
+		insertCtx = ctx
+		return nil
+	}
+
+	callerCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	callerDeadline, _ := callerCtx.Deadline()
+
+	mw.recordOutcome(callerCtx, ToolOutcomeInfo{
+		ToolName:   "ReadFile",
+		SessionKey: "sess-cap",
+		Success:    true,
+		Duration:   10 * time.Millisecond,
+	})
+
+	require.NotNil(t, insertCtx, "insert should have been called")
+	insertDeadline, ok := insertCtx.Deadline()
+	require.True(t, ok, "insert context must have a deadline")
+
+	// Insert deadline must NOT exceed caller's deadline (with a small slack
+	// for clock movement during the call).
+	assert.LessOrEqual(t, insertDeadline.UnixNano(), callerDeadline.Add(100*time.Millisecond).UnixNano(),
+		"insert deadline must not exceed caller's deadline + 100ms slack")
+
+	// Insert deadline must be well below the default 5s (i.e. capped).
+	assert.Less(t, time.Until(insertDeadline), reflectionInsertTimeout,
+		"insert deadline must be capped below the default 5s timeout")
+}
+
+// TestReflectionMiddleware_NoCallerDeadlineUsesDefaultTimeout verifies that
+// when the caller has no deadline (e.g. context.Background), the middleware
+// uses the full default 5s insert timeout (conduit-3fwk).
+func TestReflectionMiddleware_NoCallerDeadlineUsesDefaultTimeout(t *testing.T) {
+	store := newTestStore(t)
+	mw := NewReflectionMiddleware(store, DefaultConfig())
+
+	var insertCtx context.Context
+	mw.insertFn = func(ctx context.Context, _ *ReflectionEntry) error {
+		insertCtx = ctx
+		return nil
+	}
+
+	mw.recordOutcome(context.Background(), ToolOutcomeInfo{
+		ToolName:   "ReadFile",
+		SessionKey: "sess-bg",
+		Success:    true,
+		Duration:   10 * time.Millisecond,
+	})
+
+	require.NotNil(t, insertCtx, "insert should have been called")
+	deadline, ok := insertCtx.Deadline()
+	require.True(t, ok, "insert context must always carry a deadline")
+
+	remaining := time.Until(deadline)
+	// Should be near 5s — allow generous lower bound to avoid flake.
+	assert.Greater(t, remaining, 4*time.Second,
+		"with no caller deadline, insert should use the default ~5s timeout")
+	assert.LessOrEqual(t, remaining, reflectionInsertTimeout+100*time.Millisecond,
+		"insert deadline should not exceed the default timeout")
+}

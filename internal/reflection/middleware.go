@@ -26,21 +26,39 @@ type ToolOutcomeInfo struct {
 // package's concrete types.
 type AfterExecutionHook func(ctx context.Context, info ToolOutcomeInfo)
 
+// Reflection insert deadline gating: when the caller's context is close to
+// expiring we either skip or cap the detached insert timeout. This keeps
+// best-effort reflection writes from piling up behind a slow DB after the
+// caller has already given up.
+const (
+	reflectionInsertTimeout      = 5 * time.Second
+	reflectionInsertMinRemaining = 1 * time.Second
+	reflectionInsertSafetyMargin = 100 * time.Millisecond
+)
+
 // ReflectionMiddleware captures tool execution outcomes to the reflection
 // store. It is designed to be minimally invasive: a single AfterExecution
 // callback that the ExecutionEngine fires after each tool completes.
 type ReflectionMiddleware struct {
 	store  *ReflectionStore
 	config *ReflectionConfig
+
+	// insertFn is the function used to write a reflection entry. It defaults
+	// to m.store.Insert; tests may swap it to verify gating behavior.
+	insertFn func(ctx context.Context, entry *ReflectionEntry) error
 }
 
 // NewReflectionMiddleware creates a middleware that logs tool outcomes to
 // the reflection store, respecting the capture-level policy.
 func NewReflectionMiddleware(store *ReflectionStore, config *ReflectionConfig) *ReflectionMiddleware {
-	return &ReflectionMiddleware{
+	m := &ReflectionMiddleware{
 		store:  store,
 		config: config,
 	}
+	if store != nil {
+		m.insertFn = store.Insert
+	}
+	return m
 }
 
 // Hook returns an AfterExecutionHook suitable for registering on the
@@ -53,8 +71,8 @@ func (m *ReflectionMiddleware) Hook() AfterExecutionHook {
 
 // recordOutcome determines the outcome, checks capture policy, builds a
 // ReflectionEntry, and writes it to the store.
-func (m *ReflectionMiddleware) recordOutcome(_ context.Context, info ToolOutcomeInfo) {
-	if m.store == nil || m.config == nil || !m.config.Enabled {
+func (m *ReflectionMiddleware) recordOutcome(ctx context.Context, info ToolOutcomeInfo) {
+	if m.store == nil || m.config == nil || !m.config.Enabled || m.insertFn == nil {
 		return
 	}
 
@@ -62,6 +80,21 @@ func (m *ReflectionMiddleware) recordOutcome(_ context.Context, info ToolOutcome
 
 	if !m.config.ShouldCapture(outcome) {
 		return
+	}
+
+	// Gate the detached insert on the caller's remaining deadline. If the
+	// caller has already (nearly) timed out, skip the insert entirely rather
+	// than tying up a goroutine for the full timeout against a slow DB.
+	insertTimeout := reflectionInsertTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < reflectionInsertMinRemaining {
+			log.Printf("[ReflectionMiddleware] skipping insert for tool %s: caller has %s remaining", info.ToolName, remaining)
+			return
+		}
+		if capped := remaining - reflectionInsertSafetyMargin; capped < insertTimeout {
+			insertTimeout = capped
+		}
 	}
 
 	entry := NewEntry("system", TypeToolOutcome, outcome)
@@ -77,14 +110,14 @@ func (m *ReflectionMiddleware) recordOutcome(_ context.Context, info ToolOutcome
 	// Set session key for cross-session correlation.
 	entry.SessionKey = info.SessionKey
 
-	// Use a detached context with a short timeout. The caller's context may
+	// Use a detached context with a bounded timeout. The caller's context may
 	// already be expired (e.g. tool hit its deadline), but we still want to
 	// record the outcome. Reflection is best-effort and should not inherit
 	// the tool execution's lifecycle.
-	insertCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	insertCtx, cancel := context.WithTimeout(context.Background(), insertTimeout)
 	defer cancel()
 
-	if err := m.store.Insert(insertCtx, entry); err != nil {
+	if err := m.insertFn(insertCtx, entry); err != nil {
 		// Reflection is best-effort; never fail the tool call.
 		log.Printf("[ReflectionMiddleware] failed to insert entry for tool %s: %v", info.ToolName, err)
 	}
