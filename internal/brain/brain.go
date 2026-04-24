@@ -54,6 +54,12 @@ type Status struct {
 	HottestKeys  []string `json:"hottest_keys,omitempty"`
 	ColdestKeys  []string `json:"coldest_keys,omitempty"`
 	ExpiringSoon int      `json:"expiring_soon,omitempty"`
+
+	// Spreading activation metrics (session-lifetime counters).
+	SpreadEvents     int64          `json:"spread_events,omitempty"`
+	AvgWarmthBoost   float64        `json:"avg_warmth_boost,omitempty"`
+	ClusterHitRate   float64        `json:"cluster_hit_rate,omitempty"`
+	EdgeCountByType  map[string]int `json:"edge_count_by_type,omitempty"`
 }
 
 // storeOpts holds options for Store calls, populated by StoreOption funcs.
@@ -147,6 +153,14 @@ type Brain struct {
 	// namespace edges can be materialized in batch rather than per-store.
 	// Protected by mu.
 	pendingEdgeKeys map[string]struct{}
+
+	// Spreading metrics (mu-protected). Session-lifetime counters; reset on
+	// Brain restart. Used by Status() to report effectiveness.
+	spreadEvents     int64
+	totalBoost       float64
+	totalBoostCount  int64
+	clusterHitCount  int64
+	directHitCount   int64
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -688,12 +702,21 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	if b.spreadingEnabled && len(ltmHitKeys) > 0 {
 		clusterEntries, err := b.clusterNeighbours(ltmHitKeys, seen, defaultClusterConfig)
 		if err == nil {
+			var added int
 			for _, ce := range clusterEntries {
 				if !seen[ce.Key] {
 					ce.ClusterExpanded = true
 					scored = append(scored, scoredEntry{entry: ce, matchScore: 0.0})
 					seen[ce.Key] = true
+					added++
 				}
+			}
+			// Metrics: count direct vs cluster hits for the hit-rate denominator.
+			if direct := len(ltmHitKeys); direct > 0 || added > 0 {
+				b.mu.Lock()
+				b.directHitCount += int64(direct)
+				b.clusterHitCount += int64(added)
+				b.mu.Unlock()
 			}
 		}
 		// Cluster expansion failure is non-fatal — continue with direct results.
@@ -1026,10 +1049,52 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 	if wmCount > 0 {
 		avgSalience = totalSalience / float64(wmCount)
 	}
+
+	// Spreading activation metrics. Counter snapshots under mu; edge-count query
+	// outside the lock.
+	b.mu.RLock()
+	spreadEvents := b.spreadEvents
+	totalBoost := b.totalBoost
+	totalBoostCount := b.totalBoostCount
+	clusterHits := b.clusterHitCount
+	directHits := b.directHitCount
+	b.mu.RUnlock()
+
+	var avgBoost float64
+	if totalBoostCount > 0 {
+		avgBoost = totalBoost / float64(totalBoostCount)
+	}
+	var clusterHitRate float64
+	if total := clusterHits + directHits; total > 0 {
+		clusterHitRate = float64(clusterHits) / float64(total)
+	}
+
+	var edgeCounts map[string]int
+	if edgeRows, err := b.db.Query(
+		`SELECT COALESCE(relationship, ''), COUNT(*) FROM brain_relationships GROUP BY relationship`,
+	); err == nil {
+		edgeCounts = make(map[string]int)
+		for edgeRows.Next() {
+			var rel string
+			var n int
+			if edgeRows.Scan(&rel, &n) == nil {
+				if rel == "" {
+					rel = "unknown"
+				}
+				edgeCounts[rel] = n
+			}
+		}
+		edgeRows.Close()
+	}
+
 	return &Status{
 		LTMEntries: ltmCount, WMEntries: wmCount, ScratchDepth: scratchDepth,
 		AvgSalience: avgSalience, HottestKeys: hottestKeys, ColdestKeys: coldestKeys,
-		ExpiringSoon: expiringSoon,
+		ExpiringSoon:    expiringSoon,
+		SpreadEvents:    spreadEvents,
+		AvgWarmthBoost:  avgBoost,
+		ClusterHitRate:  clusterHitRate,
+		EdgeCountByType: edgeCounts,
 	}, nil
 }
 

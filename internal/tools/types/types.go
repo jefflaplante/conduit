@@ -230,6 +230,12 @@ type BrainStatus struct {
 	HottestKeys  []string `json:"hottest_keys,omitempty"`
 	ColdestKeys  []string `json:"coldest_keys,omitempty"`
 	ExpiringSoon int      `json:"expiring_soon,omitempty"`
+
+	// Spreading activation metrics (session-lifetime counters).
+	SpreadEvents    int64          `json:"spread_events,omitempty"`
+	AvgWarmthBoost  float64        `json:"avg_warmth_boost,omitempty"`
+	ClusterHitRate  float64        `json:"cluster_hit_rate,omitempty"`
+	EdgeCountByType map[string]int `json:"edge_count_by_type,omitempty"`
 }
 
 // ConsolidationReport summarizes a consolidation sweep.
