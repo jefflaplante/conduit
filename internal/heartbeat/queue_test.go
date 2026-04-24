@@ -329,6 +329,316 @@ func TestSharedAlertQueue_ConcurrentAccess(t *testing.T) {
 	}
 }
 
+// TestSharedAlertQueue_Concurrent_AddAndUpdate_NoLostAlerts is a regression test
+// for conduit-22a0: UpdateAlertStatus previously did LoadQueue (RLock) -> modify
+// -> SaveQueue (Lock). Any AddAlert that completed its own load-modify-save
+// between those two calls was silently overwritten by the stale snapshot from
+// UpdateAlertStatus, losing alerts. With the fix both mutators hold the write
+// lock across the full load-modify-save.
+func TestSharedAlertQueue_Concurrent_AddAndUpdate_NoLostAlerts(t *testing.T) {
+	tempDir := t.TempDir()
+	queuePath := filepath.Join(tempDir, "concurrent_add_update.json")
+	queue := NewSharedAlertQueue(queuePath)
+
+	// Seed the queue with an alert that updaters will target so UpdateAlertStatus
+	// always has something real to mutate (avoiding spurious not-found errors).
+	seed := Alert{
+		ID:         "seed-alert",
+		Source:     "test",
+		Title:      "Seed",
+		Message:    "seed alert for status updates",
+		Severity:   AlertSeverityWarning,
+		Status:     AlertStatusPending,
+		CreatedAt:  time.Now(),
+		MaxRetries: 3,
+	}
+	if err := queue.AddAlert(seed); err != nil {
+		t.Fatalf("seed AddAlert failed: %v", err)
+	}
+
+	const (
+		numAdders       = 4
+		alertsPerAdder  = 10
+		numUpdaters     = 2
+		updatesPerRound = 15
+	)
+
+	var wg sync.WaitGroup
+	var addErrs int32
+	var updateErrs int32
+
+	start := make(chan struct{})
+
+	// Adders: each adds alertsPerAdder uniquely-IDed alerts.
+	for i := 0; i < numAdders; i++ {
+		wg.Add(1)
+		go func(adderID int) {
+			defer wg.Done()
+			<-start
+			for j := 0; j < alertsPerAdder; j++ {
+				a := Alert{
+					ID:         fmt.Sprintf("toctou-add-%d-%d", adderID, j),
+					Source:     "test",
+					Title:      "Concurrent Add",
+					Message:    "race against status updates",
+					Severity:   AlertSeverityInfo,
+					Status:     AlertStatusPending,
+					CreatedAt:  time.Now(),
+					MaxRetries: 3,
+				}
+				if err := queue.AddAlert(a); err != nil {
+					atomic.AddInt32(&addErrs, 1)
+					return
+				}
+			}
+		}(i)
+	}
+
+	// Updaters: repeatedly flip the seed alert's status between Pending and Sent.
+	// Each call is its own load-modify-save on the shared file.
+	for u := 0; u < numUpdaters; u++ {
+		wg.Add(1)
+		go func(updaterID int) {
+			defer wg.Done()
+			<-start
+			for r := 0; r < updatesPerRound; r++ {
+				status := AlertStatusPending
+				if r%2 == 0 {
+					status = AlertStatusSent
+				}
+				if err := queue.UpdateAlertStatus(seed.ID, status); err != nil {
+					atomic.AddInt32(&updateErrs, 1)
+					return
+				}
+			}
+		}(u)
+	}
+
+	close(start)
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&addErrs); got != 0 {
+		t.Fatalf("unexpected AddAlert errors: %d", got)
+	}
+	if got := atomic.LoadInt32(&updateErrs); got != 0 {
+		t.Fatalf("unexpected UpdateAlertStatus errors: %d", got)
+	}
+
+	loaded, err := queue.LoadQueue()
+	if err != nil {
+		t.Fatalf("LoadQueue failed: %v", err)
+	}
+
+	// We expect: seed alert + every adder's every alert.
+	expected := 1 + numAdders*alertsPerAdder
+	if len(loaded.Alerts) != expected {
+		t.Fatalf("lost alerts: expected %d total, got %d. Before the fix, "+
+			"UpdateAlertStatus's stale snapshot would overwrite concurrent AddAlerts.",
+			expected, len(loaded.Alerts))
+	}
+
+	// Spot-check: every adder/index pair is present.
+	found := make(map[string]bool, len(loaded.Alerts))
+	for _, a := range loaded.Alerts {
+		found[a.ID] = true
+	}
+	for i := 0; i < numAdders; i++ {
+		for j := 0; j < alertsPerAdder; j++ {
+			id := fmt.Sprintf("toctou-add-%d-%d", i, j)
+			if !found[id] {
+				t.Fatalf("missing alert %s", id)
+			}
+		}
+	}
+	if !found[seed.ID] {
+		t.Fatalf("seed alert %s missing", seed.ID)
+	}
+}
+
+// TestSharedAlertQueue_Concurrent_AddAndRemoveProcessed_NoLostAlerts is the
+// second half of the conduit-22a0 regression: RemoveProcessedAlerts had the
+// same LoadQueue (RLock) -> SaveQueue (Lock) split, so AddAlerts that landed
+// between the two were dropped by the cleanup's stale snapshot. The fix holds
+// the write lock across the full sequence; RemoveExpiredAlerts only drops
+// alerts that are expired or already Sent, so pending alerts added concurrently
+// must survive.
+func TestSharedAlertQueue_Concurrent_AddAndRemoveProcessed_NoLostAlerts(t *testing.T) {
+	tempDir := t.TempDir()
+	queuePath := filepath.Join(tempDir, "concurrent_add_remove.json")
+	queue := NewSharedAlertQueue(queuePath)
+
+	const (
+		numAdders      = 4
+		alertsPerAdder = 10
+		numCleaners    = 2
+		cleanupRounds  = 10
+	)
+
+	// Pre-seed already-Sent alerts. RemoveProcessedAlerts only writes when
+	// it actually has something to drop ("only save if something changed"
+	// guard); without seeded removables the buggy load-RLock/save-Lock
+	// split never enters the save path so the TOCTOU race rarely
+	// manifests. Seeding one per cleanup round per cleaner keeps the
+	// save path active throughout the run.
+	totalSeeds := numCleaners * cleanupRounds
+	for s := 0; s < totalSeeds; s++ {
+		seed := Alert{
+			ID:         fmt.Sprintf("removable-seed-%d", s),
+			Source:     "test",
+			Title:      "Removable",
+			Message:    "already sent — cleaner should drop this",
+			Severity:   AlertSeverityInfo,
+			Status:     AlertStatusSent,
+			CreatedAt:  time.Now(),
+			MaxRetries: 3,
+		}
+		if err := queue.AddAlert(seed); err != nil {
+			t.Fatalf("seed AddAlert(%s) failed: %v", seed.ID, err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	var addErrs int32
+	var cleanupErrs int32
+
+	start := make(chan struct{})
+
+	// Adders produce strictly pending, non-expired alerts. These must NEVER be
+	// removed by RemoveProcessedAlerts.
+	for i := 0; i < numAdders; i++ {
+		wg.Add(1)
+		go func(adderID int) {
+			defer wg.Done()
+			<-start
+			for j := 0; j < alertsPerAdder; j++ {
+				a := Alert{
+					ID:         fmt.Sprintf("toctou-rm-%d-%d", adderID, j),
+					Source:     "test",
+					Title:      "Concurrent Add (vs cleanup)",
+					Message:    "race against RemoveProcessedAlerts",
+					Severity:   AlertSeverityInfo,
+					Status:     AlertStatusPending,
+					CreatedAt:  time.Now(),
+					MaxRetries: 3,
+				}
+				if err := queue.AddAlert(a); err != nil {
+					atomic.AddInt32(&addErrs, 1)
+					return
+				}
+			}
+		}(i)
+	}
+
+	// Cleaners call RemoveProcessedAlerts in a loop. With the bug, each cleaner
+	// sees an arbitrarily old snapshot and races the writer's save — alerts
+	// added in the window get wiped.
+	for c := 0; c < numCleaners; c++ {
+		wg.Add(1)
+		go func(cleanerID int) {
+			defer wg.Done()
+			<-start
+			for r := 0; r < cleanupRounds; r++ {
+				if err := queue.RemoveProcessedAlerts(); err != nil {
+					atomic.AddInt32(&cleanupErrs, 1)
+					return
+				}
+			}
+		}(c)
+	}
+
+	close(start)
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&addErrs); got != 0 {
+		t.Fatalf("unexpected AddAlert errors: %d", got)
+	}
+	if got := atomic.LoadInt32(&cleanupErrs); got != 0 {
+		t.Fatalf("unexpected RemoveProcessedAlerts errors: %d", got)
+	}
+
+	loaded, err := queue.LoadQueue()
+	if err != nil {
+		t.Fatalf("LoadQueue failed: %v", err)
+	}
+
+	expected := numAdders * alertsPerAdder
+	if len(loaded.Alerts) != expected {
+		t.Fatalf("RemoveProcessedAlerts dropped legitimate pending alerts: "+
+			"expected %d, got %d (before conduit-22a0 fix, cleanup's stale "+
+			"snapshot would overwrite concurrent AddAlerts).",
+			expected, len(loaded.Alerts))
+	}
+
+	// Every survivor must be one we added (none invented, none mutated).
+	for _, a := range loaded.Alerts {
+		if a.Status != AlertStatusPending {
+			t.Errorf("alert %s unexpectedly has status %s", a.ID, a.Status)
+		}
+	}
+	found := make(map[string]bool, len(loaded.Alerts))
+	for _, a := range loaded.Alerts {
+		found[a.ID] = true
+	}
+	for i := 0; i < numAdders; i++ {
+		for j := 0; j < alertsPerAdder; j++ {
+			id := fmt.Sprintf("toctou-rm-%d-%d", i, j)
+			if !found[id] {
+				t.Fatalf("missing pending alert %s after concurrent cleanup", id)
+			}
+		}
+	}
+}
+
+// TestSharedAlertQueue_RemoveProcessedAlerts_RemovesSentAndExpired ensures the
+// conduit-22a0 fix didn't accidentally stop RemoveProcessedAlerts from doing
+// its actual job: sent/expired alerts must still be dropped.
+func TestSharedAlertQueue_RemoveProcessedAlerts_RemovesSentAndExpired(t *testing.T) {
+	tempDir := t.TempDir()
+	queuePath := filepath.Join(tempDir, "remove_legit.json")
+	queue := NewSharedAlertQueue(queuePath)
+
+	now := time.Now()
+	past := now.Add(-1 * time.Hour)
+
+	alerts := []Alert{
+		{
+			ID: "keep-pending", Source: "t", Title: "k", Message: "keep",
+			Severity: AlertSeverityWarning, Status: AlertStatusPending,
+			CreatedAt: now, MaxRetries: 3,
+		},
+		{
+			ID: "drop-sent", Source: "t", Title: "s", Message: "sent",
+			Severity: AlertSeverityInfo, Status: AlertStatusSent,
+			CreatedAt: now, MaxRetries: 3,
+		},
+		{
+			ID: "drop-expired", Source: "t", Title: "e", Message: "expired",
+			Severity: AlertSeverityInfo, Status: AlertStatusPending,
+			CreatedAt: past.Add(-time.Hour), ExpiresAt: &past, MaxRetries: 3,
+		},
+	}
+	for _, a := range alerts {
+		if err := queue.AddAlert(a); err != nil {
+			t.Fatalf("AddAlert(%s) failed: %v", a.ID, err)
+		}
+	}
+
+	if err := queue.RemoveProcessedAlerts(); err != nil {
+		t.Fatalf("RemoveProcessedAlerts failed: %v", err)
+	}
+
+	loaded, err := queue.LoadQueue()
+	if err != nil {
+		t.Fatalf("LoadQueue failed: %v", err)
+	}
+	if len(loaded.Alerts) != 1 {
+		t.Fatalf("expected 1 alert to remain, got %d", len(loaded.Alerts))
+	}
+	if loaded.Alerts[0].ID != "keep-pending" {
+		t.Fatalf("wrong alert survived: %s", loaded.Alerts[0].ID)
+	}
+}
+
 func TestSharedAlertQueue_CorruptedFileRecovery(t *testing.T) {
 	tempDir := t.TempDir()
 	queuePath := filepath.Join(tempDir, "corrupted_queue.json")
