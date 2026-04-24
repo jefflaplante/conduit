@@ -3,6 +3,7 @@ package brain
 import (
 	"fmt"
 	"math"
+	"time"
 
 	"conduit/internal/database"
 )
@@ -33,6 +34,9 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 	// Collect all (neighbour, boost) pairs for all source keys.
 	// We de-duplicate by keeping the highest boost for each neighbour key.
 	bestBoost := make(map[string]float64)
+	// traversed records the (src, neighbour) pairs whose edges were scanned so
+	// their last_traversed_at can be stamped after spreading.
+	var traversed [][2]string
 
 	for _, srcKey := range accessedKeys {
 		// Fetch source salience from LTM. If the key isn't in LTM we still
@@ -69,6 +73,7 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 			if boost > bestBoost[neighbour] {
 				bestBoost[neighbour] = boost
 			}
+			traversed = append(traversed, [2]string{srcKey, neighbour})
 		}
 		rows.Close()
 	}
@@ -83,7 +88,7 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 		updates = append(updates, neighbourUpdate{key: key, warmthBoost: boost})
 	}
 
-	return database.RetryOnBusy(5, func() error {
+	err := database.RetryOnBusy(5, func() error {
 		tx, err := b.db.Begin()
 		if err != nil {
 			return fmt.Errorf("spread activation begin tx: %w", err)
@@ -106,6 +111,72 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 			}
 		}
 		return tx.Commit()
+	})
+	if err != nil {
+		return err
+	}
+
+	// Stamp last_traversed_at on every edge we scanned. Best-effort: a failure
+	// here only delays decay by one autoFlush cycle, so we don't propagate.
+	if len(traversed) > 0 {
+		_ = database.RetryOnBusy(3, func() error {
+			tx, err := b.db.Begin()
+			if err != nil {
+				return err
+			}
+			stmp, err := tx.Prepare(`
+				UPDATE brain_relationships
+				   SET last_traversed_at = datetime('now')
+				 WHERE (key_a = ? AND key_b = ?) OR (key_a = ? AND key_b = ?)
+			`)
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+			defer stmp.Close()
+			for _, pair := range traversed {
+				if _, err := stmp.Exec(pair[0], pair[1], pair[1], pair[0]); err != nil {
+					tx.Rollback()
+					return err
+				}
+			}
+			return tx.Commit()
+		})
+	}
+
+	return nil
+}
+
+// DecayEdgeConfidence multiplies the confidence of edges that haven't been
+// traversed in the recent past by decayFactor, then deletes any edge whose
+// confidence falls below pruneThreshold. Recently-traversed edges (within
+// idleWindow) are left alone.
+//
+// Called from autoFlush when spreadingEnabled is true. No-op otherwise.
+func (b *Brain) DecayEdgeConfidence(decayFactor, pruneThreshold float64, idleWindow time.Duration) error {
+	if !b.spreadingEnabled {
+		return nil
+	}
+	// SQLite accepts datetime modifiers like '-6 hours'. Build the window
+	// modifier dynamically from the requested Go duration.
+	minutes := int(idleWindow.Minutes())
+	if minutes < 0 {
+		minutes = 0
+	}
+	windowModifier := fmt.Sprintf("-%d minutes", minutes)
+
+	return database.RetryOnBusy(3, func() error {
+		if _, err := b.db.Exec(`
+			UPDATE brain_relationships
+			   SET confidence = confidence * ?
+			 WHERE confidence > 0.0
+			   AND (last_traversed_at IS NULL
+			        OR last_traversed_at < strftime('%Y-%m-%d %H:%M:%f', 'now', ?))
+		`, decayFactor, windowModifier); err != nil {
+			return err
+		}
+		_, err := b.db.Exec(`DELETE FROM brain_relationships WHERE confidence < ?`, pruneThreshold)
+		return err
 	})
 }
 
