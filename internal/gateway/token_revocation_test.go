@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -71,6 +72,11 @@ func createTestGatewayWithAuth(t *testing.T) (*Gateway, *auth.TokenStorage) {
 		ws: NewWebSocketService(testLogger, websocket.Upgrader{}, 16),
 	}
 
+	// Bind a gateway-lifecycle context to the WebSocketService so per-client
+	// HandleClientWrite goroutines (started by the test handler) have a
+	// non-nil context to select on for the gateway-shutdown branch.
+	gw.ws.Start(context.Background())
+
 	// Wire the revocation callback just like New() does.
 	authStorage.OnRevoke(gw.handleTokenRevocation)
 
@@ -102,15 +108,25 @@ func TestHandleTokenRevocation_ClosesMatchingClients(t *testing.T) {
 		clientID := r.URL.Query().Get("client_id")
 
 		client := &Client{
-			ID:      clientID,
-			TokenID: tokenID,
-			Conn:    conn,
-			Send:    make(chan []byte, 16),
+			ID:         clientID,
+			TokenID:    tokenID,
+			Conn:       conn,
+			Send:       make(chan []byte, 16),
+			CloseFrame: make(chan []byte, 1),
 		}
 
 		gw.ws.ClientMu.Lock()
 		gw.ws.Clients[client.ID] = client
 		gw.ws.ClientMu.Unlock()
+
+		// Start the send-pump so RevokeClientByToken can hand off the
+		// close frame via CloseFrame (conduit-1m5b). Without the pump
+		// running, the revoker's non-blocking send would still land in
+		// the buffer but nothing would emit the close frame — the client
+		// would observe an abnormal close (1006) instead of the expected
+		// ClosePolicyViolation (1008). Service-level Start() is bound
+		// once at fixture setup; we only spin the per-client pump here.
+		go gw.ws.HandleClientWrite(client)
 
 		// Block until the connection is closed.
 		for {
