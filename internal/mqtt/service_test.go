@@ -1,6 +1,7 @@
 package mqtt
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -178,6 +179,96 @@ func TestService_Stop_NilClient(t *testing.T) {
 
 	// Should not panic
 	svc.Stop()
+}
+
+// TestService_Stop_WaitsForPruneGoroutine is a regression test for conduit-2yo8.
+// Stop must block until the background prune goroutine has actually exited;
+// otherwise a caller that immediately re-initializes or reuses the service can
+// race with a still-running prune pass.
+//
+// The startPruneLoop hook lets us exercise the goroutine lifecycle without
+// connecting to a real broker. We instrument the goroutine via the test-only
+// pruneExited channel: with the WaitGroup fix in place, Stop's wg.Wait()
+// returns only after the goroutine's deferred close(pruneExited) has run, so
+// the channel is guaranteed to be closed by the time Stop returns.
+func TestService_Stop_WaitsForPruneGoroutine(t *testing.T) {
+	cfg := config.MQTTConfig{
+		BufferMaxAge:    3600,
+		BufferMaxEvents: 100,
+		BufferMaxTopics: 50,
+	}
+
+	// Run multiple iterations to make the test robust against scheduling luck:
+	// without the WaitGroup the channel-close race would manifest sporadically.
+	const iterations = 50
+	for i := 0; i < iterations; i++ {
+		svc := NewService(cfg)
+		svc.pruneExited = make(chan struct{})
+
+		// Use a very short interval so the ticker is active and the goroutine
+		// is parked in the select when Stop fires.
+		svc.startPruneLoop(context.Background(), time.Millisecond)
+
+		// Give the goroutine a moment to actually enter its select loop.
+		time.Sleep(2 * time.Millisecond)
+
+		stopReturned := make(chan struct{})
+		go func() {
+			svc.Stop()
+			close(stopReturned)
+		}()
+
+		select {
+		case <-stopReturned:
+			// Stop returned. With the fix, the prune goroutine must have
+			// already exited (and thus closed pruneExited).
+			select {
+			case <-svc.pruneExited:
+				// Good — goroutine exited before Stop returned.
+			default:
+				t.Fatalf("iteration %d: Stop returned before prune goroutine exited", i)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("iteration %d: Stop did not return within 2s", i)
+		}
+	}
+}
+
+// TestService_Stop_WaitsForBlockedPrune verifies Stop's synchronous semantics
+// even when the prune goroutine is doing work at cancellation time. We use a
+// large ticker interval so the goroutine is parked in the select on
+// pruneCtx.Done(); after cancel, the deferred close(pruneExited) runs before
+// wg.Done(), which is what wg.Wait() observes.
+func TestService_Stop_WaitsForBlockedPrune(t *testing.T) {
+	cfg := config.MQTTConfig{
+		BufferMaxAge:    3600,
+		BufferMaxEvents: 100,
+		BufferMaxTopics: 50,
+	}
+
+	svc := NewService(cfg)
+	svc.pruneExited = make(chan struct{})
+	svc.startPruneLoop(context.Background(), time.Hour)
+
+	// Ensure goroutine is parked in select.
+	time.Sleep(5 * time.Millisecond)
+
+	// Sanity: pruneExited is not yet closed.
+	select {
+	case <-svc.pruneExited:
+		t.Fatal("pruneExited closed before Stop was called")
+	default:
+	}
+
+	svc.Stop()
+
+	// Stop returned — pruneExited must be closed.
+	select {
+	case <-svc.pruneExited:
+		// Expected.
+	default:
+		t.Fatal("pruneExited not closed after Stop returned")
+	}
 }
 
 func TestService_Status_UpdatesWithEvents(t *testing.T) {

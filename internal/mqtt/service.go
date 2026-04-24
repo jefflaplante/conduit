@@ -3,6 +3,7 @@ package mqtt
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"conduit/internal/config"
@@ -26,6 +27,11 @@ type Service struct {
 	retained       *RetainedStore
 	deviceRegistry *DeviceRegistry
 	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+
+	// pruneExited, when non-nil, is closed by the prune goroutine just before
+	// it returns. Used by tests to assert synchronous shutdown ordering.
+	pruneExited chan struct{}
 }
 
 // NewService creates a new MQTT service (does not start yet).
@@ -62,10 +68,25 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 
 	// Background prune goroutine
+	s.startPruneLoop(ctx, 60*time.Second)
+
+	return nil
+}
+
+// startPruneLoop launches the background prune goroutine. It is called by
+// Start and by tests that need to exercise the goroutine lifecycle without a
+// live broker. The goroutine exits when the derived context is cancelled and
+// is tracked by s.wg so that Stop can wait synchronously for its exit.
+func (s *Service) startPruneLoop(ctx context.Context, interval time.Duration) {
 	pruneCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
+	s.wg.Add(1)
 	go func() {
-		ticker := time.NewTicker(60 * time.Second)
+		defer s.wg.Done()
+		if s.pruneExited != nil {
+			defer close(s.pruneExited)
+		}
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -78,15 +99,16 @@ func (s *Service) Start(ctx context.Context) error {
 			}
 		}
 	}()
-
-	return nil
 }
 
-// Stop disconnects the client and stops background tasks.
+// Stop disconnects the client and stops background tasks. It blocks until the
+// background prune goroutine has exited, so the caller can safely re-Start the
+// service or otherwise reuse its state without racing the goroutine.
 func (s *Service) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.wg.Wait()
 	if s.client != nil {
 		s.client.Close()
 	}
