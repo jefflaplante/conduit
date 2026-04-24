@@ -197,61 +197,40 @@ func (b *Brain) clusterNeighbours(seedKeys []string, matchedKeys map[string]bool
 }
 
 // RecallWithCluster performs a recall query augmented by namespace clustering.
-// It first runs a standard keyword recall, then expands results to include
-// entries from the same namespace "cluster" as the direct matches.
+// It delegates to RecallWithContext which now internally performs cluster
+// expansion when spreadingEnabled is true. The combined results are then
+// separated into direct matches and cluster-expanded entries based on the
+// ClusterExpanded flag.
 //
-// The return value separates direct matches from cluster-expanded entries so
-// callers can distinguish them if needed.
-//
-// Example: querying "solar.battery" might return:
-//   - Direct: solar.battery.config, solar.battery.plan
-//   - Cluster: solar.inverter_mode, solar.system_specs, solar.net_metering
+// When spreadingEnabled is false, no cluster expansion occurs in
+// RecallWithContext, so this method returns only direct matches with an
+// empty cluster list.
 func (b *Brain) RecallWithCluster(ctx context.Context, query string, limit int) (*ClusterResult, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 
-	// Step 1: Standard keyword recall for direct matches.
-	directResults, err := b.RecallWithContext(ctx, query, limit, "")
+	// RecallWithContext now performs cluster expansion internally when
+	// spreading is enabled, returning a combined list with ClusterExpanded flags.
+	combinedResults, err := b.RecallWithContext(ctx, query, limit, "")
 	if err != nil {
 		return nil, fmt.Errorf("cluster recall base: %w", err)
 	}
 
-	result := &ClusterResult{
-		Direct: directResults,
-	}
+	result := &ClusterResult{}
 
-	if len(directResults) == 0 {
-		return result, nil // no seeds → no clustering possible
-	}
-
-	// Step 2: Build matched set for dedup.
-	matchedKeys := make(map[string]bool, len(directResults))
-	seedKeys := make([]string, 0, len(directResults))
-	for _, e := range directResults {
-		if e.Tier == TierLongTerm {
-			matchedKeys[e.Key] = true
-			seedKeys = append(seedKeys, e.Key)
-		}
-	}
-
-	// Also include WM entries as matched (so we don't re-discover them as cluster).
-	userID := userIDFromCtx(ctx)
-	b.mu.RLock()
-	if wm, ok := b.working[userID]; ok {
-		for key := range wm {
-			matchedKeys[key] = true
-		}
-	}
-	b.mu.RUnlock()
-
-	// Step 3: BFS namespace clustering.
-	clusterEntries, err := b.clusterNeighbours(seedKeys, matchedKeys, defaultClusterConfig)
-	if err != nil {
-		// Cluster expansion failure is non-fatal — return direct results only.
+	if len(combinedResults) == 0 {
 		return result, nil
 	}
 
-	result.Cluster = clusterEntries
+	// Separate combined results into direct and cluster based on the flag.
+	for _, e := range combinedResults {
+		if e.ClusterExpanded {
+			result.Cluster = append(result.Cluster, e)
+		} else {
+			result.Direct = append(result.Direct, e)
+		}
+	}
+
 	return result, nil
 }

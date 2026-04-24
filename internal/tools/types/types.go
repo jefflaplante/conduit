@@ -207,16 +207,18 @@ const (
 
 // BrainEntry represents a single fact stored in the brain.
 type BrainEntry struct {
-	Key         string     `json:"key"`
-	Value       string     `json:"value"`
-	Tier        BrainTier  `json:"tier"`
-	CreatedAt   time.Time  `json:"created_at"`
-	AccessedAt  time.Time  `json:"accessed_at"`
-	AccessCount int        `json:"access_count"`
-	Salience    float64    `json:"salience"`
-	Source      string     `json:"source,omitempty"`
-	Stale       bool       `json:"stale,omitempty"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	Key             string     `json:"key"`
+	Value           string     `json:"value"`
+	Tier            BrainTier  `json:"tier"`
+	CreatedAt       time.Time  `json:"created_at"`
+	AccessedAt      time.Time  `json:"accessed_at"`
+	AccessCount     int        `json:"access_count"`
+	Salience        float64    `json:"salience"`
+	Warmth          float64    `json:"warmth,omitempty"`
+	Source          string     `json:"source,omitempty"`
+	Stale           bool       `json:"stale,omitempty"`
+	ClusterExpanded bool       `json:"cluster_expanded,omitempty"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
 }
 
 // BrainStatus reports the current state of the brain service.
