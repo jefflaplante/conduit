@@ -206,9 +206,22 @@ func (e *Executor) buildShellCommand(skill Skill, action string, args map[string
 
 	var command strings.Builder
 
-	// Source environment setup if mentioned
+	// Source environment setup — try standard locations
+	// The primary secrets file is /home/jules/ocgo/.ocgo-secrets.env
+	homeDir, _ := os.UserHomeDir()
+	secretsPaths := []string{
+		filepath.Join(homeDir, "ocgo", ".ocgo-secrets.env"),
+		filepath.Join(homeDir, ".conduit-secrets.env"),
+	}
+	for _, p := range secretsPaths {
+		if _, err := os.Stat(p); err == nil {
+			command.WriteString(fmt.Sprintf(". %s\n", p))
+			break
+		}
+	}
+	// Also source if the skill content explicitly references one
 	if strings.Contains(content, "source ~/.conduit-secrets.env") {
-		command.WriteString("source ~/.conduit-secrets.env\n")
+		// Already handled above by standard paths
 	}
 
 	// Look for export statements in the content
