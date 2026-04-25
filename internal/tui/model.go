@@ -350,10 +350,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.sidebar.SessionState = s.State
 					m.statusBar.SessionState = s.State
 				}
-				// Re-trigger thinking animation during tool chain gaps
-				if s.Chat.Streaming && s.Chat.StreamBuf.Len() == 0 {
-					cmds = append(cmds, thinkingTickCmd())
-				}
+	
 			} else {
 				info := ToolActivityInfo{
 					Name:     msg.ToolName,
