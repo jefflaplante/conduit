@@ -121,8 +121,14 @@ func (e *Executor) runCommand(ctx context.Context, cmd *exec.Cmd, skill Skill, a
 	// Set environment
 	cmd.Env = e.buildEnvironment(skill)
 
-	// Prepare arguments as JSON input
-	if len(args) > 0 {
+	// Only pipe args as JSON stdin for legacy script-based skills.
+	// For gog/email skills, args are already interpolated into the command line.
+	// Piping JSON to gog's stdin causes "no TTY available" errors.
+	needsStdin := true
+	if skill.Name == "email" || skill.Name == "gog" {
+		needsStdin = false
+	}
+	if needsStdin && len(args) > 0 {
 		argsJSON, err := json.Marshal(args)
 		if err != nil {
 			return &ExecutionResult{
@@ -198,16 +204,9 @@ func (e *Executor) findScript(skill Skill, action string) *SkillScript {
 
 // buildShellCommand creates a shell command for the given skill and action
 func (e *Executor) buildShellCommand(skill Skill, action string, args map[string]interface{}) string {
-	// This is a simplified approach - in practice, skills would define their own command structure
-	// For now, we'll look for common patterns in the skill content
-
-	content := skill.Content
-	lines := strings.Split(content, "\n")
-
 	var command strings.Builder
 
 	// Source environment setup — try standard locations
-	// The primary secrets file is /home/jules/ocgo/.ocgo-secrets.env
 	homeDir, _ := os.UserHomeDir()
 	secretsPaths := []string{
 		filepath.Join(homeDir, "ocgo", ".ocgo-secrets.env"),
@@ -219,69 +218,185 @@ func (e *Executor) buildShellCommand(skill Skill, action string, args map[string
 			break
 		}
 	}
-	// Also source if the skill content explicitly references one
-	if strings.Contains(content, "source ~/.conduit-secrets.env") {
-		// Already handled above by standard paths
+
+	// Export PATH for gog and other tools
+	command.WriteString("export PATH=\"$HOME/google-cloud-sdk/bin:$HOME/.local/bin:$PATH\"\n")
+
+	// Try skill-specific command builders first
+	if built := e.buildSkillSpecificCommand(skill.Name, action, args, &command); built {
+		return command.String()
 	}
 
-	// Look for export statements in the content
-	for _, line := range lines {
+	// Look for export statements in the skill content
+	content := skill.Content
+	for _, line := range strings.Split(content, "\n") {
 		trimmedLine := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmedLine, "export ") {
 			command.WriteString(trimmedLine + "\n")
 		}
 	}
 
-	// Try to find a command that matches the action
-	actionCommand := e.extractActionCommand(content, action)
-	if actionCommand != "" {
-		command.WriteString(actionCommand)
+	// Fallback: extract single-line command from skill content
+	if actionCmd := e.extractSingleLineCommand(content, action); actionCmd != "" {
+		command.WriteString(actionCmd)
 		return command.String()
 	}
 
-	// Fallback: just echo the action
+	// Final fallback: echo the action
 	command.WriteString(fmt.Sprintf("echo 'Executed action: %s'", action))
-
 	return command.String()
 }
 
-// extractActionCommand attempts to find a command for the given action in skill content
-func (e *Executor) extractActionCommand(content, action string) string {
-	lines := strings.Split(content, "\n")
-	inCodeBlock := false
-	var currentCommand strings.Builder
+// buildSkillSpecificCommand builds commands for known skill types using args
+func (e *Executor) buildSkillSpecificCommand(skillName, action string, args map[string]interface{}, command *strings.Builder) bool {
+	switch skillName {
+	case "email", "gog":
+		return e.buildGogCommand(action, args, command)
+	default:
+		return false
+	}
+}
 
-	for i, line := range lines {
-		trimmedLine := strings.TrimSpace(line)
-
-		// Track code blocks
-		if strings.HasPrefix(trimmedLine, "```") {
-			if inCodeBlock {
-				// End of code block
-				command := strings.TrimSpace(currentCommand.String())
-				if e.isRelevantCommand(command, action) {
-					return command
-				}
-				currentCommand.Reset()
-			}
-			inCodeBlock = !inCodeBlock
-			continue
+// buildGogCommand builds gog CLI commands from action and args
+func (e *Executor) buildGogCommand(action string, args map[string]interface{}, command *strings.Builder) bool {
+	// Determine which account to use
+	account := "$GOG_ACCOUNT" // default to Jeff's account
+	if acct, ok := args["account"].(string); ok && acct != "" {
+		if acct == "jules" || acct == "jules@laplante.dev" {
+			account = "$JULES_ACCOUNT"
 		}
-
-		if inCodeBlock {
-			currentCommand.WriteString(line + "\n")
-		} else if strings.HasPrefix(trimmedLine, "gog ") ||
-			strings.HasPrefix(trimmedLine, "curl ") ||
-			strings.HasPrefix(trimmedLine, "ha ") {
-			// Check if this looks like a relevant command
-			if e.isRelevantCommand(trimmedLine, action) {
-				// Look for multi-line commands
-				fullCommand := e.extractMultiLineCommand(lines, i)
-				return fullCommand
-			}
+	} else if inbox, ok := args["inbox"].(string); ok {
+		if inbox == "jules" || inbox == "jules@laplante.dev" {
+			account = "$JULES_ACCOUNT"
 		}
 	}
 
+	// Helper to get string arg with shell quoting
+	getArg := func(key string) string {
+		if v, ok := args[key].(string); ok {
+			return shellQuote(v)
+		}
+		return ""
+	}
+
+	switch action {
+	case "search":
+		query := getArg("query")
+		if query == "" {
+			query = getArg("q")
+		}
+		if query == "" {
+			query = "is:unread"
+		}
+		maxResults := "20"
+		if m, ok := args["max"].(string); ok && m != "" {
+			maxResults = m
+		} else if m, ok := args["max"].(float64); ok {
+			maxResults = fmt.Sprintf("%.0f", m)
+		} else if m, ok := args["limit"].(string); ok && m != "" {
+			maxResults = m
+		} else if m, ok := args["limit"].(float64); ok {
+			maxResults = fmt.Sprintf("%.0f", m)
+		}
+		command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail search %s --account %s --max %s\n", shellQuote(query), account, maxResults))
+
+	case "read":
+		msgID := getArg("message_id")
+		if msgID == "" {
+			msgID = getArg("id")
+		}
+		threadID := getArg("thread_id")
+		if threadID == "" {
+			threadID = getArg("threadId")
+		}
+		if msgID != "" {
+			command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail read %s --account %s\n", shellQuote(msgID), account))
+		} else if threadID != "" {
+			command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail thread get %s --account %s\n", shellQuote(threadID), account))
+		} else {
+			return false
+		}
+
+	case "send":
+		to := getArg("to")
+		subject := getArg("subject")
+		body := getArg("body")
+		from := getArg("from")
+		sendAccount := account
+		if from == "jules@laplante.dev" || from == "jules" {
+			sendAccount = "$JULES_ACCOUNT"
+		}
+		if to == "" {
+			return false
+		}
+		cmd := fmt.Sprintf("/usr/local/bin/gog gmail send --to %s", shellQuote(to))
+		if subject != "" {
+			cmd += fmt.Sprintf(" --subject %s", shellQuote(subject))
+		}
+		if body != "" {
+			cmd += fmt.Sprintf(" --body %s", shellQuote(body))
+		}
+		cmd += fmt.Sprintf(" --account %s --force", sendAccount)
+		command.WriteString(cmd + "\n")
+
+	case "cleanup":
+		// Cleanup runs the blocklist-based junk removal
+		command.WriteString("echo 'cleanup action: use search + thread modify pattern'\n")
+
+	case "list":
+		listAccount := account
+		if args["inbox"] == "jules" || args["inbox"] == "jules@laplante.dev" {
+			listAccount = "$JULES_ACCOUNT"
+		}
+		maxResults := "20"
+		if m, ok := args["max"].(string); ok && m != "" {
+			maxResults = m
+		} else if m, ok := args["max"].(float64); ok {
+			maxResults = fmt.Sprintf("%.0f", m)
+		}
+		query := "is:unread"
+		if q := getArg("query"); q != "" {
+			query = q
+		}
+		command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail search %s --account %s --max %s\n", shellQuote(query), listAccount, maxResults))
+
+	case "status":
+		command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail search \"is:unread\" --account %s --max 5\n", account))
+
+	default:
+		return false
+	}
+
+	return true
+}
+
+// shellQuote wraps a string in single quotes, escaping any embedded single quotes
+func shellQuote(s string) string {
+	// Replace ' with '\'' (end quote, escaped quote, start quote)
+	escaped := strings.ReplaceAll(s, "'", "'\\''")
+	return "'" + escaped + "'"
+}
+
+// extractSingleLineCommand extracts the first single-line command relevant to the action
+func (e *Executor) extractSingleLineCommand(content, action string) string {
+	lines := strings.Split(content, "\n")
+	inCodeBlock := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			inCodeBlock = !inCodeBlock
+			continue
+		}
+		if inCodeBlock {
+			// Only consider single-line commands (not comments, not empty)
+			if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+				if e.isRelevantCommand(trimmed, action) {
+					return trimmed
+				}
+			}
+		}
+	}
 	return ""
 }
 
@@ -313,34 +428,6 @@ func (e *Executor) isRelevantCommand(command, action string) bool {
 	}
 
 	return false
-}
-
-// extractMultiLineCommand handles commands that span multiple lines
-func (e *Executor) extractMultiLineCommand(lines []string, startIndex int) string {
-	var command strings.Builder
-	command.WriteString(strings.TrimSpace(lines[startIndex]))
-
-	// Look for continuation lines
-	for i := startIndex + 1; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-
-		// Empty line ends the command
-		if line == "" {
-			break
-		}
-
-		// Check for continuation patterns
-		if strings.HasPrefix(line, " ") ||
-			strings.HasPrefix(line, "\t") ||
-			strings.HasPrefix(line, "-") ||
-			strings.HasPrefix(line, "--") {
-			command.WriteString(" " + line)
-		} else {
-			break
-		}
-	}
-
-	return command.String()
 }
 
 // buildEnvironment creates the environment for skill execution
