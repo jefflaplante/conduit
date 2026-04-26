@@ -1,6 +1,7 @@
 package brain
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -154,4 +155,136 @@ func TestStoreBulk_QueuesEdgeKeys(t *testing.T) {
 	assert.True(t, hasA)
 	assert.True(t, hasB)
 	assert.False(t, hasWM, "working-memory stores should not queue edge keys")
+}
+
+func TestEffectiveEdgeConfidence(t *testing.T) {
+	const alpha = 0.1
+
+	tests := []struct {
+		name        string
+		confidence  float64
+		accessCount int
+		wantApprox  float64 // approximate expected value
+	}{
+		{"zero accesses — no boost", 0.9, 0, 0.9},
+		{"1 access — small boost", 0.9, 1, 0.9 * (1 + 0.1*math.Log1p(1))},
+		{"10 accesses — noticeable boost", 0.9, 10, 0.9 * (1 + 0.1*math.Log1p(10))},
+		{"100 accesses — significant boost", 0.6, 100, 0.6 * (1 + 0.1*math.Log1p(100))},
+		{"1000 accesses — diminishing returns", 0.5, 1000, 0.5 * (1 + 0.1*math.Log1p(1000))},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := EffectiveEdgeConfidence(tt.confidence, tt.accessCount, alpha)
+			assert.InDelta(t, tt.wantApprox, got, 0.001)
+		})
+	}
+}
+
+func TestSpreadActivation_IncrementsEdgeAccessCount(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	// Store two related LTM keys.
+	require.NoError(t, b.Store(ctx, "solar.battery.config", "2x 14.6kWh", TierLongTerm, "tool"))
+	require.NoError(t, b.Store(ctx, "solar.battery.mode", "self-use", TierLongTerm, "tool"))
+	require.NoError(t, b.flushPendingEdges())
+
+	// Verify edge exists with access_count=0.
+	var accessCount int
+	require.NoError(t, b.db.QueryRow(
+		`SELECT access_count FROM brain_relationships WHERE key_a LIKE 'solar%' AND key_b LIKE 'solar%' LIMIT 1`,
+	).Scan(&accessCount))
+	assert.Equal(t, 0, accessCount, "edge should start with access_count=0")
+
+	// Access one key to trigger spreading activation.
+	_, err := b.Get(ctx, "solar.battery.config")
+	require.NoError(t, err)
+
+	// The edge should now have access_count > 0.
+	require.NoError(t, b.db.QueryRow(
+		`SELECT access_count FROM brain_relationships WHERE key_a LIKE 'solar%' AND key_b LIKE 'solar%' LIMIT 1`,
+	).Scan(&accessCount))
+	assert.Equal(t, 1, accessCount, "edge access_count should be incremented after spreading activation")
+
+	// Access again — should increment to 2.
+	_, err = b.Get(ctx, "solar.battery.config")
+	require.NoError(t, err)
+	require.NoError(t, b.db.QueryRow(
+		`SELECT access_count FROM brain_relationships WHERE key_a LIKE 'solar%' AND key_b LIKE 'solar%' LIMIT 1`,
+	).Scan(&accessCount))
+	assert.Equal(t, 2, accessCount, "edge access_count should increment on each traversal")
+}
+
+func TestDecayEdgeConfidence_DecaysAccessCount(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	// Seed an edge with a high access_count via direct DB insert.
+	require.NoError(t, b.Store(ctx, "solar.battery.config", "v", TierLongTerm, "tool"))
+	require.NoError(t, b.Store(ctx, "solar.battery.mode", "v", TierLongTerm, "tool"))
+	require.NoError(t, b.flushPendingEdges())
+
+	// Manually set access_count to a known value.
+	_, err := b.db.Exec(`UPDATE brain_relationships SET access_count = 100 WHERE key_a LIKE 'solar%' AND key_b LIKE 'solar%'`)
+	require.NoError(t, err)
+
+	// Decay with a factor of 0.5, idleWindow=0 (all edges decay), pruneThreshold=0.1.
+	require.NoError(t, b.DecayEdgeConfidence(0.85, 0.1, 0))
+
+	// access_count should be halved: 100 * 0.95 = 95 (using default edgeAccessDecay=0.95).
+	var accessCount int
+	require.NoError(t, b.db.QueryRow(
+		`SELECT access_count FROM brain_relationships WHERE key_a LIKE 'solar%' AND key_b LIKE 'solar%' LIMIT 1`,
+	).Scan(&accessCount))
+	assert.Equal(t, 95, accessCount, "access_count should decay by edgeAccessDecay factor")
+
+	// Repeated decay should eventually zero out. Use decayFactor=1.0 so the
+	// edge isn't pruned (confidence stays put); this test isolates the
+	// access_count decay path from confidence-based pruning.
+	for i := 0; i < 100; i++ {
+		require.NoError(t, b.DecayEdgeConfidence(1.0, 0.1, 0))
+	}
+	require.NoError(t, b.db.QueryRow(
+		`SELECT access_count FROM brain_relationships WHERE key_a LIKE 'solar%' AND key_b LIKE 'solar%' LIMIT 1`,
+	).Scan(&accessCount))
+	assert.Equal(t, 0, accessCount, "access_count should reach zero after many decays")
+}
+
+func TestUsageWeightedBoost_StrongerThanUnweighted(t *testing.T) {
+	b := newTestBrain(t)
+	ctx := testCtx("user1")
+
+	// Set up two independent pairs of related keys with same confidence.
+	require.NoError(t, b.Store(ctx, "learned.test.alpha", "v1", TierLongTerm, "tool"))
+	require.NoError(t, b.Store(ctx, "learned.test.beta", "v2", TierLongTerm, "tool"))
+	require.NoError(t, b.Store(ctx, "learned.demo.gamma", "v3", TierLongTerm, "tool"))
+	require.NoError(t, b.Store(ctx, "learned.demo.delta", "v4", TierLongTerm, "tool"))
+	require.NoError(t, b.flushPendingEdges())
+
+	// Give the demo pair a high access_count manually.
+	_, err := b.db.Exec(`UPDATE brain_relationships SET access_count = 50 WHERE key_a LIKE 'learned.demo%' AND key_b LIKE 'learned.demo%'`)
+	require.NoError(t, err)
+
+	// Set equal salience for all entries.
+	_, err = b.db.Exec(`UPDATE brain_ltm SET salience = 0.8`)
+	require.NoError(t, err)
+
+	// Trigger spreading from a key that has edges to both pairs.
+	// Use "learned.test.alpha" which is only connected to "learned.test.beta".
+	_, err = b.Get(ctx, "learned.test.alpha")
+	require.NoError(t, err)
+
+	// The test pair should have lower warmth (no usage boost) vs what demo would have.
+	// But they're independent pairs, so we check that demo pair's warmth is higher
+	// when activated from its own side.
+	warmthTestBeta, _ := b.GetWarmth("learned.test.beta")
+	assert.Greater(t, warmthTestBeta, 0.0, "neighbour should have warmth from spreading")
+
+	// Now activate demo pair and compare — it should get a stronger boost.
+	_, err = b.Get(ctx, "learned.demo.gamma")
+	require.NoError(t, err)
+	warmthDemoDelta, _ := b.GetWarmth("learned.demo.delta")
+	assert.Greater(t, warmthDemoDelta, warmthTestBeta,
+		"edge with higher access_count should produce stronger warmth boost")
 }

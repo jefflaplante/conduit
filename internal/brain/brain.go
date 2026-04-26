@@ -23,6 +23,28 @@ const (
 	TierScratch  Tier = "scratch"
 )
 
+// Spreading activation tuning constants.
+//
+// The per-flush warmth decay controls how quickly activated entries cool down
+// between autoFlush cycles. Lower values = faster cooling = less cross-domain
+// noise from accumulated neighbour-of-neighbour warmth. The previous value of
+// 0.95 caused warmth to persist too long (85.7% at 3 flushes), pulling
+// unrelated entries into recall results (e.g., Paris trip recall returning
+// solar net metering info). At 0.85, warmth drops to 61.4% after 3 flushes
+// and 44.4% after 5 — aggressive enough to suppress cross-domain noise.
+//
+// The spreading decay controls how much warmth boost a direct neighbour
+// receives. Combined with faster warmth cooling, this keeps activation focused
+// on truly related entries.
+const (
+	DefaultSpreadingDecay         = 0.85 // neighbour warmth boost multiplier (was 0.35, then 0.5; 0.85 gives 61% at 3 hops, good domain isolation)
+	DefaultWarmthDecay            = 0.85 // per-flush warmth decay (was 0.95)
+	DefaultEdgeDecay              = 0.85 // per-flush edge confidence decay (was 0.95)
+	DefaultMinConfidenceThreshold = 0.3  // min edge confidence to participate in spreading; prevents low-confidence edges from polluting activation
+	DefaultEdgeAccessAlpha        = 0.1  // usage-weighted boost: effective_conf = base * (1 + alpha * log1p(access_count))
+	DefaultEdgeAccessDecay        = 0.95 // per-flush decay of edge access_count (prevents stale activity from permanently inflating confidence)
+)
+
 type Entry struct {
 	Key         string     `json:"key"`
 	Value       string     `json:"value"`
@@ -126,6 +148,11 @@ func WithSpreadingDecay(d float64) Option { return func(b *Brain) { b.spreadingD
 // Default: true.
 func WithSpreadingEnabled(enabled bool) Option { return func(b *Brain) { b.spreadingEnabled = enabled } }
 
+// WithMinConfidenceThreshold sets the minimum edge confidence required for an
+// edge to participate in spreading activation. Edges below this threshold will
+// still be searchable but won't propagate warmth. Default: 0.3.
+func WithMinConfidenceThreshold(t float64) Option { return func(b *Brain) { b.minConfidenceThreshold = t } }
+
 // WithMatchWeight sets the weight applied to per-entry keyword match score
 // during recall ranking. Default: 0.5.
 func WithMatchWeight(w float64) Option { return func(b *Brain) { b.matchWeight = w } }
@@ -158,8 +185,13 @@ type Brain struct {
 	heatPromotionThreshold int
 
 	// Spreading activation
-	spreadingEnabled bool
-	spreadingDecay   float64
+	spreadingEnabled   bool
+	spreadingDecay     float64 // neighbour boost multiplier
+	warmthDecay        float64 // per-flush warmth cooling (was 0.95, now 0.85)
+	edgeDecay          float64 // per-flush edge confidence cooling (was 0.95, now 0.85)
+	minConfidenceThreshold float64 // min edge confidence to participate in spreading (default 0.3)
+	edgeAccessAlpha    float64 // usage-weighted boost factor (default 0.1)
+	edgeAccessDecay    float64 // per-flush decay of edge access_count (default 0.95)
 
 	// Recall blended-score weights. Defaults sum to 1.0 (match 0.5, salience 0.3,
 	// warmth 0.2) but aren't forced to — callers can overweight a signal if
@@ -216,7 +248,12 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 		accessCountCap:         100,
 		heatPromotionThreshold: 3,
 		spreadingEnabled:       true,
-		spreadingDecay:         0.5,
+		spreadingDecay:         DefaultSpreadingDecay,
+		warmthDecay:            DefaultWarmthDecay,
+		edgeDecay:              DefaultEdgeDecay,
+		minConfidenceThreshold: DefaultMinConfidenceThreshold,
+		edgeAccessAlpha:        DefaultEdgeAccessAlpha,
+		edgeAccessDecay:        DefaultEdgeAccessDecay,
 		matchWeight:            0.5,
 		salienceWeight:         0.3,
 		warmthWeight:           0.2,
@@ -1312,11 +1349,15 @@ func (b *Brain) autoFlush() {
 	// flushPendingEdges re-acquires b.mu, and holding it across DB work blocks
 	// every Store/Get/Recall in the gateway for the duration of the flush.
 	if b.spreadingEnabled {
+		// Warmth decay: cools activated entries each flush cycle.
+		// 0.85^3 = 61.4% warmth at 3 flushes (good isolation), 0.85^5 = 44.4%
+		// Previously 0.95 gave 85.7% at 3 flushes, causing cross-domain noise.
+		wd := b.warmthDecay
 		_ = database.RetryOnBusy(3, func() error {
-			_, err := b.db.Exec(`UPDATE brain_ltm SET warmth = CASE WHEN warmth * 0.95 < 0.01 THEN 0.0 ELSE warmth * 0.95 END WHERE warmth > 0.0`)
+			_, err := b.db.Exec(`UPDATE brain_ltm SET warmth = CASE WHEN warmth * ? < 0.01 THEN 0.0 ELSE warmth * ? END WHERE warmth > 0.0`, wd, wd)
 			return err
 		})
 		_ = b.flushPendingEdges()
-		_ = b.DecayEdgeConfidence(0.95, 0.1, 6*time.Hour)
+		_ = b.DecayEdgeConfidence(b.edgeDecay, 0.1, 6*time.Hour)
 	}
 }

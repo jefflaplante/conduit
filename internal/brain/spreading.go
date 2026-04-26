@@ -12,11 +12,20 @@ import (
 // neighbours in brain_relationships. The warmth boost delivered to each
 // neighbour is:
 //
-//	warmth_boost = decay^distance * source_salience * edge_confidence
+//	warmth_boost = decay^distance * source_salience * effective_confidence
+//
+// where effective_confidence = base_confidence * (1 + alpha * log1p(access_count)),
+// giving frequently-traversed edges a boost. With default alpha=0.1, an edge
+// accessed 10 times gets ~24% more confidence, and 100 times gets ~46%.
 //
 // This implementation supports distance=1 (direct neighbours) only. The
 // neighbour's warmth is updated to max(current_warmth, warmth_boost) capped
 // at 1.0, so a warm neighbour never gets dimmed by a weaker activation wave.
+//
+// Edges with confidence below minConfidenceThreshold are excluded from
+// spreading (boost is not calculated for them), but entries remain searchable
+// via direct recall. This prevents low-confidence edges from polluting the
+// activation graph while preserving searchability.
 //
 // spreadActivation is a no-op when spreadingEnabled is false or when the
 // accessedKeys slice is empty. Errors are non-fatal; callers should log or
@@ -49,13 +58,15 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 		}
 
 		// Fetch direct neighbours (both directions of the undirected edge).
+		// Filter by minConfidenceThreshold to exclude weak edges from spreading.
+		// Also fetch access_count for usage-weighted confidence.
 		rows, err := b.db.Query(`
-			SELECT key_b AS neighbour, confidence
-			  FROM brain_relationships WHERE key_a = ?
+			SELECT key_b AS neighbour, confidence, COALESCE(access_count, 0)
+			  FROM brain_relationships WHERE key_a = ? AND confidence >= ?
 			UNION
-			SELECT key_a AS neighbour, confidence
-			  FROM brain_relationships WHERE key_b = ?
-		`, srcKey, srcKey)
+			SELECT key_a AS neighbour, confidence, COALESCE(access_count, 0)
+			  FROM brain_relationships WHERE key_b = ? AND confidence >= ?
+		`, srcKey, b.minConfidenceThreshold, srcKey, b.minConfidenceThreshold)
 		if err != nil {
 			return fmt.Errorf("spread activation neighbours for %q: %w", srcKey, err)
 		}
@@ -63,11 +74,15 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 		for rows.Next() {
 			var neighbour string
 			var confidence float64
-			if err := rows.Scan(&neighbour, &confidence); err != nil {
+			var accessCount int
+			if err := rows.Scan(&neighbour, &confidence, &accessCount); err != nil {
 				rows.Close()
 				return fmt.Errorf("spread activation scan: %w", err)
 			}
-			boost := b.spreadingDecay * srcSalience * confidence
+			// Usage-weighted confidence: frequently-traversed edges get a boost.
+			// effective_confidence = base_confidence * (1 + alpha * log1p(access_count))
+			effectiveConf := confidence * (1 + b.edgeAccessAlpha*math.Log1p(float64(accessCount)))
+			boost := b.spreadingDecay * srcSalience * effectiveConf
 			// Cap at 1.0 to keep warmth in [0, 1].
 			boost = math.Min(boost, 1.0)
 			if boost > bestBoost[neighbour] {
@@ -125,8 +140,9 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 	}
 	b.mu.Unlock()
 
-	// Stamp last_traversed_at on every edge we scanned. Best-effort: a failure
-	// here only delays decay by one autoFlush cycle, so we don't propagate.
+	// Stamp last_traversed_at and increment access_count on every edge we
+	// traversed. Best-effort: a failure here only delays decay/boost by one
+	// autoFlush cycle, so we don't propagate.
 	if len(traversed) > 0 {
 		_ = database.RetryOnBusy(3, func() error {
 			tx, err := b.db.Begin()
@@ -135,7 +151,8 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 			}
 			stmp, err := tx.Prepare(`
 				UPDATE brain_relationships
-				   SET last_traversed_at = datetime('now')
+				   SET last_traversed_at = datetime('now'),
+				       access_count = access_count + 1
 				 WHERE (key_a = ? AND key_b = ?) OR (key_a = ? AND key_b = ?)
 			`)
 			if err != nil {
@@ -161,6 +178,10 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 // confidence falls below pruneThreshold. Recently-traversed edges (within
 // idleWindow) are left alone.
 //
+// Additionally, edge access_count is decayed by edgeAccessDecay each flush,
+// preventing stale usage from permanently inflating confidence. Access counts
+// that drop below 1.0 are zeroed to avoid floating-point dust.
+//
 // Called from autoFlush when spreadingEnabled is true. No-op otherwise.
 func (b *Brain) DecayEdgeConfidence(decayFactor, pruneThreshold float64, idleWindow time.Duration) error {
 	if !b.spreadingEnabled {
@@ -182,6 +203,17 @@ func (b *Brain) DecayEdgeConfidence(decayFactor, pruneThreshold float64, idleWin
 			   AND (last_traversed_at IS NULL
 			        OR last_traversed_at < strftime('%Y-%m-%d %H:%M:%f', 'now', ?))
 		`, decayFactor, windowModifier); err != nil {
+			return err
+		}
+		// Decay access_count: multiply by edgeAccessDecay, zero dust below 1.0.
+		if _, err := b.db.Exec(`
+			UPDATE brain_relationships
+			   SET access_count = CASE
+			         WHEN CAST(access_count AS REAL) * ? < 1.0 THEN 0
+			         ELSE CAST(CAST(access_count AS REAL) * ? AS INTEGER)
+			       END
+			 WHERE access_count > 0
+		`, b.edgeAccessDecay, b.edgeAccessDecay); err != nil {
 			return err
 		}
 		_, err := b.db.Exec(`DELETE FROM brain_relationships WHERE confidence < ?`, pruneThreshold)
@@ -240,4 +272,18 @@ func (b *Brain) StoreRelationship(keyA, keyB string, relationship string, confid
 		`, keyA, keyB, relationship, confidence)
 		return err
 	})
+}
+
+// EffectiveEdgeConfidence computes the usage-weighted confidence for an edge.
+// The formula is: base_confidence * (1 + alpha * log1p(access_count)).
+//
+// This creates a positive feedback loop where edges frequently traversed
+// during recall/spreading get a confidence boost, making them stronger
+// conduits for future activation. With default alpha=0.1:
+//   - 0 accesses: effective = base * 1.0 (no change)
+//   - 10 accesses: effective = base * 1.239
+//   - 100 accesses: effective = base * 1.460
+//   - 1000 accesses: effective = base * 1.691
+func EffectiveEdgeConfidence(baseConfidence float64, accessCount int, alpha float64) float64 {
+	return baseConfidence * (1 + alpha*math.Log1p(float64(accessCount)))
 }
