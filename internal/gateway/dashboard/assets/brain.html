@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>conduit · brain graph</title>
+<script src="/dashboard/assets/vis-network.min.js"></script>
+<style>
+  :root {
+    --bg: #0e1117;
+    --panel: #161b22;
+    --panel-border: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --warm: #f78166;
+    --cool: #3fb950;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 13px; }
+  #app { display: grid; grid-template-columns: 280px 1fr 360px; grid-template-rows: 44px 1fr; height: 100vh; width: 100vw; min-height: 0; }
+  #app > * { min-width: 0; min-height: 0; }
+  header { grid-column: 1 / 4; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid var(--panel-border); background: var(--panel); }
+  header h1 { font-size: 14px; font-weight: 600; margin: 0 16px 0 0; }
+  header .stat { color: var(--muted); margin-right: 16px; }
+  header .stat strong { color: var(--text); }
+  header .spacer { flex: 1; }
+  header button { background: var(--panel); color: var(--text); border: 1px solid var(--panel-border); padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  header button:hover { border-color: var(--accent); color: var(--accent); }
+  aside.controls { padding: 16px; border-right: 1px solid var(--panel-border); background: var(--panel); overflow-y: auto; }
+  aside.controls h2 { font-size: 11px; text-transform: uppercase; color: var(--muted); margin: 0 0 8px 0; letter-spacing: 0.05em; }
+  aside.controls .group { margin-bottom: 18px; }
+  aside.controls label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  aside.controls input[type=text], aside.controls input[type=password], aside.controls input[type=number] { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--panel-border); padding: 6px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; }
+  aside.controls input[type=range] { width: 100%; }
+  aside.controls .row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  aside.controls .row .v { color: var(--accent); min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+  aside.controls .legend { font-size: 11px; color: var(--muted); line-height: 1.5; }
+  aside.controls .legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  #net { background: var(--bg); width: 100%; height: 100%; min-width: 0; min-height: 0; position: relative; overflow: hidden; }
+  aside.detail { padding: 16px; border-left: 1px solid var(--panel-border); background: var(--panel); overflow-y: auto; }
+  aside.detail h2 { font-size: 11px; text-transform: uppercase; color: var(--muted); margin: 0 0 12px 0; letter-spacing: 0.05em; }
+  aside.detail .key { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; color: var(--accent); word-break: break-all; margin-bottom: 12px; }
+  aside.detail .meta { font-size: 11px; color: var(--muted); margin-bottom: 12px; line-height: 1.6; }
+  aside.detail .meta strong { color: var(--text); }
+  aside.detail .value { background: var(--bg); border: 1px solid var(--panel-border); border-radius: 4px; padding: 8px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 70vh; overflow-y: auto; }
+  aside.detail .empty { color: var(--muted); font-style: italic; }
+  .err { color: #f85149; padding: 8px; background: rgba(248, 81, 73, 0.1); border: 1px solid rgba(248, 81, 73, 0.3); border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>conduit · brain graph</h1>
+    <div class="stat"><strong id="stat-nodes">—</strong> nodes</div>
+    <div class="stat"><strong id="stat-edges">—</strong> edges</div>
+    <div class="stat"><strong id="stat-shown">—</strong> shown</div>
+    <div class="spacer"></div>
+    <button id="physics" title="Toggle physics simulation (P)">Pause physics</button>
+    <button id="fit" title="Re-center the graph in the viewport (F)">Fit</button>
+    <button id="reload">Reload</button>
+  </header>
+  <aside class="controls">
+    <div class="group">
+      <h2>Auth</h2>
+      <label for="token">Bearer token</label>
+      <input type="password" id="token" placeholder="paste token, then Reload" autocomplete="off">
+    </div>
+    <div class="group">
+      <h2>Filter</h2>
+      <label for="search">Search (key / value)</label>
+      <input type="text" id="search" placeholder="substring filter">
+      <div style="height: 8px"></div>
+      <label for="source">Source prefix</label>
+      <input type="text" id="source" placeholder="e.g. solar.">
+      <div style="height: 8px"></div>
+      <label for="min-sal">Min salience: <span class="v" id="min-sal-v">0.00</span></label>
+      <input type="range" id="min-sal" min="0" max="1" step="0.01" value="0">
+      <label for="min-conf">Min edge confidence: <span class="v" id="min-conf-v">0.50</span></label>
+      <input type="range" id="min-conf" min="0" max="1" step="0.01" value="0.5">
+    </div>
+    <div class="group">
+      <h2>Legend</h2>
+      <div class="legend">
+        <div><span class="swatch" style="background: hsl(210, 70%, 55%)"></span>cold (low warmth)</div>
+        <div><span class="swatch" style="background: hsl(30, 80%, 55%)"></span>warm (recent activity)</div>
+        <div style="margin-top: 6px; line-height: 1.6;">
+          Node size &propto; salience<br>
+          Edge thickness &propto; confidence<br>
+          <span style="color: #c9d1d9">solid</span> = related,
+          <span style="color: var(--accent)">blue</span> = namespace
+        </div>
+      </div>
+    </div>
+    <div id="err" class="err" style="display:none"></div>
+  </aside>
+  <div id="net"></div>
+  <aside class="detail">
+    <h2>Node detail</h2>
+    <div id="detail-empty" class="empty">Click a node to inspect.</div>
+    <div id="detail" style="display:none">
+      <div class="key" id="detail-key"></div>
+      <div class="meta" id="detail-meta"></div>
+      <div class="value" id="detail-value"></div>
+    </div>
+  </aside>
+</div>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const tokenInput = $("token");
+  const searchInput = $("search");
+  const sourceInput = $("source");
+  const minSal = $("min-sal");
+  const minSalV = $("min-sal-v");
+  const minConf = $("min-conf");
+  const minConfV = $("min-conf-v");
+  const reloadBtn = $("reload");
+  const errBox = $("err");
+
+  // Restore token from sessionStorage; persist any new value.
+  tokenInput.value = sessionStorage.getItem("brainToken") || "";
+  tokenInput.addEventListener("change", () => sessionStorage.setItem("brainToken", tokenInput.value));
+
+  let allNodes = [];
+  let allEdges = [];
+  let network = null;
+  let dataset = null;
+
+  function showErr(msg) {
+    if (!msg) { errBox.style.display = "none"; errBox.textContent = ""; return; }
+    errBox.style.display = "block";
+    errBox.textContent = msg;
+  }
+
+  // HSL hue interpolated from warmth: 0 = cool blue (210), 1 = warm orange (30).
+  function warmthColor(w) {
+    const clamped = Math.max(0, Math.min(1, w));
+    const hue = 210 - clamped * 180;
+    return `hsl(${hue}, 70%, 55%)`;
+  }
+
+  function nodeSize(salience) {
+    return 10 + Math.max(0, Math.min(1, salience)) * 30;
+  }
+
+  function edgeWidth(conf) {
+    return 1 + Math.max(0, Math.min(1, conf)) * 4;
+  }
+
+  function edgeColor(rel) {
+    return rel === "namespace" ? "#58a6ff" : "#8b949e";
+  }
+
+  async function fetchGraph() {
+    showErr("");
+    const params = new URLSearchParams();
+    if (sourceInput.value) params.set("source_prefix", sourceInput.value);
+    if (parseFloat(minSal.value) > 0) params.set("min_salience", minSal.value);
+    if (parseFloat(minConf.value) > 0) params.set("min_confidence", minConf.value);
+    const url = "/api/brain/graph" + (params.toString() ? "?" + params.toString() : "");
+    const headers = {};
+    if (tokenInput.value) headers["Authorization"] = "Bearer " + tokenInput.value;
+    let res;
+    try {
+      res = await fetch(url, { headers });
+    } catch (e) {
+      showErr("network error: " + e);
+      return;
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      showErr(`HTTP ${res.status}: ${text}`);
+      return;
+    }
+    const data = await res.json();
+    allNodes = data.nodes || [];
+    allEdges = data.edges || [];
+    $("stat-nodes").textContent = data.counts?.nodes ?? allNodes.length;
+    $("stat-edges").textContent = data.counts?.edges ?? allEdges.length;
+    render();
+  }
+
+  function render() {
+    const term = searchInput.value.trim().toLowerCase();
+    const visibleKeys = new Set();
+    const visNodes = [];
+    for (const n of allNodes) {
+      if (term && !n.key.toLowerCase().includes(term) && !(n.value || "").toLowerCase().includes(term)) continue;
+      visibleKeys.add(n.key);
+      visNodes.push({
+        id: n.key,
+        label: n.key,
+        title: `${n.key}\nsalience ${n.salience.toFixed(2)} · warmth ${(n.warmth || 0).toFixed(2)}\n${(n.value || "").slice(0, 200)}`,
+        size: nodeSize(n.salience),
+        color: { background: warmthColor(n.warmth || 0), border: "#30363d", highlight: { background: warmthColor(n.warmth || 0), border: "#58a6ff" } },
+        font: { color: "#c9d1d9", size: 11 },
+      });
+    }
+    const visEdges = [];
+    for (const e of allEdges) {
+      if (!visibleKeys.has(e.key_a) || !visibleKeys.has(e.key_b)) continue;
+      visEdges.push({
+        from: e.key_a,
+        to: e.key_b,
+        width: edgeWidth(e.confidence),
+        color: { color: edgeColor(e.relationship), opacity: 0.5 },
+        title: `${e.relationship} · confidence ${e.confidence.toFixed(2)}`,
+      });
+    }
+    $("stat-shown").textContent = visNodes.length;
+    dataset = { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) };
+    if (!network) {
+      network = new vis.Network($("net"), dataset, {
+        autoResize: true,
+        nodes: { shape: "dot", borderWidth: 1 },
+        edges: { smooth: { type: "continuous" } },
+        // forceAtlas2Based is more stable on dense graphs than BarnesHut.
+        // High centralGravity keeps the cluster from flying off-screen; LR
+        // damping prevents the perpetual-spin glob.
+        physics: {
+          solver: "forceAtlas2Based",
+          forceAtlas2Based: { gravitationalConstant: -50, centralGravity: 0.02, springLength: 100, springConstant: 0.08, damping: 0.6, avoidOverlap: 0.5 },
+          stabilization: { enabled: true, iterations: 300, fit: true },
+          timestep: 0.35,
+          adaptiveTimestep: true,
+          minVelocity: 0.5,
+        },
+        interaction: { hover: true, tooltipDelay: 100 },
+      });
+      // Freeze physics once stabilized; the user can re-enable via the Pause
+      // physics button if they want to drag-and-resettle.
+      network.once("stabilizationIterationsDone", () => {
+        fitView();
+        network.setOptions({ physics: { enabled: false } });
+        physicsRunning = false;
+        $("physics").textContent = "Resume physics";
+      });
+      // Re-render whenever the container resizes (window resize, devtools open,
+      // CSS grid reflow). Without this Chrome can leave the canvas at a stale
+      // size and the graph appears to "die".
+      if (window.ResizeObserver) {
+        const ro = new ResizeObserver(() => { network.redraw(); });
+        ro.observe($("net"));
+      }
+      network.on("click", (params) => {
+        if (params.nodes.length === 0) {
+          $("detail").style.display = "none";
+          $("detail-empty").style.display = "block";
+          return;
+        }
+        const key = params.nodes[0];
+        const node = allNodes.find((n) => n.key === key);
+        if (!node) return;
+        $("detail-empty").style.display = "none";
+        $("detail").style.display = "block";
+        $("detail-key").textContent = node.key;
+        const created = node.created_at ? new Date(node.created_at).toLocaleString() : "—";
+        $("detail-meta").innerHTML =
+          `<strong>salience</strong> ${node.salience.toFixed(3)} · ` +
+          `<strong>warmth</strong> ${(node.warmth || 0).toFixed(3)}<br>` +
+          `<strong>access count</strong> ${node.access_count} · ` +
+          `<strong>source</strong> ${node.source || "—"}<br>` +
+          `<strong>created</strong> ${created}` +
+          (node.truncated ? `<br><em>(value truncated by API; full content not shown)</em>` : "");
+        $("detail-value").textContent = node.value || "";
+      });
+    } else {
+      network.setData(dataset);
+      network.redraw();
+    }
+  }
+
+  function fitView() {
+    if (network) network.fit({ animation: { duration: 400, easingFunction: "easeInOutQuad" } });
+  }
+  let physicsRunning = true;
+  function togglePhysics() {
+    if (!network) return;
+    physicsRunning = !physicsRunning;
+    network.setOptions({ physics: { enabled: physicsRunning } });
+    $("physics").textContent = physicsRunning ? "Pause physics" : "Resume physics";
+  }
+  $("physics").addEventListener("click", togglePhysics);
+  $("fit").addEventListener("click", fitView);
+  // Press "F" to re-center, "P" to toggle physics (outside inputs).
+  document.addEventListener("keydown", (e) => {
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    if (e.key === "f" || e.key === "F") fitView();
+    if (e.key === "p" || e.key === "P") togglePhysics();
+  });
+  reloadBtn.addEventListener("click", fetchGraph);
+  searchInput.addEventListener("input", render);
+  sourceInput.addEventListener("change", fetchGraph);
+  minSal.addEventListener("input", () => { minSalV.textContent = parseFloat(minSal.value).toFixed(2); });
+  minSal.addEventListener("change", fetchGraph);
+  minConf.addEventListener("input", () => { minConfV.textContent = parseFloat(minConf.value).toFixed(2); });
+  minConf.addEventListener("change", fetchGraph);
+
+  // Initial load.
+  fetchGraph();
+})();
+</script>
+</body>
+</html>

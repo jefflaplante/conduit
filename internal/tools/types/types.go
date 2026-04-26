@@ -264,6 +264,42 @@ type BrainBulkEntry struct {
 	Source string    `json:"source,omitempty"`
 }
 
+// BrainGraphNode is a single node in the brain graph payload.
+type BrainGraphNode struct {
+	Key         string    `json:"key"`
+	Value       string    `json:"value"`
+	Source      string    `json:"source,omitempty"`
+	Salience    float64   `json:"salience"`
+	Warmth      float64   `json:"warmth,omitempty"`
+	AccessCount int       `json:"access_count"`
+	CreatedAt   time.Time `json:"created_at"`
+	Truncated   bool      `json:"truncated,omitempty"`
+}
+
+// BrainGraphEdge is a single edge in the brain graph payload.
+type BrainGraphEdge struct {
+	KeyA            string     `json:"key_a"`
+	KeyB            string     `json:"key_b"`
+	Relationship    string     `json:"relationship"`
+	Confidence      float64    `json:"confidence"`
+	LastTraversedAt *time.Time `json:"last_traversed_at,omitempty"`
+}
+
+// BrainGraph is the full node+edge payload for the dashboard.
+type BrainGraph struct {
+	Nodes []*BrainGraphNode `json:"nodes"`
+	Edges []*BrainGraphEdge `json:"edges"`
+}
+
+// BrainGraphOptions filters and shapes the graph returned by ListGraph.
+type BrainGraphOptions struct {
+	SourcePrefix  string
+	MinSalience   float64
+	MinConfidence float64
+	ValueTruncate int
+	NodeLimit     int
+}
+
 // BrainService provides tiered memory (LTM + working + scratchpad) to tools.
 type BrainService interface {
 	Store(ctx context.Context, key, value string, tier BrainTier, source string) error
@@ -283,6 +319,8 @@ type BrainService interface {
 	// a namespace prefix with direct matches (BFS expansion).
 	RecallWithCluster(ctx context.Context, query string, limit int) (*BrainClusterResult, error)
 	List(ctx context.Context, prefix string, sourcePrefix string) ([]*BrainEntry, error)
+	// ListGraph returns the LTM graph (nodes + edges), filtered by opts.
+	ListGraph(ctx context.Context, opts BrainGraphOptions) (*BrainGraph, error)
 	Delete(ctx context.Context, key string) error
 	Push(ctx context.Context, userID, value string) error
 	Pop(ctx context.Context, userID string) (string, error)

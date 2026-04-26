@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"net/http"
 
-	internalssh "conduit/internal/ssh"
+	"conduit/internal/gateway/dashboard"
 	"conduit/internal/middleware"
+	internalssh "conduit/internal/ssh"
 	"conduit/internal/tui"
 	"conduit/internal/version"
 )
@@ -48,6 +49,14 @@ func (g *Gateway) buildHTTPServer() *http.Server {
 	mux.Handle("/api/vector/delete", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
 		limitRequestBody(http.HandlerFunc(vectorAPI.handleDelete), MaxRequestBodySize))))
 	mux.Handle("/api/vector/status", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(vectorAPI.handleStatus))))
+
+	// Brain memory-graph dashboard (gated by config.Brain.DashboardEnabled,
+	// enforced inside the handler). The HTML chrome at /dashboard/brain and
+	// the static asset bundle at /dashboard/assets/ are public; the JSON
+	// data feed at /api/brain/graph is auth-gated.
+	mux.Handle("/api/brain/graph", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleBrainGraph))))
+	mux.Handle("/dashboard/brain", dashboard.BrainHandler())
+	mux.Handle("/dashboard/assets/", http.StripPrefix("/dashboard/assets/", dashboard.AssetsHandler()))
 
 	// Inject request_id into every HTTP request so auth and rate-limit logs
 	// can be correlated across the entire request lifecycle.
