@@ -192,6 +192,10 @@ type BrainConfig struct {
 	REMSalienceDecayRate float64 `json:"rem_salience_decay_rate,omitempty"`
 	REMGroomWithLLM      bool    `json:"rem_groom_with_llm,omitempty"`
 	REMLogPath           string  `json:"rem_log_path,omitempty"`
+
+	// DashboardEnabled toggles the /dashboard/brain memory-graph dashboard
+	// and its backing /api/brain/graph endpoint. Off by default.
+	DashboardEnabled bool `json:"dashboard_enabled,omitempty"`
 }
 
 // DefaultBrainConfig returns sensible defaults for the brain subsystem.

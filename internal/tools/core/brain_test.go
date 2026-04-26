@@ -63,6 +63,9 @@ func (f *fakeBrainService) RecallWithCluster(ctx context.Context, query string, 
 func (f *fakeBrainService) List(ctx context.Context, prefix, sourcePrefix string) ([]*types.BrainEntry, error) {
 	return nil, nil
 }
+func (f *fakeBrainService) ListGraph(ctx context.Context, opts types.BrainGraphOptions) (*types.BrainGraph, error) {
+	return &types.BrainGraph{}, nil
+}
 func (f *fakeBrainService) Delete(ctx context.Context, key string) error            { return nil }
 func (f *fakeBrainService) Push(ctx context.Context, userID, value string) error    { return nil }
 func (f *fakeBrainService) Pop(ctx context.Context, userID string) (string, error)  { return "", nil }

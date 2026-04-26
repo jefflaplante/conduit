@@ -85,6 +85,20 @@ func (a *brainAdapter) List(ctx context.Context, prefix string, sourcePrefix str
 	return convertEntries(entries), nil
 }
 
+func (a *brainAdapter) ListGraph(ctx context.Context, opts types.BrainGraphOptions) (*types.BrainGraph, error) {
+	g, err := a.b.ListGraph(ctx, brain.GraphOptions{
+		SourcePrefix:  opts.SourcePrefix,
+		MinSalience:   opts.MinSalience,
+		MinConfidence: opts.MinConfidence,
+		ValueTruncate: opts.ValueTruncate,
+		NodeLimit:     opts.NodeLimit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return convertGraph(g), nil
+}
+
 func (a *brainAdapter) Delete(ctx context.Context, key string) error {
 	return a.b.Delete(ctx, key)
 }
@@ -159,6 +173,30 @@ func convertEntries(entries []*brain.Entry) []*types.BrainEntry {
 		result[i] = convertEntry(e)
 	}
 	return result
+}
+
+// convertGraph converts a brain.Graph to types.BrainGraph.
+func convertGraph(g *brain.Graph) *types.BrainGraph {
+	out := &types.BrainGraph{
+		Nodes: make([]*types.BrainGraphNode, len(g.Nodes)),
+		Edges: make([]*types.BrainGraphEdge, len(g.Edges)),
+	}
+	for i, n := range g.Nodes {
+		out.Nodes[i] = &types.BrainGraphNode{
+			Key: n.Key, Value: n.Value, Source: n.Source,
+			Salience: n.Salience, Warmth: n.Warmth,
+			AccessCount: n.AccessCount, CreatedAt: n.CreatedAt,
+			Truncated: n.Truncated,
+		}
+	}
+	for i, e := range g.Edges {
+		out.Edges[i] = &types.BrainGraphEdge{
+			KeyA: e.KeyA, KeyB: e.KeyB,
+			Relationship: e.Relationship, Confidence: e.Confidence,
+			LastTraversedAt: e.LastTraversedAt,
+		}
+	}
+	return out
 }
 
 // heartbeatBrainWriter adapts *brain.Brain to heartbeat.BrainWriter interface.
