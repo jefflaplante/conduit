@@ -17,15 +17,19 @@ type relationshipCandidate struct {
 	reason     string
 }
 
-// Integrate detects relationships between stored memories
-func (r *REMCycle) Integrate(ctx context.Context, dryRun bool) (*IntegrationResult, error) {
+// Integrate detects relationships between stored memories.
+//
+// When manual is false (the auto cron path) the run is gated to the configured
+// integration day so the expensive O(N²) LTM sweep only fires once a week.
+// When manual is true (caller explicitly requested the integration phase) the
+// gate is bypassed: explicit user intent overrides the schedule.
+func (r *REMCycle) Integrate(ctx context.Context, dryRun, manual bool) (*IntegrationResult, error) {
 	result := &IntegrationResult{
 		RelationshipsCreated: 0,
 		Patterns:             []string{},
 	}
 
-	// Only run on configured integration day (default Sunday = 0)
-	if !r.shouldRunIntegration() {
+	if !manual && !r.shouldRunIntegration() {
 		return result, nil // Skip with empty result
 	}
 
