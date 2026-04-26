@@ -25,7 +25,7 @@ func TestIntegrate_NamespaceRelationships(t *testing.T) {
 	// Configure to run on current weekday
 	rem.config.IntegrationDay = int(time.Now().Weekday())
 
-	result, err := rem.Integrate(ctx, false)
+	result, err := rem.Integrate(ctx, false, false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -51,7 +51,7 @@ func TestIntegrate_TokenOverlap(t *testing.T) {
 
 	rem.config.IntegrationDay = int(time.Now().Weekday())
 
-	result, err := rem.Integrate(ctx, false)
+	result, err := rem.Integrate(ctx, false, false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -73,7 +73,7 @@ func TestIntegrate_PatternDetection(t *testing.T) {
 
 	rem.config.IntegrationDay = int(time.Now().Weekday())
 
-	result, err := rem.Integrate(ctx, false)
+	result, err := rem.Integrate(ctx, false, false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -95,7 +95,7 @@ func TestIntegrate_DryRun(t *testing.T) {
 	rem.config.IntegrationDay = int(time.Now().Weekday())
 
 	// Run in dry-run mode
-	result, err := rem.Integrate(ctx, true)
+	result, err := rem.Integrate(ctx, true, false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -123,13 +123,55 @@ func TestIntegrate_SkipsWrongDay(t *testing.T) {
 	currentDay := int(time.Now().Weekday())
 	rem.config.IntegrationDay = (currentDay + 1) % 7
 
-	result, err := rem.Integrate(ctx, false)
+	result, err := rem.Integrate(ctx, false, false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
 	// Should skip integration and return empty result
 	assert.Equal(t, 0, result.RelationshipsCreated)
 	assert.Empty(t, result.Patterns)
+}
+
+func TestIntegrate_ManualBypassesDayGate(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+
+	// Two entries that share a namespace prefix → at least one candidate.
+	require.NoError(t, b.Store(ctx, "scope.alpha", "alpha body", brain.TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "scope.beta", "beta body", brain.TierLongTerm, "test"))
+
+	// Pin the gate to a non-matching weekday.
+	currentDay := int(time.Now().Weekday())
+	rem.config.IntegrationDay = (currentDay + 1) % 7
+
+	// manual=true must bypass shouldRunIntegration().
+	result, err := rem.Integrate(ctx, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Greater(t, result.RelationshipsCreated, 0,
+		"manual integrate should run and create at least one relationship even on a non-integration day")
+}
+
+func TestRun_ExplicitPhasesTreatedAsManual(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+	require.NoError(t, b.Store(ctx, "ns.one", "one body", brain.TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "ns.two", "two body", brain.TierLongTerm, "test"))
+
+	// Force the schedule gate closed.
+	currentDay := int(time.Now().Weekday())
+	rem.config.IntegrationDay = (currentDay + 1) % 7
+
+	// Caller passes phases explicitly → Run() must mark this as manual and
+	// integration must fire despite the wrong-day gate.
+	report, err := rem.Run(ctx, []string{"integration"}, false)
+	require.NoError(t, err)
+	require.NotNil(t, report.Integration)
+	assert.Greater(t, report.Integration.RelationshipsCreated, 0)
 }
 
 func TestIntegrate_EmptyLTM(t *testing.T) {
@@ -140,7 +182,7 @@ func TestIntegrate_EmptyLTM(t *testing.T) {
 
 	rem.config.IntegrationDay = int(time.Now().Weekday())
 
-	result, err := rem.Integrate(ctx, false)
+	result, err := rem.Integrate(ctx, false, false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -167,7 +209,7 @@ func TestIntegrate_HighSaliencePattern(t *testing.T) {
 
 	rem.config.IntegrationDay = int(time.Now().Weekday())
 
-	result, err := rem.Integrate(ctx, false)
+	result, err := rem.Integrate(ctx, false, false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -201,7 +243,7 @@ func TestIntegrate_FrequentAccessPattern(t *testing.T) {
 
 	rem.config.IntegrationDay = int(time.Now().Weekday())
 
-	result, err := rem.Integrate(ctx, false)
+	result, err := rem.Integrate(ctx, false, false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -228,7 +270,7 @@ func TestIntegrate_RelationshipConfidence(t *testing.T) {
 
 	rem.config.IntegrationDay = int(time.Now().Weekday())
 
-	result, err := rem.Integrate(ctx, false)
+	result, err := rem.Integrate(ctx, false, false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -257,10 +299,10 @@ func TestIntegrate_NoDuplicateRelationships(t *testing.T) {
 	rem.config.IntegrationDay = int(time.Now().Weekday())
 
 	// Run integration twice
-	_, err := rem.Integrate(ctx, false)
+	_, err := rem.Integrate(ctx, false, false)
 	require.NoError(t, err)
 
-	_, err = rem.Integrate(ctx, false)
+	_, err = rem.Integrate(ctx, false, false)
 	require.NoError(t, err)
 
 	// Should not create duplicate relationships (INSERT OR REPLACE)

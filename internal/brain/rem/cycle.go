@@ -38,9 +38,14 @@ func NewREMCycle(b *brain.Brain, db *sql.DB, config REMConfig) *REMCycle {
 	}
 }
 
-// Run executes the full REM cycle and returns a report
+// Run executes the full REM cycle and returns a report.
+//
+// A non-empty phases slice signals an explicit caller-driven invocation
+// (e.g. "run integrate now"); an empty slice is the default cron sweep. The
+// distinction matters for phases like integration that have a weekday gate
+// in the auto path but should fire immediately when explicitly requested.
 func (r *REMCycle) Run(ctx context.Context, phases []string, dryRun bool) (*REMReport, error) {
-	// Default to all phases if none specified
+	manual := len(phases) > 0
 	if len(phases) == 0 {
 		phases = []string{"triage", "reflect", "consolidation", "pruning", "integration", "grooming"}
 	}
@@ -69,7 +74,7 @@ func (r *REMCycle) Run(ctx context.Context, phases []string, dryRun bool) (*REMR
 		case "pruning":
 			report.Pruning, err = r.runPruning(ctx, dryRun)
 		case "integration":
-			report.Integration, err = r.runIntegration(ctx, dryRun)
+			report.Integration, err = r.runIntegration(ctx, dryRun, manual)
 		case "grooming":
 			report.Grooming, err = r.runGrooming(ctx, dryRun)
 		default:
@@ -110,8 +115,8 @@ func (r *REMCycle) runPruning(ctx context.Context, dryRun bool) (*PruneResult, e
 	return r.Prune(ctx, dryRun)
 }
 
-func (r *REMCycle) runIntegration(ctx context.Context, dryRun bool) (*IntegrationResult, error) {
-	return r.Integrate(ctx, dryRun)
+func (r *REMCycle) runIntegration(ctx context.Context, dryRun, manual bool) (*IntegrationResult, error) {
+	return r.Integrate(ctx, dryRun, manual)
 }
 
 func (r *REMCycle) runGrooming(ctx context.Context, dryRun bool) (*GroomResult, error) {
