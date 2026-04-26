@@ -105,6 +105,16 @@ var migrations = []migration{
 		SQL: `ALTER TABLE brain_relationships ADD COLUMN last_traversed_at DATETIME;
 		CREATE INDEX IF NOT EXISTS idx_brain_rel_last_traversed ON brain_relationships(last_traversed_at);`,
 	},
+	// Migration 8: Usage-weighted edge confidence — access_count tracks how often
+	// an edge is traversed during recall/spreading. The effective confidence used
+	// for warmth boost is: base_confidence * (1 + alpha * log1p(access_count)).
+	// This creates a positive feedback loop where frequently-relevant connections
+	// become stronger, while edgeAccessDecay prevents old activity from permanently
+	// inflating confidence.
+	{
+		Version: 8,
+		SQL: `ALTER TABLE brain_relationships ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;`,
+	},
 }
 
 func runMigrations(db *sql.DB) error {
