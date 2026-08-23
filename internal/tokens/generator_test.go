@@ -501,11 +501,19 @@ func TestSecurityEdgeCases(t *testing.T) {
 	t.Run("checksum corruption detection", func(t *testing.T) {
 		token, _ := GenerateToken()
 
-		// Corrupt the token by changing one character
+		// Corrupt the token by flipping one character to a different value.
+		// Pick a replacement that differs from the original to avoid a no-op
+		// "corruption" (e.g. flipping an 'x' to 'x' — a 1/58 chance with base58
+		// alphabets, which made this test flaky).
 		tokenBytes := []byte(token)
 		if len(tokenBytes) > len(TokenPrefix)+1 {
 			// Change a character in the base58 part
-			tokenBytes[len(TokenPrefix)+1] = 'x'
+			i := len(TokenPrefix) + 1
+			orig := tokenBytes[i]
+			tokenBytes[i] = 'x'
+			if tokenBytes[i] == orig {
+				tokenBytes[i] = 'y'
+			}
 			corruptedToken := string(tokenBytes)
 
 			if ValidateToken(corruptedToken) {
