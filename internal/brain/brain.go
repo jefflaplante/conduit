@@ -82,6 +82,10 @@ type Status struct {
 	AvgWarmthBoost   float64        `json:"avg_warmth_boost,omitempty"`
 	ClusterHitRate   float64        `json:"cluster_hit_rate,omitempty"`
 	EdgeCountByType  map[string]int `json:"edge_count_by_type,omitempty"`
+
+	// Access bonus metrics.
+	AvgAccessBonus   float64 `json:"avg_access_bonus,omitempty"`
+	TopAccessBonus   []string `json:"top_access_bonus_keys,omitempty"`
 }
 
 // storeOpts holds options for Store calls, populated by StoreOption funcs.
@@ -165,6 +169,23 @@ func WithSalienceWeight(w float64) Option { return func(b *Brain) { b.salienceWe
 // during recall ranking. Default: 0.2.
 func WithWarmthWeight(w float64) Option { return func(b *Brain) { b.warmthWeight = w } }
 
+// WithAccessBonusWeight sets the weight applied to the decaying access bonus
+// during recall ranking. The access bonus rewards frequently-accessed entries
+// with a decaying curve: min(cap, access_count * alpha * decay^days_since_access).
+// Default: 0.15.
+func WithAccessBonusWeight(w float64) Option { return func(b *Brain) { b.accessBonusWeight = w } }
+
+// WithAccessBonusAlpha sets the per-access contribution to the access bonus.
+// Default: 0.1 (each access adds 0.1 to the bonus, subject to decay and cap).
+func WithAccessBonusAlpha(a float64) Option { return func(b *Brain) { b.accessBonusAlpha = a } }
+
+// WithAccessBonusCap sets the maximum access bonus value. Default: 0.3.
+func WithAccessBonusCap(c float64) Option { return func(b *Brain) { b.accessBonusCap = c } }
+
+// WithAccessBonusDecay sets the daily decay factor for the access bonus.
+// 0.95 means the bonus halves every ~13.5 days without access. Default: 0.95.
+func WithAccessBonusDecay(d float64) Option { return func(b *Brain) { b.accessBonusDecay = d } }
+
 type Brain struct {
 	mu      sync.RWMutex
 	working map[string]map[string]*Entry // userID -> key -> entry
@@ -199,6 +220,16 @@ type Brain struct {
 	matchWeight    float64
 	salienceWeight float64
 	warmthWeight   float64
+
+	// Access bonus: decaying score reward for frequently-accessed entries.
+	// Computed at recall time as: min(cap, access_count * alpha * decay^days)
+	// This is separate from salience (which bakes in access at write time) and
+	// warmth (which is transient spreading activation). Access bonus captures
+	// "this entry has been useful repeatedly" with exponential time decay.
+	accessBonusWeight float64 // weight in blended score (default 0.15)
+	accessBonusAlpha  float64 // per-access contribution (default 0.1)
+	accessBonusCap    float64 // maximum bonus value (default 0.3)
+	accessBonusDecay  float64 // daily decay factor (default 0.95)
 
 	// pendingEdgeKeys accumulates LTM keys stored since the last autoFlush so
 	// namespace edges can be materialized in batch rather than per-store.
@@ -257,6 +288,10 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 		matchWeight:            0.5,
 		salienceWeight:         0.3,
 		warmthWeight:           0.2,
+		accessBonusWeight:      0.15,
+		accessBonusAlpha:       0.1,
+		accessBonusCap:         0.3,
+		accessBonusDecay:       0.95,
 		pendingEdgeKeys:        make(map[string]struct{}),
 		stopCh:                 make(chan struct{}),
 	}
@@ -784,10 +819,12 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	// Sort by blended score. Weights default to 0.5/0.3/0.2 (match/salience/warmth)
 	// but are configurable via WithMatchWeight / WithSalienceWeight / WithWarmthWeight.
 	// An optional context-overlap boost of (1 + defaultContextWeight) applies last.
-	mw, sw, ww := b.matchWeight, b.salienceWeight, b.warmthWeight
+	// The access bonus (accessBonusWeight) rewards frequently-accessed entries
+	// with exponential time decay, computed dynamically at recall time.
+	mw, sw, ww, abw := b.matchWeight, b.salienceWeight, b.warmthWeight, b.accessBonusWeight
 	sort.Slice(scored, func(i, j int) bool {
-		si := (scored[i].matchScore * mw) + (scored[i].entry.Salience * sw) + (scored[i].entry.Warmth * ww)
-		sj := (scored[j].matchScore * mw) + (scored[j].entry.Salience * sw) + (scored[j].entry.Warmth * ww)
+		si := (scored[i].matchScore * mw) + (scored[i].entry.Salience * sw) + (scored[i].entry.Warmth * ww) + (b.computeAccessBonus(scored[i].entry) * abw)
+		sj := (scored[j].matchScore * mw) + (scored[j].entry.Salience * sw) + (scored[j].entry.Warmth * ww) + (b.computeAccessBonus(scored[j].entry) * abw)
 		if len(contextTerms) > 0 {
 			if entryMatchesAnyTerm(scored[i].entry, contextTerms) {
 				si *= 1 + defaultContextWeight
@@ -1154,6 +1191,57 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 		edgeRows.Close()
 	}
 
+	// Access bonus metrics: average and top-5 keys by access bonus.
+	var avgAccessBonus float64
+	var topAccessBonusKeys []string
+	if bonusRows, err := b.db.Query(`
+		SELECT key, access_count, accessed_at
+		  FROM brain_ltm
+		 WHERE access_count > 0 AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))
+		 ORDER BY accessed_at DESC
+		 LIMIT 100
+	`); err == nil {
+		var totalBonus float64
+		var count int
+		type bonusEntry struct {
+			key   string
+			bonus float64
+		}
+		var entries []bonusEntry
+		for bonusRows.Next() {
+			var key string
+			var ac int
+			var aa sql.NullTime
+			if bonusRows.Scan(&key, &ac, &aa) != nil {
+				continue
+			}
+			e := &Entry{AccessCount: ac, Tier: TierLongTerm}
+			if aa.Valid {
+				e.AccessedAt = aa.Time
+			}
+			bonus := b.computeAccessBonus(e)
+			if bonus > 0 {
+				totalBonus += bonus
+				count++
+				entries = append(entries, bonusEntry{key: key, bonus: bonus})
+			}
+		}
+		bonusRows.Close()
+		if count > 0 {
+			avgAccessBonus = totalBonus / float64(count)
+		}
+		// Sort by bonus descending and take top 5.
+		sort.Slice(entries, func(i, j int) bool { return entries[i].bonus > entries[j].bonus })
+		limit := 5
+		if len(entries) < limit {
+			limit = len(entries)
+		}
+		topAccessBonusKeys = make([]string, limit)
+		for i := 0; i < limit; i++ {
+			topAccessBonusKeys[i] = entries[i].key
+		}
+	}
+
 	return &Status{
 		LTMEntries: ltmCount, WMEntries: wmCount, ScratchDepth: scratchDepth,
 		AvgSalience: avgSalience, HottestKeys: hottestKeys, ColdestKeys: coldestKeys,
@@ -1162,6 +1250,8 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 		AvgWarmthBoost:  avgBoost,
 		ClusterHitRate:  clusterHitRate,
 		EdgeCountByType: edgeCounts,
+		AvgAccessBonus:  avgAccessBonus,
+		TopAccessBonus:  topAccessBonusKeys,
 	}, nil
 }
 
@@ -1246,6 +1336,34 @@ func (b *Brain) computeSalience(e *Entry) float64 {
 		tierScore = 0.1
 	}
 	return (accessScore * b.accessWeight) + (recencyScore * b.recencyWeight) + (tierScore * b.tierWeight)
+}
+
+// computeAccessBonus calculates a decaying access bonus for an entry at recall
+// time. The formula is:
+//
+//	bonus = min(cap, access_count * alpha * decay^days_since_last_access)
+//
+// This rewards frequently-accessed entries with exponential time decay, so
+// recent accesses matter more than ancient ones. Unlike salience (which bakes
+// in access frequency at write time), the access bonus is computed dynamically
+// during recall ranking, giving a real-time signal of entry usefulness.
+//
+// Example with defaults (alpha=0.1, cap=0.3, decay=0.95):
+//   - 10 accesses, 0 days ago: min(0.3, 1.0) = 0.3 (capped)
+//   - 10 accesses, 7 days ago: min(0.3, 0.697) = 0.297
+//   - 5 accesses, 0 days ago: min(0.3, 0.5) = 0.3 (capped)
+//   - 3 accesses, 1 day ago: min(0.3, 0.285) = 0.285
+//   - 1 access, 30 days ago: min(0.3, 0.022) = 0.022
+func (b *Brain) computeAccessBonus(e *Entry) float64 {
+	if e.AccessCount <= 0 {
+		return 0.0
+	}
+	daysSince := time.Since(e.AccessedAt).Hours() / 24.0
+	if daysSince < 0 {
+		daysSince = 0
+	}
+	raw := float64(e.AccessCount) * b.accessBonusAlpha * math.Pow(b.accessBonusDecay, daysSince)
+	return math.Min(b.accessBonusCap, raw)
 }
 
 // entryMatchesAnyTerm reports whether any of the given tokens appears in the
