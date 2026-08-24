@@ -122,7 +122,7 @@ func isReferenceBullet(line string) bool {
 	normalized := strings.ToLower(stripLeadingEmphasis(body))
 
 	// Reject entries explicitly marked as non-file references.
-	skipLabels := []string{"env:", "skills:", "skill:", "tools:", "tool:", "fallback:", "binary:", "binaries:"}
+	skipLabels := []string{"env:", "skills:", "skill:", "tools:", "tool:", "fallback:", "binary:", "binaries:", "workspace:", "shared:"}
 	for _, lbl := range skipLabels {
 		if strings.HasPrefix(normalized, lbl) {
 			return false
