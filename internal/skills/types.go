@@ -93,6 +93,20 @@ type SkillsConfig struct {
 	SearchPaths []string        `json:"search_paths"`
 	Execution   ExecutionConfig `json:"execution"`
 	Cache       CacheConfig     `json:"cache"`
+	// InlineDependencies controls whether declared reference dependencies are
+	// auto-inlined into the system prompt. When false, dependency paths are
+	// listed only (agent reads them on demand). Default: true (legacy behavior).
+	InlineDependencies *bool `json:"inline_dependencies,omitempty"`
+	// MaxDependencyChars caps the inline content per dependency (0 = unlimited).
+	MaxDependencyChars int `json:"max_dependency_chars,omitempty"`
+}
+
+// DependencyInlineMode reports the effective dependency inlining mode.
+func (c *SkillsConfig) DependencyInlineMode() (inline bool, maxChars int) {
+	if c == nil || c.InlineDependencies == nil {
+		return true, 0 // legacy default: inline everything
+	}
+	return *c.InlineDependencies, c.MaxDependencyChars
 }
 
 // ExecutionConfig defines execution-specific settings
