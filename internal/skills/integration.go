@@ -12,6 +12,7 @@ import (
 type SkillIntegrator struct {
 	executor *Executor
 	loader   *SkillLoader
+	config   *SkillsConfig
 }
 
 // NewSkillIntegrator creates a new skill integrator
@@ -19,6 +20,15 @@ func NewSkillIntegrator(executor *Executor) *SkillIntegrator {
 	return &SkillIntegrator{
 		executor: executor,
 		loader:   NewSkillLoader(),
+	}
+}
+
+// NewSkillIntegratorWithConfig creates a skill integrator aware of dependency-inline settings
+func NewSkillIntegratorWithConfig(executor *Executor, cfg *SkillsConfig) *SkillIntegrator {
+	return &SkillIntegrator{
+		executor: executor,
+		loader:   NewSkillLoader(),
+		config:   cfg,
 	}
 }
 
@@ -370,7 +380,7 @@ func (i *SkillIntegrator) BuildSkillsContext(skills []Skill) string {
 	// Append auto-loaded dependency content for each skill that declared any.
 	// This makes declared reference files (e.g. ha-entities.md) part of the
 	// system prompt without requiring the agent to read them explicitly.
-	depBlock := BuildDependencyContext(skills)
+	depBlock := i.BuildDependencyContext(skills)
 	if depBlock != "" {
 		context = append(context, depBlock)
 	}
@@ -382,6 +392,89 @@ func (i *SkillIntegrator) BuildSkillsContext(skills []Skill) string {
 // dependencies for the given skills. Missing or skipped deps are noted inline
 // so the agent knows the file was declared but unavailable. Returns "" if no
 // skill has any dependencies.
+//
+// The integrator's config controls inlining: when InlineDependencies is false,
+// dependency paths are listed only (the agent reads them on demand); when true,
+// content is inlined with an optional per-dependency character cap.
+func (i *SkillIntegrator) BuildDependencyContext(skills []Skill) string {
+	inline, maxChars := i.config.DependencyInlineMode()
+	if inline {
+		return BuildDependencyContextCapped(skills, maxChars)
+	}
+	return BuildDependencyContextList(skills)
+}
+
+// BuildDependencyContextCapped inlines dependency content, truncating each
+// dependency to maxChars (0 = no cap).
+func BuildDependencyContextCapped(skills []Skill, maxChars int) string {
+	var b strings.Builder
+	b.WriteString("\n### Skill Dependencies (auto-loaded)\n")
+	b.WriteString("Reference files declared by the above skills have been inlined below.\n\n")
+
+	hasAny := false
+	for _, skill := range skills {
+		if len(skill.Dependencies) == 0 {
+			continue
+		}
+		for _, dep := range skill.Dependencies {
+			header := fmt.Sprintf("#### %s — %s\n", skill.Name, dep.Path)
+			switch {
+			case dep.Missing:
+				b.WriteString(header)
+				b.WriteString("_(declared dependency not found on disk; skill still active)_\n\n")
+			case dep.Skipped:
+				b.WriteString(header)
+				b.WriteString(fmt.Sprintf("_(skipped: %s)_\n\n", dep.SkipReason))
+			case dep.Content != "":
+				hasAny = true
+				b.WriteString(header)
+				content := strings.TrimRight(dep.Content, "\n")
+				if maxChars > 0 && len(content) > maxChars {
+					content = content[:maxChars] + fmt.Sprintf("\n...(truncated at %d chars — read the file for the rest)", maxChars)
+				}
+				b.WriteString(content)
+				b.WriteString("\n\n")
+			}
+		}
+	}
+	if !hasAny {
+		return ""
+	}
+	return b.String()
+}
+
+// BuildDependencyContextList lists dependency paths without inlining content.
+// The agent reads files on demand via the Read tool.
+func BuildDependencyContextList(skills []Skill) string {
+	var b strings.Builder
+	var lines []string
+	for _, skill := range skills {
+		if len(skill.Dependencies) == 0 {
+			continue
+		}
+		for _, dep := range skill.Dependencies {
+			state := ""
+			switch {
+			case dep.Missing:
+				state = " (missing on disk)"
+			case dep.Skipped:
+				state = fmt.Sprintf(" (skipped: %s)", dep.SkipReason)
+			}
+			lines = append(lines, fmt.Sprintf("- %s — %s%s", skill.Name, dep.Path, state))
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	b.WriteString("\n### Skill Dependencies (paths only)\n")
+	b.WriteString("Reference files declared by the above skills. Read them with the Read tool when the task requires their contents.\n\n")
+	b.WriteString(strings.Join(lines, "\n"))
+	b.WriteString("\n")
+	return b.String()
+}
+
+// BuildDependencyContext is the legacy package-level function preserving the
+// original behavior (inline everything, no cap). Kept for external callers and tests.
 func BuildDependencyContext(skills []Skill) string {
 	hasAny := false
 	for _, s := range skills {

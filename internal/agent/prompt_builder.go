@@ -535,6 +535,10 @@ func (pb *PromptBuilder) buildIdentitySection(isOAuth bool) string {
 }
 
 // buildToolingSection creates the tools availability section
+// buildToolingSection lists tool availability. Skill-derived tools are
+// compressed to one line each — their full descriptions and action catalogs
+// are duplicated in the Skills section, so restating them here only inflates
+// the prompt.
 func (pb *PromptBuilder) buildToolingSection() string {
 	var builder strings.Builder
 
@@ -542,8 +546,16 @@ func (pb *PromptBuilder) buildToolingSection() string {
 	builder.WriteString("Tool availability (filtered by policy):\n")
 	builder.WriteString("Tool names are case-sensitive. Call tools exactly as listed.\n")
 
+	skillTools := 0
 	for _, tool := range pb.tools {
+		if strings.HasPrefix(tool.Name, "skill_") {
+			skillTools++
+			continue
+		}
 		builder.WriteString(fmt.Sprintf("- %s: %s\n", tool.Name, tool.Description))
+	}
+	if skillTools > 0 {
+		builder.WriteString(fmt.Sprintf("- skill_*: %d skill-derived tools — see Skills section for names/actions/descriptions\n", skillTools))
 	}
 
 	builder.WriteString("TOOLS.md does not control tool availability; it is user guidance for how to use external tools.\n")
@@ -686,19 +698,31 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 	builder.WriteString("The following project context files have been loaded:\n")
 	builder.WriteString("If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.\n\n")
 
-	// Core files in specific order
-	coreFiles := []string{"SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md", "IDENTITY.md", "HEARTBEAT.md", "BOOTSTRAP.md"}
+	// Core files in specific order.
+	// HEARTBEAT.md is heartbeat/cron-session guidance: only inject for those
+	// session types. Regular chat sessions never need it.
+	coreFiles := []string{"SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md", "IDENTITY.md", "BOOTSTRAP.md"}
+	isHeartbeatSession := strings.HasPrefix(sessionKey, "heartbeat_") || strings.HasPrefix(sessionKey, "cron_")
+	if isHeartbeatSession {
+		coreFiles = append([]string{"HEARTBEAT.md"}, coreFiles...)
+	}
 	for _, filename := range coreFiles {
 		if content, exists := files[filename]; exists {
 			builder.WriteString(fmt.Sprintf("## %s\n%s\n", filename, content))
 		}
 	}
 
-	// Memory files
+	// Memory files — tail-truncated (recent entries are the signal; the file
+	// is appended chronologically so the last N chars are the most recent).
 	for filename, content := range files {
 		if strings.HasPrefix(filename, "memory/") && strings.HasSuffix(filename, ".md") {
 			if len(content) > 4000 {
-				content = content[:4000] + "\n...(truncated)"
+				cut := len(content) - 4000
+				// Advance to the next newline so we don't start mid-entry
+				if idx := strings.IndexByte(content[cut:], '\n'); idx >= 0 {
+					cut += idx + 1
+				}
+				content = "…(older entries truncated)\n" + content[cut:]
 			}
 			builder.WriteString(fmt.Sprintf("## %s\n%s\n", filename, content))
 		}

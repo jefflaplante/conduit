@@ -50,7 +50,7 @@ func NewManager(config SkillsConfig) *Manager {
 
 	discovery := NewSkillDiscovery(config.SearchPaths)
 	executor := NewExecutor(config.Execution)
-	integrator := NewSkillIntegrator(executor)
+	integrator := NewSkillIntegratorWithConfig(executor, &config)
 
 	return &Manager{
 		config:     config,
