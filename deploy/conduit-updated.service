@@ -22,8 +22,9 @@ KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30
 
-# Restart policy
-Restart=on-failure
+# Restart policy — always so clean drain-exits (SIGHUP reload, gateway tool
+# restart) also bring us back; on-failure lets clean exits leave the service dead.
+Restart=always
 RestartSec=5
 StartLimitIntervalSec=60
 StartLimitBurst=3
