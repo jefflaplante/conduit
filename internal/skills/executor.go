@@ -93,7 +93,24 @@ func (e *Executor) executeScript(ctx context.Context, skill Skill, action string
 		cmd = exec.CommandContext(ctx, scriptPath)
 	}
 
-	return e.runCommand(ctx, cmd, skill, args)
+	// Script skills always receive a JSON envelope on stdin containing the
+	// action name plus any args. Scripts select on the action key to dispatch
+	// subcommands (e.g. water-tank monitor.py). The executor runs
+	// `python3 monitor.py` with no argv, so stdin is the only channel.
+	envelope := make(map[string]interface{}, len(args)+1)
+	for k, v := range args {
+		envelope[k] = v
+	}
+	envelope["action"] = action
+	stdinJSON, err := json.Marshal(envelope)
+	if err != nil {
+		return &ExecutionResult{
+			Success: false,
+			Error:   fmt.Sprintf("error marshaling action envelope: %v", err),
+		}, nil
+	}
+
+	return e.runCommand(ctx, cmd, skill, stdinJSON)
 }
 
 // executeSubprocess executes the skill through a shell subprocess
@@ -110,33 +127,41 @@ func (e *Executor) executeSubprocess(ctx context.Context, skill Skill, action st
 	// Execute through bash
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 
-	return e.runCommand(ctx, cmd, skill, args)
-}
-
-// runCommand executes a command with proper environment and argument handling
-func (e *Executor) runCommand(ctx context.Context, cmd *exec.Cmd, skill Skill, args map[string]interface{}) (*ExecutionResult, error) {
-	// Set working directory
-	cmd.Dir = skill.Location
-
-	// Set environment
-	cmd.Env = e.buildEnvironment(skill)
-
-	// Only pipe args as JSON stdin for legacy script-based skills.
-	// For gog/email skills, args are already interpolated into the command line.
-	// Piping JSON to gog's stdin causes "no TTY available" errors.
-	needsStdin := true
-	if skill.Name == "email" || skill.Name == "gog" {
-		needsStdin = false
-	}
-	if needsStdin && len(args) > 0 {
-		argsJSON, err := json.Marshal(args)
+	// For subprocess skills (gog/email), args are interpolated into the
+	// command line; keep legacy stdin behavior (pipe raw args JSON only
+	// when args exist) for any script reading them that way.
+	var stdinJSON []byte
+	if len(args) > 0 {
+		var err error
+		stdinJSON, err = json.Marshal(args)
 		if err != nil {
 			return &ExecutionResult{
 				Success: false,
 				Error:   fmt.Sprintf("error marshaling arguments: %v", err),
 			}, nil
 		}
-		cmd.Stdin = bytes.NewReader(argsJSON)
+	}
+
+	return e.runCommand(ctx, cmd, skill, stdinJSON)
+}
+
+// runCommand executes a command with proper environment and argument handling.
+// stdinJSON, when non-nil, is piped to the command's stdin.
+func (e *Executor) runCommand(ctx context.Context, cmd *exec.Cmd, skill Skill, stdinJSON []byte) (*ExecutionResult, error) {
+	// Set working directory
+	cmd.Dir = skill.Location
+
+	// Set environment
+	cmd.Env = e.buildEnvironment(skill)
+
+	// Pipe stdin payload when present. For gog/email skills args are already
+	// interpolated into the command line; piping JSON to their stdin causes
+	// "no TTY available" errors, so skip those.
+	if stdinJSON != nil {
+		skipStdin := skill.Name == "email" || skill.Name == "gog"
+		if !skipStdin {
+			cmd.Stdin = bytes.NewReader(stdinJSON)
+		}
 	}
 
 	// Execute command
