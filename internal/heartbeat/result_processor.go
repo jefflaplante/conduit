@@ -56,7 +56,22 @@ func NewResultProcessor() *ResultProcessor {
 func (p *ResultProcessor) ProcessResponse(response AIResponse, tasks []ParsedHeartbeatTask) (*HeartbeatResult, error) {
 	content := response.GetContent()
 	if content == "" {
-		return nil, fmt.Errorf("empty response content")
+		// Empty content with no execution error means the AI router
+		// intentionally suppressed the response: processSilentPatterns()
+		// blanks HEARTBEAT_OK / NO_REPLY replies so they never reach a
+		// channel, and that blanked content is what flows back here. The
+		// model completed its checks and chose to stay silent — a clean
+		// run, not a failure. Genuine LLM errors surface in the executor
+		// before reaching this point, so error-free + empty is always
+		// intentional silence.
+		result := &HeartbeatResult{
+			Status:         ResultStatusOK,
+			TasksProcessed: len(tasks),
+			Metadata: map[string]interface{}{
+				"usage": response.GetUsage(),
+			},
+		}
+		return result, nil
 	}
 
 	result := &HeartbeatResult{
