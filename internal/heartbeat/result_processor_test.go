@@ -750,3 +750,33 @@ func TestHeartbeatResult_HasAlerts(t *testing.T) {
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
+
+// TestResultProcessor_ProcessResponse_EmptyContentIsOK verifies that empty
+// response content — produced when the AI router's silent-pattern suppression
+// blanks a HEARTBEAT_OK reply — is treated as a clean OK run, not an error.
+// Root cause of 119 false "heartbeat failed" scheduler entries per day.
+func TestResultProcessor_ProcessResponse_EmptyContentIsOK(t *testing.T) {
+	processor := NewResultProcessor()
+
+	tasks := []ParsedHeartbeatTask{{Title: "check email", Priority: TaskPriorityNormal}}
+
+	result, err := processor.ProcessResponse(&mockAIResponse{content: "", usage: nil}, tasks)
+	if err != nil {
+		t.Fatalf("Expected empty content to be OK, got error: %v", err)
+	}
+	if result.Status != ResultStatusOK {
+		t.Errorf("Expected ResultStatusOK for empty (suppressed) content, got %s", result.Status)
+	}
+	if result.TasksProcessed != 1 {
+		t.Errorf("Expected TasksProcessed=1, got %d", result.TasksProcessed)
+	}
+
+	// Same result shape as an explicit HEARTBEAT_OK reply
+	okResult, okErr := processor.ProcessResponse(&mockAIResponse{content: "HEARTBEAT_OK", usage: nil}, tasks)
+	if okErr != nil {
+		t.Fatalf("Explicit HEARTBEAT_OK errored: %v", okErr)
+	}
+	if okResult.Status != ResultStatusOK {
+		t.Errorf("Explicit HEARTBEAT_OK should be OK, got %s", okResult.Status)
+	}
+}
