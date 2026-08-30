@@ -39,14 +39,14 @@ func TestIsQuotaError(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "401 with quota keyword",
+			name:     "401 with quota keyword — NOT quota (auth propagates, bd-8dy: zero 401s in incident)",
 			err:      errors.New("API error: 401 - quota limit reached"),
-			expected: true,
+			expected: false,
 		},
 		{
-			name:     "401 with exceeded keyword",
+			name:     "401 with exceeded keyword — NOT quota (auth propagates)",
 			err:      errors.New("API error: 401 - request limit exceeded"),
-			expected: true,
+			expected: false,
 		},
 		{
 			name:     "400 without quota indicators",
@@ -79,9 +79,9 @@ func TestIsQuotaError(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "401 with balance keyword",
+			name:     "401 with balance keyword — NOT quota (auth propagates)",
 			err:      errors.New("API error: 401 - account balance too low"),
-			expected: true,
+			expected: false,
 		},
 		{
 			name:     "generic error with 400 but no quota",

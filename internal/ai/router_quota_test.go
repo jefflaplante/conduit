@@ -134,7 +134,7 @@ func TestGenerateResponseWithTools_QuotaFallback(t *testing.T) {
 
 			if tt.expectFallback {
 				assert.True(t, mockProvider.secondCallMade, "expected fallback retry to be made")
-				assert.Equal(t, "glm-5.3", mockProvider.secondCallModel, "expected fallback model to be glm-5.3")
+				assert.Equal(t, "z-ai/glm-5.3", mockProvider.secondCallModel, "expected fallback model to be z-ai/glm-5.3")
 			} else {
 				assert.False(t, mockProvider.secondCallMade, "expected no fallback retry")
 			}
