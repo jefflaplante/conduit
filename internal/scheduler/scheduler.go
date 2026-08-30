@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -767,7 +768,11 @@ func (s *Scheduler) reloadFromData(data []byte, hash [32]byte) error {
 			existingJob.Command != fileJob.Command ||
 			existingJob.Enabled != fileJob.Enabled ||
 			existingJob.Type != fileJob.Type ||
-			existingJob.Name != fileJob.Name {
+			existingJob.Name != fileJob.Name ||
+			existingJob.Target != fileJob.Target ||
+			existingJob.Model != fileJob.Model ||
+			existingJob.OneShot != fileJob.OneShot ||
+			!reflect.DeepEqual(existingJob.Skills, fileJob.Skills) {
 			// Modified — unschedule old, update fields, reschedule
 			if existingJob.Type == JobTypeGo && existingJob.entryID != 0 {
 				s.cron.Remove(existingJob.entryID)
