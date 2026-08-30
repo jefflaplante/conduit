@@ -137,37 +137,3 @@ func UserFriendlyError(err error) string {
 	return errStr
 }
 
-// isQuotaOrAuthError determines if an error is a quota or authentication error that should trigger fallback retry.
-// This matches:
-// - HTTP 400 errors containing "out of extra usage" or quota-related text
-// - HTTP 401 unauthorized errors
-// - HTTP 403 forbidden errors
-func isQuotaOrAuthError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	errStr := strings.ToLower(err.Error())
-
-	// Check for 401/403 status codes
-	if strings.Contains(errStr, "401") || strings.Contains(errStr, "unauthorized") {
-		return true
-	}
-	if strings.Contains(errStr, "403") || strings.Contains(errStr, "forbidden") {
-		return true
-	}
-
-	// Check for 400 with quota text
-	if strings.Contains(errStr, "400") {
-		// Must contain "out of extra usage" or quota-related text
-		if strings.Contains(errStr, "out of extra usage") {
-			return true
-		}
-		// Check for other quota patterns
-		if strings.Contains(errStr, "quota") && (strings.Contains(errStr, "exceeded") || strings.Contains(errStr, "limit")) {
-			return true
-		}
-	}
-
-	return false
-}

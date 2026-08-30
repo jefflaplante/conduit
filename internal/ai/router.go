@@ -697,7 +697,7 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
 		// bd-6tb: retry on quota/auth error if fallback model is configured
-		if isQuotaOrAuthError(err) {
+		if IsQuotaError(err) {
 			meta, metaOk := r.GetProviderMeta(providerName)
 			fallbackModel := ""
 			if metaOk && meta.FallbackModel != "" {
@@ -711,7 +711,7 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 			if fallbackModel != "" && req.Model != "" {
 				originalModel := req.Model
 				req.Model = fallbackModel
-				log.Printf("[Router] Quota/auth error on %q, retrying with fallback model %q (bd-6tb)", originalModel, fallbackModel)
+				log.Printf("[Router] Quota error on %q, retrying with fallback model %q (bd-6tb)", originalModel, fallbackModel)
 
 				retryStart := time.Now()
 				response, err = provider.GenerateResponse(ctx, req)
@@ -913,7 +913,7 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	response, err := streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
 	if err != nil {
 		// bd-6tb: retry on quota/auth error if fallback model is configured
-		if isQuotaOrAuthError(err) {
+		if IsQuotaError(err) {
 			meta, metaOk := r.GetProviderMeta(providerName)
 			fallbackModel := ""
 			if metaOk && meta.FallbackModel != "" {
@@ -927,7 +927,7 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 			if fallbackModel != "" && req.Model != "" {
 				originalModel := req.Model
 				req.Model = fallbackModel
-				log.Printf("[Router] Quota/auth error on %q (streaming), retrying with fallback model %q (bd-6tb)", originalModel, fallbackModel)
+				log.Printf("[Router] Quota error on %q (streaming), retrying with fallback model %q (bd-6tb)", originalModel, fallbackModel)
 
 				response, err = streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
 				if err == nil {

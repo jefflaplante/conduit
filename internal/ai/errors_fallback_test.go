@@ -18,14 +18,14 @@ func TestIsQuotaOrAuthError(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "401 unauthorized",
+			name: "401 unauthorized — NOT quota (auth propagates per NoFallbackOnAuthError contract)",
 			err:  fmt.Errorf("API error: 401 - unauthorized"),
-			want: true,
+			want: false,
 		},
 		{
-			name: "403 forbidden",
+			name: "403 forbidden — NOT quota (auth propagates)",
 			err:  fmt.Errorf("API error: 403 - forbidden"),
-			want: true,
+			want: false,
 		},
 		{
 			name: "400 without quota text",
@@ -71,9 +71,9 @@ func TestIsQuotaOrAuthError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isQuotaOrAuthError(tt.err)
+			got := IsQuotaError(tt.err)
 			if got != tt.want {
-				t.Errorf("isQuotaOrAuthError() = %v, want %v", got, tt.want)
+				t.Errorf("IsQuotaError() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -109,21 +109,21 @@ func TestIsQuotaOrAuthErrorWithQuotaVariations(t *testing.T) {
 		{
 			name:   "extra usage only",
 			errMsg: "extra usage limit reached",
-			want:   false,
+			want:   true, // 400 + "limit" matches narrow classifier's keyword set
 		},
 		{
 			name:   "usage without extra",
 			errMsg: "usage limit exceeded",
-			want:   false,
+			want:   true, // 400 + "limit" matches narrow classifier's keyword set
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := fmt.Errorf("API error: 400 - %s", tt.errMsg)
-			got := isQuotaOrAuthError(err)
+			got := IsQuotaError(err)
 			if got != tt.want {
-				t.Errorf("isQuotaOrAuthError() = %v, want %v for message %q", got, tt.want, tt.errMsg)
+				t.Errorf("IsQuotaError() = %v, want %v for message %q", got, tt.want, tt.errMsg)
 			}
 		})
 	}
@@ -136,8 +136,8 @@ func TestIsQuotaOrAuthErrorWithHTTPStatusCodes(t *testing.T) {
 		statusCode int
 		want       bool
 	}{
-		{name: "401", statusCode: 401, want: true},
-		{name: "403", statusCode: 403, want: true},
+		{name: "401", statusCode: 401, want: false}, // auth propagates
+		{name: "403", statusCode: 403, want: false}, // auth propagates
 		{name: "400", statusCode: 400, want: false}, // 400 only counts with quota text
 		{name: "402", statusCode: 402, want: false},
 		{name: "404", statusCode: 404, want: false},
@@ -149,9 +149,9 @@ func TestIsQuotaOrAuthErrorWithHTTPStatusCodes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := fmt.Errorf("API error: %d - error", tt.statusCode)
-			got := isQuotaOrAuthError(err)
+			got := IsQuotaError(err)
 			if got != tt.want {
-				t.Errorf("isQuotaOrAuthError() = %v, want %v for status %d", got, tt.want, tt.statusCode)
+				t.Errorf("IsQuotaError() = %v, want %v for status %d", got, tt.want, tt.statusCode)
 			}
 		})
 	}

@@ -4,8 +4,14 @@ import (
 	"strings"
 )
 
-// IsQuotaError determines if an error is a quota-exhaustion error (400/401 with quota indicators).
+// IsQuotaError determines if an error is a quota-exhaustion error.
 // Used for fallback retry logic in bd-6tb.
+//
+// Deliberately NARROW: Claude Max quota exhaustion presents as HTTP 400 with
+// "out of extra usage" (bd-8dy: 514 occurrences, zero 401s). Auth failures
+// (401/403) must propagate so callers see credential problems instead of
+// silently falling back to another provider — see
+// TestGenerateResponseSmart_NoFallbackOnAuthError for the contract.
 func IsQuotaError(err error) bool {
 	if err == nil {
 		return false
@@ -13,9 +19,10 @@ func IsQuotaError(err error) bool {
 
 	msg := strings.ToLower(err.Error())
 
-	// Check for 400/401 HTTP codes with quota indicators
-	if strings.Contains(msg, "400") || strings.Contains(msg, "401") {
-		if strings.Contains(msg, "quota") ||
+	// Claude Max (and similar) send HTTP 400 with quota indicators in the body.
+	if strings.Contains(msg, "400") {
+		if strings.Contains(msg, "out of extra usage") ||
+			strings.Contains(msg, "quota") ||
 			strings.Contains(msg, "credit") ||
 			strings.Contains(msg, "balance") ||
 			strings.Contains(msg, "limit") ||
