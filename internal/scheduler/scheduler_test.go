@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -333,6 +334,64 @@ func TestReloadJobs_PreservesRuntimeFields(t *testing.T) {
 	// But name/schedule/command should be updated
 	if got.Name != "RT Updated" {
 		t.Errorf("expected name 'RT Updated', got %q", got.Name)
+	}
+}
+
+// TestReloadJobs_DetectsExtendedFieldChanges reproduces bd-23s: the reload
+// modified-detection only compared Schedule/Command/Enabled/Type/Name, so an
+// external edit changing ONLY Target/Model/OneShot/Skills was treated as
+// "unchanged" and stale in-memory values survived hot-reload.
+func TestReloadJobs_DetectsExtendedFieldChanges(t *testing.T) {
+	dir := t.TempDir()
+	jobsFile := filepath.Join(dir, "cron_jobs.json")
+
+	s := New(dir, nil)
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer s.Stop()
+
+	initial := []*Job{
+		{ID: "j1", Name: "Job", Schedule: "0 0 9 * * *", Type: JobTypeGo, Command: "cmd",
+			Target: "telegram:123", Model: "haiku", Skills: []string{"solar"}, Enabled: true},
+	}
+	data, _ := json.MarshalIndent(initial, "", "  ")
+	if err := os.WriteFile(jobsFile, data, 0644); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	if err := s.ReloadJobs(); err != nil {
+		t.Fatalf("initial ReloadJobs failed: %v", err)
+	}
+
+	// External edit: change ONLY Target/Model/OneShot/Skills.
+	updated := []*Job{
+		{ID: "j1", Name: "Job", Schedule: "0 0 9 * * *", Type: JobTypeGo, Command: "cmd",
+			Target: "telegram:999", Model: "sonnet", OneShot: true,
+			Skills: []string{"email", "solar"}, Enabled: true},
+	}
+	data, _ = json.MarshalIndent(updated, "", "  ")
+	if err := os.WriteFile(jobsFile, data, 0644); err != nil {
+		t.Fatalf("write updated file: %v", err)
+	}
+	if err := s.ReloadJobs(); err != nil {
+		t.Fatalf("ReloadJobs after edit failed: %v", err)
+	}
+
+	got, err := s.GetJob("j1")
+	if err != nil {
+		t.Fatalf("GetJob('j1') failed: %v", err)
+	}
+	if got.Target != "telegram:999" {
+		t.Errorf("Target not reloaded: expected %q, got %q", "telegram:999", got.Target)
+	}
+	if got.Model != "sonnet" {
+		t.Errorf("Model not reloaded: expected %q, got %q", "sonnet", got.Model)
+	}
+	if !got.OneShot {
+		t.Error("OneShot not reloaded: expected true, got false")
+	}
+	if !reflect.DeepEqual(got.Skills, []string{"email", "solar"}) {
+		t.Errorf("Skills not reloaded: expected [email solar], got %v", got.Skills)
 	}
 }
 
