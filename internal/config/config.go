@@ -530,6 +530,7 @@ type ProviderConfig struct {
 	Model         string            `json:"model"`
 	Auth          *AuthConfig       `json:"auth,omitempty"`           // OAuth configuration
 	ContextWindow int               `json:"context_window,omitempty"` // Override context window size (tokens); 0 = auto-detect from model name
+	FallbackModel string            `json:"fallback_model,omitempty"` // Fallback model for quota/auth errors (default: "z-ai/glm-5.3")
 	ClaudeCode    *ClaudeCodeConfig `json:"claude_code,omitempty"`    // Settings for type="claude-code"
 }
 

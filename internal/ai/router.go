@@ -32,6 +32,7 @@ type ProviderMeta struct {
 	Type          string // "anthropic", "openai", "ollama"
 	DefaultModel  string
 	ContextWindow int // Configured context window override (0 = auto-detect from model)
+	FallbackModel string // Fallback model for quota/auth errors (bd-6tb)
 }
 
 // Router handles AI model interactions
@@ -357,6 +358,7 @@ func (r *Router) initializeProviders(cfg config.AIConfig) error {
 			Type:          providerCfg.Type,
 			DefaultModel:  providerCfg.Model,
 			ContextWindow: providerCfg.ContextWindow,
+			FallbackModel: providerCfg.FallbackModel, // bd-6tb
 		}
 	}
 
@@ -543,10 +545,26 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 	response, err := provider.GenerateResponse(ctx, req)
 	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
-		if r.usageTracker != nil {
-			r.usageTracker.RecordError(providerName, req.Model)
+		// bd-6tb: retry on quota exhaustion if model override was set
+		if IsQuotaError(err) && req.Model != "" {
+			log.Printf("[Router] Quota error on %q, retrying with fallback model glm-5.3 (bd-6tb)", req.Model)
+			req.Model = "glm-5.3" // Fallback to glm-5.3
+			retryStart := time.Now()
+			response, err = provider.GenerateResponse(ctx, req)
+			latencyMs = time.Since(retryStart).Milliseconds()
+			if err == nil {
+				log.Printf("[Router] Fallback retry succeeded (bd-6tb)")
+			} else {
+				log.Printf("[Router] Fallback retry failed: %v (bd-6tb)", err)
+			}
 		}
-		return nil, err
+
+		if err != nil {
+			if r.usageTracker != nil {
+				r.usageTracker.RecordError(providerName, req.Model)
+			}
+			return nil, err
+		}
 	}
 	if r.usageTracker != nil {
 		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, latencyMs)
@@ -678,14 +696,44 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 	response, err := provider.GenerateResponse(ctx, req)
 	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
-		if r.usageTracker != nil {
-			r.usageTracker.RecordError(providerName, modelOverride)
+		// bd-6tb: retry on quota/auth error if fallback model is configured
+		if isQuotaOrAuthError(err) {
+			meta, metaOk := r.GetProviderMeta(providerName)
+			fallbackModel := ""
+			if metaOk && meta.FallbackModel != "" {
+				fallbackModel = meta.FallbackModel
+			} else {
+				// Default fallback if not configured
+				fallbackModel = "z-ai/glm-5.3"
+			}
+
+			// Only retry if we have a fallback model and the original request used a model
+			if fallbackModel != "" && req.Model != "" {
+				originalModel := req.Model
+				req.Model = fallbackModel
+				log.Printf("[Router] Quota/auth error on %q, retrying with fallback model %q (bd-6tb)", originalModel, fallbackModel)
+
+				retryStart := time.Now()
+				response, err = provider.GenerateResponse(ctx, req)
+				latencyMs = time.Since(retryStart).Milliseconds()
+				if err == nil {
+					log.Printf("[Router] Fallback retry succeeded (bd-6tb): %q -> %q", originalModel, fallbackModel)
+				} else {
+					log.Printf("[Router] Fallback retry failed: %v (bd-6tb)", err)
+				}
+			}
 		}
-		chainErr = fmt.Errorf("AI provider error: %w", err)
-		return nil, chainErr
+
+		if err != nil {
+			if r.usageTracker != nil {
+				r.usageTracker.RecordError(providerName, req.Model)
+			}
+			chainErr = fmt.Errorf("AI provider error: %w", err)
+			return nil, chainErr
+		}
 	}
 	if r.usageTracker != nil {
-		r.usageTracker.RecordUsage(providerName, modelOverride, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, latencyMs)
+		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, latencyMs)
 	}
 
 	// Process response through agent system
@@ -864,8 +912,36 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	// Call streaming API via the provider-agnostic interface
 	response, err := streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
 	if err != nil {
-		chainErr = err
-		return nil, chainErr
+		// bd-6tb: retry on quota/auth error if fallback model is configured
+		if isQuotaOrAuthError(err) {
+			meta, metaOk := r.GetProviderMeta(providerName)
+			fallbackModel := ""
+			if metaOk && meta.FallbackModel != "" {
+				fallbackModel = meta.FallbackModel
+			} else {
+				// Default fallback if not configured
+				fallbackModel = "z-ai/glm-5.3"
+			}
+
+			// Only retry if we have a fallback model and the original request used a model
+			if fallbackModel != "" && req.Model != "" {
+				originalModel := req.Model
+				req.Model = fallbackModel
+				log.Printf("[Router] Quota/auth error on %q (streaming), retrying with fallback model %q (bd-6tb)", originalModel, fallbackModel)
+
+				response, err = streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
+				if err == nil {
+					log.Printf("[Router] Fallback retry succeeded (bd-6tb): %q -> %q", originalModel, fallbackModel)
+				} else {
+					log.Printf("[Router] Fallback retry failed: %v (bd-6tb)", err)
+				}
+			}
+		}
+
+		if err != nil {
+			chainErr = err
+			return nil, chainErr
+		}
 	}
 
 	// Process response through agent system (same as non-streaming path)
