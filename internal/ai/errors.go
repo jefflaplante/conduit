@@ -1,7 +1,9 @@
 package ai
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 )
 
@@ -60,7 +62,6 @@ func ClassifyError(err error) AIErrorCategory {
 		strings.Contains(msg, "timeout") {
 		return CategoryTimeout
 	}
-
 	// Check for rate limit patterns
 	if strings.Contains(msg, "rate limit") ||
 		strings.Contains(msg, "429") ||
@@ -96,6 +97,28 @@ func ClassifyError(err error) AIErrorCategory {
 	}
 
 	return CategoryUnknown
+}
+
+// IsTransientTimeoutError reports whether err is a transient timeout worth
+// retrying once. Matches context.DeadlineExceeded (including wrapped forms via
+// errors.Is and the string form injected by net/http: "context deadline
+// exceeded (Client.Timeout exceeded while awaiting headers)").
+//
+// Deliberately EXCLUDES context.Canceled: cancellation is intentional (user
+// abort, session teardown, shutdown), never transient.
+//
+// Used by the retry-once logic in the router (bd-13p): z.ai calls were dying
+// with "context deadline exceeded" on post-tool completion turns, killing
+// sub-agent sessions silently (3 occurrences, root-caused via gateway.db).
+func IsTransientTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "context deadline exceeded")
 }
 
 // GetUserMessage returns a user-friendly message for an error.

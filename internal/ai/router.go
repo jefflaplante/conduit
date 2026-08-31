@@ -31,7 +31,7 @@ type ProviderMeta struct {
 	Name          string
 	Type          string // "anthropic", "openai", "ollama"
 	DefaultModel  string
-	ContextWindow int // Configured context window override (0 = auto-detect from model)
+	ContextWindow int    // Configured context window override (0 = auto-detect from model)
 	FallbackModel string // Fallback model for quota/auth errors (bd-6tb)
 }
 
@@ -559,6 +559,22 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 			}
 		}
 
+		// bd-13p: retry once on transient timeout. z.ai calls were dying with
+		// "context deadline exceeded" mid-session (sub-agent silent deaths).
+		// Only retry if the parent context is still live — retrying against a
+		// dead context would fail instantly.
+		if err != nil && IsTransientTimeoutError(err) && ctx.Err() == nil {
+			log.Printf("[Router] Transient timeout on %q, retrying once (bd-13p)", providerName)
+			retryStart := time.Now()
+			response, err = provider.GenerateResponse(ctx, req)
+			latencyMs = time.Since(retryStart).Milliseconds()
+			if err == nil {
+				log.Printf("[Router] Timeout retry succeeded (bd-13p)")
+			} else {
+				log.Printf("[Router] Timeout retry failed: %v (bd-13p)", err)
+			}
+		}
+
 		if err != nil {
 			if r.usageTracker != nil {
 				r.usageTracker.RecordError(providerName, req.Model)
@@ -721,6 +737,19 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 				} else {
 					log.Printf("[Router] Fallback retry failed: %v (bd-6tb)", err)
 				}
+			}
+		}
+
+		// bd-13p: retry once on transient timeout (see GenerateResponse).
+		if err != nil && IsTransientTimeoutError(err) && ctx.Err() == nil {
+			log.Printf("[Router] Transient timeout on %q (tool loop), retrying once (bd-13p)", providerName)
+			retryStart := time.Now()
+			response, err = provider.GenerateResponse(ctx, req)
+			latencyMs = time.Since(retryStart).Milliseconds()
+			if err == nil {
+				log.Printf("[Router] Timeout retry succeeded (bd-13p)")
+			} else {
+				log.Printf("[Router] Timeout retry failed: %v (bd-13p)", err)
 			}
 		}
 
@@ -935,6 +964,19 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 				} else {
 					log.Printf("[Router] Fallback retry failed: %v (bd-6tb)", err)
 				}
+			}
+		}
+
+		// bd-13p: retry once on transient timeout (see GenerateResponse).
+		// Streams are more prone to mid-stream deadlocks; a retry replays the
+		// full generation but is still better than a silent session death.
+		if err != nil && IsTransientTimeoutError(err) && ctx.Err() == nil {
+			log.Printf("[Router] Transient timeout on %q (streaming), retrying once (bd-13p)", providerName)
+			response, err = streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
+			if err == nil {
+				log.Printf("[Router] Timeout retry succeeded (bd-13p)")
+			} else {
+				log.Printf("[Router] Timeout retry failed: %v (bd-13p)", err)
 			}
 		}
 
