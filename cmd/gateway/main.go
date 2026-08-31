@@ -117,6 +117,7 @@ func init() {
 	// Add SSH commands
 	rootCmd.AddCommand(sshCmd)
 	rootCmd.AddCommand(sshKeysCmd)
+	rootCmd.AddCommand(BrainRootCmd())
 
 	// If no command is specified, default to server
 	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {
