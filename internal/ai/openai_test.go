@@ -9,9 +9,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"conduit/internal/config"
 	"conduit/internal/sessions"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // Compile-time interface compliance checks
@@ -481,5 +484,62 @@ func TestConvertMessagesToOpenAI(t *testing.T) {
 	}
 	if toolMsg["tool_call_id"] != "call_123" {
 		t.Errorf("expected tool_call_id 'call_123', got %v", toolMsg["tool_call_id"])
+	}
+}
+
+func TestOpenAITimeoutConfiguration(t *testing.T) {
+	tests := []struct {
+		name            string
+		cfg             config.ProviderConfig
+		expectedTimeout time.Duration
+	}{
+		{
+			name: "default timeout when not set",
+			cfg: config.ProviderConfig{
+				Name:   "test",
+				Type:   "openai",
+				APIKey: "test-key",
+			},
+			expectedTimeout: 300 * time.Second,
+		},
+		{
+			name: "custom timeout is respected",
+			cfg: config.ProviderConfig{
+				Name:          "test",
+				Type:          "openai",
+				APIKey:        "test-key",
+				TimeoutSeconds: 600,
+			},
+			expectedTimeout: 600 * time.Second,
+		},
+		{
+			name: "zero value uses default",
+			cfg: config.ProviderConfig{
+				Name:          "test",
+				Type:          "openai",
+				APIKey:        "test-key",
+				TimeoutSeconds: 0,
+			},
+			expectedTimeout: 300 * time.Second,
+		},
+		{
+			name: "short timeout works",
+			cfg: config.ProviderConfig{
+				Name:          "test",
+				Type:          "openai",
+				APIKey:        "test-key",
+				TimeoutSeconds: 45,
+			},
+			expectedTimeout: 45 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, err := NewOpenAIProvider(tt.cfg)
+			assert.NoError(t, err)
+			assert.NotNil(t, provider)
+			assert.Equal(t, tt.expectedTimeout, provider.client.Timeout)
+		})
 	}
 }
