@@ -162,15 +162,22 @@ func (r *REMCycle) detectRelationships(entries []brain.Entry) []relationshipCand
 			tokensA := tokenMap[entries[i].Key]
 			tokensB := tokenMap[entries[j].Key]
 
+			// Require both entries to have at least 2 non-stopword tokens
+			// This eliminates noise from very short or generic entries
+			if len(tokensA) < 2 || len(tokensB) < 2 {
+				continue
+			}
+
 			// Calculate Jaccard similarity
 			overlap := countOverlap(tokensA, tokensB)
 			union := len(tokensA) + len(tokensB) - overlap
 
 			if union > 0 && overlap > 0 {
 				similarity := float64(overlap) / float64(union)
-				// Require at least 30% similarity
-				if similarity >= 0.3 {
-					confidence := 0.3 + (similarity * 0.3) // Range: 0.3 to 0.6
+				// Require at least 60% similarity (raised from 0.3 to eliminate noise)
+				// The 42,500 candidates at 0.3 were overwhelmingly stopword/token overlap noise
+				if similarity >= 0.6 {
+					confidence := 0.4 + (similarity * 0.2) // Range: 0.52 to 0.64
 					candidates = append(candidates, relationshipCandidate{
 						keyA:       keyA,
 						keyB:       keyB,

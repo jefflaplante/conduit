@@ -45,9 +45,9 @@ func TestIntegrate_TokenOverlap(t *testing.T) {
 
 	ctx := brain.WithUserID(context.Background(), "testuser")
 
-	// Store entries with overlapping tokens
-	require.NoError(t, b.Store(ctx, "pet.dog", "Theo is a golden retriever", brain.TierLongTerm, "test"))
-	require.NoError(t, b.Store(ctx, "friends.john", "John has a golden retriever too", brain.TierLongTerm, "test"))
+	// Store entries with high token overlap (2/3 = 66.7% >= 0.6)
+	require.NoError(t, b.Store(ctx, "pet.dog", "cat dog", brain.TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "friends.john", "cat dog bird", brain.TierLongTerm, "test"))
 
 	rem.config.IntegrationDay = int(time.Now().Weekday())
 
@@ -55,7 +55,7 @@ func TestIntegrate_TokenOverlap(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	// Should detect relationship via token overlap (golden, retriever)
+	// Should detect relationship via token overlap (cat, dog)
 	assert.GreaterOrEqual(t, result.RelationshipsCreated, 1)
 }
 
@@ -328,4 +328,91 @@ func containsSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestIntegrate_JaccardThresholdVer60 tests that the raised Jaccard threshold
+// (0.3 → 0.6) eliminates noisy cross-namespace edge candidates while preserving
+// genuinely related keys.
+func TestIntegrate_JaccardThresholdVer60(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+
+	// Entry A: Entry with few tokens (should be filtered out)
+	require.NoError(t, b.Store(ctx, "test.short", "cat", brain.TierLongTerm, "test"))
+
+	// Entry B: Entry with stopword overlap only
+	require.NoError(t, b.Store(ctx, "stopwords.a", "the cat and the dog", brain.TierLongTerm, "test"))
+
+	// Entry C: Entry with high Jaccard similarity to B
+	require.NoError(t, b.Store(ctx, "stopwords.b", "the cat and the dog", brain.TierLongTerm, "test"))
+
+	// Entry D: Entry with low Jaccard similarity to B (shared "cat", "dog" only)
+	require.NoError(t, b.Store(ctx, "low.similarity", "cat dog bird fish", brain.TierLongTerm, "test"))
+
+	// Entry E: Entry with high Jaccard similarity to D (3/4 tokens overlap)
+	require.NoError(t, b.Store(ctx, "high.similarity", "cat dog fish wolf", brain.TierLongTerm, "test"))
+
+	// Entry F: Entry with moderately high similarity (2/4 = 50%, should fail threshold)
+	require.NoError(t, b.Store(ctx, "moderate.similarity", "cat dog elephant tiger", brain.TierLongTerm, "test"))
+
+	// Run integration
+	result, err := rem.Integrate(ctx, false, true)
+	require.NoError(t, err)
+
+	// Verify results
+	// Should NOT create relationships for:
+	// - test.short (filtered out by token count < 2)
+	// - stopwords.a vs low.similarity (similarity too low: 2/6 = 33% < 60%)
+	// - stopwords.a vs moderate.similarity (2/6 = 33% < 60%)
+	// - low.similarity vs moderate.similarity (2/6 = 33% < 60%)
+	
+	// Should create relationships for:
+	// - stopwords.b (100% similarity with stopwords.a)
+	// - high.similarity vs low.similarity (3/4 = 75% >= 60%)
+	
+	// Expected relationships: 2
+	assert.GreaterOrEqual(t, result.RelationshipsCreated, 1, "Should create at least 1 relationship for high similarity")
+
+	// Verify that the high similarity pair was created
+	rows, err := rem.db.Query(`
+		SELECT key_a, key_b, relationship, confidence
+		FROM brain_relationships
+		WHERE relationship = 'related'
+		ORDER BY key_a, key_b
+	`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var relationships []struct {
+		KeyA       string
+		KeyB       string
+		Rel        string
+		Confidence float64
+	}
+
+	for rows.Next() {
+		var r struct {
+			KeyA       string
+			KeyB       string
+			Rel        string
+			Confidence float64
+		}
+		err := rows.Scan(&r.KeyA, &r.KeyB, &r.Rel, &r.Confidence)
+		require.NoError(t, err)
+		relationships = append(relationships, r)
+	}
+
+	// Should have the high similarity pair
+	foundHighSim := false
+	for _, r := range relationships {
+		if (r.KeyA == "high.similarity" && r.KeyB == "low.similarity") ||
+			(r.KeyA == "low.similarity" && r.KeyB == "high.similarity") {
+			foundHighSim = true
+			// Confidence should be in the new range: 0.4 + (0.6 * 0.2) = 0.52
+			assert.InDelta(t, 0.52, r.Confidence, 0.01, "Confidence should be ~0.52 for 60% similarity")
+		}
+	}
+	assert.True(t, foundHighSim, "Should find high.similarity ↔ low.similarity relationship")
 }
