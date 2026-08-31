@@ -145,7 +145,14 @@ func (o *OpenAIProvider) GenerateResponse(ctx context.Context, req *GenerateRequ
 
 		resp, err = o.client.Do(httpReq)
 		if err != nil {
-			return nil, fmt.Errorf("request failed: %w", err)
+			// bd-13p: transport errors (timeouts, connection resets) are
+			// transient — enter the retry loop instead of failing fast.
+			// Only a caller that gave up (ctx cancelled) aborts immediately.
+			if isCallerContextError(ctx, err) {
+				return nil, fmt.Errorf("request failed: %w", err)
+			}
+			lastErr = fmt.Errorf("request failed: %w", err)
+			continue
 		}
 
 		if resp.StatusCode == http.StatusOK {
@@ -162,6 +169,11 @@ func (o *OpenAIProvider) GenerateResponse(ctx context.Context, req *GenerateRequ
 		// retryable — loop continues
 	}
 
+	// Transport errors on every attempt leave resp nil — surface lastErr
+	// instead of dereferencing nil (bd-13p).
+	if resp == nil {
+		return nil, lastErr
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, lastErr
 	}
@@ -247,7 +259,14 @@ func (o *OpenAIProvider) GenerateResponseStreaming(ctx context.Context, req *Gen
 
 		resp, err = o.client.Do(httpReq)
 		if err != nil {
-			return nil, fmt.Errorf("request failed: %w", err)
+			// bd-13p: transport errors (timeouts, connection resets) are
+			// transient — enter the retry loop instead of failing fast.
+			// Only a caller that gave up (ctx cancelled) aborts immediately.
+			if isCallerContextError(ctx, err) {
+				return nil, fmt.Errorf("request failed: %w", err)
+			}
+			lastErr = fmt.Errorf("request failed: %w", err)
+			continue
 		}
 
 		if resp.StatusCode == http.StatusOK {
@@ -265,6 +284,11 @@ func (o *OpenAIProvider) GenerateResponseStreaming(ctx context.Context, req *Gen
 		// retryable — loop continues
 	}
 
+	// Transport errors on every attempt leave resp nil — surface lastErr
+	// instead of dereferencing nil (bd-13p).
+	if resp == nil {
+		return nil, lastErr
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, lastErr
 	}
