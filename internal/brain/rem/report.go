@@ -35,6 +35,8 @@ type ConsolidationResult struct {
 	Merged          []MergeRecord
 	SalienceDecayed int
 	SalienceBoosted int
+	BackfilledNodes int
+	BackfilledEdges int
 }
 
 type MergeRecord struct {
@@ -132,7 +134,8 @@ func (r *REMReport) WriteLog(logPath string) error {
 		sb.WriteString(fmt.Sprintf("- Promoted to LTM: %d entries\n", len(r.Consolidation.Promoted)))
 		sb.WriteString(fmt.Sprintf("- Merged duplicates: %d pairs\n", len(r.Consolidation.Merged)))
 		sb.WriteString(fmt.Sprintf("- Salience decayed: %d entries\n", r.Consolidation.SalienceDecayed))
-		sb.WriteString(fmt.Sprintf("- Salience boosted: %d entries\n\n", r.Consolidation.SalienceBoosted))
+		sb.WriteString(fmt.Sprintf("- Salience boosted: %d entries\n", r.Consolidation.SalienceBoosted))
+		sb.WriteString(fmt.Sprintf("- Backfilled LTM edges: %d nodes, %d edges\n\n", r.Consolidation.BackfilledNodes, r.Consolidation.BackfilledEdges))
 
 		if len(r.Consolidation.Promoted) > 0 {
 			sb.WriteString("### Promoted Entries\n")

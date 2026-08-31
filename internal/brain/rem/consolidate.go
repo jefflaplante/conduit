@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"conduit/internal/brain"
 )
 
 // Consolidate promotes high-value working memory, merges duplicates, and adjusts salience
@@ -42,6 +44,12 @@ func (r *REMCycle) Consolidate(ctx context.Context, dryRun bool) (*Consolidation
 	// Phase 4: Boost salience for recently accessed entries
 	if err := r.boostRecentlyAccessed(ctx, result, dryRun); err != nil {
 		return result, fmt.Errorf("boost recently accessed: %w", err)
+	}
+
+	// Phase 5: Backfill LTM edges for historical nodes (bounded per run)
+	if err := r.backfillLTMEdeges(ctx, result, dryRun); err != nil {
+		// Backfill is non-critical; log error but don't fail consolidate
+		fmt.Printf("REM: backfill LTM edges failed (non-fatal): %v\n", err)
 	}
 
 	return result, nil
@@ -273,4 +281,43 @@ func normalizeKey(key string) string {
 	// Collapse multiple spaces to single space
 	fields := strings.Fields(key)
 	return strings.Join(fields, " ")
+}
+
+// backfillLTMEdeges performs bounded backfill of LTM edges for historical nodes
+// Uses a small budget per run (200 pair budget, per-node cap=5) so repeated consolidations
+// gradually backfill the full graph without blocking or creating N-squared edges.
+func (r *REMCycle) backfillLTMEdeges(ctx context.Context, result *ConsolidationResult, dryRun bool) error {
+	if dryRun {
+	// In dry run, just count how many nodes would be backfilled
+		var isolatedNodeCount int
+		err := r.db.QueryRow(`
+			SELECT COUNT(*)
+			FROM brain_ltm l
+			WHERE NOT EXISTS (
+				SELECT 1 FROM brain_relationships r
+				WHERE r.key_a = l.key OR r.key_b = l.key
+			)
+		`).Scan(&isolatedNodeCount)
+		if err != nil {
+			return fmt.Errorf("count isolated nodes (dry run): %w", err)
+		}
+		result.BackfilledNodes = isolatedNodeCount
+		return nil
+	}
+
+	// Run backfill with conservative budget: 200 pair budget, per-node cap=5
+	// This ensures each consolidate run does bounded work and repeated runs
+	// gradually fill the graph without blocking or overwhelming the database.
+	report, err := r.brain.BackfillEdges(ctx, brain.BackfillConfig{
+		PerNodeCap: 5,
+		GlobalCap:  200,
+	})
+	if err != nil {
+		return fmt.Errorf("backfill LTM edges: %w", err)
+	}
+
+	result.BackfilledNodes = report.NodesProcessed
+	result.BackfilledEdges = report.EdgesCreated
+
+	return nil
 }
