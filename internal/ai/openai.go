@@ -57,12 +57,18 @@ func NewOpenAIProvider(cfg config.ProviderConfig) (*OpenAIProvider, error) {
 		baseURL = normalizeOpenAIBaseURL(baseURL)
 	}
 
+	// bd-29i: Use per-provider timeout with 300s default
+	timeoutSeconds := cfg.TimeoutSeconds
+	if timeoutSeconds == 0 {
+		timeoutSeconds = 300
+	}
+
 	return &OpenAIProvider{
 		name:    cfg.Name,
 		apiKey:  cfg.APIKey,
 		model:   cfg.Model,
 		baseURL: baseURL,
-		client:  &http.Client{Timeout: 120 * time.Second},
+		client:  &http.Client{Timeout: time.Duration(timeoutSeconds) * time.Second},
 	}, nil
 }
 

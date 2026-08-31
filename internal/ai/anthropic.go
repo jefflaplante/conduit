@@ -72,12 +72,18 @@ func NewAnthropicProvider(cfg config.ProviderConfig) (*AnthropicProvider, error)
 	// Detect if this is an OAuth token based on prefix.
 	isOAuth := isOAuthToken(authToken)
 
+	// bd-29i: Use per-provider timeout with 300s default
+	timeoutSeconds := cfg.TimeoutSeconds
+	if timeoutSeconds == 0 {
+		timeoutSeconds = 300
+	}
+
 	return &AnthropicProvider{
 		name:    cfg.Name,
 		apiKey:  authToken,
 		model:   cfg.Model,
 		authCfg: authCfg,
-		client:  &http.Client{Timeout: 120 * time.Second},
+		client:  &http.Client{Timeout: time.Duration(timeoutSeconds) * time.Second},
 		isOAuth: isOAuth,
 	}, nil
 }

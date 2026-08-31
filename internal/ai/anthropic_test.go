@@ -2,6 +2,9 @@ package ai
 
 import (
 	"testing"
+	"time"
+
+	"conduit/internal/config"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -85,6 +88,63 @@ func TestParseAnthropicUsage_WithCacheMetrics(t *testing.T) {
 			assert.Equal(t, tt.expectedCompletionTokens, usage.CompletionTokens, "CompletionTokens mismatch")
 			assert.Equal(t, tt.expectedCacheWrite, usage.CacheCreationInputTokens, "CacheCreationInputTokens mismatch")
 			assert.Equal(t, tt.expectedCacheRead, usage.CacheReadInputTokens, "CacheReadInputTokens mismatch")
+		})
+	}
+}
+
+func TestAnthropicTimeoutConfiguration(t *testing.T) {
+	tests := []struct {
+		name                string
+		cfg                 config.ProviderConfig
+		expectedTimeout     time.Duration
+	}{
+		{
+			name: "default timeout when not set",
+			cfg: config.ProviderConfig{
+				Name:   "test",
+				Type:   "anthropic",
+				APIKey: "test-key",
+			},
+			expectedTimeout: 300 * time.Second,
+		},
+		{
+			name: "custom timeout is respected",
+			cfg: config.ProviderConfig{
+				Name:          "test",
+				Type:          "anthropic",
+				APIKey:        "test-key",
+				TimeoutSeconds: 600,
+			},
+			expectedTimeout: 600 * time.Second,
+		},
+		{
+			name: "zero value uses default",
+			cfg: config.ProviderConfig{
+				Name:          "test",
+				Type:          "anthropic",
+				APIKey:        "test-key",
+				TimeoutSeconds: 0,
+			},
+			expectedTimeout: 300 * time.Second,
+		},
+		{
+			name: "short timeout works",
+			cfg: config.ProviderConfig{
+				Name:          "test",
+				Type:          "anthropic",
+				APIKey:        "test-key",
+				TimeoutSeconds: 45,
+			},
+			expectedTimeout: 45 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, err := NewAnthropicProvider(tt.cfg)
+			assert.NoError(t, err)
+			assert.NotNil(t, provider)
+			assert.Equal(t, tt.expectedTimeout, provider.client.Timeout)
 		})
 	}
 }
