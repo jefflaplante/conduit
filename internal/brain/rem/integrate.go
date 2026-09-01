@@ -3,6 +3,7 @@ package rem
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,6 +13,11 @@ import (
 // maxNodeDegree is the maximum number of edges allowed per node in the brain graph.
 // This prevents unbounded edge accumulation that degrades performance and search quality.
 const maxNodeDegree = 25
+
+// namespacePairCap caps the number of pair candidates generated per namespace prefix.
+// Without this, a namespace with N entries generates N*(N-1)/2 pairs (quadratic explosion).
+// Example: learned.* with 248 entries → 30,628 pairs (noise, not signal). Cap at 50.
+const namespacePairCap = 50
 
 // relationshipCandidate represents a potential relationship between two keys
 type relationshipCandidate struct {
@@ -121,28 +127,48 @@ func (r *REMCycle) detectRelationships(entries []brain.Entry) []relationshipCand
 		tokenMap[e.Key] = tokens
 	}
 
+	// Build entry map for efficient salience lookup
+	entryMap := make(map[string]brain.Entry)
+	for _, e := range entries {
+		entryMap[e.Key] = e
+	}
+
 	// Track seen pairs to avoid duplicates
 	seen := make(map[string]bool)
 
 	// 1. Detect namespace relationships
 	for prefix, keys := range namespaceMap {
 		if len(keys) >= 2 {
-			// Create relationships between keys sharing a namespace
-			for i := 0; i < len(keys); i++ {
-				for j := i + 1; j < len(keys); j++ {
+			// Sort keys alphabetically for deterministic behavior
+			sort.Strings(keys)
+
+			// Cap candidates per namespace to prevent quadratic explosion
+			// Example: learned.* with 248 entries → 30,628 pairs → cap at 50
+			var pairsInNamespace int
+			for i := 0; i < len(keys) && pairsInNamespace < namespacePairCap; i++ {
+				for j := i + 1; j < len(keys) && pairsInNamespace < namespacePairCap; j++ {
 					keyA, keyB := keys[i], keys[j]
 					if keyA > keyB {
 						keyA, keyB = keyB, keyA
 					}
 					pairKey := keyA + "|" + keyB
 					if !seen[pairKey] {
-						candidates = append(candidates, relationshipCandidate{
-							keyA:       keyA,
-							keyB:       keyB,
-							confidence: 0.7,
-							reason:     fmt.Sprintf("shared namespace: %s", prefix),
-						})
-						seen[pairKey] = true
+						// Skip pairs where both entries have low salience (< 0.5)
+						// Only add if at least one entry has meaningful importance
+						entryA, okA := entryMap[keyA]
+						entryB, okB := entryMap[keyB]
+
+						// Only create candidate if both entries exist and at least one has salience >= 0.5
+						if okA && okB && (entryA.Salience >= 0.5 || entryB.Salience >= 0.5) {
+							candidates = append(candidates, relationshipCandidate{
+								keyA:       keyA,
+								keyB:       keyB,
+								confidence: 0.7,
+								reason:     fmt.Sprintf("shared namespace: %s", prefix),
+							})
+							seen[pairKey] = true
+							pairsInNamespace++
+						}
 					}
 				}
 			}

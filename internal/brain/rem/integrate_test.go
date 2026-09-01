@@ -2,6 +2,7 @@ package rem
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -415,4 +416,184 @@ func TestIntegrate_JaccardThresholdVer60(t *testing.T) {
 		}
 	}
 	assert.True(t, foundHighSim, "Should find high.similarity ↔ low.similarity relationship")
+}
+
+// TestIntegrate_NamespacePairCap tests that namespace pair generation is capped
+// to prevent quadratic explosion (e.g., learned.* with 248 entries → 30,628 pairs)
+func TestIntegrate_NamespacePairCap(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+
+	// Create a namespace with 100+ entries to test the cap
+	// Without the cap, this would generate 100*99/2 = 4,950 candidates
+	// With the cap (namespacePairCap = 50), it should generate at most 50 candidates
+	for i := 0; i < 100; i++ {
+		key := fmt.Sprintf("large.namespace.entry%03d", i)
+		require.NoError(t, b.Store(ctx, key, fmt.Sprintf("value %d", i), brain.TierLongTerm, "test"))
+	}
+
+	// Manually boost salience to ensure namespace relationships are created
+	for i := 0; i < 100; i++ {
+		key := fmt.Sprintf("large.namespace.entry%03d", i)
+		_, err := rem.db.Exec(`
+			UPDATE brain_ltm
+			SET salience = 0.7
+			WHERE key = ?
+		`, key)
+		require.NoError(t, err)
+	}
+
+	// Run integration
+	result, err := rem.Integrate(ctx, false, true) // manual=true to bypass schedule gate
+	require.NoError(t, err)
+	_ = result // unused
+
+	// Verify that relationships were created for the large namespace
+	rows, err := rem.db.Query(`
+		SELECT COUNT(*)
+		FROM brain_relationships
+		WHERE (key_a LIKE 'large.namespace.%' OR key_b LIKE 'large.namespace.%')
+		AND relationship = 'related'
+	`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var count int
+	if rows.Next() {
+		require.NoError(t, rows.Scan(&count))
+	}
+	
+	// Should be capped, not the full 4,950 pairs
+	assert.LessOrEqual(t, count, namespacePairCap, 
+		"Namespace relationships should be capped at namespacePairCap")
+	assert.Greater(t, count, 0, "Should have created at least some namespace relationships")
+
+	// Log the actual count for debugging
+	t.Logf("Created %d namespace relationships (cap: %d)", count, namespacePairCap)
+}
+
+// TestIntegrate_NamespaceSalienceGate tests that low-salience pairs are filtered out
+func TestIntegrate_NamespaceSalienceGate(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	ctx := brain.WithUserID(context.Background(), "testuser")
+
+	// Create entries in the same namespace with varying salience
+	// Some low salience (< 0.5), some high salience (>= 0.5)
+	
+	// Low-salience entries
+	lowSalienceKeys := []string{"salience.low1", "salience.low2", "salience.low3"}
+	// Values are distinct so token-overlap (Jaccard) does not create edges;
+	// only the namespace pairing path is under test here.
+	lowSalienceVals := map[string]string{
+		"salience.low1": "unrelated alpha value",
+		"salience.low2": "unrelated beta value",
+		"salience.low3": "unrelated gamma value",
+	}
+	for _, key := range lowSalienceKeys {
+		require.NoError(t, b.Store(ctx, key, lowSalienceVals[key], brain.TierLongTerm, "test"))
+	}
+
+	// High-salience entries
+	highSalienceKeys := []string{"salience.high1", "salience.high2"}
+	for _, key := range highSalienceKeys {
+		require.NoError(t, b.Store(ctx, key, "high importance value", brain.TierLongTerm, "test"))
+	}
+
+	// Manually adjust salience to control the test
+	// Low salience: set to 0.3
+	for _, key := range lowSalienceKeys {
+		_, err := rem.db.Exec(`
+			UPDATE brain_ltm
+			SET salience = 0.3
+			WHERE key = ?
+		`, key)
+		require.NoError(t, err)
+	}
+
+	// High salience: set to 0.7
+	for _, key := range highSalienceKeys {
+		_, err := rem.db.Exec(`
+			UPDATE brain_ltm
+			SET salience = 0.7
+			WHERE key = ?
+		`, key)
+		require.NoError(t, err)
+	}
+
+	// Run integration
+	_, err := rem.Integrate(ctx, false, true) // manual=true to bypass schedule gate
+	require.NoError(t, err)
+
+	// Count relationships (namespace relationships specifically)
+	rows, err := rem.db.Query(`
+		SELECT key_a, key_b, confidence
+		FROM brain_relationships
+		WHERE (key_a LIKE 'salience.%' OR key_b LIKE 'salience.%')
+		AND relationship = 'related'
+		AND confidence = 0.7
+		ORDER BY key_a, key_b
+	`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var relationships []struct {
+		KeyA       string
+		KeyB       string
+		Confidence float64
+	}
+
+	for rows.Next() {
+		var r struct {
+			KeyA       string
+			KeyB       string
+			Confidence float64
+		}
+		require.NoError(t, rows.Scan(&r.KeyA, &r.KeyB, &r.Confidence))
+		relationships = append(relationships, r)
+	}
+
+	// Should NOT have namespace relationships (confidence=0.7) between two low-salience entries
+	for _, r := range relationships {
+		isLowA := false
+		isLowB := false
+		for _, key := range lowSalienceKeys {
+			if r.KeyA == key {
+				isLowA = true
+			}
+			if r.KeyB == key {
+				isLowB = true
+			}
+		}
+		
+		// If both are low-salience, this is a violation of the salience gate
+		if isLowA && isLowB {
+			t.Errorf("Found namespace relationship (confidence=0.7) between two low-salience entries: %s ↔ %s", r.KeyA, r.KeyB)
+		}
+	}
+
+	// Should have at least one relationship involving a high-salience entry
+	hasHighSalienceRelation := false
+	for _, r := range relationships {
+		isHighA := false
+		isHighB := false
+		for _, key := range highSalienceKeys {
+			if r.KeyA == key {
+				isHighA = true
+			}
+			if r.KeyB == key {
+				isHighB = true
+			}
+		}
+		if isHighA || isHighB {
+			hasHighSalienceRelation = true
+			break
+		}
+	}
+
+	assert.True(t, hasHighSalienceRelation, 
+		"Should have at least one relationship involving a high-salience entry")
 }
