@@ -15,37 +15,44 @@ func TestGenerateResponseWithTools_QuotaFallback(t *testing.T) {
 	tests := []struct {
 		name               string
 		modelOverride      string
-		firstError         error
 		expectFallback     bool
 		expectSuccess      bool
+		expectSecondModel  string
 		setupMockProvider  func(*mockProviderWithRetry)
+		setupFallback      func(*MockProvider)
 	}{
 		{
-			name:          "quota error with model override - retries with fallback",
+			name:          "quota error - retries on fallback provider with correct model (bd-27ud)",
 			modelOverride: "sonnet",
-			firstError:    errors.New("API error: 400 - quota exceeded"),
 			expectFallback: true,
 			expectSuccess:  true,
+			expectSecondModel: "z-ai/glm-5.3",
 			setupMockProvider: func(mp *mockProviderWithRetry) {
 				mp.errorOnFirstCall = true
 				mp.firstError = errors.New("API error: 400 - quota exceeded")
 			},
 		},
 		{
-			name:           "quota error without model override - no retry",
-			modelOverride:  "",
-			firstError:     errors.New("API error: 400 - quota exceeded"),
-			expectFallback: false,
+			name:           "quota error - fallback provider also fails, original error surfaces (bd-27ud)",
+			modelOverride:  "sonnet",
+			expectFallback: true,
 			expectSuccess:  false,
+			expectSecondModel: "z-ai/glm-5.3",
 			setupMockProvider: func(mp *mockProviderWithRetry) {
 				mp.errorOnFirstCall = true
 				mp.firstError = errors.New("API error: 400 - quota exceeded")
+			},
+			// bd-27ud: retry goes to the z-ai provider now, so the FALLBACK
+			// provider must be the one configured to fail. The old test had
+			// the default provider failing twice, but the fixed router never
+			// retries on the failed provider.
+			setupFallback: func(zai *MockProvider) {
+				zai.AddErrorResponse(errors.New("API error: 500 - fallback provider down"))
 			},
 		},
 		{
 			name:           "non-quota error - no retry",
 			modelOverride:  "sonnet",
-			firstError:     errors.New("API error: 500 - internal server error"),
 			expectFallback: false,
 			expectSuccess:  false,
 			setupMockProvider: func(mp *mockProviderWithRetry) {
@@ -56,7 +63,6 @@ func TestGenerateResponseWithTools_QuotaFallback(t *testing.T) {
 		{
 			name:           "400 without quota indicators - no retry",
 			modelOverride:  "sonnet",
-			firstError:     errors.New("API error: 400 - bad request"),
 			expectFallback: false,
 			expectSuccess:  false,
 			setupMockProvider: func(mp *mockProviderWithRetry) {
@@ -65,22 +71,8 @@ func TestGenerateResponseWithTools_QuotaFallback(t *testing.T) {
 			},
 		},
 		{
-			name:           "quota error fallback also fails - returns error",
-			modelOverride:  "sonnet",
-			firstError:     errors.New("API error: 400 - quota exceeded"),
-			expectFallback: true,
-			expectSuccess:  false,
-			setupMockProvider: func(mp *mockProviderWithRetry) {
-				mp.errorOnFirstCall = true
-				mp.errorOnSecondCall = true
-				mp.firstError = errors.New("API error: 400 - quota exceeded")
-				mp.secondError = errors.New("API error: 401 - quota limit reached")
-			},
-		},
-		{
 			name:           "no error - normal flow",
 			modelOverride:  "sonnet",
-			firstError:     nil,
 			expectFallback: false,
 			expectSuccess:  true,
 			setupMockProvider: func(mp *mockProviderWithRetry) {
@@ -105,10 +97,20 @@ func TestGenerateResponseWithTools_QuotaFallback(t *testing.T) {
 			}
 			tt.setupMockProvider(mockProvider)
 
-			// Create a minimal router with the mock provider
+			// Create a minimal router with the mock provider plus a z-ai
+			// fallback provider (bd-27ud: fallback must route there).
+			zai := NewMockProvider("z-ai")
+			if tt.setupFallback != nil {
+				tt.setupFallback(zai)
+			}
 			router := &Router{
 				providers: map[string]Provider{
 					"default": mockProvider,
+					"z-ai":    zai,
+				},
+				providerMeta: map[string]ProviderMeta{
+					"default": {Name: "default", Type: "anthropic"},
+					"z-ai":    {Name: "z-ai", Type: "openai", DefaultModel: "glm-5.3"},
 				},
 				default_: "default",
 			}
@@ -133,10 +135,13 @@ func TestGenerateResponseWithTools_QuotaFallback(t *testing.T) {
 			}
 
 			if tt.expectFallback {
-				assert.True(t, mockProvider.secondCallMade, "expected fallback retry to be made")
-				assert.Equal(t, "z-ai/glm-5.3", mockProvider.secondCallModel, "expected fallback model to be z-ai/glm-5.3")
+				assert.Equal(t, 1, zai.GetCallCount(), "expected fallback retry to land on z-ai provider (bd-27ud)")
+				if calls := zai.GetCalls(); len(calls) == 1 {
+					assert.Equal(t, tt.expectSecondModel, calls[0].Request.Model, "expected fallback model")
+				}
+				assert.False(t, mockProvider.secondCallMade, "expected NO retry on the failed provider (bd-27ud)")
 			} else {
-				assert.False(t, mockProvider.secondCallMade, "expected no fallback retry")
+				assert.Equal(t, 0, zai.GetCallCount(), "expected no fallback retry")
 			}
 		})
 	}

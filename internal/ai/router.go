@@ -499,6 +499,30 @@ func (r *Router) ResolveProviderForModel(model string) string {
 }
 
 // GenerateResponse generates an AI response for a session
+// resolveFallbackRoute returns (fallbackModel, provider to retry on).
+// bd-27ud: the fallback model must be sent to ITS OWN provider, not the
+// failed one — "z-ai/glm-5.3" retried on Anthropic previously 404'd
+// (journal 15:33:21Z Sep 1 2026; 5 sub-agent silent deaths).
+// ok=false when the fallback model resolves to no known provider; callers
+// must then surface the original error instead of blind-retrying.
+func (r *Router) resolveFallbackRoute(failedProvider string) (string, Provider, bool) {
+	meta, metaOk := r.GetProviderMeta(failedProvider)
+	fallbackModel := "z-ai/glm-5.3" // default fallback (bd-6tb)
+	if metaOk && meta.FallbackModel != "" {
+		fallbackModel = meta.FallbackModel
+	}
+
+	fallbackProviderName := r.ResolveProviderForModel(fallbackModel)
+	if fallbackProviderName == "" {
+		return "", nil, false
+	}
+	p, exists := r.GetProvider(fallbackProviderName)
+	if !exists {
+		return "", nil, false
+	}
+	return fallbackModel, p, true
+}
+
 func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session, userMessage string, providerName string) (*GenerateResponse, error) {
 	// Use default provider if none specified
 	if providerName == "" {
@@ -545,17 +569,23 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 	response, err := provider.GenerateResponse(ctx, req)
 	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
-		// bd-6tb: retry on quota exhaustion if model override was set
-		if IsQuotaError(err) && req.Model != "" {
-			log.Printf("[Router] Quota error on %q, retrying with fallback model glm-5.3 (bd-6tb)", req.Model)
-			req.Model = "glm-5.3" // Fallback to glm-5.3
-			retryStart := time.Now()
-			response, err = provider.GenerateResponse(ctx, req)
-			latencyMs = time.Since(retryStart).Milliseconds()
-			if err == nil {
-				log.Printf("[Router] Fallback retry succeeded (bd-6tb)")
-			} else {
-				log.Printf("[Router] Fallback retry failed: %v (bd-6tb)", err)
+		// bd-6tb: retry on quota exhaustion
+		// bd-27ud: retry on the fallback model's OWN provider (req.Model is
+		// empty here — provider uses its default — so no model guard applies)
+		if IsQuotaError(err) {
+			fallbackModel, fallbackProvider, ok := r.resolveFallbackRoute(providerName)
+			if ok {
+				log.Printf("[Router] Quota error on %q, retrying with fallback model %q on provider %q (bd-27ud)", req.Model, fallbackModel, fallbackProvider.Name())
+				originalModel := req.Model
+				req.Model = fallbackModel
+				retryStart := time.Now()
+				response, err = fallbackProvider.GenerateResponse(ctx, req)
+				latencyMs = time.Since(retryStart).Milliseconds()
+				if err == nil {
+					log.Printf("[Router] Fallback retry succeeded (bd-27ud): %q -> %q", originalModel, fallbackModel)
+				} else {
+					log.Printf("[Router] Fallback retry failed: %v (bd-27ud)", err)
+				}
 			}
 		}
 
@@ -713,29 +743,22 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
 		// bd-6tb: retry on quota/auth error if fallback model is configured
+		// bd-27ud: retry on the fallback model's OWN provider, not this one
 		if IsQuotaError(err) {
-			meta, metaOk := r.GetProviderMeta(providerName)
-			fallbackModel := ""
-			if metaOk && meta.FallbackModel != "" {
-				fallbackModel = meta.FallbackModel
-			} else {
-				// Default fallback if not configured
-				fallbackModel = "z-ai/glm-5.3"
-			}
-
-			// Only retry if we have a fallback model and the original request used a model
-			if fallbackModel != "" && req.Model != "" {
+			fallbackModel, fallbackProvider, ok := r.resolveFallbackRoute(providerName)
+			// Only retry if we resolved a fallback provider and the original request used a model
+			if ok && req.Model != "" {
 				originalModel := req.Model
 				req.Model = fallbackModel
-				log.Printf("[Router] Quota error on %q, retrying with fallback model %q (bd-6tb)", originalModel, fallbackModel)
+				log.Printf("[Router] Quota error on %q, retrying with fallback model %q on provider %q (bd-27ud)", originalModel, fallbackModel, fallbackProvider.Name())
 
 				retryStart := time.Now()
-				response, err = provider.GenerateResponse(ctx, req)
+				response, err = fallbackProvider.GenerateResponse(ctx, req)
 				latencyMs = time.Since(retryStart).Milliseconds()
 				if err == nil {
-					log.Printf("[Router] Fallback retry succeeded (bd-6tb): %q -> %q", originalModel, fallbackModel)
+					log.Printf("[Router] Fallback retry succeeded (bd-27ud): %q -> %q", originalModel, fallbackModel)
 				} else {
-					log.Printf("[Router] Fallback retry failed: %v (bd-6tb)", err)
+					log.Printf("[Router] Fallback retry failed: %v (bd-27ud)", err)
 				}
 			}
 		}
@@ -942,27 +965,25 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	response, err := streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
 	if err != nil {
 		// bd-6tb: retry on quota/auth error if fallback model is configured
+		// bd-27ud: retry on the fallback model's OWN provider, not this one
 		if IsQuotaError(err) {
-			meta, metaOk := r.GetProviderMeta(providerName)
-			fallbackModel := ""
-			if metaOk && meta.FallbackModel != "" {
-				fallbackModel = meta.FallbackModel
-			} else {
-				// Default fallback if not configured
-				fallbackModel = "z-ai/glm-5.3"
-			}
+			fallbackModel, fallbackProvider, ok := r.resolveFallbackRoute(providerName)
+			// Only retry if we resolved a fallback provider and the original request used a model
+			if ok && req.Model != "" {
+				fallbackStream, canFallbackStream := fallbackProvider.(StreamingProvider)
+				if canFallbackStream {
+					originalModel := req.Model
+					req.Model = fallbackModel
+					log.Printf("[Router] Quota error on %q (streaming), retrying with fallback model %q on provider %q (bd-27ud)", originalModel, fallbackModel, fallbackProvider.Name())
 
-			// Only retry if we have a fallback model and the original request used a model
-			if fallbackModel != "" && req.Model != "" {
-				originalModel := req.Model
-				req.Model = fallbackModel
-				log.Printf("[Router] Quota error on %q (streaming), retrying with fallback model %q (bd-6tb)", originalModel, fallbackModel)
-
-				response, err = streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
-				if err == nil {
-					log.Printf("[Router] Fallback retry succeeded (bd-6tb): %q -> %q", originalModel, fallbackModel)
+					response, err = fallbackStream.GenerateResponseStreaming(ctx, req, onDelta)
+					if err == nil {
+						log.Printf("[Router] Fallback retry succeeded (bd-27ud): %q -> %q", originalModel, fallbackModel)
+					} else {
+						log.Printf("[Router] Fallback retry failed: %v (bd-27ud)", err)
+					}
 				} else {
-					log.Printf("[Router] Fallback retry failed: %v (bd-6tb)", err)
+					log.Printf("[Router] Fallback provider %q cannot stream, surfacing original error (bd-27ud)", fallbackProvider.Name())
 				}
 			}
 		}
