@@ -161,6 +161,14 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 	}
 	result.ReflectionsGroomed = groomed
 
+	// 6. Prune hub nodes that exceed maxNodeDegree
+	hubsPruned, edgesRemoved, err := r.HubPrune(ctx, dryRun)
+	if err != nil {
+		return result, fmt.Errorf("prune hubs: %w", err)
+	}
+	result.HubsPruned = hubsPruned
+	result.EdgesRemoved = edgesRemoved
+
 	return result, nil
 }
 
@@ -223,6 +231,104 @@ func (r *REMCycle) groomReflections(ctx context.Context, dryRun bool) (int, erro
 		return 0, nil
 	}
 	return groomed, nil
+}
+
+// HubPrune removes lowest-confidence edges from nodes that exceed maxNodeDegree.
+// This prevents unbounded edge accumulation that degrades graph performance.
+func (r *REMCycle) HubPrune(ctx context.Context, dryRun bool) (hubsPruned, edgesRemoved int, err error) {
+	// Find all nodes that exceed the degree cap
+	query := `
+		SELECT DISTINCT node
+		FROM (
+			SELECT key_a as node FROM brain_relationships
+			UNION ALL
+			SELECT key_b as node FROM brain_relationships
+		)
+		GROUP BY node
+		HAVING COUNT(*) > ?
+	`
+
+	rows, err := r.db.Query(query, maxNodeDegree)
+	if err != nil {
+		return 0, 0, fmt.Errorf("query hub nodes: %w", err)
+	}
+	defer rows.Close()
+
+	var hubNodes []string
+	for rows.Next() {
+		var node string
+		if err := rows.Scan(&node); err != nil {
+			return 0, 0, fmt.Errorf("scan hub node: %w", err)
+		}
+		hubNodes = append(hubNodes, node)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, fmt.Errorf("iterate hub nodes: %w", err)
+	}
+
+	if len(hubNodes) == 0 {
+		return 0, 0, nil // No hubs to prune
+	}
+
+	// For each hub, prune edges down to the cap
+	for _, hub := range hubNodes {
+		// Get all edges for this hub, ordered by confidence (lowest first)
+		edgeQuery := `
+			SELECT key_a, key_b, confidence
+			FROM brain_relationships
+			WHERE key_a = ? OR key_b = ?
+			ORDER BY confidence ASC
+		`
+
+		edgeRows, err := r.db.Query(edgeQuery, hub, hub)
+		if err != nil {
+			return 0, 0, fmt.Errorf("query edges for hub %q: %w", hub, err)
+		}
+
+		var edges []struct {
+			keyA       string
+			keyB       string
+			confidence float64
+		}
+
+		for edgeRows.Next() {
+			var e struct {
+				keyA       string
+				keyB       string
+				confidence float64
+			}
+			if err := edgeRows.Scan(&e.keyA, &e.keyB, &e.confidence); err != nil {
+				edgeRows.Close()
+				return 0, 0, fmt.Errorf("scan edge for hub %q: %w", hub, err)
+			}
+			edges = append(edges, e)
+		}
+		edgeRows.Close()
+
+		edgeCount := len(edges)
+		if edgeCount <= maxNodeDegree {
+			continue // Already under cap
+		}
+
+		// Remove edges beyond the cap (lowest confidence first)
+		edgesToRemove := edgeCount - maxNodeDegree
+		for i := 0; i < edgesToRemove; i++ {
+			e := edges[i]
+			if !dryRun {
+				_, err := r.db.ExecContext(ctx,
+					"DELETE FROM brain_relationships WHERE key_a = ? AND key_b = ?",
+					e.keyA, e.keyB)
+				if err != nil {
+					return 0, 0, fmt.Errorf("delete edge for hub %q: %w", hub, err)
+				}
+			}
+			edgesRemoved++
+		}
+
+		hubsPruned++
+	}
+
+	return hubsPruned, edgesRemoved, nil
 }
 
 // pruneOrphansOnly detects entries whose source files have been deleted.
