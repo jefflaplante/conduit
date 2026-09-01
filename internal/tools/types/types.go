@@ -453,6 +453,7 @@ const (
 	WakeSourceSubAgentCallback  = "sub_agent_callback"  // kept for backwards compatibility
 	WakeSourceSubAgentAnnounced = "sub_agent_announced" // raw result already posted to channel
 	WakeSourceSubAgentSilent    = "sub_agent_silent"    // raw result NOT posted; parent must decide
+	WakeSourceSubAgentFailed    = "sub_agent_failed"    // sub-agent encountered an error
 	WakeSourceHeartbeat         = "heartbeat"
 )
 
