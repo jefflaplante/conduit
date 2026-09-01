@@ -84,10 +84,18 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 		if err != nil {
 			log.Printf("[SubAgent] Error on %s: %v", session.Key, err)
 			// Store error in session for manager to query
-			_, _ = g.sessions.AddMessage(session.Key, "assistant", fmt.Sprintf("Error: %v", err), nil)
+			errorMsg := fmt.Sprintf("Error: %v", err)
+			_, _ = g.sessions.AddMessage(session.Key, "assistant", errorMsg, nil)
 			// Announce failure if requested
 			if announce && parentChannelID != "" && parentUserID != "" {
 				g.announceToParent(parentChannelID, parentUserID, fmt.Sprintf("❌ Sub-agent failed: %v", err))
+			}
+			// Wake the parent session so it knows the sub-agent failed (even in silent mode)
+			if parentSessionKey != "" {
+				wakeErr := g.sendToSessionWakeWithSource(context.Background(), parentSessionKey, "", errorMsg, types.WakeSourceSubAgentFailed)
+				if wakeErr != nil {
+					log.Printf("[SubAgent] Failed to wake parent session %s on error: %v", parentSessionKey, wakeErr)
+				}
 			}
 			return
 		}
