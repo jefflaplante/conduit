@@ -63,14 +63,9 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 			subCtx = brain.WithParentUserID(subCtx, parentBrainUID)
 		}
 
-		// Resolve model alias (haiku -> claude-haiku-4-5-20251001, etc.)
-		modelToUse := model
-		if modelToUse == "" {
-			// Use gateway's configured default model
-			modelToUse = g.getDefaultModel()
-		} else if fullModel, exists := g.getModelAliases()[strings.ToLower(modelToUse)]; exists && fullModel != "" {
-			modelToUse = fullModel
-		}
+		// Resolve model (explicit model wins; empty uses configured sub-agent
+		// default, falling back to the gateway default)
+		modelToUse := g.getSubagentModel(model)
 
 		// Set model context for prompt builder's context window calculations
 		if session.Context == nil {
@@ -185,6 +180,29 @@ func (g *Gateway) announceToParent(channelID, userID, message string) {
 	if err := g.channelManager.SendMessage(outgoingMsg); err != nil {
 		log.Printf("[SubAgent] Failed to announce result: %v", err)
 	}
+}
+
+// getSubagentModel resolves the model for a spawned sub-agent.
+// Explicit model wins (alias-resolved). Otherwise, if AIConfig.SubagentDefaultModel
+// is set it is used (alias-resolved), letting operators pin a cheaper default for
+// sub-agents independently of the main-session gateway default. Empty/nil config
+// falls back to the gateway default model.
+func (g *Gateway) getSubagentModel(model string) string {
+	if model != "" {
+		if fullModel, exists := g.getModelAliases()[strings.ToLower(model)]; exists && fullModel != "" {
+			return fullModel
+		}
+		return model
+	}
+
+	if g.config != nil && g.config.AI.SubagentDefaultModel != "" {
+		if fullModel, exists := g.getModelAliases()[strings.ToLower(g.config.AI.SubagentDefaultModel)]; exists && fullModel != "" {
+			return fullModel
+		}
+		return g.config.AI.SubagentDefaultModel
+	}
+
+	return g.getDefaultModel()
 }
 
 // getDefaultModel returns the gateway's configured default model

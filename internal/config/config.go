@@ -450,6 +450,7 @@ type AIConfig struct {
 	DefaultProvider string               `json:"default_provider"`
 	Providers       []ProviderConfig     `json:"providers"`
 	ModelAliases    map[string]string    `json:"model_aliases,omitempty"`
+	SubagentDefaultModel string          `json:"subagent_default_model,omitempty"` // Default model for sub-agents spawned without an explicit model (overrides gateway default when set)
 	SmartRouting    *SmartRoutingConfig  `json:"smart_routing,omitempty"`
 	Compaction      *CompactionConfig    `json:"compaction,omitempty"`
 	PromptCaching   PromptCachingConfig  `json:"prompt_caching,omitempty"`
