@@ -50,6 +50,8 @@ type PruneResult struct {
 	ReflectionsGroomed int
 	ExpiredDeleted     int // Entries deleted because their TTL expired.
 	ColdEvicted        int `json:"cold_evicted,omitempty"`
+	HubsPruned         int // Number of hub nodes with excessive edges pruned.
+	EdgesRemoved       int // Number of edges removed during hub pruning.
 }
 
 type ArchiveRecord struct {

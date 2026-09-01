@@ -31,13 +31,13 @@ func namespaceEdgeConfidence(keyA, keyB string) float64 {
 	}
 	switch {
 	case shared >= 3:
-		return 0.9
+		return 1.0
 	case shared == 2:
 		return 0.9
 	case shared == 1:
-		return 0.6
+		return 0.7
 	default:
-		return 0.3
+		return 0.4
 	}
 }
 

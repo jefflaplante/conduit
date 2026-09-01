@@ -15,9 +15,9 @@ func TestNamespaceEdgeConfidence(t *testing.T) {
 		want float64
 	}{
 		{"two shared segments", "solar.battery.config", "solar.battery.plan", 0.9},
-		{"one shared segment", "solar.battery.config", "solar.inverter", 0.6},
-		{"no shared segments", "solar.foo", "house.foo", 0.3},
-		{"three shared segments", "a.b.c.d", "a.b.c.e", 0.9},
+		{"one shared segment", "solar.battery.config", "solar.inverter", 0.7},
+		{"no shared segments", "solar.foo", "house.foo", 0.4},
+		{"three shared segments", "a.b.c.d", "a.b.c.e", 1.0},
 		{"identical keys", "solar.x", "solar.x", 0.0},
 	}
 	for _, tt := range tests {

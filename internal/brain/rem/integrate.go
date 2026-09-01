@@ -9,6 +9,10 @@ import (
 	"conduit/internal/brain"
 )
 
+// maxNodeDegree is the maximum number of edges allowed per node in the brain graph.
+// This prevents unbounded edge accumulation that degrades performance and search quality.
+const maxNodeDegree = 25
+
 // relationshipCandidate represents a potential relationship between two keys
 type relationshipCandidate struct {
 	keyA       string
@@ -208,12 +212,101 @@ func countOverlap(a, b []string) int {
 	return count
 }
 
-// insertRelationship inserts or updates a relationship in the database
+// insertRelationship inserts or updates a relationship in the database.
+// It enforces maxNodeDegree by evicting the lowest-confidence edge if necessary.
 func (r *REMCycle) insertRelationship(ctx context.Context, candidate relationshipCandidate) error {
+	// Normalize so keyA < keyB for consistency
+	keyA, keyB := candidate.keyA, candidate.keyB
+	if keyA > keyB {
+		keyA, keyB = candidate.keyB, candidate.keyA
+	}
+
+	// Check if we would exceed degree cap for keyA
+	var countA int
+	if err := r.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM brain_relationships WHERE key_a = ? OR key_b = ?",
+		keyA, keyA).Scan(&countA); err != nil {
+		return fmt.Errorf("count edges for keyA: %w", err)
+	}
+
+	// Check if we would exceed degree cap for keyB
+	var countB int
+	if err := r.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM brain_relationships WHERE key_a = ? OR key_b = ?",
+		keyB, keyB).Scan(&countB); err != nil {
+		return fmt.Errorf("count edges for keyB: %w", err)
+	}
+
+	// If either node is at cap, we need to make room
+	if countA >= maxNodeDegree || countB >= maxNodeDegree {
+		// Find the lowest-confidence edge to evict
+		var evictKeyA, evictKeyB string
+		var evictConfidence float64
+
+		if countA >= maxNodeDegree {
+			err := r.db.QueryRowContext(ctx,
+				`SELECT key_a, key_b, confidence
+				 FROM brain_relationships
+				 WHERE key_a = ? OR key_b = ?
+				 ORDER BY confidence ASC LIMIT 1`,
+				keyA, keyA).Scan(&evictKeyA, &evictKeyB, &evictConfidence)
+			if err != nil {
+				return fmt.Errorf("find lowest edge for keyA: %w", err)
+			}
+
+			// Only evict if new edge has higher confidence
+			if candidate.confidence > evictConfidence {
+				if _, err := r.db.ExecContext(ctx,
+					"DELETE FROM brain_relationships WHERE key_a = ? AND key_b = ?",
+					evictKeyA, evictKeyB); err != nil {
+					return fmt.Errorf("evict low-confidence edge for keyA: %w", err)
+				}
+			} else {
+				// New edge is not better than existing ones; skip insertion
+				return nil
+			}
+		}
+
+		if countB >= maxNodeDegree {
+			// Re-check countB as it may have changed if we evicted an edge above
+			var newCountB int
+			if err := r.db.QueryRowContext(ctx,
+				"SELECT COUNT(*) FROM brain_relationships WHERE key_a = ? OR key_b = ?",
+				keyB, keyB).Scan(&newCountB); err != nil {
+				return fmt.Errorf("re-count edges for keyB: %w", err)
+			}
+
+			if newCountB >= maxNodeDegree {
+				err := r.db.QueryRowContext(ctx,
+					`SELECT key_a, key_b, confidence
+					 FROM brain_relationships
+					 WHERE key_a = ? OR key_b = ?
+					 ORDER BY confidence ASC LIMIT 1`,
+					keyB, keyB).Scan(&evictKeyA, &evictKeyB, &evictConfidence)
+				if err != nil {
+					return fmt.Errorf("find lowest edge for keyB: %w", err)
+				}
+
+				// Only evict if new edge has higher confidence
+				if candidate.confidence > evictConfidence {
+					if _, err := r.db.ExecContext(ctx,
+						"DELETE FROM brain_relationships WHERE key_a = ? AND key_b = ?",
+						evictKeyA, evictKeyB); err != nil {
+						return fmt.Errorf("evict low-confidence edge for keyB: %w", err)
+					}
+				} else {
+					// New edge is not better than existing ones; skip insertion
+					return nil
+				}
+			}
+		}
+	}
+
+	// Insert or replace the relationship
 	_, err := r.db.ExecContext(ctx, `
 		INSERT OR REPLACE INTO brain_relationships (key_a, key_b, relationship, confidence)
 		VALUES (?, ?, 'related', ?)
-	`, candidate.keyA, candidate.keyB, candidate.confidence)
+	`, keyA, keyB, candidate.confidence)
 	return err
 }
 
