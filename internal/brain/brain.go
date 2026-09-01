@@ -863,7 +863,57 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 		}
 	}
 
+	// Log recall event for brain_spread reinforcement (best-effort)
+	b.logRecallEvent(query, results)
+
 	return results, nil
+}
+
+// recallEventsPath is where recall events are logged for brain_spread
+// reinforcement. Package var so tests can redirect to a temp dir.
+var recallEventsPath = "/home/jules/ocgo/workspace/memory/recall-events.jsonl"
+
+func (b *Brain) logRecallEvent(query string, results []*Entry) {
+	// Best-effort logging: failure must not fail recall
+	type recallEvent struct {
+		Timestamp string   `json:"ts"`
+		Query     string   `json:"query"`
+		Keys      []string `json:"keys"`
+		Tiers     []string `json:"tiers"`
+	}
+
+	if len(results) == 0 {
+		return
+	}
+
+	event := recallEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Query:     query,
+		Keys:      make([]string, 0, len(results)),
+		Tiers:     make([]string, 0, len(results)),
+	}
+
+	for _, entry := range results {
+		event.Keys = append(event.Keys, entry.Key)
+		event.Tiers = append(event.Tiers, string(entry.Tier))
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("Brain: failed to marshal recall event: %v", err)
+		return
+	}
+
+	file, err := os.OpenFile(recallEventsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("Brain: failed to open recall-events.jsonl: %v", err)
+		return
+	}
+	defer file.Close()
+	
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		log.Printf("Brain: failed to write recall event: %v", err)
+	}
 }
 
 func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([]*Entry, error) {
@@ -934,6 +984,7 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 		}
 		results = append(results, entry)
 	}
+
 	return results, nil
 }
 
