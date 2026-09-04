@@ -16,10 +16,13 @@ import (
 // Claude vision via internal/ai/anthropic.go's convertMessagesToAnthropic)
 // can process the bytes natively.
 //
-// The adapter uses the router's default provider/model, which on a standard
-// Conduit deployment is Anthropic with a vision-capable Claude model. A
-// follow-up could surface a tool-level "model" override; for now the
-// configured default is used unconditionally.
+// Provider selection (bd-1820): the adapter previously used the router's
+// default provider unconditionally, which 400s when the default is a
+// text-only endpoint ("messages.content.type is invalid, allowed values
+// [text]" — glm-5.3 via the OpenAI shim on z-ai). It now prefers, in order:
+//  1. an explicitly configured vision provider (NewVisionAdapterWithModel),
+//  2. any configured anthropic-type provider (vision-capable by default),
+//  3. the router default.
 type visionAdapter struct {
 	router       *ai.Router
 	providerName string
@@ -31,8 +34,39 @@ func newVisionAdapter(router *ai.Router) *visionAdapter {
 	}
 	return &visionAdapter{
 		router:       router,
-		providerName: router.DefaultProviderName(),
+		providerName: selectVisionProvider(router),
 	}
+}
+
+// NewVisionAdapterWithModel returns a vision adapter pinned to a specific
+// provider, bypassing auto-selection.
+func NewVisionAdapterWithModel(router *ai.Router, providerName string) *visionAdapter {
+	if router == nil {
+		return nil
+	}
+	return &visionAdapter{router: router, providerName: providerName}
+}
+
+// selectVisionProvider picks the provider used for image analysis.
+func selectVisionProvider(router *ai.Router) string {
+	defaultName := router.DefaultProviderName()
+	if defaultName == "" {
+		return ""
+	}
+	// If the default provider is anthropic (or claude-code), it already
+	// supports vision — no selection needed.
+	meta, ok := router.GetProviderMeta(defaultName)
+	if ok && (meta.Type == "anthropic" || meta.Type == "claude-code") {
+		return defaultName
+	}
+	// Default is text-only — find a vision-capable alternative.
+	for _, meta := range router.ListProviders() {
+		if meta.Type == "anthropic" {
+			return meta.Name
+		}
+	}
+	// No alternative: keep the default and let the provider surface the error.
+	return defaultName
 }
 
 // AnalyzeImage implements types.VisionAnalyzer. It builds a single-turn user
