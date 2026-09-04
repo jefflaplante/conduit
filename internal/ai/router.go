@@ -757,6 +757,13 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 				latencyMs = time.Since(retryStart).Milliseconds()
 				if err == nil {
 					log.Printf("[Router] Fallback retry succeeded (bd-27ud): %q -> %q", originalModel, fallbackModel)
+					// The tool-loop continuation (HandleToolCallFlow) reuses
+					// this provider variable; if we leave it pointing at the
+					// failed provider, the continuation sends the fallback
+					// model string to the wrong API (anthropic 404
+					// not_found_error, 2026-09-04 sub-agent death).
+					provider = fallbackProvider
+					providerName = fallbackProvider.Name()
 				} else {
 					log.Printf("[Router] Fallback retry failed: %v (bd-27ud)", err)
 				}
@@ -991,6 +998,11 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 					response, err = fallbackStream.GenerateResponseStreaming(ctx, req, onDelta)
 					if err == nil {
 						log.Printf("[Router] Fallback retry succeeded (bd-27ud): %q -> %q", originalModel, fallbackModel)
+						// Keep the tool-loop continuation on the provider
+						// that actually served the response (see non-streaming
+						// path; same anthropic-404 failure mode).
+						provider = fallbackProvider
+						providerName = fallbackProvider.Name()
 					} else {
 						log.Printf("[Router] Fallback retry failed: %v (bd-27ud)", err)
 					}
