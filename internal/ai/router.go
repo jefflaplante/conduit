@@ -788,6 +788,11 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, latencyMs)
 	}
 
+	// conduit-18vj: a raw-empty response (no content AND no tool calls) must
+	// never complete a turn silently — retry once, then deliver a visible
+	// fallback so every turn ends with SOMETHING.
+	response, err = GuardEmptyResponse(ctx, provider, req, response, err, "initial")
+
 	// Process response through agent system
 	if r.agentSystem != nil {
 		processed, err := r.agentSystem.ProcessResponse(ctx, response)
