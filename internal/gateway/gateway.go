@@ -975,6 +975,35 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		return
 	}
 
+	// conduit-1mnp: busy-ack. If a turn is already in flight for this session,
+	// the per-session turn lock will queue this message behind it — tell the
+	// user immediately instead of leaving them in silence. 30s cooldown per
+	// session so rapid nudges don't spam acks.
+	g.ws.ActiveRequestsMu.Lock()
+	_, turnInFlight := g.ws.ActiveRequests[session.Key]
+	g.ws.ActiveRequestsMu.Unlock()
+	if turnInFlight {
+		now := time.Now().Unix()
+		lastAck, _ := strconv.ParseInt(session.Context["last_busy_ack"], 10, 64)
+		if now-lastAck > 30 {
+			ack := &protocol.OutgoingMessage{
+				BaseMessage: protocol.BaseMessage{
+					Type:      protocol.TypeOutgoingMessage,
+					ID:        fmt.Sprintf("busyack_%d", time.Now().UnixNano()),
+					Timestamp: time.Now(),
+				},
+				ChannelID:  msg.ChannelID,
+				SessionKey: msg.SessionKey,
+				UserID:     msg.UserID,
+				Text:       "Still working on your previous request — this message is queued and I'll handle it right after.",
+			}
+			g.channelManager.SendMessage(ack)
+			_ = g.sessions.SetSessionContext(session.Key, "last_busy_ack", strconv.FormatInt(now, 10))
+			logging.Info(ctx, "busy-ack sent, message queued behind in-flight turn",
+				"session_key", session.Key)
+		}
+	}
+
 	// Reset wake_depth on normal user messages so the recursion guard resets
 	// after a human sends a message to the session.
 	if session.Context["wake_depth"] != "" && session.Context["wake_depth"] != "0" {

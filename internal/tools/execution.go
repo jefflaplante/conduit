@@ -424,7 +424,7 @@ func (e *ExecutionEngine) HandleToolCallFlow(
 	for i, tc := range initialResp.ToolCalls {
 		log.Printf("[ExecutionEngine] Tool call %d: %s", i, tc.Name)
 	}
-	return e.handleToolCallFlowRecursive(ctx, provider, initialReq, initialResp, 0)
+	return e.handleToolCallFlowRecursive(ctx, provider, initialReq, initialResp, 0, time.Now())
 }
 
 // handleToolCallFlowRecursive handles tool chaining with depth limits
@@ -434,7 +434,22 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 	initialReq *ai.GenerateRequest,
 	initialResp *ai.GenerateResponse,
 	depth int,
+	chainStart time.Time,
 ) (*ConversationResponse, error) {
+	// conduit-1z6d: hard wall-clock cap for the whole chain. On breach, stop
+	// recursing and return a user-visible timeout message as normal content —
+	// never a silent end.
+	if timeoutMsg, timedOut := watchdogTimeoutResponse(chainStart); timedOut {
+		log.Printf("[Watchdog] chain hard cap exceeded at depth %d (elapsed %s) — aborting with visible timeout (conduit-1z6d)",
+			depth, time.Since(chainStart).Round(time.Second))
+		return &ConversationResponse{
+			Content:    timeoutMsg,
+			Usage:      &initialResp.Usage,
+			Steps:      depth + 1,
+			ChainDepth: depth,
+		}, nil
+	}
+
 	// Prevent infinite tool chains
 	if depth >= e.maxChains {
 		log.Printf("Tool chain depth limit reached: %d/%d", depth, e.maxChains)
@@ -533,6 +548,7 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 	}
 
 	stopThinking := startThinkingIndicator(ctx, depth)
+	rtStart := time.Now()
 	finalResp, err := provider.GenerateResponse(ctx, finalReq)
 	stopThinking()
 	if err != nil {
@@ -542,6 +558,13 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 	// conduit-18vj: raw-empty round trips after tool execution were the proven
 	// dead-turn mechanism (2026-09-03) — retry once, then a visible fallback.
 	finalResp, err = ai.GuardEmptyResponse(ctx, provider, finalReq, finalResp, err, fmt.Sprintf("depth%d", depth))
+
+	// conduit-1z6d: per-round-trip instrumentation — dead turns diagnosable
+	// from the journal alone.
+	log.Printf("[RoundTrip] phase=post-tools depth=%d model=%q duration=%s prompt_tokens=%d completion_tokens=%d content_bytes=%d tool_calls=%d",
+		depth, finalReq.Model, time.Since(rtStart).Round(time.Millisecond),
+		finalResp.Usage.PromptTokens, finalResp.Usage.CompletionTokens,
+		len(finalResp.Content), len(finalResp.ToolCalls))
 
 	// Check for additional tool calls (tool chaining)
 	if len(finalResp.ToolCalls) > 0 {
@@ -558,7 +581,7 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 			}
 		}
 		// Recursive tool calling with depth tracking
-		return e.handleToolCallFlowRecursive(ctx, provider, finalReq, finalResp, depth+1)
+		return e.handleToolCallFlowRecursive(ctx, provider, finalReq, finalResp, depth+1, chainStart)
 	}
 
 	// No more tool calls - return final response
