@@ -793,6 +793,13 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 	// fallback so every turn ends with SOMETHING.
 	response, err = GuardEmptyResponse(ctx, provider, req, response, err, "initial")
 
+	// conduit-1z6d: per-round-trip instrumentation — dead turns diagnosable
+	// from the journal alone.
+	log.Printf("[RoundTrip] phase=initial model=%q duration=%dms prompt_tokens=%d completion_tokens=%d content_bytes=%d tool_calls=%d",
+		req.Model, latencyMs,
+		response.Usage.PromptTokens, response.Usage.CompletionTokens,
+		len(response.Content), len(response.ToolCalls))
+
 	// Process response through agent system
 	if r.agentSystem != nil {
 		processed, err := r.agentSystem.ProcessResponse(ctx, response)
