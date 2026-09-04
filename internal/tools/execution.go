@@ -539,6 +539,10 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		return nil, fmt.Errorf("AI response after tool execution failed: %w", err)
 	}
 
+	// conduit-18vj: raw-empty round trips after tool execution were the proven
+	// dead-turn mechanism (2026-09-03) — retry once, then a visible fallback.
+	finalResp, err = ai.GuardEmptyResponse(ctx, provider, finalReq, finalResp, err, fmt.Sprintf("depth%d", depth))
+
 	// Check for additional tool calls (tool chaining)
 	if len(finalResp.ToolCalls) > 0 {
 		// Check for circular tool call patterns before recursing
