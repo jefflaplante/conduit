@@ -424,7 +424,45 @@ func (e *ExecutionEngine) HandleToolCallFlow(
 	for i, tc := range initialResp.ToolCalls {
 		log.Printf("[ExecutionEngine] Tool call %d: %s", i, tc.Name)
 	}
-	return e.handleToolCallFlowRecursive(ctx, provider, initialReq, initialResp, 0, time.Now())
+	return e.handleToolCallFlowRecursive(ctx, provider, initialReq, initialResp, 0, time.Now(), newTurnBudget(time.Now()))
+}
+
+// maybeSendExtensionNotice delivers the extension announcement via the
+// StatusUpdate tool so the user sees the turn is still alive. Best-effort:
+// a failed notice never aborts the chain.
+func (e *ExecutionEngine) maybeSendExtensionNotice(ctx context.Context, tb *turnBudget) {
+	msg := extensionStatusMessage(tb, time.Now())
+	if e.registry == nil {
+		log.Printf("[TurnBudget] no registry; extension notice not sent: %s", msg)
+		return
+	}
+	if _, err := e.registry.ExecuteTool(ctx, "StatusUpdate", map[string]interface{}{"message": msg}); err != nil {
+		log.Printf("[TurnBudget] extension notice send failed (continuing): %v", err)
+	}
+}
+
+// checkTurnWindow enforces the adaptive cap: grant an extension when eligible,
+// otherwise terminate with the user-visible timeout message. Returns non-nil
+// ConversationResponse when the chain must stop.
+func (e *ExecutionEngine) checkTurnWindow(ctx context.Context, chainStart time.Time, tb *turnBudget, depth int) *ConversationResponse {
+	now := time.Now()
+	if _, pastWindow := watchdogTimeoutResponse(chainStart, tb.extensions); pastWindow {
+		if ok, reason := tb.extensionEligible(now); ok {
+			tb.extensions++
+			log.Printf("[TurnBudget] extension %d/%d granted at depth %d (elapsed %s, %s)",
+				tb.extensions, turnMaxExtensions, depth, now.Sub(chainStart).Round(time.Second), reason)
+			e.maybeSendExtensionNotice(ctx, tb)
+		} else {
+			log.Printf("[TurnBudget] chain cap exceeded at depth %d (elapsed %s, extensions used %d/%d, %s) — aborting with visible timeout (conduit-1z6d)",
+				depth, now.Sub(chainStart).Round(time.Second), tb.extensions, turnMaxExtensions, reason)
+			return &ConversationResponse{
+				Content:    watchdogTerminalMessage(reason),
+				Steps:      depth + 1,
+				ChainDepth: depth,
+			}
+		}
+	}
+	return nil
 }
 
 // handleToolCallFlowRecursive handles tool chaining with depth limits
@@ -435,19 +473,16 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 	initialResp *ai.GenerateResponse,
 	depth int,
 	chainStart time.Time,
+	tb *turnBudget,
 ) (*ConversationResponse, error) {
-	// conduit-1z6d: hard wall-clock cap for the whole chain. On breach, stop
-	// recursing and return a user-visible timeout message as normal content —
-	// never a silent end.
-	if timeoutMsg, timedOut := watchdogTimeoutResponse(chainStart); timedOut {
-		log.Printf("[Watchdog] chain hard cap exceeded at depth %d (elapsed %s) — aborting with visible timeout (conduit-1z6d)",
-			depth, time.Since(chainStart).Round(time.Second))
-		return &ConversationResponse{
-			Content:    timeoutMsg,
-			Usage:      &initialResp.Usage,
-			Steps:      depth + 1,
-			ChainDepth: depth,
-		}, nil
+	// conduit-1z6d + adaptive extension: enforce the turn window. Productive
+	// coding chains get bounded extensions (each announced); everything else
+	// stops with a user-visible timeout — never a silent end.
+	if stop := e.checkTurnWindow(ctx, chainStart, tb, depth); stop != nil {
+		if stop.Usage == nil {
+			stop.Usage = &initialResp.Usage
+		}
+		return stop, nil
 	}
 
 	// Prevent infinite tool chains
@@ -502,6 +537,16 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 	if err != nil {
 		return nil, fmt.Errorf("tool execution failed: %w", err)
 	}
+
+	// Turn budget: record this round's activity for extension eligibility.
+	anySuccess := false
+	for _, r := range toolResults {
+		if r != nil && r.Error == nil && r.Result != nil && r.Result.Success {
+			anySuccess = true
+			break
+		}
+	}
+	tb.markRound(initialResp.ToolCalls, anySuccess, time.Now())
 
 	// Add tool results to conversation
 	for _, result := range toolResults {
@@ -581,7 +626,7 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 			}
 		}
 		// Recursive tool calling with depth tracking
-		return e.handleToolCallFlowRecursive(ctx, provider, finalReq, finalResp, depth+1, chainStart)
+		return e.handleToolCallFlowRecursive(ctx, provider, finalReq, finalResp, depth+1, chainStart, tb)
 	}
 
 	// No more tool calls - return final response
