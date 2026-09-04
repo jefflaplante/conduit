@@ -230,6 +230,7 @@ func (e *Executor) findScript(skill Skill, action string) *SkillScript {
 // buildShellCommand creates a shell command for the given skill and action
 func (e *Executor) buildShellCommand(skill Skill, action string, args map[string]interface{}) string {
 	var command strings.Builder
+	action = normalizeAction(action)
 
 	// Source environment setup — try standard locations
 	homeDir, _ := os.UserHomeDir()
@@ -267,9 +268,32 @@ func (e *Executor) buildShellCommand(skill Skill, action string, args map[string
 		return command.String()
 	}
 
-	// Final fallback: echo the action
-	command.WriteString(fmt.Sprintf("echo 'Executed action: %s'", action))
+	// Final fallback: echo the action (quoted — action names may contain quotes)
+	command.WriteString(fmt.Sprintf("echo 'Executed action: %s'\n", shellQuote(action)))
 	return command.String()
+}
+
+// normalizeAction maps legacy heading-derived action names onto the executor's
+// canonical verbs (search/read/send/list/cleanup/status). Heading-derived names
+// like "send_email_(as_jules_—_via_jules's_own_account)" missed every case,
+// fell through to the echo fallback, and their embedded quotes broke the
+// generated shell command (gog send skill triage, Sep 2026).
+func normalizeAction(action string) string {
+	a := strings.ToLower(action)
+	switch {
+	case strings.Contains(a, "cleanup") || strings.Contains(a, "organize"):
+		return "cleanup"
+	case strings.Contains(a, "send") || strings.Contains(a, "reply") || strings.Contains(a, "compose"):
+		return "send"
+	case strings.Contains(a, "search") || strings.Contains(a, "find") || strings.Contains(a, "query"):
+		return "search"
+	case strings.Contains(a, "read") || strings.Contains(a, "thread_get"):
+		return "read"
+	case strings.Contains(a, "list"):
+		return "list"
+	default:
+		return action
+	}
 }
 
 // buildSkillSpecificCommand builds commands for known skill types using args
@@ -296,10 +320,12 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 		}
 	}
 
-	// Helper to get string arg with shell quoting
+	// Helper to get raw string arg (unquoted). Callers shell-quote exactly
+	// once at emission — pre-quoting here caused double-quoting
+	// (''\''val'\'' garbage) in every generated command (Sep 2026 triage).
 	getArg := func(key string) string {
 		if v, ok := args[key].(string); ok {
-			return shellQuote(v)
+			return v
 		}
 		return ""
 	}
@@ -347,9 +373,16 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 		subject := getArg("subject")
 		body := getArg("body")
 		from := getArg("from")
-		sendAccount := account
-		if from == "jules@laplante.dev" || from == "jules" {
-			sendAccount = "$JULES_ACCOUNT"
+		// Safety default: sends without an explicit identity go from Jules's
+		// account, never Jeff's. Matches email-safety policy (autonomous
+		// sends must use $JULES_ACCOUNT); $GOG_ACCOUNT requires Jeff's
+		// explicit approval in args.
+		sendAccount := "$JULES_ACCOUNT"
+		if acct, ok := args["account"].(string); ok && acct != "" &&
+			acct != "jules" && acct != "jules@laplante.dev" {
+			sendAccount = "$GOG_ACCOUNT"
+		} else if from == "jeff@jefflaplante.com" || from == "jeff@laplante.dev" || from == "jeff" {
+			sendAccount = "$GOG_ACCOUNT"
 		}
 		if to == "" {
 			return false
@@ -365,8 +398,10 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 		command.WriteString(cmd + "\n")
 
 	case "cleanup":
-		// Cleanup runs the blocklist-based junk removal
-		command.WriteString("echo 'cleanup action: use search + thread modify pattern'\n")
+		// Cleanup runs the blocklist-based junk removal. Delegates to the
+		// workspace sweep script (searches last 24h against the junk
+		// blocklist, trashes thread matches, prints SUMMARY|total|trashed|errs).
+		command.WriteString("/home/jules/ocgo/workspace/scripts/hygiene-junk-sweep.sh\n")
 
 	case "list":
 		listAccount := account
