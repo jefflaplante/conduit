@@ -59,6 +59,7 @@ type Entry struct {
 	Source      string     `json:"source,omitempty"`
 	Stale          bool       `json:"stale,omitempty"`
 	ClusterHit      bool       `json:"cluster_hit,omitempty"`
+	WarmthHit      bool       `json:"warmth_hit,omitempty"` // injected by warmth-floor, not a keyword/cluster match
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 }
 
@@ -83,6 +84,7 @@ type Status struct {
 	SpreadEvents     int64          `json:"spread_events,omitempty"`
 	AvgWarmthBoost   float64        `json:"avg_warmth_boost,omitempty"`
 	ClusterHitRate   float64        `json:"cluster_hit_rate,omitempty"`
+	WarmthHitCount   int64          `json:"warmth_hit_count,omitempty"`
 	EdgeCountByType  map[string]int `json:"edge_count_by_type,omitempty"`
 
 	// Access bonus metrics.
@@ -188,6 +190,15 @@ func WithAccessBonusCap(c float64) Option { return func(b *Brain) { b.accessBonu
 // 0.95 means the bonus halves every ~13.5 days without access. Default: 0.95.
 func WithAccessBonusDecay(d float64) Option { return func(b *Brain) { b.accessBonusDecay = d } }
 
+// WithWarmthInjectFloor sets the minimum warmth an LTM entry must have to be
+// eligible for warmth-floor injection during recall. Default: 0.7.
+func WithWarmthInjectFloor(f float64) Option { return func(b *Brain) { b.warmthInjectFloor = f } }
+
+// WithWarmthInjectLimit sets the maximum number of high-warmth non-matching
+// LTM entries appended to recall results. 0 disables injection entirely.
+// Default: 2.
+func WithWarmthInjectLimit(n int) Option { return func(b *Brain) { b.warmthInjectLimit = n } }
+
 type Brain struct {
 	mu      sync.RWMutex
 	working map[string]map[string]*Entry // userID -> key -> entry
@@ -233,6 +244,12 @@ type Brain struct {
 	accessBonusCap    float64 // maximum bonus value (default 0.3)
 	accessBonusDecay  float64 // daily decay factor (default 0.95)
 
+	// Warmth-floor injection: append up to warmthInjectLimit high-warmth LTM
+	// entries that didn't match the query keywords, at the tail of recall
+	// results. Kill-switch: warmthInjectLimit <= 0.
+	warmthInjectFloor float64 // min warmth to qualify (default 0.7)
+	warmthInjectLimit int     // max injected per recall (default 2; <=0 disables)
+
 	// pendingEdgeKeys accumulates LTM keys stored since the last autoFlush so
 	// namespace edges can be materialized in batch rather than per-store.
 	// Protected by mu.
@@ -245,6 +262,7 @@ type Brain struct {
 	totalBoostCount  int64
 	clusterHitCount  int64
 	directHitCount   int64
+	warmthHitCount   int64
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -294,6 +312,8 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 		accessBonusAlpha:       0.1,
 		accessBonusCap:         0.3,
 		accessBonusDecay:       0.95,
+		warmthInjectFloor:      0.7,
+		warmthInjectLimit:      2,
 		pendingEdgeKeys:        make(map[string]struct{}),
 		stopCh:                 make(chan struct{}),
 	}
@@ -846,6 +866,13 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 		results[i] = s.entry
 	}
 
+	// Warmth-floor injection: append up to warmthInjectLimit high-warmth LTM
+	// entries that didn't match the query keywords. Tail placement — keyword
+	// and cluster hits always outrank injected entries. Only fires when the
+	// query already produced results (guard against polluting miss-driven
+	// queries, mirroring the cluster-expansion gating).
+	results = b.injectWarmEntries(ctx, results, seen, limit)
+
 	// Spread activation from the top results (limit to top 3 to avoid cascade).
 	if len(results) > 0 {
 		topN := 3
@@ -867,6 +894,61 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	b.logRecallEvent(query, results)
 
 	return results, nil
+}
+
+// injectWarmEntries appends up to b.warmthInjectLimit high-warmth LTM entries
+// that did not match the query keywords, at the tail of the results. Only
+// fires when the query already returned >=1 result (guard against polluting
+// miss-driven queries) and when spreading is enabled. Best-effort: any error
+// returns the unmodified results — warmth injection must never fail recall.
+func (b *Brain) injectWarmEntries(ctx context.Context, results []*Entry, seen map[string]bool, limit int) []*Entry {
+	if !b.spreadingEnabled || b.warmthInjectLimit <= 0 || b.warmthInjectFloor <= 0 || len(results) == 0 {
+		return results
+	}
+	// Don't grow the result set beyond the caller's limit: inject only while
+	// there's headroom. With the default floor of 0.7 and per-flush decay of
+	// 0.85, few entries qualify — the overfetch covers rows lost to `seen`.
+	rows, err := b.db.QueryContext(ctx, `
+		SELECT key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at, warmth
+		  FROM brain_ltm
+		 WHERE warmth >= ? AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f','now'))
+		 ORDER BY warmth DESC LIMIT ?`, b.warmthInjectFloor, b.warmthInjectLimit+len(results))
+	if err != nil {
+		return results // best-effort, never fails recall
+	}
+	defer rows.Close()
+	added := 0
+	headroom := b.warmthInjectLimit
+	if len(results)+added+headroom > limit {
+		headroom = limit - len(results)
+	}
+	for rows.Next() && added < headroom {
+		e := &Entry{Tier: TierLongTerm}
+		var staleInt int
+		var exp sql.NullTime
+		if err := rows.Scan(&e.Key, &e.Value, &e.CreatedAt, &e.AccessedAt, &e.AccessCount,
+			&e.Salience, &e.Source, &staleInt, &exp, &e.Warmth); err != nil {
+			continue
+		}
+		e.Stale = staleInt != 0
+		if exp.Valid {
+			t := exp.Time
+			e.ExpiresAt = &t
+		}
+		if seen[e.Key] {
+			continue
+		}
+		e.WarmthHit = true
+		results = append(results, e)
+		seen[e.Key] = true
+		added++
+	}
+	if added > 0 {
+		b.mu.Lock()
+		b.warmthHitCount += int64(added)
+		b.mu.Unlock()
+	}
+	return results
 }
 
 // recallEventsPath is where recall events are logged for brain_spread
@@ -1215,6 +1297,7 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 	totalBoostCount := b.totalBoostCount
 	clusterHits := b.clusterHitCount
 	directHits := b.directHitCount
+	warmthHits := b.warmthHitCount
 	b.mu.RUnlock()
 
 	var avgBoost float64
@@ -1302,6 +1385,7 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 		SpreadEvents:    spreadEvents,
 		AvgWarmthBoost:  avgBoost,
 		ClusterHitRate:  clusterHitRate,
+		WarmthHitCount:  warmthHits,
 		EdgeCountByType: edgeCounts,
 		AvgAccessBonus:  avgAccessBonus,
 		TopAccessBonus:  topAccessBonusKeys,
