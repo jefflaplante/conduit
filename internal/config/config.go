@@ -193,6 +193,11 @@ type BrainConfig struct {
 	REMGroomWithLLM      bool    `json:"rem_groom_with_llm,omitempty"`
 	REMLogPath           string  `json:"rem_log_path,omitempty"`
 
+	// Warmth-floor injection: recall appends up to WarmthInjectLimit high-warmth
+	// LTM entries that didn't match the query keywords, at the tail of results.
+	WarmthInjectFloor float64 `json:"warmth_inject_floor,omitempty"` // min warmth to qualify (default 0.7)
+	WarmthInjectLimit int     `json:"warmth_inject_limit,omitempty"` // max injected per recall (default 2; 0 disables)
+
 	// DashboardEnabled toggles the /dashboard/brain memory-graph dashboard
 	// and its backing /api/brain/graph endpoint. Off by default.
 	DashboardEnabled bool `json:"dashboard_enabled,omitempty"`
@@ -220,6 +225,8 @@ func DefaultBrainConfig() BrainConfig {
 		REMSalienceDecayRate: 0.1,
 		REMGroomWithLLM:      true,
 		REMLogPath:           "memory/rem-log",
+		WarmthInjectFloor:    0.7,
+		WarmthInjectLimit:    2,
 	}
 }
 

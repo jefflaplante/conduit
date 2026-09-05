@@ -107,6 +107,12 @@ func (g *Gateway) initBrainSubsystem(cfg *config.Config) {
 	if cfg.Brain.AccessCountCap > 0 {
 		brainOpts = append(brainOpts, brain.WithAccessCountCap(cfg.Brain.AccessCountCap))
 	}
+	if cfg.Brain.WarmthInjectFloor > 0 {
+		brainOpts = append(brainOpts, brain.WithWarmthInjectFloor(cfg.Brain.WarmthInjectFloor))
+	}
+	if cfg.Brain.WarmthInjectLimit != 0 {
+		brainOpts = append(brainOpts, brain.WithWarmthInjectLimit(cfg.Brain.WarmthInjectLimit))
+	}
 	brainSvc, brainErr := brain.New(brainDBPath, brainOpts...)
 	if brainErr != nil {
 		g.logger.Warn("failed to initialize brain, continuing without", "error", brainErr)
