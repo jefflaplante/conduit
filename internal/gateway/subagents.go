@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"conduit/internal/ai"
 	"conduit/internal/brain"
 	"conduit/internal/channels"
 	"conduit/internal/protocol"
@@ -95,6 +96,29 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 				wakeErr := g.sendToSessionWakeWithSource(context.Background(), parentSessionKey, "", errorMsg, types.WakeSourceSubAgentFailed)
 				if wakeErr != nil {
 					log.Printf("[SubAgent] Failed to wake parent session %s on error: %v", parentSessionKey, wakeErr)
+				}
+			}
+			return
+		}
+
+		// bd-1k3o: a "successful" chain whose final answer is the empty-guard
+		// fallback is a silent death, not a completion — the model returned
+		// raw-empty twice and the guard substituted local text (2026-09-04
+		// RCA: sub-agent 6eb4bfe1 logged "Completed" while delivering the
+		// fallback). Route it through the error path so the parent gets
+		// WakeSourceSubAgentFailed instead of a fake result.
+		if ai.IsEmptyResponseFallback(response.GetContent()) {
+			err := fmt.Errorf("model returned empty responses (empty-guard fallback delivered); task not completed")
+			log.Printf("[SubAgent] Degenerate final (empty-guard fallback) on %s — routing to failure: %v", session.Key, err)
+			errorMsg := fmt.Sprintf("Error: %v", err)
+			_, _ = g.sessions.AddMessage(session.Key, "assistant", errorMsg, nil)
+			if announce && parentChannelID != "" && parentUserID != "" {
+				g.announceToParent(parentChannelID, parentUserID, fmt.Sprintf("❌ Sub-agent failed: %v", err))
+			}
+			if parentSessionKey != "" {
+				wakeErr := g.sendToSessionWakeWithSource(context.Background(), parentSessionKey, "", errorMsg, types.WakeSourceSubAgentFailed)
+				if wakeErr != nil {
+					log.Printf("[SubAgent] Failed to wake parent session %s on degenerate final: %v", parentSessionKey, wakeErr)
 				}
 			}
 			return

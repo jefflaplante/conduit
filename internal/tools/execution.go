@@ -611,6 +611,50 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		finalResp.Usage.PromptTokens, finalResp.Usage.CompletionTokens,
 		len(finalResp.Content), len(finalResp.ToolCalls))
 
+	// bd-1k3o: length-truncation guard. finish_reason=="length" means the model
+	// hit max_tokens mid-generation — the content is a severed fragment, not a
+	// complete answer (2026-09-04 RCA: sub-agent 1beda0f4's deliverable report
+	// was cut off mid-word at 4000 tokens and discarded as "the answer").
+	// Auto-continue: append the fragment as an assistant turn, then a user
+	// "continue" turn, and keep generating. Max 2 continues per chain node;
+	// fragments are concatenated into the final content.
+	const maxAutoContinues = 2
+	var fragments []string
+	for cont := 0; finalResp.FinishReason == "length" && len(finalResp.ToolCalls) == 0 && cont < maxAutoContinues; cont++ {
+		log.Printf("[ExecutionEngine] Length-truncated final (max_tokens hit) at depth %d — auto-continue %d/%d (bd-1k3o)",
+			depth, cont+1, maxAutoContinues)
+		fragments = append(fragments, finalResp.Content)
+		finalReq.Messages = append(finalReq.Messages,
+			ai.ChatMessage{Role: "assistant", Content: finalResp.Content},
+			ai.ChatMessage{Role: "user", Content: "continue"},
+		)
+		rtContStart := time.Now()
+		contResp, contErr := provider.GenerateResponse(ctx, finalReq)
+		if contErr != nil {
+			// Continuation failed — deliver the fragments we have rather than
+			// failing the whole chain (the truncated text is still progress).
+			log.Printf("[ExecutionEngine] Auto-continue failed at depth %d: %v — delivering truncated content (bd-1k3o)", depth, contErr)
+			break
+		}
+		contResp, err = ai.GuardEmptyResponse(ctx, provider, finalReq, contResp, contErr, fmt.Sprintf("depth%d-continue%d", depth, cont))
+		if err != nil {
+			break
+		}
+		log.Printf("[RoundTrip] phase=post-tools-continue depth=%d continue=%d model=%q duration=%s prompt_tokens=%d completion_tokens=%d content_bytes=%d tool_calls=%d finish_reason=%q",
+			depth, cont+1, finalReq.Model, time.Since(rtContStart).Round(time.Millisecond),
+			contResp.Usage.PromptTokens, contResp.Usage.CompletionTokens,
+			len(contResp.Content), len(contResp.ToolCalls), contResp.FinishReason)
+		finalResp = contResp
+	}
+	if len(fragments) > 0 {
+		fragments = append(fragments, finalResp.Content)
+		finalResp.Content = strings.Join(fragments, "")
+	}
+	if finalResp.FinishReason == "length" && len(finalResp.ToolCalls) == 0 {
+		log.Printf("[ExecutionEngine] Final still length-truncated after %d continues at depth %d — delivering with marker (bd-1k3o)", maxAutoContinues, depth)
+		finalResp.Content += "\n\n_(truncated at max_tokens — ask me to continue if this cuts off)_"
+	}
+
 	// Check for additional tool calls (tool chaining)
 	if len(finalResp.ToolCalls) > 0 {
 		// Check for circular tool call patterns before recursing
