@@ -111,6 +111,14 @@ func (g *Gateway) wakeSession(sessionKey string) {
 
 	responseContent := response.GetContent()
 
+	// Persist usage to session context (bd-f48o): wake-path chains ran full
+	// LLM turns but never recorded token usage, so SessionStatus showed 0
+	// tokens and observers concluded the session was dead when it wasn't.
+	if usage := response.GetUsage(); usage != nil {
+		batch := recordTokenUsage(session, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+		_ = g.sessions.SetSessionContextBatch(sessionKey, batch)
+	}
+
 	// Persist AI response to session history.
 	if _, addErr := g.sessions.AddMessage(sessionKey, "assistant", responseContent, nil); addErr != nil {
 		g.logger.Warn("session wakeup: failed to save AI response", "session_key", sessionKey, "error", addErr)
