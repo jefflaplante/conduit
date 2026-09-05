@@ -1300,21 +1300,20 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 
 		responseContent := convResponse.GetContent()
 
-		// Persist usage to session context for /context command and context-budget gauge (conduit-2v0t)
+		// Token usage recording is router-level since bd-27hs —
+		// GenerateResponseWithTools/Streaming records last_* and cumulative
+		// totals inside the turn lock. This block now only handles path-local
+		// concerns: proactive context-window warnings (and their dedup keys).
 		if usage := convResponse.GetUsage(); usage != nil {
-			batch := recordTokenUsage(session, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
-
-			// Proactive context window warning
 			if warning := contextWarningIfNeeded(session, usage.PromptTokens, modelOverride); warning.Text != "" {
 				responseContent += warning.Text
-				batch[warning.Key] = "true"
+				batch := map[string]string{warning.Key: "true"}
 				// SPAR: trigger reflection on next message when context budget >= 80%
 				if warning.Key == "context_warned_80" && g.sessionReflector != nil {
 					batch["reflection_context_budget_triggered"] = "true"
 				}
+				_ = g.sessions.SetSessionContextBatch(session.Key, batch)
 			}
-
-			_ = g.sessions.SetSessionContextBatch(session.Key, batch)
 		}
 
 		// Check for silent response tokens (NO_REPLY, HEARTBEAT_OK)

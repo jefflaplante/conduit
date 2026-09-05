@@ -59,14 +59,9 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 		return fmt.Errorf("AI execution failed: %w", err)
 	}
 
-	// Persist usage to session context so SessionStatus reports real token
-	// counts (bd-f48o: cron sessions previously looked "silently dead" —
-	// chains ran and billed tokens, but nothing wrote last_prompt_tokens /
-	// session_prompt_tokens_total, so every observer read 0 tokens).
-	if usage := response.GetUsage(); usage != nil {
-		batch := recordTokenUsage(session, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
-		_ = g.sessions.SetSessionContextBatch(session.Key, batch)
-	}
+	// Usage accounting is router-level since bd-27hs: GenerateResponseWithTools
+	// records last_* / session_*_tokens_total to the session store for every
+	// path. No per-path recording here.
 
 	// If there's a target, send the result there.
 	if job.Target != "" {

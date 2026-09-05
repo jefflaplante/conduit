@@ -869,15 +869,38 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 		}
 		// Post-process for silent response patterns (HEARTBEAT_OK, NO_REPLY)
 		// This applies the same logic as ProcessResponse but after tool execution
-		return r.processSilentPatterns(convResponse), nil
+		final := r.processSilentPatterns(convResponse)
+		r.recordUsageToStore(session, final)
+		return final, nil
 	}
 
 	// No tools called or no execution engine - return simple response
-	return &SimpleConversationResponse{
+	simple := &SimpleConversationResponse{
 		Content: response.Content,
 		Usage:   &response.Usage,
 		Steps:   1,
-	}, nil
+	}
+	r.recordUsageToStore(session, simple)
+	return simple, nil
+}
+
+// recordUsageToStore persists token usage from a completed generation to the
+// session store (bd-27hs). Called inside the per-session turn lock, after the
+// chain has succeeded, so every path that generates a tool-using response —
+// channel, direct, cron, wake, sub-agent, WS, HTTP — records usage uniformly
+// without per-path glue. Best-effort: failures are logged, never fatal, and a
+// nil store/session/usage is a no-op.
+func (r *Router) recordUsageToStore(session *sessions.Session, response ConversationResponse) {
+	if r.sessionStore == nil || session == nil || response == nil {
+		return
+	}
+	usage := response.GetUsage()
+	if usage == nil {
+		return
+	}
+	if err := r.sessionStore.RecordTokenUsage(session.Key, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens); err != nil {
+		log.Printf("[Router] token usage recording failed for session %s: %v", session.Key, err)
+	}
 }
 
 // getConversationalProgress returns a friendly status message for tool calls
@@ -1083,15 +1106,19 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 			return nil, chainErr
 		}
 		// Post-process for silent response patterns (HEARTBEAT_OK, NO_REPLY)
-		return r.processSilentPatterns(convResponse), nil
+		final := r.processSilentPatterns(convResponse)
+		r.recordUsageToStore(session, final)
+		return final, nil
 	}
 
 	// No tool calls - return simple streaming response
-	return &SimpleConversationResponse{
+	simple := &SimpleConversationResponse{
 		Content: response.Content,
 		Usage:   &response.Usage,
 		Steps:   1,
-	}, nil
+	}
+	r.recordUsageToStore(session, simple)
+	return simple, nil
 }
 
 // SimpleConversationResponse implements ConversationResponse for non-tool responses

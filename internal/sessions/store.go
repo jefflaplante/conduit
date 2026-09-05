@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -570,6 +571,67 @@ func (s *Store) GetSessionContext(sessionKey, key string) (string, error) {
 		return "", err
 	}
 	return session.Context[key], nil
+}
+
+// Context keys written by RecordTokenUsage. These power SessionStatus's
+// context-budget gauge (last_* snapshot keys) and cumulative session totals.
+// Declared here so the sessions package is the single source of truth for the
+// key names; the gateway package mirrors them via exported constants.
+const (
+	CtxKeyLastPromptTokens         = "last_prompt_tokens"
+	CtxKeyLastCompletionTokens     = "last_completion_tokens"
+	CtxKeyLastTotalTokens          = "last_total_tokens"
+	CtxKeySessionPromptTokensTotal = "session_prompt_tokens_total"
+	CtxKeySessionCompletionTokens  = "session_completion_tokens_total"
+	CtxKeyContextBudgetUpdatedAt   = "context_budget_updated_at"
+)
+
+// RecordTokenUsage persists a token-usage snapshot to the session's context:
+// the last_* keys reflect the most recent generation, the session_*_tokens_total
+// keys accumulate across generations, and context_budget_updated_at is an
+// RFC3339 timestamp. It reads the current cumulative totals from the store
+// (single round trip) and merges everything in one batched context write.
+//
+// This is the router-level accounting path (bd-27hs): every generation entry
+// point records through here, so usage is uniform across channel, direct,
+// cron, wake, sub-agent, WS and HTTP callers. Zero-token usage is a no-op.
+// Best-effort: errors are returned for the caller to log/ignore.
+func (s *Store) RecordTokenUsage(sessionKey string, promptTokens, completionTokens, totalTokens int) error {
+	if sessionKey == "" {
+		return nil
+	}
+	if promptTokens == 0 && completionTokens == 0 {
+		return nil
+	}
+	if totalTokens == 0 {
+		totalTokens = promptTokens + completionTokens
+	}
+
+	// Read current context to pick up the running cumulative totals.
+	session, err := s.GetSession(sessionKey)
+	if err != nil {
+		return err
+	}
+	prevPrompt := atoiContext(session.Context, CtxKeySessionPromptTokensTotal)
+	prevCompletion := atoiContext(session.Context, CtxKeySessionCompletionTokens)
+
+	return s.SetSessionContextBatch(sessionKey, map[string]string{
+		CtxKeyLastPromptTokens:         strconv.Itoa(promptTokens),
+		CtxKeyLastCompletionTokens:     strconv.Itoa(completionTokens),
+		CtxKeyLastTotalTokens:          strconv.Itoa(totalTokens),
+		CtxKeySessionPromptTokensTotal: strconv.Itoa(prevPrompt + promptTokens),
+		CtxKeySessionCompletionTokens:  strconv.Itoa(prevCompletion + completionTokens),
+		CtxKeyContextBudgetUpdatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+	})
+}
+
+// atoiContext parses a context value as an int, returning 0 on absence/error.
+func atoiContext(ctx map[string]string, key string) int {
+	v, err := strconv.Atoi(ctx[key])
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 // Session State Tracking Methods
