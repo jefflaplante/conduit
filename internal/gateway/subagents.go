@@ -126,13 +126,8 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 
 		log.Printf("[SubAgent] Completed: %s", session.Key)
 
-		// Persist usage to session context (bd-f48o): sub-agent chains ran
-		// full LLM turns but never recorded token usage, so SessionStatus
-		// showed 0 tokens and verification had to fall back to journal lines.
-		if usage := response.GetUsage(); usage != nil {
-			batch := recordTokenUsage(session, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
-			_ = g.sessions.SetSessionContextBatch(session.Key, batch)
-		}
+		// Usage accounting is router-level since bd-27hs (GenerateResponseWithTools
+		// records it inside the turn lock); sub-agent path no longer records here.
 
 		// Store the result
 		_, _ = g.sessions.AddMessage(session.Key, "assistant", response.GetContent(), nil)

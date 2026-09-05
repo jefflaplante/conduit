@@ -285,13 +285,14 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 			sessionCost = prevCost + requestCost
 			prevCount, _ := strconv.Atoi(session.Context["session_request_count"])
 
-			// Batch all context updates into a single write
+			// Token usage recording is router-level since bd-27hs —
+			// GenerateResponseStreaming records last_* and cumulative totals
+			// inside the turn lock. This block now only handles path-local
+			// concerns: context warning, session cost, request count.
+
 			batch := map[string]string{
-				"last_prompt_tokens":     strconv.Itoa(promptTokens),
-				"last_completion_tokens": strconv.Itoa(completionTokens),
-				"last_total_tokens":      strconv.Itoa(totalTokens),
-				"session_total_cost":     fmt.Sprintf("%.6f", sessionCost),
-				"session_request_count":  strconv.Itoa(prevCount + 1),
+				"session_total_cost":    fmt.Sprintf("%.6f", sessionCost),
+				"session_request_count": strconv.Itoa(prevCount + 1),
 			}
 			if warning.Text != "" {
 				batch[warning.Key] = "true"

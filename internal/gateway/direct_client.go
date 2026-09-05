@@ -296,11 +296,15 @@ func (c *DirectClient) streamChatWithID(session *sessions.Session, text, request
 			sessionCost = prevCost + requestCost
 			prevCount, _ := strconv.Atoi(session.Context["session_request_count"])
 
-			// Batch all context updates into a single write. recordTokenUsage handles
-			// last_* + cumulative session_*_tokens_total for the context-budget gauge (conduit-2v0t).
-			batch := recordTokenUsage(session, promptTokens, completionTokens, totalTokens)
-			batch["session_total_cost"] = fmt.Sprintf("%.6f", sessionCost)
-			batch["session_request_count"] = strconv.Itoa(prevCount + 1)
+			// Token usage recording is router-level since bd-27hs —
+			// GenerateResponseStreaming records last_* and cumulative totals
+			// inside the turn lock. This block now only handles path-local
+			// concerns: context warning, session cost, request count.
+
+			batch := map[string]string{
+				"session_total_cost":    fmt.Sprintf("%.6f", sessionCost),
+				"session_request_count": strconv.Itoa(prevCount + 1),
+			}
 			if warning.Text != "" {
 				batch[warning.Key] = "true"
 			}
