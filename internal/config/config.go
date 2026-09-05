@@ -15,38 +15,38 @@ import (
 
 // Config represents the gateway configuration
 type Config struct {
-	Port           int                  `json:"port"`
-	Timezone       string               `json:"timezone,omitempty"`
-	DataDir        string               `json:"data_dir,omitempty" cfg:"env,path"`
-	SecretsFile    string               `json:"secrets_file,omitempty" cfg:"env,path"`
-	AllowedOrigins []string             `json:"allowed_origins,omitempty"` // WebSocket allowed origins (empty = same-origin + localhost only)
-	WebSocket      WebSocketConfig      `json:"websocket,omitempty"`
-	Database       DatabaseConfig       `json:"database"`
-	Search         SearchDatabaseConfig `json:"search,omitempty"`
-	AI             AIConfig             `json:"ai"`
-	Agent          AgentConfig          `json:"agent"`
-	Workspace      WorkspaceConfig      `json:"workspace,omitempty"`
-	Skills         skills.SkillsConfig  `json:"skills,omitempty"`
-	Tools          ToolsConfig          `json:"tools"`
-	Channels       []ChannelConfig      `json:"channels"`
-	Debug          DebugConfig          `json:"debug,omitempty"`
-	RateLimiting   RateLimitingConfig   `json:"rateLimiting,omitempty"`
-	Diagnostics    DiagnosticsConfig    `json:"diagnostics,omitempty"`
-	Heartbeat      HeartbeatConfig      `json:"heartbeat,omitempty"`
-	AgentHeartbeat AgentHeartbeatConfig `json:"agent_heartbeat,omitempty"`
-	SSH            SSHServerConfig      `json:"ssh,omitempty"`
-	TUI            TUIConfig            `json:"tui,omitempty"`
-	Vector         VectorConfig         `json:"vector,omitempty"`
-	RemoteSSH      RemoteSSHConfig      `json:"remote_ssh,omitempty"`
-	MQTT           MQTTConfig           `json:"mqtt,omitempty"`
-	Kubernetes     KubernetesConfig     `json:"kubernetes,omitempty"`
-	PagerDuty      PagerDutyConfig      `json:"pagerduty,omitempty"`
-	Datadog        DatadogConfig        `json:"datadog,omitempty"`
-	Auth           AuthTokenConfig      `json:"auth,omitempty"`
-	Logging        LoggingConfig        `json:"logging,omitempty"`
-	Brain          BrainConfig                `json:"brain,omitempty"`
+	Port           int                          `json:"port"`
+	Timezone       string                       `json:"timezone,omitempty"`
+	DataDir        string                       `json:"data_dir,omitempty" cfg:"env,path"`
+	SecretsFile    string                       `json:"secrets_file,omitempty" cfg:"env,path"`
+	AllowedOrigins []string                     `json:"allowed_origins,omitempty"` // WebSocket allowed origins (empty = same-origin + localhost only)
+	WebSocket      WebSocketConfig              `json:"websocket,omitempty"`
+	Database       DatabaseConfig               `json:"database"`
+	Search         SearchDatabaseConfig         `json:"search,omitempty"`
+	AI             AIConfig                     `json:"ai"`
+	Agent          AgentConfig                  `json:"agent"`
+	Workspace      WorkspaceConfig              `json:"workspace,omitempty"`
+	Skills         skills.SkillsConfig          `json:"skills,omitempty"`
+	Tools          ToolsConfig                  `json:"tools"`
+	Channels       []ChannelConfig              `json:"channels"`
+	Debug          DebugConfig                  `json:"debug,omitempty"`
+	RateLimiting   RateLimitingConfig           `json:"rateLimiting,omitempty"`
+	Diagnostics    DiagnosticsConfig            `json:"diagnostics,omitempty"`
+	Heartbeat      HeartbeatConfig              `json:"heartbeat,omitempty"`
+	AgentHeartbeat AgentHeartbeatConfig         `json:"agent_heartbeat,omitempty"`
+	SSH            SSHServerConfig              `json:"ssh,omitempty"`
+	TUI            TUIConfig                    `json:"tui,omitempty"`
+	Vector         VectorConfig                 `json:"vector,omitempty"`
+	RemoteSSH      RemoteSSHConfig              `json:"remote_ssh,omitempty"`
+	MQTT           MQTTConfig                   `json:"mqtt,omitempty"`
+	Kubernetes     KubernetesConfig             `json:"kubernetes,omitempty"`
+	PagerDuty      PagerDutyConfig              `json:"pagerduty,omitempty"`
+	Datadog        DatadogConfig                `json:"datadog,omitempty"`
+	Auth           AuthTokenConfig              `json:"auth,omitempty"`
+	Logging        LoggingConfig                `json:"logging,omitempty"`
+	Brain          BrainConfig                  `json:"brain,omitempty"`
 	Reflection     *reflection.ReflectionConfig `json:"reflection,omitempty"`
-	STT            STTConfig                  `json:"stt,omitempty"`
+	STT            STTConfig                    `json:"stt,omitempty"`
 }
 
 // AuthTokenConfig holds configuration for the token authentication system
@@ -447,13 +447,18 @@ func (s *SearchDatabaseConfig) IsEnabled() bool {
 
 // AIConfig contains AI provider settings
 type AIConfig struct {
-	DefaultProvider string               `json:"default_provider"`
-	Providers       []ProviderConfig     `json:"providers"`
-	ModelAliases    map[string]string    `json:"model_aliases,omitempty"`
-	SubagentDefaultModel string          `json:"subagent_default_model,omitempty"` // Default model for sub-agents spawned without an explicit model (overrides gateway default when set)
-	SmartRouting    *SmartRoutingConfig  `json:"smart_routing,omitempty"`
-	Compaction      *CompactionConfig    `json:"compaction,omitempty"`
-	PromptCaching   PromptCachingConfig  `json:"prompt_caching,omitempty"`
+	DefaultProvider      string              `json:"default_provider"`
+	Providers            []ProviderConfig    `json:"providers"`
+	ModelAliases         map[string]string   `json:"model_aliases,omitempty"`
+	SubagentDefaultModel string              `json:"subagent_default_model,omitempty"` // Default model for sub-agents spawned without an explicit model (overrides gateway default when set)
+	SmartRouting         *SmartRoutingConfig `json:"smart_routing,omitempty"`
+	Compaction           *CompactionConfig   `json:"compaction,omitempty"`
+	PromptCaching        PromptCachingConfig `json:"prompt_caching,omitempty"`
+	// MaxTokens caps generated output per LLM round trip (bd-1k3o). 0 = default 4000.
+	// Long report-writing turns (e.g., sub-agent deliverables) benefit from a
+	// higher cap; the finish_reason parser now makes "length" truncation
+	// recoverable, but avoiding it outright is cheaper than continuing.
+	MaxTokens int `json:"max_tokens,omitempty"`
 }
 
 // PromptCachingConfig holds configuration for Anthropic prompt caching
@@ -524,29 +529,29 @@ func DefaultModelAliases() map[string]string {
 
 // ProviderConfig contains settings for a specific AI provider
 type ProviderConfig struct {
-	Name          string            `json:"name"`
-	Type          string            `json:"type"`               // "anthropic", "openai", "ollama", "claude-code", etc.
-	APIKey        string            `json:"api_key,omitempty" cfg:"env"`  // Legacy API key
-	BaseURL       string            `json:"base_url,omitempty" cfg:"env"` // Custom API base URL (for local/compatible servers)
-	Model         string            `json:"model"`
-	Auth          *AuthConfig       `json:"auth,omitempty"`           // OAuth configuration
-	ContextWindow int               `json:"context_window,omitempty"` // Override context window size (tokens); 0 = auto-detect from model name
-	FallbackModel string            `json:"fallback_model,omitempty"` // Fallback model for quota/auth errors (default: "z-ai/glm-5.3")
-	TimeoutSeconds int              `json:"timeout_seconds,omitempty"` // HTTP client timeout in seconds (default: 300); bd-29i
-	ClaudeCode    *ClaudeCodeConfig `json:"claude_code,omitempty"`    // Settings for type="claude-code"
+	Name           string            `json:"name"`
+	Type           string            `json:"type"`                         // "anthropic", "openai", "ollama", "claude-code", etc.
+	APIKey         string            `json:"api_key,omitempty" cfg:"env"`  // Legacy API key
+	BaseURL        string            `json:"base_url,omitempty" cfg:"env"` // Custom API base URL (for local/compatible servers)
+	Model          string            `json:"model"`
+	Auth           *AuthConfig       `json:"auth,omitempty"`            // OAuth configuration
+	ContextWindow  int               `json:"context_window,omitempty"`  // Override context window size (tokens); 0 = auto-detect from model name
+	FallbackModel  string            `json:"fallback_model,omitempty"`  // Fallback model for quota/auth errors (default: "z-ai/glm-5.3")
+	TimeoutSeconds int               `json:"timeout_seconds,omitempty"` // HTTP client timeout in seconds (default: 300); bd-29i
+	ClaudeCode     *ClaudeCodeConfig `json:"claude_code,omitempty"`     // Settings for type="claude-code"
 }
 
 // ClaudeCodeConfig holds settings for the claude-code provider type.
 // When Type is "claude-code", these fields configure how Conduit
 // shells out to the Claude Code CLI.
 type ClaudeCodeConfig struct {
-	ClaudePath     string   `json:"claude_path"`      // Path to claude binary; default: "claude"
-	MCPPort        int      `json:"mcp_port"`         // Conduit's MCP server port; default: 18790
-	AllowedTools   []string `json:"allowed_tools"`    // Claude Code native tools to enable
-	PermissionMode string   `json:"permission_mode"`  // default: "acceptEdits"
-	MaxTurns       int      `json:"max_turns"`        // default: 25
-	TimeoutSeconds int      `json:"timeout_seconds"`  // default: 300
-	WorkingDir     string   `json:"working_dir"`      // where claude -p runs
+	ClaudePath     string   `json:"claude_path"`     // Path to claude binary; default: "claude"
+	MCPPort        int      `json:"mcp_port"`        // Conduit's MCP server port; default: 18790
+	AllowedTools   []string `json:"allowed_tools"`   // Claude Code native tools to enable
+	PermissionMode string   `json:"permission_mode"` // default: "acceptEdits"
+	MaxTurns       int      `json:"max_turns"`       // default: 25
+	TimeoutSeconds int      `json:"timeout_seconds"` // default: 300
+	WorkingDir     string   `json:"working_dir"`     // where claude -p runs
 }
 
 // DefaultClaudeCodeConfig returns sensible defaults for the claude-code provider.

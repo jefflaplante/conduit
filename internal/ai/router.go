@@ -58,6 +58,23 @@ type Router struct {
 	// same session (e.g., a normal user message and an inter-session wake
 	// firing at the same time). Keys are session.Key; values are *sync.Mutex.
 	turnLocks sync.Map
+
+	// maxTokensForChain caps generated output per round trip (bd-1k3o).
+	// 0 = default 4000. Configurable via ai.max_tokens for report-heavy
+	// workloads where 4000 truncates deliverables mid-sentence.
+	maxTokensForChain int
+}
+
+// defaultChainMaxTokens is the fallback per-round-trip output cap.
+const defaultChainMaxTokens = 4000
+
+// chainMaxTokens returns the configured per-round-trip output cap, or the
+// default when unset (bd-1k3o).
+func (r *Router) chainMaxTokens() int {
+	if r.maxTokensForChain > 0 {
+		return r.maxTokensForChain
+	}
+	return defaultChainMaxTokens
 }
 
 // lockSession acquires the per-session turn lock and returns an unlock function.
@@ -136,6 +153,13 @@ type GenerateResponse struct {
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	Usage     Usage      `json:"usage,omitempty"`
 	Partial   bool       `json:"partial,omitempty"` // True when response is incomplete due to mid-stream error
+	// FinishReason is the provider-reported stop condition for the generation:
+	// "stop" (natural end), "length" (hit max_tokens mid-generation — the
+	// content is truncated, NOT a complete answer), "tool_calls" (model wants
+	// tools), "content_filter". Empty when the provider did not report one.
+	// bd-1k3o: parsed from OpenAI-compatible responses so the tool loop can
+	// detect length-truncated finals instead of silently accepting them.
+	FinishReason string `json:"finish_reason,omitempty"`
 }
 
 // ChatMessage represents a message in a conversation
@@ -236,11 +260,12 @@ func ContextWindowForModel(model string) int {
 // NewRouter creates a new AI router
 func NewRouter(cfg config.AIConfig, agentSystem AgentSystem) (*Router, error) {
 	router := &Router{
-		providers:    make(map[string]Provider),
-		providerMeta: make(map[string]ProviderMeta),
-		default_:     cfg.DefaultProvider,
-		agentSystem:  agentSystem,
-		usageTracker: NewUsageTracker(),
+		providers:         make(map[string]Provider),
+		providerMeta:      make(map[string]ProviderMeta),
+		default_:          cfg.DefaultProvider,
+		agentSystem:       agentSystem,
+		usageTracker:      NewUsageTracker(),
+		maxTokensForChain: cfg.MaxTokens,
 	}
 
 	return router, router.initializeProviders(cfg)
@@ -249,12 +274,13 @@ func NewRouter(cfg config.AIConfig, agentSystem AgentSystem) (*Router, error) {
 // NewRouterWithExecution creates a new AI router with tool execution
 func NewRouterWithExecution(cfg config.AIConfig, agentSystem AgentSystem, executionEngine ExecutionEngine) (*Router, error) {
 	router := &Router{
-		providers:       make(map[string]Provider),
-		providerMeta:    make(map[string]ProviderMeta),
-		default_:        cfg.DefaultProvider,
-		agentSystem:     agentSystem,
-		executionEngine: executionEngine,
-		usageTracker:    NewUsageTracker(),
+		providers:         make(map[string]Provider),
+		providerMeta:      make(map[string]ProviderMeta),
+		default_:          cfg.DefaultProvider,
+		agentSystem:       agentSystem,
+		executionEngine:   executionEngine,
+		usageTracker:      NewUsageTracker(),
+		maxTokensForChain: cfg.MaxTokens,
 	}
 
 	return router, router.initializeProviders(cfg)
@@ -561,7 +587,7 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 	req := &GenerateRequest{
 		Messages:  messages,
 		Tools:     tools,
-		MaxTokens: 4000,
+		MaxTokens: r.chainMaxTokens(),
 	}
 	trimRequestToFitContext(req, r.contextWindowForProvider(providerName))
 
@@ -733,7 +759,7 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 		Messages:  messages,
 		Model:     modelOverride,
 		Tools:     tools,
-		MaxTokens: 4000,
+		MaxTokens: r.chainMaxTokens(),
 	}
 	trimRequestToFitContext(req, r.contextWindowForProvider(providerName))
 
@@ -976,7 +1002,7 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		Messages:  messages,
 		Model:     modelOverride,
 		Tools:     tools,
-		MaxTokens: 4000,
+		MaxTokens: r.chainMaxTokens(),
 	}
 	trimRequestToFitContext(req, contextWindow)
 

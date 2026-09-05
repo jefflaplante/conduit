@@ -190,13 +190,14 @@ func (o *OpenAIProvider) GenerateResponse(ctx context.Context, req *GenerateRequ
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	content, toolCalls := o.parseOpenAIContent(openaiResp)
+	content, toolCalls, finishReason := o.parseOpenAIContent(openaiResp)
 	usage := o.parseOpenAIUsage(openaiResp)
 
 	return &GenerateResponse{
-		Content:   content,
-		ToolCalls: toolCalls,
-		Usage:     usage,
+		Content:      content,
+		ToolCalls:    toolCalls,
+		Usage:        usage,
+		FinishReason: finishReason,
 	}, nil
 }
 
@@ -312,6 +313,7 @@ func (o *OpenAIProvider) parseOpenAISSEStream(body io.Reader, onDelta StreamCall
 
 	var contentBuilder strings.Builder
 	var usage Usage
+	var finishReason string // bd-1k3o: captured from the terminal chunk's choice.finish_reason
 
 	// Tool calls are assembled incrementally by index
 	type pendingToolCall struct {
@@ -361,6 +363,12 @@ func (o *OpenAIProvider) parseOpenAISSEStream(body io.Reader, onDelta StreamCall
 		choice, ok := choices[0].(map[string]interface{})
 		if !ok {
 			continue
+		}
+
+		// bd-1k3o: finish_reason rides on the choice object (not the delta),
+		// typically on the terminal chunk before [DONE].
+		if fr, ok := choice["finish_reason"].(string); ok && fr != "" {
+			finishReason = fr
 		}
 
 		delta, ok := choice["delta"].(map[string]interface{})
@@ -438,9 +446,10 @@ func (o *OpenAIProvider) parseOpenAISSEStream(body io.Reader, onDelta StreamCall
 	}
 
 	return &GenerateResponse{
-		Content:   contentBuilder.String(),
-		ToolCalls: toolCalls,
-		Usage:     usage,
+		Content:      contentBuilder.String(),
+		ToolCalls:    toolCalls,
+		Usage:        usage,
+		FinishReason: finishReason,
 	}, nil
 }
 
@@ -572,13 +581,19 @@ func (o *OpenAIProvider) convertMessagesToOpenAI(messages []ChatMessage) []map[s
 	return result
 }
 
-// parseOpenAIContent extracts content and tool calls from OpenAI response
-func (o *OpenAIProvider) parseOpenAIContent(resp map[string]interface{}) (string, []ToolCall) {
+// parseOpenAIContent extracts content, tool calls, and finish_reason from an
+// OpenAI response. finish_reason (bd-1k3o): "length" means the generation was
+// truncated at max_tokens — callers must NOT treat such content as complete.
+func (o *OpenAIProvider) parseOpenAIContent(resp map[string]interface{}) (string, []ToolCall, string) {
 	var content string
 	var toolCalls []ToolCall
+	var finishReason string
 
 	if choices, ok := resp["choices"].([]interface{}); ok && len(choices) > 0 {
 		if choice, ok := choices[0].(map[string]interface{}); ok {
+			if fr, ok := choice["finish_reason"].(string); ok {
+				finishReason = fr
+			}
 			if message, ok := choice["message"].(map[string]interface{}); ok {
 				if text, ok := message["content"].(string); ok {
 					content = text
@@ -597,7 +612,7 @@ func (o *OpenAIProvider) parseOpenAIContent(resp map[string]interface{}) (string
 		}
 	}
 
-	return content, toolCalls
+	return content, toolCalls, finishReason
 }
 
 // parseOpenAIToolCall extracts a tool call from OpenAI tool_calls array

@@ -42,6 +42,15 @@ func EmptyResponseFallbackContent() string {
 	return emptyResponseFallback
 }
 
+// IsEmptyResponseFallback reports whether content is the locally-generated
+// empty-guard terminal fallback (bd-1k3o). Sub-agent completion paths use this
+// to route such finals to the failure/wake path: the fallback text is not a
+// model answer, and treating it as one caused silent sub-agent deaths
+// (2026-09-04 RCA — sessions "Completed" while delivering nothing of value).
+func IsEmptyResponseFallback(content string) bool {
+	return strings.TrimSpace(content) == emptyResponseFallback
+}
+
 // GuardEmptyResponse inspects a raw model response. On raw-empty it retries the
 // generation ONCE, then falls back to a user-visible terminal message. It never
 // returns an empty response: callers get content or an error, never silence.

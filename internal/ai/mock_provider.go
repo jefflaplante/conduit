@@ -16,10 +16,11 @@ type MockProvider struct {
 
 // MockResponse represents a pre-configured response for the mock provider
 type MockResponse struct {
-	Content   string
-	ToolCalls []ToolCall
-	Usage     Usage
-	Error     error
+	Content      string
+	ToolCalls    []ToolCall
+	Usage        Usage
+	Error        error
+	FinishReason string // bd-1k3o: provider-reported stop condition
 }
 
 // MockCall records information about a call to GenerateResponse
@@ -59,9 +60,10 @@ func (m *MockProvider) GenerateResponse(ctx context.Context, req *GenerateReques
 		}
 
 		return &GenerateResponse{
-			Content:   resp.Content,
-			ToolCalls: resp.ToolCalls,
-			Usage:     resp.Usage,
+			Content:      resp.Content,
+			ToolCalls:    resp.ToolCalls,
+			Usage:        resp.Usage,
+			FinishReason: resp.FinishReason,
 		}, nil
 	}
 
@@ -92,6 +94,23 @@ func (m *MockProvider) AddResponse(content string, toolCalls []ToolCall) {
 	m.responses = append(m.responses, MockResponse{
 		Content:   content,
 		ToolCalls: toolCalls,
+		Usage: Usage{
+			PromptTokens:     10,
+			CompletionTokens: 5,
+			TotalTokens:      15,
+		},
+	})
+}
+
+// AddResponseWithFinishReason adds a response carrying an explicit
+// finish_reason (bd-1k3o) — e.g. "length" for max_tokens truncation.
+func (m *MockProvider) AddResponseWithFinishReason(content string, toolCalls []ToolCall, finishReason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.responses = append(m.responses, MockResponse{
+		Content:      content,
+		ToolCalls:    toolCalls,
+		FinishReason: finishReason,
 		Usage: Usage{
 			PromptTokens:     10,
 			CompletionTokens: 5,
