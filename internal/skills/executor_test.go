@@ -82,26 +82,31 @@ print('OK')
 }
 
 // TestExecutor_SubprocessNoStdinWithoutArgs verifies the subprocess path
-// keeps legacy behavior: no stdin piped when there are no args.
+// keeps legacy behavior: no stdin piped when there are no args. Uses a
+// stdin-sensitive probe command instead of the removed echo fallback —
+// if args JSON were piped with empty args, the probe exits 1.
 func TestExecutor_SubprocessNoStdinWithoutArgs(t *testing.T) {
 	dir := t.TempDir()
+	probe := `if [ -t 0 ]; then echo NO_STDIN_OK; else data=$(cat); if [ -z "$data" ]; then echo NO_STDIN_OK; else echo "STDIN_LEAKED: $data"; exit 1; fi; fi`
 	skill := Skill{
 		Name:     "subproc-skill",
 		Location: dir,
-		Content:  "# Test skill\n",
+		Content:  "# Test skill\n```\n" + probe + "\n```\n",
 		// No scripts → subprocess method
 	}
 
 	e := NewExecutor(ExecutionConfig{TimeoutSeconds: 10})
-	result, err := e.ExecuteSkill(context.Background(), skill, "anything", map[string]interface{}{})
+	result, err := e.ExecuteSkill(context.Background(), skill, "echo", map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("ExecuteSkill error: %v", err)
 	}
 	if !result.Success {
 		t.Fatalf("subprocess failed: %s (output: %s)", result.Error, result.Output)
 	}
-	// The built command falls back to echoing the action; assert it ran.
-	if !strings.Contains(result.Output, "anything") {
-		t.Errorf("expected fallback echo containing action; got: %q", result.Output)
+	if strings.Contains(result.Output, "STDIN_LEAKED") {
+		t.Errorf("args JSON leaked to stdin with empty args: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "NO_STDIN_OK") {
+		t.Errorf("probe did not run (no command resolved?); got: %q", result.Output)
 	}
 }
