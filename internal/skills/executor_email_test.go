@@ -20,18 +20,18 @@ func emailCommand(t *testing.T, action string, args map[string]interface{}) stri
 // embedded quotes broke the generated shell command (Sep 2026 triage).
 func TestNormalizeAction_MapsHeadingDerivedNames(t *testing.T) {
 	cases := map[string]string{
-		"send_email_(as_jules)":  "send",
-		"send_email_(as_jeff)":   "send",
-		"reply_to_thread":        "send",
-		"compose_draft":          "send",
-		"organize_inbox":         "cleanup",
-		"cleanup_junk":           "cleanup",
-		"search_mail":            "search",
-		"thread_get":             "read",
-		"read_thread":            "read",
-		"list_messages":          "list",
-		"inbox_check_protocol":   "inbox_check_protocol", // no canonical keyword → unchanged
-		"weird_unknown_action":   "weird_unknown_action",
+		"send_email_(as_jules)": "send",
+		"send_email_(as_jeff)":  "send",
+		"reply_to_thread":       "send",
+		"compose_draft":         "send",
+		"organize_inbox":        "cleanup",
+		"cleanup_junk":          "cleanup",
+		"search_mail":           "search",
+		"thread_get":            "read",
+		"read_thread":           "read",
+		"list_messages":         "list",
+		"inbox_check_protocol":  "inbox_check_protocol", // no canonical keyword → unchanged
+		"weird_unknown_action":  "weird_unknown_action",
 	}
 
 	for in, want := range cases {
@@ -105,19 +105,47 @@ func TestEmailSkill_CleanupRunsJunkSweep(t *testing.T) {
 	}
 }
 
-// The final-fallback echo must shell-quote the action so embedded quotes
-// can't break the generated command.
-func TestBuildShellCommand_FallbackEchoIsQuoted(t *testing.T) {
-	// Unknown action on the email skill → buildGogCommand returns false,
-	// no content/scripts → falls to the final echo.
+// No real command exists for an unknown action on a scriptless skill.
+// The executor must fail honestly (empty command → executeSubprocess error)
+// instead of echoing "Executed action: X" and exiting 0 — the old fallback
+// faked success while doing nothing (state-skill silent-failure bug, Sep 2026).
+func TestBuildShellCommand_UnknownActionReturnsEmpty(t *testing.T) {
 	cmd := emailCommand(t, "totally'bogus'action", map[string]interface{}{})
-	if !strings.Contains(cmd, "echo 'Executed action:") {
-		t.Errorf("expected fallback echo, got:\n%s", cmd)
+	if cmd != "" {
+		t.Errorf("unknown action must return empty command (honest failure), got:\n%s", cmd)
 	}
-	if strings.Contains(cmd, "action: totally'bogus'action'") {
-		t.Errorf("fallback echo does not escape embedded quote — command would break:\n%s", cmd)
+}
+
+// Real-content skills without scripts must still resolve a command through
+// content extraction; known actions must never hit the empty return.
+func TestBuildShellCommand_EmailActionsResolveRealCommands(t *testing.T) {
+	// Argless-capable actions resolve with empty args
+	for _, action := range []string{"search", "list", "cleanup", "status"} {
+		cmd := emailCommand(t, action, map[string]interface{}{})
+		if cmd == "" {
+			t.Errorf("email action %q must resolve a real command, got empty", action)
+			continue
+		}
+		if strings.Contains(cmd, "echo 'Executed action") {
+			t.Errorf("email action %q fell through to echo fallback:\n%s", action, cmd)
+		}
 	}
-	if !strings.Contains(cmd, `'\''`) {
-		t.Errorf("expected escaped quote sequence in echo, got:\n%s", cmd)
+
+	// Arg-requiring actions resolve with required args present
+	if cmd := emailCommand(t, "read", map[string]interface{}{"message_id": "18c123"}); !strings.Contains(cmd, "gog gmail read") {
+		t.Errorf("email read with message_id must resolve gog gmail read, got:\n%s", cmd)
+	}
+	if cmd := emailCommand(t, "send", map[string]interface{}{"to": "x@y.z", "subject": "s", "body": "b"}); !strings.Contains(cmd, "gog gmail send") {
+		t.Errorf("email send with to must resolve gog gmail send, got:\n%s", cmd)
+	}
+}
+
+// Missing required args must fail honestly (empty command), not fake success.
+// Previously argless read/send hit the echo fallback and reported Success:true.
+func TestBuildShellCommand_MissingRequiredArgsReturnsEmpty(t *testing.T) {
+	for _, action := range []string{"read", "send"} {
+		if cmd := emailCommand(t, action, map[string]interface{}{}); cmd != "" {
+			t.Errorf("email action %q with missing required args must return empty (honest failure), got:\n%s", action, cmd)
+		}
 	}
 }

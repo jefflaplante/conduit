@@ -268,9 +268,12 @@ func (e *Executor) buildShellCommand(skill Skill, action string, args map[string
 		return command.String()
 	}
 
-	// Final fallback: echo the action (quoted — action names may contain quotes)
-	command.WriteString(fmt.Sprintf("echo 'Executed action: %s'\n", shellQuote(action)))
-	return command.String()
+	// No real command found. Return an empty command so executeSubprocess
+	// reports an honest failure. The previous behavior echoed
+	// "Executed action: X" and exited 0 — the executor reported Success:true
+	// while doing nothing at all (state-skill silent-failure bug, Sep 2026).
+	log.Printf("[skills] no command found for skill %q action %q — failing honestly (no echo fallback)", skill.Name, action)
+	return ""
 }
 
 // normalizeAction maps legacy heading-derived action names onto the executor's
