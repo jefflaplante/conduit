@@ -99,6 +99,20 @@ type SkillsConfig struct {
 	InlineDependencies *bool `json:"inline_dependencies,omitempty"`
 	// MaxDependencyChars caps the inline content per dependency (0 = unlimited).
 	MaxDependencyChars int `json:"max_dependency_chars,omitempty"`
+	// GenerateActionTools controls whether per-action wrapper tools
+	// (e.g. email_search, solar_current) are generated in addition to the
+	// parent skill tool (skill_email, skill_solar). Each wrapper duplicates
+	// the parent's schema in every LLM request. Legacy default: true.
+	GenerateActionTools *bool `json:"generate_action_tools,omitempty"`
+}
+
+// ActionToolsEnabled reports whether per-action wrapper tools should be
+// generated. Nil receiver or nil pointer → true (legacy behavior).
+func (c *SkillsConfig) ActionToolsEnabled() bool {
+	if c == nil || c.GenerateActionTools == nil {
+		return true
+	}
+	return *c.GenerateActionTools
 }
 
 // DependencyInlineMode reports the effective dependency inlining mode.
