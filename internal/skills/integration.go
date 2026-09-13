@@ -36,6 +36,8 @@ func NewSkillIntegratorWithConfig(executor *Executor, cfg *SkillsConfig) *SkillI
 func (i *SkillIntegrator) GenerateToolsFromSkills(skills []Skill) []SkillToolInterface {
 	var generatedTools []SkillToolInterface
 
+	actionToolsEnabled := i.config.ActionToolsEnabled()
+
 	for _, skill := range skills {
 		// Create primary skill tool
 		skillTool := &SkillTool{
@@ -46,9 +48,13 @@ func (i *SkillIntegrator) GenerateToolsFromSkills(skills []Skill) []SkillToolInt
 
 		generatedTools = append(generatedTools, skillTool)
 
-		// Create action-specific tools for common actions
-		actionTools := i.generateActionTools(skill)
-		generatedTools = append(generatedTools, actionTools...)
+		// Create action-specific tools for common actions (config-gated).
+		// Legacy default is enabled for backward compatibility; disable via
+		// skills.generate_action_tools=false to cut prompt tokens.
+		if actionToolsEnabled {
+			actionTools := i.generateActionTools(skill)
+			generatedTools = append(generatedTools, actionTools...)
+		}
 	}
 
 	log.Printf("Generated %d tools from %d skills", len(generatedTools), len(skills))
