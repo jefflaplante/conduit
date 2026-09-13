@@ -6,6 +6,24 @@ import (
 )
 
 func TestBuildRuntimeSection_UserTimezone(t *testing.T) {
+	params := &SectionParams{
+		UserTimezone: "America/Los_Angeles",
+	}
+	result := buildRuntimeSection(params, map[string]string{
+		"agent": "conduit",
+	})
+
+	// Runtime must contain static facts only. The minute-resolution timestamp
+	// moved to the trailing Time Context section (prefix-cache stability, bd-ttft).
+	if strings.Contains(result, "Current time") {
+		t.Errorf("buildRuntimeSection() must NOT contain minute-resolution timestamp (breaks provider prefix caching); got %q", result)
+	}
+	if !strings.Contains(result, "agent=conduit") {
+		t.Errorf("buildRuntimeSection() = %q, want it to contain agent=conduit", result)
+	}
+}
+
+func TestBuildTimeContextSection(t *testing.T) {
 	tests := []struct {
 		name         string
 		timezone     string
@@ -38,26 +56,27 @@ func TestBuildRuntimeSection_UserTimezone(t *testing.T) {
 			params := &SectionParams{
 				UserTimezone: tt.timezone,
 			}
-			result := buildRuntimeSection(params, map[string]string{
-				"agent": "conduit",
-			})
+			result := buildTimeContextSection(params)
 
 			if !strings.Contains(result, tt.wantContains) {
-				t.Errorf("buildRuntimeSection() = %q, want it to contain %q", result, tt.wantContains)
+				t.Errorf("buildTimeContextSection() = %q, want it to contain %q", result, tt.wantContains)
+			}
+			if !strings.Contains(result, "## Time Context") {
+				t.Errorf("buildTimeContextSection() = %q, want section header", result)
 			}
 		})
 	}
 }
 
-func TestBuildRuntimeSection_PacificTimezone(t *testing.T) {
+func TestBuildTimeContextSection_PacificTimezone(t *testing.T) {
 	params := &SectionParams{
 		UserTimezone: "America/Los_Angeles",
 	}
-	result := buildRuntimeSection(params, map[string]string{})
+	result := buildTimeContextSection(params)
 
 	// Should contain either PST or PDT
 	if !strings.Contains(result, "PST") && !strings.Contains(result, "PDT") {
-		t.Errorf("buildRuntimeSection with Pacific timezone should contain PST or PDT, got: %q", result)
+		t.Errorf("buildTimeContextSection with Pacific timezone should contain PST or PDT, got: %q", result)
 	}
 }
 
