@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"conduit/internal/ai"
@@ -51,7 +52,19 @@ func convertToolsToAIFormat(registry *tools.Registry) []ai.Tool {
 	var aiTools []ai.Tool
 
 	availableTools := registry.GetAvailableTools()
-	for _, tool := range availableTools {
+
+	// Sort tool names for deterministic ordering. GetAvailableTools returns
+	// a Go map whose iteration order is randomized per call; without this,
+	// the tools array reshuffles every request and invalidates provider
+	// prompt caches (the cached prefix includes the tools block).
+	names := make([]string, 0, len(availableTools))
+	for name := range availableTools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		tool := availableTools[name]
 		description := tool.Description()
 		params := tool.Parameters()
 
