@@ -64,6 +64,21 @@ func TestBuildFullPrompt_LargeContext(t *testing.T) {
 			t.Errorf("expected section %q in full prompt", want)
 		}
 	}
+	// The Time Context section (minute-resolution timestamp) must be the LAST
+	// section rendered so the byte-stable prefix above it stays cacheable:
+	// its header must be the last "\n## " section header in the prompt.
+	lastHeader := strings.LastIndex(prompt, "\n## ")
+	if lastHeader < 0 || !strings.HasPrefix(prompt[lastHeader+1:], "## Time Context") {
+		t.Errorf("expected Time Context to be the final section; prompt tail: %q", prompt[max(0, len(prompt)-300):])
+	}
+	// Runtime section must not carry the timestamp anymore.
+	runtimeIdx := strings.Index(prompt, "## Runtime")
+	if runtimeIdx >= 0 {
+		tail := prompt[runtimeIdx:runtimeIdx+600]
+		if strings.Contains(tail, "Current time:") {
+			t.Errorf("Runtime section still contains minute-resolution timestamp near offset %d (breaks prefix caching)", runtimeIdx)
+		}
+	}
 }
 
 func TestBuildFullPrompt_SmallContext(t *testing.T) {

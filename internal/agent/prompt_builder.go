@@ -420,6 +420,13 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		{name: "Reactions", priority: 4, build: func() string { return buildReactionsSection(params) }},
 		{name: "Conduit CLI", priority: 4, build: func() string { return buildConduitCLISection(params.IsMinimal) }},
 		{name: "Gateway Actions", priority: 4, build: func() string { return buildSelfUpdateSection(params) }},
+		// P4 (LAST) — Time Context: registered last so it renders at the very end
+		// of the system prompt. The minute-resolution timestamp would otherwise
+		// invalidate the provider's prefix cache for the entire prompt on every
+		// call. Everything above must stay byte-stable between requests.
+		{name: "Time Context", priority: 4, build: func() string {
+			return buildTimeContextSection(params)
+		}},
 	}
 
 	// Stable sort by priority (preserves order within same priority).

@@ -429,7 +429,9 @@ func buildModelAliasesSection(params *SectionParams) string {
 	return builder.String()
 }
 
-// buildRuntimeSection returns runtime context
+// buildRuntimeSection returns runtime context. Static facts only — the
+// minute-resolution timestamp lives in the trailing Time Context section so
+// this prefix of the prompt stays byte-stable for provider prefix caching.
 func buildRuntimeSection(params *SectionParams, runtimeInfo map[string]string) string {
 	var parts []string
 
@@ -455,6 +457,16 @@ func buildRuntimeSection(params *SectionParams, runtimeInfo map[string]string) s
 		parts = append(parts, fmt.Sprintf("channel=%s", sanitizeRuntimeValue(v)))
 	}
 
+	return fmt.Sprintf(`## Runtime
+Runtime: %s
+`, strings.Join(parts, " | "))
+}
+
+// buildTimeContextSection returns the current timestamp. This section is
+// registered LAST (P4) so it renders at the very end of the system prompt:
+// everything above it is byte-stable between calls, keeping the provider
+// prefix cache warm. Do not move it earlier in the section list.
+func buildTimeContextSection(params *SectionParams) string {
 	now := time.Now()
 	if params.UserTimezone != "" {
 		if loc, err := time.LoadLocation(params.UserTimezone); err == nil {
@@ -462,10 +474,9 @@ func buildRuntimeSection(params *SectionParams, runtimeInfo map[string]string) s
 		}
 	}
 
-	return fmt.Sprintf(`## Runtime
-Runtime: %s
+	return fmt.Sprintf(`## Time Context
 Current time: %s
-`, strings.Join(parts, " | "), now.Format("Mon 2006-01-02 15:04 MST"))
+`, now.Format("Mon 2006-01-02 15:04 MST"))
 }
 
 // buildMQTTSection returns MQTT/IoT instructions if the MQTT tool is available.
