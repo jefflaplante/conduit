@@ -1,10 +1,8 @@
 package skills
 
 import (
-	"bufio"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -107,6 +105,16 @@ func (l *SkillLoader) populateSkillFromFrontmatter(skill *Skill, data map[string
 		skill.Description = description
 	}
 
+	// Explicit action list — frontmatter "actions: [a, b]" or multi-line form.
+	// When present, this is the authoritative action enum for the skill tool.
+	if actionsData, ok := data["actions"].([]interface{}); ok {
+		for _, a := range actionsData {
+			if s, ok := a.(string); ok && strings.TrimSpace(s) != "" {
+				skill.Actions = append(skill.Actions, strings.TrimSpace(s))
+			}
+		}
+	}
+
 	// Optional Conduit metadata
 	if conduitData, ok := data["conduit"].(map[string]interface{}); ok {
 		if err := l.parseConduitMetadata(&skill.Metadata.Conduit, conduitData); err != nil {
@@ -175,69 +183,44 @@ func (l *SkillLoader) interfaceSliceToStringSlice(slice []interface{}) []string 
 	return result
 }
 
-// ExtractActionsFromContent extracts available actions from skill content
+// ExtractActionsFromContent returns the actions a skill genuinely supports.
+//
+// Historical note (Sep 2026, conduit-1jd9): this function used to regex-scrape
+// prose for action-like words, which produced garbage entries in the tool
+// schema enum — e.g. "NOT" from "do NOT trigger", "a" from "execute a",
+// lowercase header fragments from prose headings. Those fake entries were
+// advertised to the model via the tool enum while enforcing nothing (executor
+// dispatch is by script name / curated builders). Replaced with honest
+// sources only:
+//
+//  1. skill.Actions — explicit frontmatter "actions:" list (authoritative)
+//  2. skill.Scripts — declared script names are real executable actions
+//
+// Callers that need a broader set layer the curated common-actions map on
+// top (see extractAvailableActions in integration.go).
 func (l *SkillLoader) ExtractActionsFromContent(content string) []string {
-	var actions []string
-
-	// Look for action patterns in the markdown content
-	// This is a heuristic approach - skills may define actions in various ways
-
-	// Pattern 1: Look for command examples with action-like names
-	actionPattern := regexp.MustCompile(`(?i)(?:action|command|do|execute)\s*:?\s*([a-zA-Z_][a-zA-Z0-9_-]+)`)
-	matches := actionPattern.FindAllStringSubmatch(content, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			actions = append(actions, match[1])
-		}
-	}
-
-	// Pattern 2: Look for function/method definitions
-	functionPattern := regexp.MustCompile(`(?i)(?:function|def|method)\s+([a-zA-Z_][a-zA-Z0-9_-]+)`)
-	matches = functionPattern.FindAllStringSubmatch(content, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			actions = append(actions, match[1])
-		}
-	}
-
-	// Pattern 3: Look for headers that might indicate actions
-	scanner := bufio.NewScanner(strings.NewReader(content))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-
-		// Check for markdown headers that look like actions
-		if strings.HasPrefix(line, "##") {
-			headerText := strings.TrimSpace(strings.TrimPrefix(line, "##"))
-			headerText = strings.TrimPrefix(headerText, "#") // Handle ### etc
-			headerText = strings.TrimSpace(headerText)
-
-			// Simple action-like header names
-			if l.isActionLike(headerText) {
-				actions = append(actions, strings.ToLower(strings.ReplaceAll(headerText, " ", "_")))
-			}
-		}
-	}
-
-	// Remove duplicates and return
-	return l.removeDuplicates(actions)
+	// content is retained in the signature for backward compatibility with
+	// the old heuristic API, but is deliberately unused: prose scraping was
+	// the bug. See ExtractActions(skill) for the replacement.
+	return nil
 }
 
-// isActionLike determines if a header text looks like an action
-func (l *SkillLoader) isActionLike(text string) bool {
-	actionWords := []string{
-		"search", "read", "send", "list", "get", "check", "update", "create",
-		"delete", "execute", "run", "start", "stop", "status", "monitor",
-		"forecast", "current", "control", "toggle", "cleanup", "organize",
+// ExtractActions returns the honest action set for a skill: the explicit
+// frontmatter list when declared, otherwise the names of declared scripts.
+func ExtractActions(skill Skill) []string {
+	if len(skill.Actions) > 0 {
+		return append([]string(nil), skill.Actions...)
 	}
-
-	lowerText := strings.ToLower(text)
-	for _, word := range actionWords {
-		if strings.Contains(lowerText, word) {
-			return true
+	if len(skill.Scripts) > 0 {
+		names := make([]string, 0, len(skill.Scripts))
+		for _, s := range skill.Scripts {
+			if s.Name != "" {
+				names = append(names, s.Name)
+			}
 		}
+		return names
 	}
-
-	return false
+	return nil
 }
 
 // removeDuplicates removes duplicate strings from a slice

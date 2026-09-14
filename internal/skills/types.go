@@ -6,10 +6,15 @@ import (
 
 // Skill represents a discovered and parsed Conduit skill
 type Skill struct {
-	Name         string            `json:"name" yaml:"name"`
-	Description  string            `json:"description" yaml:"description"`
-	Location     string            `json:"location"`
-	Content      string            `json:"content"`
+	Name        string `json:"name" yaml:"name"`
+	Description string `json:"description" yaml:"description"`
+	Location    string `json:"location"`
+	Content     string `json:"content"`
+	// Actions is an explicit list of actions declared in frontmatter
+	// ("actions: [a, b]"). When present it is the sole source of truth for
+	// the tool schema enum — no heuristic content scraping. Empty means
+	// actions fall back to script names + the curated common-actions map.
+	Actions      []string          `json:"actions,omitempty"`
 	Scripts      []SkillScript     `json:"scripts"`
 	References   []SkillReference  `json:"references"`
 	Dependencies []SkillDependency `json:"dependencies,omitempty"`

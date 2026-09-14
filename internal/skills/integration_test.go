@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -157,4 +158,89 @@ func (m *MockSkillTool) Execute(ctx context.Context, args map[string]interface{}
 			"args": args,
 		},
 	}, nil
+}
+
+// --- conduit-1jd9 regression tests: skill description bloat + honest actions ---
+
+func mkBloatSkill(name, desc string) Skill {
+	return Skill{
+		Name:        name,
+		Description: desc,
+		Content:     "Some content with 'do NOT trigger' prose that used to be scraped.",
+	}
+}
+
+// TestBuildSkillsContext_CompactFormat pins the one-line-per-skill format:
+// no full-description duplication (the catalog already carries it) and no
+// Location lines.
+func TestBuildSkillsContext_CompactFormat(t *testing.T) {
+	integrator := &SkillIntegrator{loader: NewSkillLoader(), config: nil}
+	longDesc := strings.Repeat("Trigger words. ", 40) // ~560 chars of bloat
+	skills := []Skill{mkBloatSkill("spot", longDesc)}
+
+	out := integrator.BuildSkillsContext(skills)
+
+	if !strings.Contains(out, "skill_spot") {
+		t.Errorf("section should name the tool, got: %s", out)
+	}
+	if strings.Count(out, "Trigger words.") > 2 {
+		t.Errorf("full description must not be repeated in prompt section; got: %s", out)
+	}
+	if strings.Contains(out, "Location:") || strings.Contains(out, "**Tool:**") {
+		t.Errorf("legacy verbose format still present; got: %s", out)
+	}
+	if len(out) > 2000 {
+		t.Errorf("section for one skill should be compact; got %d chars: %s", len(out), out)
+	}
+}
+
+// TestTruncateDescription word-boundary and sentence-preference behavior.
+func TestTruncateDescription(t *testing.T) {
+	short := "Short description."
+	if got := truncateDescription(short, 160); got != short {
+		t.Errorf("short desc should pass through, got %q", got)
+	}
+
+	long := strings.Repeat("word ", 60) // 300 chars, no sentence break
+	got := truncateDescription(long, 100)
+	if len(got) > 105 || !strings.HasSuffix(got, "…") {
+		t.Errorf("expected word-boundary truncation with ellipsis, got %q (len %d)", got, len(got))
+	}
+
+	sentency := "First sentence is here. Then a long tail " + strings.Repeat("x", 200)
+	if got := truncateDescription(sentency, 160); got != "First sentence is here." {
+		t.Errorf("expected first-sentence truncation, got %q", got)
+	}
+}
+
+// TestParameters_EnumOnlyWithHonestActions pins the schema contract: enum
+// present when honest actions exist (frontmatter or scripts), omitted
+// otherwise — never populated from prose scraping.
+func TestParameters_EnumOnlyWithHonestActions(t *testing.T) {
+	executor := &Executor{}
+	loader := NewSkillLoader()
+
+	// Explicit frontmatter actions → enum present.
+	skill, err := loader.LoadSkillFromContent("---\nname: t\ndescription: d\nactions: [search, send]\n---\nbody")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	tool := &SkillTool{skill: *skill, executor: executor}
+	params := tool.Parameters()
+	props := params["properties"].(map[string]interface{})
+	actionProp := props["action"].(map[string]interface{})
+	if enum, ok := actionProp["enum"].([]string); !ok || len(enum) != 2 {
+		t.Errorf("expected enum [search send], got %v", actionProp["enum"])
+	}
+
+	// No actions, no scripts → enum omitted, tool still usable.
+	empty := &SkillTool{skill: Skill{Name: "e", Description: "d"}, executor: executor}
+	props2 := empty.Parameters()["properties"].(map[string]interface{})
+	actionProp2 := props2["action"].(map[string]interface{})
+	if _, hasEnum := actionProp2["enum"]; hasEnum {
+		t.Errorf("enum must be omitted when no honest actions exist; got %v", actionProp2["enum"])
+	}
+	if actionProp2["description"] == "" {
+		t.Error("action param must still carry a description")
+	}
 }

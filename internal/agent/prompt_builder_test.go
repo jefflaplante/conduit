@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"conduit/internal/ai"
 	"conduit/internal/config"
 	"conduit/internal/sessions"
+	"conduit/internal/skills"
 )
 
 func newTestPromptBuilder() *PromptBuilder {
@@ -74,7 +77,7 @@ func TestBuildFullPrompt_LargeContext(t *testing.T) {
 	// Runtime section must not carry the timestamp anymore.
 	runtimeIdx := strings.Index(prompt, "## Runtime")
 	if runtimeIdx >= 0 {
-		tail := prompt[runtimeIdx:runtimeIdx+600]
+		tail := prompt[runtimeIdx : runtimeIdx+600]
 		if strings.Contains(tail, "Current time:") {
 			t.Errorf("Runtime section still contains minute-resolution timestamp near offset %d (breaks prefix caching)", runtimeIdx)
 		}
@@ -712,5 +715,57 @@ func TestConduitAgent_ConcurrentSetAndBuild(t *testing.T) {
 	tools := agent.GetToolDefinitions(nil)
 	if tools == nil {
 		t.Error("GetToolDefinitions should not return nil")
+	}
+}
+
+// TestGetToolDefinitions_NoSkillDupes is the conduit-1jd9 regression test:
+// when the base tool list already contains skill_* tools (as the registry
+// provides via registerSkillTools), GetToolDefinitions must not append a
+// second copy from the skills manager. Uses a live skills manager to
+// exercise the real append path.
+func TestGetToolDefinitions_NoSkillDupes(t *testing.T) {
+	// Minimal on-disk skill so the manager has something to generate.
+	tempDir := t.TempDir()
+	skillDir := filepath.Join(tempDir, "dupe-test-skill")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	skillMD := "---\nname: dupe-test-skill\ndescription: Dupe regression fixture\n---\nbody"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	sm := skills.NewManager(skills.SkillsConfig{
+		Enabled:     true,
+		SearchPaths: []string{tempDir},
+	})
+	if err := sm.Initialize(context.Background()); err != nil {
+		t.Fatalf("manager init: %v", err)
+	}
+
+	// Base catalog mimics the registry: skill tool already present.
+	tools := []ai.Tool{
+		{Name: "Read", Description: "Read a file"},
+		{Name: "skill_dupe-test-skill", Description: "registry bridge copy"},
+	}
+	cfg := AgentConfig{
+		Name:        "test-agent",
+		Personality: "helpful",
+		Identity:    IdentityConfig{APIKeyIdentity: "You are a test agent."},
+		Capabilities: AgentCapabilities{
+			SkillsIntegration: true,
+		},
+	}
+	agent := NewConduitAgentWithIntegration(cfg, tools, nil, nil, sm, nil, nil)
+
+	defs := agent.GetToolDefinitions(nil)
+	counts := map[string]int{}
+	for _, td := range defs {
+		counts[td.Name]++
+	}
+	if counts["skill_dupe-test-skill"] != 1 {
+		t.Errorf("skill tool appears %d times in catalog; want 1 (dupes shipped to provider)", counts["skill_dupe-test-skill"])
+	}
+	if counts["Read"] != 1 {
+		t.Errorf("base tools must be untouched; Read count = %d", counts["Read"])
 	}
 }

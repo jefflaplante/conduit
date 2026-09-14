@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"path/filepath"
 	"strings"
 )
 
@@ -85,7 +84,10 @@ func (i *SkillIntegrator) generateActionTools(skill Skill) []SkillToolInterface 
 
 // extractAvailableActions gets available actions from skill content
 func (i *SkillIntegrator) extractAvailableActions(skill Skill) []string {
-	actions := i.loader.ExtractActionsFromContent(skill.Content)
+	// Honest sources only: explicit frontmatter "actions:" list first, then
+	// declared script names. Prose scraping was removed (conduit-1jd9) — it
+	// advertised garbage like "NOT" (from "do NOT trigger") in the tool enum.
+	actions := ExtractActions(skill)
 
 	// Add common actions based on skill name/type
 	commonActions := i.getCommonActionsForSkill(skill.Name)
@@ -171,15 +173,25 @@ func (st *SkillTool) Description() string {
 
 // Parameters returns the tool parameter schema
 func (st *SkillTool) Parameters() map[string]interface{} {
+	actionProp := map[string]interface{}{
+		"type": "string",
+	}
+	actions := ExtractActions(st.skill)
+	// Omit the enum entirely when no honest action list exists — a fake enum
+	// misleads the model more than an open string field guides it. Empty
+	// action lists previously advertised prose-scraped garbage (conduit-1jd9).
+	if len(actions) > 0 {
+		actionProp["description"] = fmt.Sprintf("Action to perform. Supported: %s",
+			formatActionsList(actions))
+		actionProp["enum"] = actions
+	} else {
+		actionProp["description"] = "Action to perform (free-form; see skill help)"
+	}
+
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"action": map[string]interface{}{
-				"type": "string",
-				"description": fmt.Sprintf("Action to perform. Available: %s",
-					formatActionsList(st.actions)),
-				"enum": st.actions,
-			},
+			"action": actionProp,
 			"args": map[string]interface{}{
 				"type":        "object",
 				"description": "Arguments for the skill action",
@@ -359,6 +371,28 @@ func GenerateToolAdapters(ctx context.Context, manager *Manager) ([]*SkillToolAd
 	return adapters, nil
 }
 
+// truncateDescription shortens a skill description for prompt use. Applies a
+// word-boundary-safe cutoff at maxChars (sentence break preferred), and marks
+// truncation with "…". Skills like `spot` carry 500+ char trigger lists in
+// their description; in the prompt section those belong in the skill file
+// (read on demand), not in every request.
+func truncateDescription(desc string, maxChars int) string {
+	desc = strings.TrimSpace(desc)
+	if len(desc) <= maxChars {
+		return desc
+	}
+	// Prefer the first sentence when it fits reasonably
+	if idx := strings.Index(desc, ". "); idx > 0 && idx < maxChars {
+		return desc[:idx+1]
+	}
+	cut := desc[:maxChars]
+	// Back off to the last space to avoid splitting a word
+	if i := strings.LastIndex(cut, " "); i > maxChars/2 {
+		cut = cut[:i]
+	}
+	return strings.TrimRight(cut, " ,;:") + "…"
+}
+
 // BuildSkillsContext creates contextual information about skills for agent prompts
 func (i *SkillIntegrator) BuildSkillsContext(skills []Skill) string {
 	if len(skills) == 0 {
@@ -376,9 +410,13 @@ func (i *SkillIntegrator) BuildSkillsContext(skills []Skill) string {
 		}
 
 		actions := i.extractAvailableActions(skill)
-		skillInfo := fmt.Sprintf("### %s %s\n%s\n**Tool:** `skill_%s` **Actions:** %s\n**Location:** %s\n",
-			emoji, skill.Name, skill.Description, skill.Name,
-			formatActionsList(actions), filepath.Base(skill.Location))
+		// One compact line per skill. The full description already ships in
+		// the tool catalog (skill_* tools), so repeating it here doubled the
+		// token cost of every request. Keep name + emoji + trimmed gist +
+		// actions only.
+		skillInfo := fmt.Sprintf("- `skill_%s` %s — %s (actions: %s)\n",
+			skill.Name, emoji, truncateDescription(skill.Description, 160),
+			formatActionsList(actions))
 
 		context = append(context, skillInfo)
 	}
