@@ -256,25 +256,41 @@ func TestSkillCache(t *testing.T) {
 	}
 }
 
-func TestSkillActionExtraction(t *testing.T) {
-	content := "# Email Skill\n\nThis skill manages email.\n\n## Search\nSearch for emails using queries.\n\n## Read\nRead specific email threads.\n\n## Commands\n\n### Current Status\nCheck status.\n\n### Send Email\nSend an email.\n"
+// TestSkillActionExtraction_NoProseScraping pins the conduit-1jd9 fix:
+// ExtractActionsFromContent no longer regex-scrapes prose. Prose that used to
+// yield garbage enum entries ("NOT" from "do NOT trigger", "a" from
+// "execute a") must yield nothing. Honest actions come from frontmatter
+// ("actions:") or declared scripts, via ExtractActions.
+func TestSkillActionExtraction_NoProseScraping(t *testing.T) {
+	prose := "# Email Skill\n\nThis skill manages email. Do NOT trigger for general questions. " +
+		"Use when the user wants to execute a search or read a thread.\n\n" +
+		"## Search\nSearch for emails using queries.\n\n## Read\nRead specific email threads.\n"
 
 	loader := NewSkillLoader()
-	actions := loader.ExtractActionsFromContent(content)
+	if actions := loader.ExtractActionsFromContent(prose); len(actions) != 0 {
+		t.Errorf("prose scraping must stay dead; got %v", actions)
+	}
 
-	expectedActions := []string{"search", "read"} // Only test core actions that will be extracted
+	// Frontmatter actions are the authoritative source.
+	skill, err := loader.LoadSkillFromContent("---\nname: t\ndescription: d\nactions: [search, read, send]\n---\nbody")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got := ExtractActions(*skill)
+	want := []string{"search", "read", "send"}
+	if len(got) != len(want) {
+		t.Fatalf("ExtractActions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ExtractActions[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
 
-	for _, expected := range expectedActions {
-		found := false
-		for _, action := range actions {
-			if action == expected {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("expected action %q not found in extracted actions: %v", expected, actions)
-		}
+	// Scripts are the fallback source.
+	scriptSkill := Skill{Name: "s", Scripts: []SkillScript{{Name: "daily_report", Path: "run.sh"}}}
+	if got := ExtractActions(scriptSkill); len(got) != 1 || got[0] != "daily_report" {
+		t.Errorf("script fallback: got %v, want [daily_report]", got)
 	}
 }
 

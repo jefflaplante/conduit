@@ -294,7 +294,13 @@ func (a *ConduitAgentWithIntegration) GetToolDefinitions(session *sessions.Sessi
 		}
 	}
 
-	// Add skills-generated tools if skills integration is enabled
+	// Add skills-generated tools if skills integration is enabled.
+	//
+	// Duplicate-registration fix (conduit-1jd9): the registry already
+	// registers every skill tool as a bridge (registerSkillTools), so
+	// a.tools already contains each skill_* tool. Appending freshly
+	// generated skill tools here shipped every skill tool TWICE to the
+	// provider catalog. Filter to genuinely-new names instead.
 	if sm != nil && caps.SkillsIntegration && sm.IsEnabled() {
 		ctx := context.Background()
 		var skillTools []skills.SkillToolInterface
@@ -305,7 +311,14 @@ func (a *ConduitAgentWithIntegration) GetToolDefinitions(session *sessions.Sessi
 			skillTools, err = sm.GenerateTools(ctx)
 		}
 		if err == nil {
+			seen := make(map[string]bool, len(allTools))
+			for _, t := range allTools {
+				seen[t.Name] = true
+			}
 			for _, skillTool := range skillTools {
+				if seen[skillTool.Name()] {
+					continue // already present via registry bridges
+				}
 				aiTool := ai.Tool{
 					Name:        skillTool.Name(),
 					Description: skillTool.Description(),
