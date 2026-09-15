@@ -1106,6 +1106,23 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		}
 	}
 
+	// conduit-14qr: the streaming path never went through the empty guard —
+	// only the non-streaming chain call sites wrap GuardEmptyResponse — so
+	// raw-empty provider responses (z.ai HTTP-200 empty payloads, 2026-09-14
+	// RCA) flowed straight to delivery and died as silent WARN suppressions
+	// (5 dead deliveries on Sep 14 alone). Run the same retry → cross-model
+	// failover → visible fallback machinery as the non-streaming path
+	// (conduit-18vj/1z0g). No-op for non-empty responses, errors, tool-call
+	// responses, and deliberate silence (NO_REPLY/HEARTBEAT_OK arrive here
+	// non-empty and are blanked later by silent-pattern processing).
+	// NOTE: deltas already streamed to the client before an empty FINAL are
+	// unrecoverable — a recovered retry/failover renders as a fresh message.
+	response, err = GuardEmptyResponse(ctx, provider, req, response, err, "streaming")
+	if err != nil {
+		chainErr = err
+		return nil, chainErr
+	}
+
 	// Process response through agent system (same as non-streaming path)
 	if r.agentSystem != nil {
 		processed, err := r.agentSystem.ProcessResponse(ctx, response)
