@@ -287,6 +287,12 @@ func New(cfg *config.Config) (*Gateway, error) {
 		return nil, fmt.Errorf("failed to create AI router: %w", err)
 	}
 
+	// conduit-1z0g: wire the AI router as the empty guard's cross-model
+	// failover source. z.ai returns HTTP 200 with an EMPTY payload under load
+	// (prompt_tokens=0); same-model retries die identically, so the guard's
+	// final attempt runs the provider's fallback_model on its OWN provider.
+	ai.SetEmptyFailoverRouter(aiRouter)
+
 	// Wire up session store for conversation history
 	aiRouter.SetSessionStore(sessionStore)
 

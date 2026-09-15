@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -27,6 +28,31 @@ func IsEmptyModelResponse(resp *GenerateResponse) bool {
 		return false
 	}
 	return strings.TrimSpace(resp.Content) == ""
+}
+
+// EmptyFailoverRouter is the optional hook the empty guard uses for one final
+// cross-model attempt after the same-model retry also dies (conduit-1z0g).
+//
+// Root cause (2026-09-14 RCA): z.ai returns HTTP 200 with an EMPTY completion
+// payload under load (prompt_tokens=0, duration 2-4.5min). Retrying the same
+// model seconds later hits the same sick backend and dies identically — the
+// only cure is a different provider. Implementations must honor the bd-27ud
+// rule: the fallback model goes to ITS OWN provider, and must return
+// ok=false if the resolved provider equals failedProvider (failover to the
+// same backend is not failover).
+type EmptyFailoverRouter interface {
+	ResolveEmptyFailover(failedProvider string) (fallbackModel string, provider Provider, ok bool)
+}
+
+// emptyFailoverRouter is the package-level failover source, injected once at
+// gateway startup via SetEmptyFailoverRouter. Nil = failover disabled (guard
+// degrades to conduit-18vj behavior: same-model retry, then visible fallback).
+var emptyFailoverRouter EmptyFailoverRouter
+
+// SetEmptyFailoverRouter wires the failover source. Call once at startup,
+// after the AI router is constructed.
+func SetEmptyFailoverRouter(r EmptyFailoverRouter) {
+	emptyFailoverRouter = r
 }
 
 // emptyResponseFallback is the user-visible terminal message delivered when a
@@ -87,8 +113,58 @@ func GuardEmptyResponse(
 		return retryResp, nil
 	}
 
+	// conduit-1z0g: same-model retry died too. One final cross-model attempt —
+	// z.ai empties are provider-side (HTTP 200, empty payload), so the only
+	// cure is a different backend. No failover source wired, or the resolved
+	// provider is the same one that just failed twice → visible fallback.
+	if emptyFailoverRouter != nil {
+		failoverResp, failoverErr := emptyFailoverAttempt(ctx, emptyFailoverRouter, provider, req, label)
+		if failoverErr == nil && failoverResp != nil && !IsEmptyModelResponse(failoverResp) {
+			return failoverResp, nil
+		}
+		log.Printf("[EmptyGuard] (%s) failover also empty/failed — delivering visible fallback (conduit-18vj)", label)
+		return &GenerateResponse{
+			Content: EmptyResponseFallbackContent(),
+		}, nil
+	}
+
 	log.Printf("[EmptyGuard] (%s) retry also empty/failed — delivering visible fallback (conduit-18vj)", label)
 	return &GenerateResponse{
 		Content: EmptyResponseFallbackContent(),
 	}, nil
+}
+
+// emptyFailoverAttempt resolves and executes the cross-model failover attempt
+// for the empty guard (conduit-1z0g). Returns the response and error from the
+// failover provider. Called only after the same-model retry also returned
+// empty/failed. Enforces the same-provider refusal inside the resolver's
+// contract (bd-27ud: fallback model goes to its OWN provider).
+func emptyFailoverAttempt(
+	ctx context.Context,
+	router EmptyFailoverRouter,
+	failedProvider Provider,
+	req *GenerateRequest,
+	label string,
+) (*GenerateResponse, error) {
+	fallbackModel, failoverProvider, ok := router.ResolveEmptyFailover(failedProvider.Name())
+	if !ok || failoverProvider == nil {
+		log.Printf("[EmptyGuard] (%s) no failover route for provider %q — skipping cross-model attempt (conduit-1z0g)", label, failedProvider.Name())
+		return nil, fmt.Errorf("no empty-failover route for provider %q", failedProvider.Name())
+	}
+	if failoverProvider.Name() == failedProvider.Name() {
+		log.Printf("[EmptyGuard] (%s) failover resolved to the FAILED provider %q — refusing (conduit-1z0g)", label, failedProvider.Name())
+		return nil, fmt.Errorf("empty-failover resolved to the same provider %q", failedProvider.Name())
+	}
+
+	failoverReq := *req // shallow copy — Messages/Tools shared, model differs
+	originalModel := req.Model
+	failoverReq.Model = fallbackModel
+
+	log.Printf("[EmptyGuard] (%s) failover %q -> %q on provider %q (conduit-1z0g)",
+		label, originalModel, fallbackModel, failoverProvider.Name())
+	start := time.Now()
+	resp, err := failoverProvider.GenerateResponse(ctx, &failoverReq)
+	log.Printf("[EmptyGuard] (%s) failover completed in %s: empty=%v err=%v (conduit-1z0g)",
+		label, time.Since(start).Round(time.Millisecond), IsEmptyModelResponse(resp), err)
+	return resp, err
 }
