@@ -551,11 +551,14 @@ func (r *Router) resolveFallbackRoute(failedProvider string) (string, Provider, 
 
 // ResolveEmptyFailover implements ai.EmptyFailoverRouter (conduit-1z0g):
 // resolve the provider's configured fallback_model for the empty guard's
-// cross-model attempt. Reuses the bd-6tb FallbackModel plumbing and enforces
-// the bd-27ud rule — the fallback model goes to its OWN provider, never back
-// to the one that failed. ok=false when no route exists OR the resolved
-// provider is the failed provider itself (failing over to the same backend
-// that just returned empty twice is not failover).
+// cross-model attempt. Reuses the bd-6tb FallbackModel plumbing.
+//
+// conduit-15gt: this is a PURE RESOLVER. Same-provider routes are allowed
+// here (z-ai → z-ai/glm-5.3 when glm-5.3-flash fails is meaningful failover
+// on a different inference path). The guard layer owns the same-model
+// refusal — only it knows which model actually failed (req.Model); the
+// provider's DefaultModel is NOT the failed model (sessions override it
+// per-request), so any router-level same-model check would misfire.
 func (r *Router) ResolveEmptyFailover(failedProvider string) (string, Provider, bool) {
 	// Unknown failed provider: the quota path defaults to the bd-6tb fallback,
 	// but the empty guard only ever asks about a provider that just failed —
@@ -564,15 +567,7 @@ func (r *Router) ResolveEmptyFailover(failedProvider string) (string, Provider, 
 		log.Printf("[Router] Empty-failover asked about unknown provider %q — refusing (conduit-1z0g)", failedProvider)
 		return "", nil, false
 	}
-	fallbackModel, p, ok := r.resolveFallbackRoute(failedProvider)
-	if !ok || p == nil {
-		return "", nil, false
-	}
-	if p.Name() == failedProvider {
-		log.Printf("[Router] Empty-failover model for provider %q resolves to the same provider — refusing (conduit-1z0g)", failedProvider)
-		return "", nil, false
-	}
-	return fallbackModel, p, true
+	return r.resolveFallbackRoute(failedProvider)
 }
 
 func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session, userMessage string, providerName string) (*GenerateResponse, error) {

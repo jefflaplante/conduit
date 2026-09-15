@@ -534,6 +534,17 @@ func DefaultModelAliases() map[string]string {
 	}
 }
 
+// ThinkingConfig controls extended-thinking behavior on OpenAI-compatible
+// providers that expose it (conduit-15gt). Probed live 2026-09-15 against
+// z.ai: "disabled" fully suppresses reasoning; "enabled" with budget_tokens
+// bounds the reasoning phase (z.ai honors the budget as guidance, not a hard
+// cap — observed 50 → 125 reasoning tokens; visible-output headroom is what
+// actually prevents empty responses).
+type ThinkingConfig struct {
+	Type         string `json:"type"`          // "enabled" | "disabled" (required)
+	BudgetTokens int    `json:"budget_tokens"` // with type=enabled: reasoning token budget; 0 = provider default
+}
+
 // ProviderConfig contains settings for a specific AI provider
 type ProviderConfig struct {
 	Name           string            `json:"name"`
@@ -544,6 +555,7 @@ type ProviderConfig struct {
 	Auth           *AuthConfig       `json:"auth,omitempty"`            // OAuth configuration
 	ContextWindow  int               `json:"context_window,omitempty"`  // Override context window size (tokens); 0 = auto-detect from model name
 	FallbackModel  string            `json:"fallback_model,omitempty"`  // Fallback model for quota/auth errors (default: "z-ai/glm-5.3")
+	Thinking       *ThinkingConfig   `json:"thinking,omitempty"`        // conduit-15gt: reasoning control for OpenAI-compatible providers (z.ai etc.)
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty"` // HTTP client timeout in seconds (default: 300); bd-29i
 	ClaudeCode     *ClaudeCodeConfig `json:"claude_code,omitempty"`     // Settings for type="claude-code"
 }

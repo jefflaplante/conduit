@@ -34,11 +34,12 @@ func isRetryableStatus(code int) bool {
 
 // OpenAIProvider implements the OpenAI API (and any OpenAI-compatible server)
 type OpenAIProvider struct {
-	name    string
-	apiKey  string
-	model   string
-	baseURL string
-	client  *http.Client
+	name     string
+	apiKey   string
+	model    string
+	baseURL  string
+	client   *http.Client
+	thinking *config.ThinkingConfig // conduit-15gt: optional reasoning control (z.ai etc.)
 }
 
 // NewOpenAIProvider creates a new OpenAI-compatible provider.
@@ -64,12 +65,45 @@ func NewOpenAIProvider(cfg config.ProviderConfig) (*OpenAIProvider, error) {
 	}
 
 	return &OpenAIProvider{
-		name:    cfg.Name,
-		apiKey:  cfg.APIKey,
-		model:   cfg.Model,
-		baseURL: baseURL,
-		client:  &http.Client{Timeout: time.Duration(timeoutSeconds) * time.Second},
+		name:     cfg.Name,
+		apiKey:   cfg.APIKey,
+		model:    cfg.Model,
+		baseURL:  baseURL,
+		client:   &http.Client{Timeout: time.Duration(timeoutSeconds) * time.Second},
+		thinking: cfg.Thinking, // conduit-15gt: may be nil = no thinking param sent
 	}, nil
+}
+
+// applyThinking injects the provider's configured thinking control into an
+// OpenAI-compatible request body (conduit-15gt). No-op when unconfigured —
+// the param is omitted entirely so non-thinking backends (OpenAI, local
+// servers) see an unchanged payload.
+//
+// Budget accounting (conduit-15gt, the "A+C" fix): providers on the
+// Anthropic-style convention count budget_tokens INSIDE max_tokens, so the
+// visible-answer allowance is max_tokens − budget. Left alone, long reasoning
+// drains the budget and the API returns 200 with content:"" — the exact z.ai
+// empty-response signature. With type=enabled, max_tokens is raised by
+// budget_tokens so reasoning + a complete answer both fit.
+func (o *OpenAIProvider) applyThinking(openaiReq map[string]interface{}, maxTokens int) {
+	if o.thinking == nil {
+		return
+	}
+	switch o.thinking.Type {
+	case "disabled":
+		openaiReq["thinking"] = map[string]interface{}{"type": "disabled"}
+	case "enabled":
+		thinking := map[string]interface{}{"type": "enabled"}
+		budget := 0
+		if o.thinking.BudgetTokens > 0 {
+			thinking["budget_tokens"] = o.thinking.BudgetTokens
+			budget = o.thinking.BudgetTokens
+		}
+		openaiReq["thinking"] = thinking
+		if maxTokens > 0 {
+			openaiReq["max_tokens"] = maxTokens + budget
+		}
+	}
 }
 
 // normalizeOpenAIBaseURL ensures the URL ends with /chat/completions.
@@ -111,6 +145,8 @@ func (o *OpenAIProvider) GenerateResponse(ctx context.Context, req *GenerateRequ
 		openaiReq["tools"] = o.convertToolsToOpenAI(req.Tools)
 		openaiReq["tool_choice"] = "auto"
 	}
+
+	o.applyThinking(openaiReq, req.MaxTokens) // conduit-15gt: reasoning control + budget headroom
 
 	reqBody, err := json.Marshal(openaiReq)
 	if err != nil {
@@ -222,6 +258,8 @@ func (o *OpenAIProvider) GenerateResponseStreaming(ctx context.Context, req *Gen
 		openaiReq["tools"] = o.convertToolsToOpenAI(req.Tools)
 		openaiReq["tool_choice"] = "auto"
 	}
+
+	o.applyThinking(openaiReq, req.MaxTokens) // conduit-15gt: streaming path gets the same control
 
 	reqBody, err := json.Marshal(openaiReq)
 	if err != nil {

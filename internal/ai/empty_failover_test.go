@@ -70,26 +70,36 @@ func TestResolveEmptyFailover_DifferentProvider(t *testing.T) {
 	}
 }
 
-func TestResolveEmptyFailover_SameProviderRefused(t *testing.T) {
+func TestResolveEmptyFailover_SameProviderDifferentModel_Allowed(t *testing.T) {
 	r := newFailoverTestRouter()
-	// Misconfiguration: z-ai's fallback_model resolves back to z-ai itself
-	// (the bd-6tb default has this shape). Must be refused — retrying the
-	// backend that just returned empty twice is not failover (bd-27ud).
-	r.providerMeta["z-ai"] = ProviderMeta{Name: "z-ai", Type: "openai", FallbackModel: "z-ai/glm-5.3"}
+	// conduit-15gt: z-ai fallback_model = z-ai/glm-5.3 — same provider,
+	// DIFFERENT model. The resolver is a pure resolver: it returns the
+	// route and the GUARD decides same-model refusal using req.Model.
+	// Same-backend different-inference-path is exactly the cure for
+	// model-specific failures (reasoning exhaustion).
+	r.providerMeta["z-ai"] = ProviderMeta{Name: "z-ai", Type: "openai", DefaultModel: "glm-5.3-flash", FallbackModel: "z-ai/glm-5.3"}
 
-	_, _, ok := r.ResolveEmptyFailover("z-ai")
-	if ok {
-		t.Fatal("same-provider failover must be refused")
+	model, p, ok := r.ResolveEmptyFailover("z-ai")
+	if !ok {
+		t.Fatal("same-provider different-model failover must be allowed")
+	}
+	if model != "z-ai/glm-5.3" {
+		t.Fatalf("expected fallback model z-ai/glm-5.3, got %q", model)
+	}
+	if p.Name() != "z-ai" {
+		t.Fatalf("expected z-ai provider, got %q", p.Name())
 	}
 }
 
-func TestResolveEmptyFailover_DefaultFallbackResolvesToSelf_Refused(t *testing.T) {
+func TestResolveEmptyFailover_DefaultFallbackSameProvider_Returned(t *testing.T) {
 	r := newFailoverTestRouter()
-	// No FallbackModel configured on z-ai → bd-6tb default "z-ai/glm-5.3"
-	// resolves back to z-ai itself. Must be refused, not blindly retried.
+	// No FallbackModel configured → bd-6tb default "z-ai/glm-5.3" resolves
+	// to z-ai itself. conduit-15gt: the resolver RETURNS this route; the
+	// guard refuses it when req.Model is also glm-5.3 (prefix-stripped
+	// compare). Refusal-at-guard covered by stub-based guard tests.
 	_, _, ok := r.ResolveEmptyFailover("z-ai")
-	if ok {
-		t.Fatal("default fallback that resolves to the failed provider must be refused")
+	if !ok {
+		t.Fatal("resolver must return the default route; same-model refusal belongs to the guard")
 	}
 }
 
