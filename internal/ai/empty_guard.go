@@ -137,8 +137,10 @@ func GuardEmptyResponse(
 // emptyFailoverAttempt resolves and executes the cross-model failover attempt
 // for the empty guard (conduit-1z0g). Returns the response and error from the
 // failover provider. Called only after the same-model retry also returned
-// empty/failed. Enforces the same-provider refusal inside the resolver's
-// contract (bd-27ud: fallback model goes to its OWN provider).
+// empty/failed. conduit-15gt refines the refusal to same-provider-AND-same-
+// model: a different model on the failed provider's backend is real failover
+// for model-specific failures (glm-5.3-flash reasoning exhaustion). When the
+// fallback model cannot be verified as different, we fail closed.
 func emptyFailoverAttempt(
 	ctx context.Context,
 	router EmptyFailoverRouter,
@@ -152,8 +154,16 @@ func emptyFailoverAttempt(
 		return nil, fmt.Errorf("no empty-failover route for provider %q", failedProvider.Name())
 	}
 	if failoverProvider.Name() == failedProvider.Name() {
-		log.Printf("[EmptyGuard] (%s) failover resolved to the FAILED provider %q — refusing (conduit-1z0g)", label, failedProvider.Name())
-		return nil, fmt.Errorf("empty-failover resolved to the same provider %q", failedProvider.Name())
+		// conduit-15gt: same backend is meaningful failover only when the
+		// model differs. Compare raw and prefix-stripped forms; an empty
+		// fallback model is unverifiable — fail closed.
+		strippedFallback := stripProviderPrefix(fallbackModel)
+		strippedReq := stripProviderPrefix(req.Model)
+		if fallbackModel == "" || fallbackModel == req.Model || strippedFallback == strippedReq {
+			log.Printf("[EmptyGuard] (%s) failover resolved to the SAME model %q on the failed provider %q — refusing (conduit-15gt)", label, fallbackModel, failedProvider.Name())
+			return nil, fmt.Errorf("empty-failover resolved to the same model %q on provider %q", fallbackModel, failedProvider.Name())
+		}
+		log.Printf("[EmptyGuard] (%s) same provider %q, different model %q — proceeding (conduit-15gt)", label, failedProvider.Name(), fallbackModel)
 	}
 
 	failoverReq := *req // shallow copy — Messages/Tools shared, model differs
