@@ -549,6 +549,32 @@ func (r *Router) resolveFallbackRoute(failedProvider string) (string, Provider, 
 	return fallbackModel, p, true
 }
 
+// ResolveEmptyFailover implements ai.EmptyFailoverRouter (conduit-1z0g):
+// resolve the provider's configured fallback_model for the empty guard's
+// cross-model attempt. Reuses the bd-6tb FallbackModel plumbing and enforces
+// the bd-27ud rule — the fallback model goes to its OWN provider, never back
+// to the one that failed. ok=false when no route exists OR the resolved
+// provider is the failed provider itself (failing over to the same backend
+// that just returned empty twice is not failover).
+func (r *Router) ResolveEmptyFailover(failedProvider string) (string, Provider, bool) {
+	// Unknown failed provider: the quota path defaults to the bd-6tb fallback,
+	// but the empty guard only ever asks about a provider that just failed —
+	// an unknown name means misconfiguration, so refuse rather than guess.
+	if _, metaOk := r.GetProviderMeta(failedProvider); !metaOk {
+		log.Printf("[Router] Empty-failover asked about unknown provider %q — refusing (conduit-1z0g)", failedProvider)
+		return "", nil, false
+	}
+	fallbackModel, p, ok := r.resolveFallbackRoute(failedProvider)
+	if !ok || p == nil {
+		return "", nil, false
+	}
+	if p.Name() == failedProvider {
+		log.Printf("[Router] Empty-failover model for provider %q resolves to the same provider — refusing (conduit-1z0g)", failedProvider)
+		return "", nil, false
+	}
+	return fallbackModel, p, true
+}
+
 func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session, userMessage string, providerName string) (*GenerateResponse, error) {
 	// Use default provider if none specified
 	if providerName == "" {
