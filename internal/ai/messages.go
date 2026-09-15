@@ -28,6 +28,10 @@ func (r *Router) buildChatMessages(session *sessions.Session, userMessage string
 	if err != nil {
 		return nil, err
 	}
+	// conduit-z7hu: history already contains the just-stored current user
+	// message (store-before-call); drop the trailing duplicate so the current
+	// message is not appended a second time below.
+	recentMessages = dropTrailingCurrentUserDup(recentMessages, userMessage)
 
 	for _, msg := range recentMessages {
 		// Skip messages with empty content - Anthropic API requires non-empty content
@@ -47,6 +51,26 @@ func (r *Router) buildChatMessages(session *sessions.Session, userMessage string
 	})
 
 	return messages, nil
+}
+
+// dropTrailingCurrentUserDup removes the last history message when it is an
+// exact duplicate of the current user message. conduit-z7hu: the gateway
+// stores the incoming user message BEFORE calling the AI, then passes the
+// same text as userMessage — appending it after verbatim history duplicates
+// it in the prompt. Only the very last message is considered, and only on an
+// exact role+content match, so identical texts from earlier turns (stored
+// before this turn) are preserved. Exact match on empty/whitespace means
+// nothing is dropped for a genuinely empty userMessage beyond what the
+// empty-content skip already handles.
+func dropTrailingCurrentUserDup(history []sessions.Message, userMessage string) []sessions.Message {
+	if len(history) == 0 {
+		return history
+	}
+	last := history[len(history)-1]
+	if last.Role == "user" && last.Content == userMessage {
+		return history[:len(history)-1]
+	}
+	return history
 }
 
 // buildChatMessagesWithSystemPrompt constructs messages with agent system prompt.
@@ -75,6 +99,10 @@ func (r *Router) buildChatMessagesWithSystemPrompt(ctx context.Context, session 
 	if err != nil {
 		return nil, err
 	}
+	// conduit-z7hu: history already contains the just-stored current user
+	// message (store-before-call); drop the trailing duplicate so the current
+	// message is not appended a second time below.
+	recentMessages = dropTrailingCurrentUserDup(recentMessages, userMessage)
 
 	for _, msg := range recentMessages {
 		// Skip messages with empty content - Anthropic API requires non-empty content
