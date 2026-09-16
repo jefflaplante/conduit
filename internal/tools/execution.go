@@ -134,7 +134,6 @@ type ExecutionEngine struct {
 	truncationConfig TruncationConfig     // Smart truncation configuration
 	debugBuffer      *debuglog.RingBuffer // In-memory ring buffer for debug entries (nil-safe)
 	verboseLogging   bool                 // When true, log full args to journal
-	refocusInterval  int                  // Inject goal reminder every N tool calls (0 = disabled, default 10)
 	patternTracker   *PatternTracker      // Detects circular tool call patterns
 	failureTracker   *FailureTracker      // Tracks consecutive tool failures for pivot prompts
 	afterExecHook    AfterExecutionFunc   // Optional hook for reflection capture (nil-safe)
@@ -180,7 +179,6 @@ func NewExecutionEngine(registry ToolRegistry, maxParallel int, timeout time.Dur
 		maxChains:        maxChains,
 		maxResultChars:   DefaultMaxToolResultChars,
 		truncationConfig: DefaultTruncationConfig(),
-		refocusInterval:  10, // Default: remind of goal every 10 tool calls
 		patternTracker:   NewPatternTracker(10),
 		failureTracker:   NewFailureTracker(3),
 	}
@@ -201,12 +199,6 @@ func (e *ExecutionEngine) SetMaxResultChars(maxChars int) {
 	if maxChars > 0 {
 		e.maxResultChars = maxChars
 	}
-}
-
-// SetRefocusInterval configures how often (every N tool calls) a goal reminder is injected.
-// Set to 0 to disable refocusing. Default is 10.
-func (e *ExecutionEngine) SetRefocusInterval(n int) {
-	e.refocusInterval = n
 }
 
 // SetAfterExecutionHook registers a callback that fires after every tool
@@ -509,16 +501,26 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		}, nil
 	}
 
-	// Mid-chain goal refocusing: inject a reminder of the original goal at intervals
+	// conduit-8ba7: mid-chain progress reminder. The old every-10-depth
+	// verbatim goal reminder is gone; deep chains instead get exactly one
+	// progress-aware system message at the first depth >= 20, and depth
+	// milestones 30/40/50 emit chain_depth telemetry (log only, no injection).
+	const refocusDepthThreshold = 20
 	var refocusMessage string
-	if e.refocusInterval > 0 && depth > 0 && depth%e.refocusInterval == 0 {
+	if depth >= refocusDepthThreshold && !tb.injected {
 		originalGoal := e.extractOriginalGoal(initialReq.Messages)
 		if originalGoal != "" {
 			refocusMessage = fmt.Sprintf(
-				"Reminder: Your original goal was: %s. Stay focused on completing this.",
-				originalGoal,
+				"%s%d of max %d. Original request: %s",
+				progressReminderMarker, depth, e.maxChains, originalGoal,
 			)
-			log.Printf("[ExecutionEngine] Injecting goal refocus at depth %d: %s", depth, originalGoal)
+			tb.injected = true
+			log.Printf("[ExecutionEngine] operation=refocus_inject depth=%d max=%d goal=%q (conduit-8ba7)", depth, e.maxChains, originalGoal)
+		}
+	}
+	for _, milestone := range []int{30, 40, 50} {
+		if depth == milestone {
+			log.Printf("[ExecutionEngine] operation=chain_depth milestone=%d max=%d (conduit-8ba7)", milestone, e.maxChains)
 		}
 	}
 
@@ -560,7 +562,7 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		})
 	}
 
-	// Inject goal refocus reminder if applicable
+	// Inject the one-per-chain progress reminder if applicable (conduit-8ba7)
 	if refocusMessage != "" {
 		conversationHistory = append(conversationHistory, ai.ChatMessage{
 			Role:    "system",
@@ -657,6 +659,23 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 
 	// Check for additional tool calls (tool chaining)
 	if len(finalResp.ToolCalls) > 0 {
+		// conduit-8ba7 ephemerality: the progress reminder exists for THIS
+		// round trip only. finalReq becomes the next depth's initialReq, so
+		// build a stripped copy for recursion — never mutate finalReq in
+		// place (its pointer was already recorded by mocks/telemetry, and
+		// in-place edits would rewrite already-observed history).
+		if len(refocusMessage) > 0 {
+			stripped := make([]ai.ChatMessage, 0, len(finalReq.Messages))
+			for _, m := range finalReq.Messages {
+				if m.Role == "system" && strings.Contains(m.Content, progressReminderMarker) {
+					continue
+				}
+				stripped = append(stripped, m)
+			}
+			nextReq := *finalReq
+			nextReq.Messages = stripped
+			finalReq = &nextReq
+		}
 		// Check for circular tool call patterns before recursing
 		if e.patternTracker != nil {
 			if detected, pattern := e.patternTracker.DetectCircular(); detected {
@@ -960,3 +979,8 @@ func (mm *MetricsMiddleware) GetMetrics() map[string]interface{} {
 
 	return metrics
 }
+
+// progressReminderMarker is the stable prefix of the conduit-8ba7 mid-chain
+// progress reminder. Kept as a shared const so the injection site and the
+// strip-before-recursion site can never drift apart (ephemerality guarantee).
+const progressReminderMarker = "Turn progress: depth "

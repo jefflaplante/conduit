@@ -63,6 +63,7 @@ type turnBudget struct {
 	coderToolRounds int      // rounds that included at least one coder-class tool
 	totalRounds    int
 	started        time.Time
+	injected       bool      // conduit-8ba7: progress reminder already injected this chain
 }
 
 func newTurnBudget(now time.Time) *turnBudget {
