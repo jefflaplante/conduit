@@ -45,24 +45,5 @@ func GetCacheMinTokens(model string) int {
 	return DefaultCacheMinTokens
 }
 
-// PromptCachingConfig holds configuration for prompt caching behavior
-type PromptCachingConfig struct {
-	Enabled                   bool `json:"enabled"`                     // Master switch for prompt caching
-	ExtendedTTL               bool `json:"extended_ttl"`                // Use 1-hour TTL (2x write cost) vs 5-minute default
-	CacheTools                bool `json:"cache_tools"`                 // Cache tool definitions
-	CacheSystem               bool `json:"cache_system"`                // Cache system prompt
-	CacheHistory              bool `json:"cache_history"`               // Cache conversation history
-	HistoryBreakpointInterval int  `json:"history_breakpoint_interval"` // Messages between history breakpoints
-}
-
-// DefaultPromptCachingConfig returns sensible defaults for prompt caching
-func DefaultPromptCachingConfig() PromptCachingConfig {
-	return PromptCachingConfig{
-		Enabled:                   true,
-		ExtendedTTL:               false, // 5-minute default TTL
-		CacheTools:                true,
-		CacheSystem:               true,
-		CacheHistory:              true,
-		HistoryBreakpointInterval: 15,
-	}
-}
+// conduit-3dru: PromptCachingConfig moved to internal/config (canonical home).
+// DefaultPromptCachingConfig also lives there now: config.DefaultPromptCachingConfig().

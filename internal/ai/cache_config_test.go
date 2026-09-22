@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"conduit/internal/config"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,14 +35,15 @@ func TestGetCacheMinTokens(t *testing.T) {
 }
 
 func TestDefaultPromptCachingConfig(t *testing.T) {
-	cfg := DefaultPromptCachingConfig()
+	// conduit-3dru: canonical config lives in internal/config now.
+	cfg := config.DefaultPromptCachingConfig()
 
 	assert.True(t, cfg.Enabled, "Enabled should be true by default")
 	assert.False(t, cfg.ExtendedTTL, "ExtendedTTL should be false by default")
 	assert.True(t, cfg.CacheTools, "CacheTools should be true by default")
 	assert.True(t, cfg.CacheSystem, "CacheSystem should be true by default")
 	assert.True(t, cfg.CacheHistory, "CacheHistory should be true by default")
-	assert.Equal(t, 15, cfg.HistoryBreakpointInterval, "HistoryBreakpointInterval should be 15")
+	assert.Equal(t, 6, cfg.HistoryBreakpointInterval, "HistoryBreakpointInterval should be 6 (mirrors old >5 heuristic)")
 }
 
 func TestCacheMinTokensDefaultValue(t *testing.T) {
