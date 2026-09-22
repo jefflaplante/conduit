@@ -183,7 +183,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	var workspaceContext *workspace.WorkspaceContext
 	if cfg.Workspace.ContextDir != "" {
 		logger.Info("initializing workspace context", "path", cfg.Workspace.ContextDir)
-		workspaceContext = workspace.NewWorkspaceContext(cfg.Workspace.ContextDir)
+		workspaceContext = workspace.NewWorkspaceContextWithLookback(cfg.Workspace.ContextDir, cfg.Workspace.Files.Memory.DailyLookbackDays)
 	} else {
 		logger.Warn("no workspace context directory configured")
 	}

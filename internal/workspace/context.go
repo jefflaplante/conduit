@@ -11,13 +11,18 @@ import (
 	"time"
 )
 
+// DefaultDailyLookbackDays is the default number of recent daily memory
+// files loaded into the prompt (today + yesterday).
+const DefaultDailyLookbackDays = 2
+
 // WorkspaceContext manages loading and caching of workspace context files
 type WorkspaceContext struct {
-	workspaceDir string
-	files        map[string]*ContextFile
-	security     *SecurityManager
-	cache        *FileCache
-	mu           sync.RWMutex
+	workspaceDir      string
+	dailyLookbackDays int
+	files             map[string]*ContextFile
+	security          *SecurityManager
+	cache             *FileCache
+	mu                sync.RWMutex
 }
 
 // ContextFile represents a loaded workspace context file
@@ -44,13 +49,27 @@ type SecurityContext struct {
 	SessionID   string `json:"session_id"`   // Session identifier
 }
 
-// NewWorkspaceContext creates a new workspace context manager
+// NewWorkspaceContext creates a new workspace context manager with the
+// default daily-memory lookback (today + yesterday).
 func NewWorkspaceContext(workspaceDir string) *WorkspaceContext {
+	return NewWorkspaceContextWithLookback(workspaceDir, DefaultDailyLookbackDays)
+}
+
+// NewWorkspaceContextWithLookback creates a workspace context manager with an
+// explicit daily-memory lookback. n = number of recent daily memory files to
+// include, counting today as day 1. n = 0 disables daily memory injection
+// entirely (startup routines read memory files explicitly when needed).
+// Negative values fall back to the default.
+func NewWorkspaceContextWithLookback(workspaceDir string, dailyLookbackDays int) *WorkspaceContext {
+	if dailyLookbackDays < 0 {
+		dailyLookbackDays = DefaultDailyLookbackDays
+	}
 	return &WorkspaceContext{
-		workspaceDir: workspaceDir,
-		files:        make(map[string]*ContextFile),
-		security:     NewSecurityManager(),
-		cache:        NewFileCache(5*time.Minute, 50*1024*1024), // 5min TTL, 50MB max
+		workspaceDir:      workspaceDir,
+		files:             make(map[string]*ContextFile),
+		security:          NewSecurityManager(),
+		cache:             NewFileCache(5*time.Minute, 50*1024*1024), // 5min TTL, 50MB max
+		dailyLookbackDays: dailyLookbackDays,
 	}
 }
 
@@ -135,7 +154,8 @@ func (wc *WorkspaceContext) discoverFiles() ([]ContextFile, error) {
 	return files, nil
 }
 
-// discoverMemoryFiles finds recent daily memory files
+// discoverMemoryFiles finds recent daily memory files per the configured
+// lookback window (n = days including today; 0 disables daily files).
 func (wc *WorkspaceContext) discoverMemoryFiles() ([]ContextFile, error) {
 	memoryDir := filepath.Join(wc.workspaceDir, "memory")
 
@@ -145,12 +165,14 @@ func (wc *WorkspaceContext) discoverMemoryFiles() ([]ContextFile, error) {
 	}
 
 	files := []ContextFile{}
+	if wc.dailyLookbackDays <= 0 {
+		return files, nil
+	}
 
-	// Get recent memory files (today + yesterday)
+	// Last n days, today included
 	now := time.Now()
-	targets := []time.Time{now, now.AddDate(0, 0, -1)}
-
-	for _, date := range targets {
+	for i := 0; i < wc.dailyLookbackDays; i++ {
+		date := now.AddDate(0, 0, -i)
 		filename := fmt.Sprintf("%s.md", date.Format("2006-01-02"))
 		path := filepath.Join(memoryDir, filename)
 		relativePath := filepath.Join("memory", filename)

@@ -34,7 +34,7 @@ func NewManager(config *Config) (*Manager, error) {
 		return nil, err
 	}
 
-	provider := NewWorkspaceContext(config.ContextDir)
+	provider := NewWorkspaceContextWithLookback(config.ContextDir, config.Files.Memory.DailyLookbackDays)
 
 	return &Manager{
 		provider: provider,
@@ -77,11 +77,15 @@ func (m *Manager) UpdateConfig(config *Config) error {
 		return err
 	}
 
+	oldConfig := m.config
 	m.config = config
 
-	// If workspace directory changed, need to recreate provider
-	if config.ContextDir != m.provider.GetWorkspaceDir() {
-		m.provider = NewWorkspaceContext(config.ContextDir)
+	// Recreate the provider if the directory or memory lookback changed;
+	// otherwise the old provider keeps serving the previous lookback window.
+	if oldConfig == nil ||
+		config.ContextDir != oldConfig.ContextDir ||
+		config.Files.Memory.DailyLookbackDays != oldConfig.Files.Memory.DailyLookbackDays {
+		m.provider = NewWorkspaceContextWithLookback(config.ContextDir, config.Files.Memory.DailyLookbackDays)
 	}
 
 	return nil
