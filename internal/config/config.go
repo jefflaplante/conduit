@@ -468,14 +468,29 @@ type AIConfig struct {
 	MaxTokens int `json:"max_tokens,omitempty"`
 }
 
-// PromptCachingConfig holds configuration for Anthropic prompt caching
+// PromptCachingConfig holds configuration for Anthropic prompt caching.
+// Canonical home: config package (conduit-3dru). Providers inherit the
+// ai.prompt_caching block unless a provider-level block overrides it.
 type PromptCachingConfig struct {
 	Enabled                   bool `json:"enabled"`                     // Master switch for prompt caching
-	ExtendedTTL               bool `json:"extended_ttl"`                // Use 1-hour TTL vs 5-minute default
+	ExtendedTTL               bool `json:"extended_ttl"`                // Use 1-hour TTL (2x write cost) vs 5-minute default
 	CacheTools                bool `json:"cache_tools"`                 // Cache tool definitions
 	CacheSystem               bool `json:"cache_system"`                // Cache system prompt
 	CacheHistory              bool `json:"cache_history"`               // Cache conversation history
 	HistoryBreakpointInterval int  `json:"history_breakpoint_interval"` // Messages between history breakpoints
+}
+
+// DefaultPromptCachingConfig returns sensible defaults for prompt caching.
+// Breakpoint interval 6 mirrors the historical >5 messages heuristic.
+func DefaultPromptCachingConfig() PromptCachingConfig {
+	return PromptCachingConfig{
+		Enabled:                   true,
+		ExtendedTTL:               false, // 5-minute default TTL
+		CacheTools:                true,
+		CacheSystem:               true,
+		CacheHistory:              true,
+		HistoryBreakpointInterval: 6,
+	}
 }
 
 // CompactionConfig configures automatic context compaction for long sessions.
@@ -547,17 +562,18 @@ type ThinkingConfig struct {
 
 // ProviderConfig contains settings for a specific AI provider
 type ProviderConfig struct {
-	Name           string            `json:"name"`
-	Type           string            `json:"type"`                         // "anthropic", "openai", "ollama", "claude-code", etc.
-	APIKey         string            `json:"api_key,omitempty" cfg:"env"`  // Legacy API key
-	BaseURL        string            `json:"base_url,omitempty" cfg:"env"` // Custom API base URL (for local/compatible servers)
-	Model          string            `json:"model"`
-	Auth           *AuthConfig       `json:"auth,omitempty"`            // OAuth configuration
-	ContextWindow  int               `json:"context_window,omitempty"`  // Override context window size (tokens); 0 = auto-detect from model name
-	FallbackModel  string            `json:"fallback_model,omitempty"`  // Fallback model for quota/auth errors (default: "z-ai/glm-5.3")
-	Thinking       *ThinkingConfig   `json:"thinking,omitempty"`        // conduit-15gt: reasoning control for OpenAI-compatible providers (z.ai etc.)
-	TimeoutSeconds int               `json:"timeout_seconds,omitempty"` // HTTP client timeout in seconds (default: 300); bd-29i
-	ClaudeCode     *ClaudeCodeConfig `json:"claude_code,omitempty"`     // Settings for type="claude-code"
+	Name           string               `json:"name"`
+	Type           string               `json:"type"`                         // "anthropic", "openai", "ollama", "claude-code", etc.
+	APIKey         string               `json:"api_key,omitempty" cfg:"env"`  // Legacy API key
+	BaseURL        string               `json:"base_url,omitempty" cfg:"env"` // Custom API base URL (for local/compatible servers)
+	Model          string               `json:"model"`
+	Auth           *AuthConfig          `json:"auth,omitempty"`            // OAuth configuration
+	ContextWindow  int                  `json:"context_window,omitempty"`  // Override context window size (tokens); 0 = auto-detect from model name
+	FallbackModel  string               `json:"fallback_model,omitempty"`  // Fallback model for quota/auth errors (default: "z-ai/glm-5.3")
+	Thinking       *ThinkingConfig      `json:"thinking,omitempty"`        // conduit-15gt: reasoning control for OpenAI-compatible providers (z.ai etc.)
+	PromptCaching  *PromptCachingConfig `json:"prompt_caching,omitempty"`  // conduit-3dru: Anthropic prompt caching; nil = inherit ai.prompt_caching, which defaults to enabled
+	TimeoutSeconds int                  `json:"timeout_seconds,omitempty"` // HTTP client timeout in seconds (default: 300); bd-29i
+	ClaudeCode     *ClaudeCodeConfig    `json:"claude_code,omitempty"`     // Settings for type="claude-code"
 }
 
 // ClaudeCodeConfig holds settings for the claude-code provider type.

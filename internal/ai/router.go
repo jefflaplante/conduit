@@ -356,6 +356,12 @@ func (r *Router) initializeProviders(cfg config.AIConfig) error {
 		var provider Provider
 		var err error
 
+		// conduit-3dru: provider-level prompt_caching overrides the ai-level
+		// block; unset providers inherit it.
+		if providerCfg.PromptCaching == nil && cfg.PromptCaching != (config.PromptCachingConfig{}) {
+			providerCfg.PromptCaching = &cfg.PromptCaching
+		}
+
 		switch providerCfg.Type {
 		case "anthropic":
 			provider, err = NewAnthropicProvider(providerCfg)

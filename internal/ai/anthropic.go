@@ -25,8 +25,10 @@ type AnthropicProvider struct {
 	model   string
 	authCfg *config.AuthConfig
 	client  *http.Client
+	baseURL string // conduit-3dru: defaults to https://api.anthropic.com, overridable for proxies/tests
 	isOAuth bool
-	oauthMu sync.Mutex // protects apiKey, authCfg fields during OAuth refresh
+	caching config.PromptCachingConfig // conduit-3dru: prompt caching behavior
+	oauthMu sync.Mutex                 // protects apiKey, authCfg fields during OAuth refresh
 }
 
 // isOAuthToken detects if the token is an OAuth token (Pro/Max subscription)
@@ -72,6 +74,17 @@ func NewAnthropicProvider(cfg config.ProviderConfig) (*AnthropicProvider, error)
 	// Detect if this is an OAuth token based on prefix.
 	isOAuth := isOAuthToken(authToken)
 
+	// conduit-3dru: resolve prompt caching config; nil = defaults (enabled).
+	caching := config.DefaultPromptCachingConfig()
+	if cfg.PromptCaching != nil {
+		caching = *cfg.PromptCaching
+	}
+
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = "https://api.anthropic.com"
+	}
+
 	// bd-29i: Use per-provider timeout with 300s default
 	timeoutSeconds := cfg.TimeoutSeconds
 	if timeoutSeconds == 0 {
@@ -84,7 +97,9 @@ func NewAnthropicProvider(cfg config.ProviderConfig) (*AnthropicProvider, error)
 		model:   cfg.Model,
 		authCfg: authCfg,
 		client:  &http.Client{Timeout: time.Duration(timeoutSeconds) * time.Second},
+		baseURL: baseURL,
 		isOAuth: isOAuth,
+		caching: caching,
 	}, nil
 }
 
@@ -142,12 +157,38 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 		"messages":   anthropicMessages,
 	}
 
+	// Add tools if provided (with OAuth name mapping if needed)
+	var convertedTools []interface{}
+	if len(req.Tools) > 0 {
+		convertedTools = a.convertToolsToAnthropic(req.Tools)
+		if len(convertedTools) > 0 {
+			anthropicReq["tools"] = convertedTools
+		}
+	}
+
+	// Apply cache breakpoints BEFORE serializing the system prompt:
+	// conduit-3dru — previously markers were added after API-key auth had
+	// already flattened systemBlocks to a plain string, silently dropping
+	// the system breakpoint (the largest cacheable prefix) for API-key users.
+	a.addCacheBreakpoints(convertedTools, systemBlocks, anthropicMessages, modelToUse)
+
+	// Detect whether any system block now carries a cache marker; if so the
+	// block-array form must be preserved even for API-key auth, because
+	// cache_control cannot be expressed in the plain-string system form.
+	systemHasCacheMarker := false
+	for _, block := range systemBlocks {
+		if _, ok := block["cache_control"]; ok {
+			systemHasCacheMarker = true
+			break
+		}
+	}
+
 	// Add system prompt - as array for OAuth, string for API key
 	if len(systemBlocks) > 0 {
-		if a.isOAuth {
+		if a.isOAuth || systemHasCacheMarker {
 			anthropicReq["system"] = systemBlocks
 		} else {
-			// For API key auth, use simple string format
+			// For API key auth without cache markers, use simple string format
 			var systemText string
 			for _, block := range systemBlocks {
 				if text, ok := block["text"].(string); ok {
@@ -161,24 +202,12 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 		}
 	}
 
-	// Add tools if provided (with OAuth name mapping if needed)
-	var convertedTools []interface{}
-	if len(req.Tools) > 0 {
-		convertedTools = a.convertToolsToAnthropic(req.Tools)
-		if len(convertedTools) > 0 {
-			anthropicReq["tools"] = convertedTools
-		}
-	}
-
-	// Apply cache breakpoints based on model-specific thresholds
-	a.addCacheBreakpoints(convertedTools, systemBlocks, anthropicMessages, modelToUse)
-
 	reqBody, err := json.Marshal(anthropicReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewBuffer(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.baseURL+"/v1/messages", bytes.NewBuffer(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -463,15 +492,22 @@ func (a *AnthropicProvider) parseAnthropicUsage(resp map[string]interface{}) Usa
 }
 
 // addCacheBreakpoints adds cache_control markers to the request components
-// based on model-specific minimum token thresholds and content stability
+// based on the configured PromptCachingConfig (conduit-3dru). The master
+// switch gates everything; granular flags gate each breakpoint type.
 func (a *AnthropicProvider) addCacheBreakpoints(
 	tools []interface{},
 	systemBlocks []map[string]interface{},
 	messages []map[string]interface{},
 	model string,
 ) {
+	if !a.caching.Enabled {
+		return
+	}
 	minTokens := GetCacheMinTokens(model)
-	cacheControl := map[string]string{"type": "ephemeral"}
+	cacheControl := map[string]interface{}{"type": "ephemeral"}
+	if a.caching.ExtendedTTL {
+		cacheControl["ttl"] = "1h"
+	}
 
 	// Estimate tokens (rough: 4 chars per token)
 	estimateTokens := func(content string) int {
@@ -479,7 +515,7 @@ func (a *AnthropicProvider) addCacheBreakpoints(
 	}
 
 	// Breakpoint 1: Last tool definition (if tools meet threshold)
-	if len(tools) > 0 {
+	if a.caching.CacheTools && len(tools) > 0 {
 		// Estimate tool tokens (rough: 100 tokens per tool for schema)
 		toolTokens := len(tools) * 100
 		if toolTokens >= minTokens {
@@ -490,7 +526,7 @@ func (a *AnthropicProvider) addCacheBreakpoints(
 	}
 
 	// Breakpoint 2: Last system block
-	if len(systemBlocks) > 0 {
+	if a.caching.CacheSystem && len(systemBlocks) > 0 {
 		// Calculate total system prompt tokens
 		totalSystemTokens := 0
 		for _, block := range systemBlocks {
@@ -504,8 +540,13 @@ func (a *AnthropicProvider) addCacheBreakpoints(
 	}
 
 	// Breakpoint 3: Conversation history (for longer conversations)
-	// Only add if we have enough messages and they exceed threshold
-	if len(messages) > 5 {
+	// Marks a stable prefix at the configured interval back from the end;
+	// the final turn stays uncached.
+	if a.caching.CacheHistory && len(messages) > 5 {
+		interval := a.caching.HistoryBreakpointInterval
+		if interval <= 0 {
+			interval = 6
+		}
 		totalHistoryTokens := 0
 		for _, msg := range messages[:len(messages)-1] { // Exclude last message
 			if content, ok := msg["content"].(string); ok {
@@ -514,20 +555,19 @@ func (a *AnthropicProvider) addCacheBreakpoints(
 		}
 
 		if totalHistoryTokens >= minTokens {
-			// Mark the second-to-last message for caching
-			// This caches the conversation prefix, not the current turn
-			breakpointIdx := len(messages) - 2
-			if breakpointIdx >= 0 {
-				msg := messages[breakpointIdx]
-				// For string content, convert to block format with cache_control
-				if content, ok := msg["content"].(string); ok {
-					msg["content"] = []map[string]interface{}{
-						{
-							"type":          "text",
-							"text":          content,
-							"cache_control": cacheControl,
-						},
-					}
+			breakpointIdx := len(messages) - 1 - interval
+			if breakpointIdx < 0 {
+				breakpointIdx = 0
+			}
+			msg := messages[breakpointIdx]
+			// For string content, convert to block format with cache_control
+			if content, ok := msg["content"].(string); ok {
+				msg["content"] = []map[string]interface{}{
+					{
+						"type":          "text",
+						"text":          content,
+						"cache_control": cacheControl,
+					},
 				}
 			}
 		}
