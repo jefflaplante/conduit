@@ -1,6 +1,6 @@
 # Conduit Go Gateway
 
-A clean, high-performance rewrite of the Conduit gateway core in Go, with native channel adapters, vector database integration, and support for legacy TypeScript integrations.
+A clean, high-performance rewrite of the Conduit gateway core in Go, with native channel adapters, vector database integration, and a pluggable tool/skill architecture.
 
 ## Architecture
 
@@ -20,14 +20,12 @@ A clean, high-performance rewrite of the Conduit gateway core in Go, with native
 │                               │                               │
 │               ┌───────────────┴───────────────┐               │
 │               ▼                               ▼               │
-│  ┌─────────────────────────┐    ┌─────────────────────────┐   │
-│  │   Native Go Adapters    │    │   TypeScript Adapters   │   │
-│  │                         │    │                         │   │
-│  │  • Telegram             │    │  • WhatsApp (Baileys)   │   │
-│  │    (go-telegram/bot)    │    │  • Signal               │   │
-│  │  • Discord (planned)    │    │  • Other legacy         │   │
-│  │  • Slack (planned)      │    │                         │   │
-│  └─────────────────────────┘    └─────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │                   Native Go Adapters                    │  │
+│  │                                                         │  │
+│  │  • Telegram (go-telegram/bot)                           │  │
+│  │  • Discord (planned)    • Slack (planned)               │  │
+│  └─────────────────────────────────────────────────────────┘  │
 │                                                               │
 │  ┌─────────────────────────────────────────────────────────┐  │
 │  │  Core Services                                          │  │

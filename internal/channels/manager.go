@@ -21,7 +21,7 @@ func StripReplyTags(text string) string {
 	return strings.TrimSpace(ReplyTagRe.ReplaceAllString(text, ""))
 }
 
-// Manager manages all channel adapters (both native Go and TypeScript processes)
+// Manager manages all channel adapters (native Go)
 type Manager struct {
 	adapters     map[string]ChannelAdapter
 	factories    map[string]ChannelFactory
