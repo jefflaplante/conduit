@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"conduit/internal/config"
@@ -25,12 +28,17 @@ var optionalFactories = make(map[string]types.OptionalToolFactory)
 
 // globalRegistry holds a reference to the active registry for tools that need ToolExecutor.
 // Set by SetServices() after the registry is fully initialized.
-var globalRegistry *Registry
+// conduit-31jg.19: atomic so a late SetServices can't race with readers.
+var globalRegistry atomic.Pointer[Registry]
 
 // GetRegistryAsExecutor returns the global registry as a ToolExecutor.
 // Used by tools like SRE that need to orchestrate other tools.
+// Returns a nil interface (not a typed nil) when no registry is set.
 func GetRegistryAsExecutor() types.ToolExecutor {
-	return globalRegistry
+	if r := globalRegistry.Load(); r != nil {
+		return r
+	}
+	return nil
 }
 
 // RegisterOptional registers an optional tool factory.
@@ -42,6 +50,15 @@ func RegisterOptional(name string, factory types.OptionalToolFactory) {
 
 // Registry manages available tools and their execution
 type Registry struct {
+	// mu guards tools and enabledTools (conduit-31jg.19). RefreshSkillTools
+	// mutates both at runtime (model-triggerable via Gateway reload) while
+	// ExecuteTool/GetAvailableTools read them concurrently. Never hold mu
+	// while a tool executes: look the tool up under RLock, release, then run
+	// it (a running tool may itself trigger RefreshSkillTools). Methods
+	// suffixed "Locked" assume the caller holds mu; all other methods acquire
+	// it themselves and must not be called with mu held (RWMutex is not
+	// re-entrant).
+	mu           sync.RWMutex
 	tools        map[string]types.Tool
 	sandboxCfg   config.SandboxConfig
 	enabledTools map[string]bool
@@ -126,7 +143,7 @@ func (r *Registry) SetServices(services *types.ToolServices) {
 	r.services = services
 
 	// Set global registry reference for tools that need ToolExecutor
-	globalRegistry = r
+	globalRegistry.Store(r)
 
 	// Initialize schema builder with discovery providers
 	r.initializeSchemaBuilder()
@@ -243,12 +260,14 @@ func (r *Registry) registerAllTools() {
 	}...)
 
 	// Register all tools
+	r.mu.Lock()
 	for _, tool := range allTools {
 		if tool != nil {
 			r.tools[tool.Name()] = tool
 			log.Printf("Registered tool: %s", tool.Name())
 		}
 	}
+	r.mu.Unlock()
 
 	// Instantiate optional tools from registered factories (build-tag gated)
 	r.registerOptionalTools()
@@ -268,8 +287,16 @@ func (r *Registry) GetServices() *types.ToolServices {
 // HasTool returns true if a tool is registered (compiled in and instantiated).
 // Used by optional tools to check for dependencies (e.g., SRE checks for Datadog).
 func (r *Registry) HasTool(name string) bool {
-	_, exists := r.tools[name]
+	_, exists := r.getTool(name)
 	return exists
+}
+
+// getTool looks up a registered tool by exact name under the read lock.
+func (r *Registry) getTool(name string) (types.Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	tool, exists := r.tools[name]
+	return tool, exists
 }
 
 // ListAvailableOptionalTools returns names of optional tools that were compiled in.
@@ -291,33 +318,59 @@ func normalizeToolName(name string) string {
 
 // isToolEnabled checks if a tool is enabled (case-insensitive, underscore-insensitive).
 func (r *Registry) isToolEnabled(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.isToolEnabledLocked(name)
+}
+
+// isToolEnabledLocked is isToolEnabled for callers already holding r.mu.
+func (r *Registry) isToolEnabledLocked(name string) bool {
 	return r.enabledTools[normalizeToolName(name)]
 }
 
-// registerSkillTools discovers skill adapters and registers them as enabled tools.
-func (r *Registry) registerSkillTools() {
+// buildSkillBridges discovers skill adapters. It touches no registry maps
+// and runs without r.mu so skill discovery I/O never blocks tool lookups.
+func (r *Registry) buildSkillBridges() []*skillToolBridge {
 	if r.services.SkillsManager == nil || !r.services.SkillsManager.IsEnabled() {
-		return
+		return nil
 	}
 	skillAdapters, err := skills.GenerateToolAdapters(context.Background(), r.services.SkillsManager)
 	if err != nil {
 		log.Printf("Failed to register skill tools: %v", err)
-		return
+		return nil
 	}
+	bridges := make([]*skillToolBridge, 0, len(skillAdapters))
 	for _, adapter := range skillAdapters {
-		bridge := &skillToolBridge{adapter: adapter, services: r.services}
+		bridges = append(bridges, &skillToolBridge{adapter: adapter, services: r.services})
+	}
+	return bridges
+}
+
+// addSkillBridgesLocked registers bridges as enabled tools. Caller holds r.mu (write).
+func (r *Registry) addSkillBridgesLocked(bridges []*skillToolBridge) {
+	for _, bridge := range bridges {
 		r.tools[bridge.Name()] = bridge
 		r.enabledTools[normalizeToolName(bridge.Name())] = true
 	}
-	if len(skillAdapters) > 0 {
-		log.Printf("Registered and enabled %d skill-based tools", len(skillAdapters))
+	if len(bridges) > 0 {
+		log.Printf("Registered and enabled %d skill-based tools", len(bridges))
 	}
+}
+
+// registerSkillTools discovers skill adapters and registers them as enabled tools.
+func (r *Registry) registerSkillTools() {
+	bridges := r.buildSkillBridges()
+	r.mu.Lock()
+	r.addSkillBridgesLocked(bridges)
+	r.mu.Unlock()
 }
 
 // registerOptionalTools instantiates optional tools from registered factories.
 // Factories are registered via RegisterOptional() from init() functions with build tags.
 func (r *Registry) registerOptionalTools() {
 	for name, factory := range optionalFactories {
+		// Factories run without r.mu held: they may call back into the
+		// registry (e.g. HasTool / GetRegistryAsExecutor).
 		tool, err := factory(r.services, r.services.ConfigMgr)
 		if err != nil {
 			log.Printf("Failed to create optional tool %s: %v", name, err)
@@ -328,7 +381,9 @@ func (r *Registry) registerOptionalTools() {
 			log.Printf("Optional tool %s: compiled but disabled via config", name)
 			continue
 		}
+		r.mu.Lock()
 		r.tools[tool.Name()] = tool
+		r.mu.Unlock()
 		log.Printf("Registered optional tool: %s", tool.Name())
 	}
 }
@@ -364,15 +419,22 @@ func (r *Registry) warnMismatchedOptionalTools() {
 // RefreshSkillTools removes old skill tools and re-registers from fresh state.
 // Returns the number of skill tools now registered.
 func (r *Registry) RefreshSkillTools() int {
+	// conduit-31jg.19: discover outside the lock, then swap atomically under
+	// the write lock so readers never observe a half-refreshed registry.
+	bridges := r.buildSkillBridges()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	// Remove old skill tools (identified by bridge type)
 	for name, tool := range r.tools {
 		if _, ok := tool.(*skillToolBridge); ok {
 			delete(r.tools, name)
-			delete(r.enabledTools, name)
+			// enabledTools is keyed by normalized name (see addSkillBridgesLocked).
+			delete(r.enabledTools, normalizeToolName(name))
 		}
 	}
 	// Re-register from fresh skills manager state
-	r.registerSkillTools()
+	r.addSkillBridgesLocked(bridges)
 	// Count registered skill tools
 	count := 0
 	for _, tool := range r.tools {
@@ -384,9 +446,30 @@ func (r *Registry) RefreshSkillTools() int {
 }
 
 // ExecuteTool executes a tool by name with the given arguments, including validation
-func (r *Registry) ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (*types.ToolResult, error) {
+//
+// conduit-31jg.19: this is the single choke point every tool invocation passes
+// through (ExecutionEngine.executeSingle/executeParallel, the MCP handler,
+// Chain, planning, SRE). A panicking tool is recovered here and converted into
+// a failed result + error naming the tool, so it cannot take down the gateway.
+func (r *Registry) ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (result *types.ToolResult, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("[Registry] PANIC in tool %q: %v\n%s", name, rec, debug.Stack())
+			err = fmt.Errorf("tool %q panicked: %v", name, rec)
+			result = types.NewErrorResult("tool_panic", err.Error()).
+				WithSuggestions([]string{"This is a bug in the tool; try a different approach or tool"})
+		}
+	}()
+
+	// Look up enablement and tool under the read lock, then release it
+	// before executing (the tool may itself call RefreshSkillTools).
+	r.mu.RLock()
+	enabled := r.isToolEnabledLocked(name)
+	tool, exists := r.tools[name]
+	r.mu.RUnlock()
+
 	// Check if tool is enabled
-	if !r.isToolEnabled(name) {
+	if !enabled {
 		result := types.NewErrorResult("tool_disabled", fmt.Sprintf("tool '%s' is not enabled", name)).
 			WithSuggestions([]string{"Check the enabled_tools list in your config.json to enable this tool"})
 		// Suggest enabled tools of the same category
@@ -396,8 +479,6 @@ func (r *Registry) ExecuteTool(ctx context.Context, name string, args map[string
 		return result, nil
 	}
 
-	// Get tool
-	tool, exists := r.tools[name]
 	if !exists {
 		result := types.NewErrorResult("tool_not_found", fmt.Sprintf("tool '%s' not found", name))
 		available := r.getEnabledToolNames()
@@ -419,15 +500,15 @@ func (r *Registry) ExecuteTool(ctx context.Context, name string, args map[string
 	}
 
 	// Execute tool
-	result, err := tool.Execute(ctx, args)
-	if err != nil {
+	toolResult, execErr := tool.Execute(ctx, args)
+	if execErr != nil {
 		return &types.ToolResult{
 			Success: false,
-			Error:   fmt.Sprintf("tool execution error: %v", err),
-		}, err
+			Error:   fmt.Sprintf("tool execution error: %v", execErr),
+		}, execErr
 	}
 
-	return result, nil
+	return toolResult, nil
 }
 
 // createValidationErrorResult creates a rich error result from validation failures
@@ -485,9 +566,11 @@ func (r *Registry) createValidationErrorResult(toolName string, validation *type
 
 // GetAvailableTools returns a list of available tools
 func (r *Registry) GetAvailableTools() map[string]types.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	available := make(map[string]types.Tool)
 	for name, tool := range r.tools {
-		if r.isToolEnabled(name) {
+		if r.isToolEnabledLocked(name) {
 			available[name] = tool
 		}
 	}
@@ -496,9 +579,11 @@ func (r *Registry) GetAvailableTools() map[string]types.Tool {
 
 // getEnabledToolNames returns the names of all enabled tools.
 func (r *Registry) getEnabledToolNames() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var names []string
 	for name := range r.tools {
-		if r.isToolEnabled(name) {
+		if r.isToolEnabledLocked(name) {
 			names = append(names, name)
 		}
 	}
@@ -508,9 +593,11 @@ func (r *Registry) getEnabledToolNames() []string {
 // findSimilarEnabledTools returns enabled tool names that share a prefix or substring with the given name.
 func (r *Registry) findSimilarEnabledTools(name string) []string {
 	lower := strings.ToLower(name)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var similar []string
 	for toolName := range r.tools {
-		if r.isToolEnabled(toolName) && strings.Contains(strings.ToLower(toolName), lower[:min(len(lower), 3)]) {
+		if r.isToolEnabledLocked(toolName) && strings.Contains(strings.ToLower(toolName), lower[:min(len(lower), 3)]) {
 			similar = append(similar, toolName)
 		}
 	}
@@ -522,8 +609,10 @@ func (r *Registry) findClosestToolName(name string) string {
 	lower := strings.ToLower(name)
 	best := ""
 	bestScore := 0
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	for toolName := range r.tools {
-		if r.isToolEnabled(toolName) {
+		if r.isToolEnabledLocked(toolName) {
 			score := commonPrefixLen(lower, strings.ToLower(toolName))
 			if score > bestScore {
 				bestScore = score
@@ -586,8 +675,11 @@ func (r *Registry) GetToolSchemasWithContext(ctx context.Context) []map[string]i
 
 // GetToolHelp returns comprehensive help information for a specific tool including examples
 func (r *Registry) GetToolHelp(toolName string) map[string]interface{} {
+	r.mu.RLock()
 	tool, exists := r.tools[toolName]
-	if !exists || !r.isToolEnabled(toolName) {
+	enabled := r.isToolEnabledLocked(toolName)
+	r.mu.RUnlock()
+	if !exists || !enabled {
 		return map[string]interface{}{
 			"error": fmt.Sprintf("Tool '%s' not found or not enabled", toolName),
 		}
@@ -597,7 +689,7 @@ func (r *Registry) GetToolHelp(toolName string) map[string]interface{} {
 		"name":        tool.Name(),
 		"description": tool.Description(),
 		"parameters":  tool.Parameters(),
-		"enabled":     r.isToolEnabled(toolName),
+		"enabled":     enabled,
 	}
 
 	// Add schema hints if available
@@ -707,8 +799,11 @@ func (r *RegistrySelfTestResult) IsHealthy() bool {
 // SelfTestTool runs a self-test on a specific tool by name.
 // Returns nil if the tool doesn't exist or isn't enabled.
 func (r *Registry) SelfTestTool(ctx context.Context, name string, opts *types.SelfTestOptions) *types.SelfTestResult {
+	r.mu.RLock()
 	tool, exists := r.tools[name]
-	if !exists || !r.isToolEnabled(name) {
+	enabled := r.isToolEnabledLocked(name)
+	r.mu.RUnlock()
+	if !exists || !enabled {
 		return nil
 	}
 
