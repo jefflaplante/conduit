@@ -78,6 +78,11 @@ func (s *Server) makeToolHandler(toolName string) sdkmcp.ToolHandler {
 
 		// Execute the tool via the registry.
 		toolResult, err := s.registry.ExecuteTool(ctx, toolName, args)
+		if err != nil && toolResult != nil && !toolResult.Success {
+			// conduit-31jg.47: the registry now keeps output returned with an
+			// error; AdaptToolResult renders error + output.
+			return AdaptToolResult(toolResult), nil
+		}
 		if err != nil {
 			result := &sdkmcp.CallToolResult{
 				IsError: true,

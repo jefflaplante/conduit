@@ -504,10 +504,18 @@ func (r *Registry) ExecuteTool(ctx context.Context, name string, args map[string
 	// Execute tool
 	toolResult, execErr := tool.Execute(ctx, args)
 	if execErr != nil {
-		return &types.ToolResult{
+		errResult := &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("tool execution error: %v", execErr),
-		}, execErr
+		}
+		// conduit-31jg.47: keep the tool's output when it returned both a
+		// result and an error (was discarded, hiding e.g. partial stderr).
+		if toolResult != nil {
+			errResult.Content = toolResult.Content
+			errResult.Data = toolResult.Data
+			errResult.ErrorDetails = toolResult.ErrorDetails
+		}
+		return errResult, execErr
 	}
 
 	return toolResult, nil

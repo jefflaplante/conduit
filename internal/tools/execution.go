@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -261,8 +262,24 @@ func (e *ExecutionEngine) ExecuteToolCalls(ctx context.Context, calls []ai.ToolC
 }
 
 // executeSingle executes a single tool call
-func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *ExecutionResult {
+func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) (execResult *ExecutionResult) {
 	start := time.Now()
+
+	// conduit-31jg.47: middleware, hooks and event callbacks run outside
+	// Registry.ExecuteTool's recover. A panic before the tool ran becomes an
+	// error result; after it ran, the tool's result is kept (reporting a
+	// failure would invite a retry of a side-effecting call).
+	toolRan := false
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("[ExecutionEngine] PANIC in execution pipeline for tool %q (tool_ran=%v): %v\n%s",
+				call.Name, toolRan, rec, debug.Stack())
+			if toolRan && execResult != nil && execResult.Result != nil {
+				return
+			}
+			execResult = pipelinePanicResult(call, start, rec)
+		}
+	}()
 
 	// Log tool name only to journal (never args at INFO)
 	log.Printf("[ExecutionEngine] > Tool: %s", call.Name)
@@ -278,7 +295,7 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 	}
 
 	// Create result structure
-	execResult := &ExecutionResult{
+	execResult = &ExecutionResult{
 		ToolCall:   &call,
 		ExecutedAt: start,
 	}
@@ -314,6 +331,7 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 	callCtx, cancelCall := context.WithTimeout(ctx, e.callTimeout(call))
 	result, err := e.registry.ExecuteTool(callCtx, call.Name, call.Args)
 	cancelCall()
+	toolRan = true
 	execResult.Result = result
 	execResult.Error = err
 	execResult.Duration = time.Since(start)
@@ -389,6 +407,23 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 	return execResult
 }
 
+// pipelinePanicResult builds the error result for a panic in the execution
+// pipeline (conduit-31jg.47).
+func pipelinePanicResult(call ai.ToolCall, start time.Time, rec interface{}) *ExecutionResult {
+	err := fmt.Errorf("tool %q: panic in execution pipeline: %v", call.Name, rec)
+	return &ExecutionResult{
+		ToolCall:   &call,
+		Error:      err,
+		Duration:   time.Since(start),
+		ExecutedAt: start,
+		Result: &ToolResult{
+			Success: false,
+			Error:   err.Error(),
+			Content: fmt.Sprintf("Tool '%s' failed: %s", call.Name, err.Error()),
+		},
+	}
+}
+
 // callTimeoutSlack lets a tool's own per-call timeout fire (and report a
 // proper timeout result) before the engine deadline does.
 const callTimeoutSlack = 5 * time.Second
@@ -426,6 +461,14 @@ func (e *ExecutionEngine) executeParallel(ctx context.Context, calls []ai.ToolCa
 			// Acquire semaphore
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
+
+			// conduit-31jg.47: never let one call's panic kill the process.
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Printf("[ExecutionEngine] PANIC in parallel worker for tool %q: %v\n%s", toolCall.Name, rec, debug.Stack())
+					results[idx] = pipelinePanicResult(toolCall, time.Now(), rec)
+				}
+			}()
 
 			results[idx] = e.executeSingle(ctx, toolCall)
 		}(i, call)
@@ -721,7 +764,14 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 // formatToolResultForAI formats tool results for AI consumption
 func (e *ExecutionEngine) formatToolResultForAI(result *ExecutionResult) string {
 	if result.Error != nil {
-		return fmt.Sprintf("Tool '%s' failed: %s", result.ToolCall.Name, result.Error.Error())
+		msg := fmt.Sprintf("Tool '%s' failed: %s", result.ToolCall.Name, result.Error.Error())
+		// conduit-31jg.47: surface output a tool returned alongside its error.
+		if result.Result != nil {
+			if out := strings.TrimSpace(result.Result.Content); out != "" && !strings.Contains(msg, out) {
+				msg += "\nOutput:\n" + e.truncateForModel(out)
+			}
+		}
+		return msg
 	}
 
 	if result.Result == nil {
@@ -788,6 +838,18 @@ func (e *ExecutionEngine) formatToolResultForAI(result *ExecutionResult) string 
 	}
 
 	return content
+}
+
+// truncateForModel applies the result budget to s (conduit-31jg.47).
+func (e *ExecutionEngine) truncateForModel(s string) string {
+	maxChars := e.maxResultChars
+	if maxChars <= 0 {
+		maxChars = DefaultMaxToolResultChars
+	}
+	if len(s) > maxChars {
+		return e.smartTruncate(s, maxChars)
+	}
+	return s
 }
 
 // toolWantsDataInOutput reports whether the named tool opted into having
