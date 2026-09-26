@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"conduit/internal/auth/oauthflow"
 	"conduit/internal/config"
+	"conduit/internal/httpsafe"
 )
 
 // AnthropicProvider implements the Anthropic API
@@ -278,7 +278,7 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 
 	if resp.StatusCode != http.StatusOK {
 		// Read body for error details
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
 	}
 

@@ -6,12 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"conduit/internal/auth"
+	"conduit/internal/httpsafe"
 	"conduit/internal/models"
 )
 
@@ -221,7 +221,7 @@ func (a *AnthropicNativeSearch) makeAPIRequest(ctx context.Context, req *models.
 	defer httpResp.Body.Close()
 
 	// Read response body
-	responseBody, err := io.ReadAll(httpResp.Body)
+	responseBody, err := httpsafe.ReadLimited(httpResp.Body, httpsafe.APIBodyLimit) // conduit-31jg.7
 	if err != nil {
 		return nil, ErrNetworkError
 	}

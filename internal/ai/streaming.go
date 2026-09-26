@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+
+	"conduit/internal/httpsafe"
 )
 
 // VerboseLogging controls whether debug-level AI messages appear in the journal.
@@ -60,7 +62,7 @@ func (a *AnthropicProvider) GenerateResponseStreaming(ctx context.Context, req *
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
 	}
 

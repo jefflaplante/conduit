@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -15,6 +14,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"conduit/internal/httpsafe"
 )
 
 // FlowOptions configures the authorization flow.
@@ -209,7 +210,7 @@ func postTokenRequest(ctx context.Context, tokenURL string, data url.Values) (*t
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := httpsafe.ReadLimited(resp.Body, httpsafe.SmallAPIBodyLimit) // conduit-31jg.7
 		resp.Body.Close()
 		if err != nil {
 			lastErr = fmt.Errorf("failed to read response: %w", err)

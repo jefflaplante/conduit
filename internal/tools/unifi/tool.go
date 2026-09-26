@@ -7,13 +7,13 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"conduit/internal/httpsafe"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
@@ -185,7 +185,7 @@ func (t *UniFiTool) getSnapshot(ctx context.Context, cameraName string) (*types.
 	}
 
 	// Save snapshot to temporary file
-	snapshotData, err := io.ReadAll(resp.Body)
+	snapshotData, err := httpsafe.ReadLimited(resp.Body, httpsafe.MediaBodyLimit) // conduit-31jg.7
 	if err != nil {
 		return types.NewErrorResult("read_error",
 			fmt.Sprintf("Failed to read snapshot data: %v", err)), nil
@@ -291,7 +291,7 @@ func (t *UniFiTool) fetchProtectCameras(unvrURL, apiKey string) ([]map[string]in
 	}
 
 	var cameras []map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&cameras); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&cameras); err != nil {
 		return nil, err
 	}
 

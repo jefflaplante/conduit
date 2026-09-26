@@ -3,7 +3,6 @@ package telegram
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
+	"conduit/internal/httpsafe"
 	"conduit/internal/protocol"
 )
 
@@ -148,7 +148,7 @@ func (a *Adapter) downloadPhoto(ctx context.Context, photo *models.PhotoSize) ([
 		return nil, fmt.Errorf("unexpected status downloading photo: %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := httpsafe.ReadLimited(resp.Body, httpsafe.MediaBodyLimit) // conduit-31jg.7
 	if err != nil {
 		return nil, fmt.Errorf("failed to read photo file: %w", err)
 	}

@@ -104,6 +104,32 @@ WARNING: rejected workspace/link.conf: symlink entry not allowed: workspace/link
 
 > **This sandbox is defense-in-depth, not a security boundary, whenever the Bash tool is enabled.** A shell can read or write anything the gateway's OS user can reach, including creating new symlinks. The file sandbox stops an agent from wandering by accident through the structured file tools, and it blocks escapes planted through symlinks in cloned repos or unpacked archives. It cannot contain an agent that has shell access. For a hard boundary, run the gateway as a dedicated low-privilege user (the systemd units already set `UMask=0077`), or disable Bash.
 
+### Outbound HTTP: WebFetch SSRF Guard and Bounded Bodies (conduit-31jg.7)
+
+**SSRF guard.** WebFetch uses its own HTTP client, built in `internal/httpsafe`. That client resolves each hostname itself and checks every **resolved IP** at connect time, then dials only the IP it checked. A socket-level `Control` hook checks the final address again. Every redirect hop goes through the same dialer. Because the check runs on the connect-time IP, DNS rebinding cannot bypass it. The client ignores environment proxies, because routing through a proxy would skip the per-IP check.
+
+| Destination | Default | Configurable |
+|---|---|---|
+| Link-local `169.254.0.0/16` (incl. cloud metadata `169.254.169.254`), `fe80::/10`, `0.0.0.0/8`, `::`, multicast, broadcast | **Always blocked** | No |
+| Loopback `127.0.0.0/8`, `::1` (the gateway's own API on :18789) | Blocked | Allow specific `host:port` via `allowed_hosts` |
+| Private RFC1918, ULA `fc00::/7`, CGNAT `100.64.0.0/10` | **Allowed** (homelab LAN devices) | Block with `block_private_networks` |
+| Everything else | Allowed | — |
+
+```json
+{
+  "tools": {
+    "web": {
+      "block_private_networks": false,
+      "allowed_hosts": ["localhost:8123", "192.168.1.20:80", "127.0.0.1:*"]
+    }
+  }
+}
+```
+
+In `allowed_hosts`, each host must be an IP literal or `localhost`, where `localhost` matches any loopback address. The port can be `*`. These entries can reopen a loopback or private address, but never a link-local one.
+
+**Bounded bodies.** Every `io.ReadAll(resp.Body)` on an external response now goes through `httpsafe.ReadLimited`. Tool-side `json.NewDecoder(resp.Body)` calls go through `httpsafe.LimitReader`. Oversized bodies return `ErrBodyTooLarge`. The limits are 64 KiB for error bodies, 1 MiB for small control-plane replies, 32 MiB for API JSON, 10 MiB for WebFetch pages, and 50 MiB for media. WebFetch keeps the part of a page that fits the limit and marks the result `truncated`.
+
 ## Human-in-the-Loop Approvals (conduit-31jg.43)
 
 Some tool actions are too risky to let the model perform alone. For these, the `internal/approval` package makes the agent ask the human who started the turn. The only action wired to it so far is **sending email as the owner's account** through the gog/email skill (`account` or `from` set to jeff, owner@example.com or owner-alt@example.com). Reading, searching and listing the owner inbox is unchanged. Sends from the agent's own account (jules) need no approval.

@@ -734,6 +734,7 @@ type ToolsConfig struct {
 	MaxToolChains      int                               `json:"max_tool_chains,omitempty"`       // Maximum tool calls in a chain before stopping
 	MaxToolResultChars int                               `json:"max_tool_result_chars,omitempty"` // Maximum chars in tool result content (default 8192)
 	Sandbox            SandboxConfig                     `json:"sandbox"`
+	Web                WebToolsConfig                    `json:"web,omitempty"` // conduit-31jg.7: outbound fetch (SSRF) policy
 	Services           map[string]map[string]interface{} `json:"services,omitempty"`
 }
 
@@ -742,6 +743,15 @@ type SandboxConfig struct {
 	WorkspaceDir    string   `json:"workspace_dir"`
 	AllowedPaths    []string `json:"allowed_paths"`
 	CommandDenylist []string `json:"command_denylist,omitempty"`
+}
+
+// WebToolsConfig controls the SSRF guard on WebFetch/Image URL fetches
+// (conduit-31jg.7). Link-local (incl. 169.254.169.254) is always blocked;
+// loopback is blocked unless listed in AllowedHosts; RFC1918/ULA is allowed
+// unless BlockPrivateNetworks is set.
+type WebToolsConfig struct {
+	BlockPrivateNetworks bool     `json:"block_private_networks,omitempty"`
+	AllowedHosts         []string `json:"allowed_hosts,omitempty"` // "ip:port" or "localhost:port"; port may be "*"
 }
 
 // ChannelConfig contains settings for channel adapters

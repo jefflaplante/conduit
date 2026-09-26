@@ -2,14 +2,15 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
+	"conduit/internal/httpsafe"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 	"github.com/PuerkitoBio/goquery"
@@ -17,28 +18,40 @@ import (
 
 // WebFetchTool fetches and extracts readable content from URLs
 type WebFetchTool struct {
-	services   *types.ToolServices
-	httpClient *http.Client
+	services     *types.ToolServices
+	httpClient   *http.Client
+	maxBodyBytes int64 // conduit-31jg.7: cap on raw response bytes read
 }
 
 func NewWebFetchTool(services *types.ToolServices) *WebFetchTool {
 	tool := &WebFetchTool{
-		services: services,
+		services:     services,
+		maxBodyBytes: httpsafe.WebPageBodyLimit,
 	}
 
-	// Get HTTP client from services
-	if services != nil && services.WebClient != nil {
-		tool.httpClient = services.WebClient
+	// conduit-31jg.7: WebFetch URLs are model-controlled (and so reachable by
+	// prompt injection), so it never uses the shared, unguarded WebClient.
+	// It builds its own client whose dialer checks the resolved IP of every
+	// connection, redirects included. Only the timeout is inherited.
+	timeout := 30 * time.Second
+	if services != nil && services.WebClient != nil && services.WebClient.Timeout > 0 {
+		timeout = services.WebClient.Timeout
 	}
-
-	// Fallback to default client if not provided
-	if tool.httpClient == nil {
-		tool.httpClient = &http.Client{
-			Timeout: 30 * time.Second,
-		}
-	}
+	tool.httpClient = httpsafe.NewClient(SSRFPolicy(services), timeout, nil)
 
 	return tool
+}
+
+// SSRFPolicy builds the outbound-fetch policy from tools.web config.
+// conduit-31jg.7
+func SSRFPolicy(services *types.ToolServices) httpsafe.Policy {
+	var p httpsafe.Policy
+	if services != nil && services.ConfigMgr != nil {
+		w := services.ConfigMgr.Tools.Web
+		p.BlockPrivate = w.BlockPrivateNetworks
+		p.AllowedHosts = append([]string(nil), w.AllowedHosts...)
+	}
+	return p
 }
 
 func (t *WebFetchTool) Name() string {
@@ -102,7 +115,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	// Fetch and extract content
-	content, err := t.fetchAndExtract(ctx, urlStr, extractMode, maxChars)
+	content, truncated, err := t.fetchAndExtract(ctx, urlStr, extractMode, maxChars)
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,
@@ -118,41 +131,50 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 			"extractMode": extractMode,
 			"length":      len(content),
 			"maxChars":    maxChars,
-			"truncated":   len(content) >= maxChars,
+			"truncated":   truncated || len(content) >= maxChars,
 		},
 	}, nil
 }
 
 // fetchAndExtract fetches content from URL and extracts readable text
-func (t *WebFetchTool) fetchAndExtract(ctx context.Context, urlStr, extractMode string, maxChars int) (string, error) {
+func (t *WebFetchTool) fetchAndExtract(ctx context.Context, urlStr, extractMode string, maxChars int) (string, bool, error) {
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return "", false, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	// Set realistic headers
 	req.Header.Set("User-Agent", "Conduit-Gateway/1.0 (Web Content Fetcher)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	// conduit-31jg.7: no explicit Accept-Encoding. Setting it disables Go's
+	// transparent gzip decoding, so gzip pages came back as compressed
+	// bytes and the size limit applied to compressed data. Letting the
+	// transport negotiate gzip means the limit below bounds decoded bytes.
 
 	// Perform request
 	resp, err := t.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
+		return "", false, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Check status code
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP error %d: %s", resp.StatusCode, resp.Status)
+		return "", false, fmt.Errorf("HTTP error %d: %s", resp.StatusCode, resp.Status)
 	}
 
-	// Read response body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+	// Read response body. conduit-31jg.7: bounded read; an oversized page is
+	// truncated (and flagged) rather than buffered whole.
+	limit := t.maxBodyBytes
+	if limit <= 0 {
+		limit = httpsafe.WebPageBodyLimit
+	}
+	body, err := httpsafe.ReadLimited(resp.Body, limit)
+	bodyTruncated := errors.Is(err, httpsafe.ErrBodyTooLarge)
+	if err != nil && !bodyTruncated {
+		return "", false, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	// Extract content based on content type
@@ -162,21 +184,25 @@ func (t *WebFetchTool) fetchAndExtract(ctx context.Context, urlStr, extractMode 
 	if strings.Contains(contentType, "text/html") {
 		content, err = t.extractFromHTML(string(body), extractMode)
 		if err != nil {
-			return "", fmt.Errorf("failed to extract from HTML: %w", err)
+			return "", false, fmt.Errorf("failed to extract from HTML: %w", err)
 		}
 	} else if strings.Contains(contentType, "text/") {
 		// Plain text content
 		content = string(body)
 	} else {
-		return "", fmt.Errorf("unsupported content type: %s", contentType)
+		return "", false, fmt.Errorf("unsupported content type: %s", contentType)
 	}
 
 	// Truncate if needed
+	truncated := bodyTruncated
 	if len(content) > maxChars {
 		content = content[:maxChars] + "\n\n[Content truncated...]"
+		truncated = true
+	} else if bodyTruncated {
+		content += "\n\n[Content truncated: response exceeded size limit]"
 	}
 
-	return content, nil
+	return content, truncated, nil
 }
 
 // extractFromHTML extracts readable content from HTML
@@ -375,4 +401,3 @@ func (t *WebFetchTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions
 
 	return result
 }
-

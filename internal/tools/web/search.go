@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"conduit/internal/httpsafe"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
@@ -211,7 +212,7 @@ func (t *WebSearchTool) searchBrave(ctx context.Context, query string, count int
 
 	// Check status code
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		log.Printf("[WebSearch] API error: status %d, body: %s", resp.StatusCode, string(body))
 		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
 	}
@@ -229,7 +230,7 @@ func (t *WebSearchTool) searchBrave(ctx context.Context, query string, count int
 		reader = gzipReader
 	}
 
-	body, err := io.ReadAll(reader)
+	body, err := httpsafe.ReadLimited(reader, httpsafe.APIBodyLimit) // conduit-31jg.7
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -373,4 +374,3 @@ func (t *WebSearchTool) SelfTest(ctx context.Context, opts *types.SelfTestOption
 
 	return result
 }
-
