@@ -220,33 +220,8 @@ func (a AgentHeartbeatConfig) GetLocation() *time.Location {
 	return loc
 }
 
-// IsQuietTime checks if the given time falls within quiet hours
-func (a AgentHeartbeatConfig) IsQuietTime(t time.Time) bool {
-	if !a.QuietEnabled {
-		return false
-	}
-
-	// Convert time to configured timezone
-	loc := a.GetLocation()
-	localTime := t.In(loc)
-
-	startTime, _ := time.Parse("15:04", a.QuietHours.StartTime)
-	endTime, _ := time.Parse("15:04", a.QuietHours.EndTime)
-
-	// Create time objects for comparison (same day as localTime)
-	startOfDay := time.Date(localTime.Year(), localTime.Month(), localTime.Day(), 0, 0, 0, 0, loc)
-	quietStart := startOfDay.Add(time.Duration(startTime.Hour())*time.Hour + time.Duration(startTime.Minute())*time.Minute)
-	quietEnd := startOfDay.Add(time.Duration(endTime.Hour())*time.Hour + time.Duration(endTime.Minute())*time.Minute)
-
-	// Handle overnight quiet hours (e.g., 23:00 to 08:00)
-	if quietEnd.Before(quietStart) {
-		// Quiet hours span midnight
-		return localTime.After(quietStart) || localTime.Before(quietEnd)
-	}
-
-	// Normal quiet hours within same day
-	return localTime.After(quietStart) && localTime.Before(quietEnd)
-}
+// IsQuietTime, NextQuietEnd and NextQuietStart live in quiet_hours.go
+// (conduit-31jg.33).
 
 // DefaultAgentHeartbeatConfig returns default agent heartbeat configuration
 func DefaultAgentHeartbeatConfig() AgentHeartbeatConfig {

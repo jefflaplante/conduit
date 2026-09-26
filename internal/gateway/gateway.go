@@ -446,10 +446,15 @@ func New(cfg *config.Config) (*Gateway, error) {
 	if workspaceDir == "" {
 		workspaceDir = "./workspace"
 	}
+	// conduit-31jg.34: cron stays in time.Local on purpose. Existing
+	// cron_jobs.json expressions were written for the server zone (UTC);
+	// scheduler.WithLocation(cfg.GetLocation()) would shift them. Per-job
+	// "CRON_TZ=<zone> " prefixes are supported for opt-in migration.
 	gw.scheduler = scheduler.New(workspaceDir, gw.executeScheduledJob)
 
 	// Initialize heartbeat integration
 	hbIntegration := heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, gw.monitoring.MetricsCollector, cfg.AgentHeartbeat.Model, cfg.AgentHeartbeat.TimeoutSeconds)
+	hbIntegration.SetAgentHeartbeatConfig(cfg.AgentHeartbeat) // conduit-31jg.33: configured TZ + quiet window
 	if gw.brainService != nil {
 		hbIntegration.SetBrainWriter(newHeartbeatBrainWriter(gw.brainService))
 		logger.Info("heartbeat Brain writer enabled for sense.alerts.* namespace")

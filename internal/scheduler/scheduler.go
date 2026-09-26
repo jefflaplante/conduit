@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -81,14 +82,36 @@ type Scheduler struct {
 	// watchExited is an optional channel that watchJobsFile sends on right
 	// before returning. Used by tests to assert synchronous shutdown.
 	watchExited chan struct{}
+
+	// conduit-31jg.34: location cron expressions are evaluated in (default
+	// time.Local), and the set of job IDs currently executing (guarded by mu)
+	// so neither cron ticks nor RunNow start a second concurrent run.
+	location *time.Location
+	running  map[string]bool
+}
+
+// ErrJobRunning is returned by RunNow when the job is already executing.
+var ErrJobRunning = errors.New("job is already running")
+
+// Option configures a Scheduler.
+type Option func(*Scheduler)
+
+// WithLocation evaluates Go-job cron expressions in loc instead of
+// time.Local. System (crontab) jobs are unaffected: the cron daemon uses its
+// own zone. A per-job "CRON_TZ=<zone> " prefix overrides either.
+func WithLocation(loc *time.Location) Option {
+	return func(s *Scheduler) {
+		if loc != nil {
+			s.location = loc
+		}
+	}
 }
 
 // New creates a new scheduler
-func New(workspaceDir string, executor JobExecutor) *Scheduler {
+func New(workspaceDir string, executor JobExecutor, opts ...Option) *Scheduler {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &Scheduler{
-		cron:          cron.New(cron.WithSeconds()), // Support 6-field cron (with seconds)
+	s := &Scheduler{
 		jobs:          make(map[string]*Job),
 		jobsFile:      filepath.Join(workspaceDir, "cron_jobs.json"),
 		executor:      executor,
@@ -96,13 +119,44 @@ func New(workspaceDir string, executor JobExecutor) *Scheduler {
 		cancel:        cancel,
 		crontagMarker: CrontabMarker,
 		watchInterval: 30 * time.Second,
+		location:      time.Local,
+		running:       make(map[string]bool),
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	// Support 6-field cron (with seconds), evaluated in s.location.
+	s.cron = cron.New(cron.WithSeconds(), cron.WithLocation(s.location))
+	return s
+}
+
+// Location returns the zone Go-job cron expressions are evaluated in.
+func (s *Scheduler) Location() *time.Location {
+	return s.location
+}
+
+// splitTZPrefix separates a leading "CRON_TZ=<zone> " or "TZ=<zone> " from a
+// cron expression (robfig/cron understands the prefix natively).
+func splitTZPrefix(schedule string) (prefix, rest string) {
+	schedule = strings.TrimSpace(schedule)
+	if strings.HasPrefix(schedule, "CRON_TZ=") || strings.HasPrefix(schedule, "TZ=") {
+		if i := strings.IndexAny(schedule, " \t"); i > 0 {
+			return schedule[:i] + " ", strings.TrimSpace(schedule[i+1:])
+		}
+		return schedule, ""
+	}
+	return "", schedule
 }
 
 // normalizeSchedule converts a cron expression to the correct field count for
 // the given job type. Go jobs need 6-field (with seconds) for robfig/cron;
 // system jobs need 5-field (standard crontab).
 func normalizeSchedule(schedule string, jobType JobType) (string, error) {
+	// conduit-31jg.34: allow an explicit per-job zone for Go jobs.
+	tzPrefix, schedule := splitTZPrefix(schedule)
+	if tzPrefix != "" && jobType != JobTypeGo {
+		return "", fmt.Errorf("invalid cron expression: %s prefix is only supported for go jobs", strings.TrimSpace(tzPrefix))
+	}
 	fields := strings.Fields(schedule)
 
 	switch len(fields) {
@@ -126,6 +180,7 @@ func normalizeSchedule(schedule string, jobType JobType) (string, error) {
 	}
 
 	// Validate with the appropriate parser
+	schedule = tzPrefix + schedule
 	var err error
 	if jobType == JobTypeGo {
 		_, err = cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow).Parse(schedule)
@@ -340,17 +395,14 @@ func (s *Scheduler) DisableJob(jobID string) error {
 	return s.saveJobs()
 }
 
-// RunNow executes a job immediately
+// RunNow executes a job immediately. It returns ErrJobRunning if the job is
+// already executing (conduit-31jg.34).
 func (s *Scheduler) RunNow(jobID string) error {
-	s.mu.RLock()
-	job, exists := s.jobs[jobID]
-	s.mu.RUnlock()
-
-	if !exists {
-		return fmt.Errorf("job %s not found", jobID)
+	snap, err := s.beginRun(jobID)
+	if err != nil {
+		return err
 	}
-
-	go s.executeJob(job)
+	go s.runSnapshot(snap)
 	return nil
 }
 
@@ -361,8 +413,11 @@ func (s *Scheduler) scheduleGoJob(job *Job) error {
 		s.cron.Remove(job.entryID)
 	}
 
+	// conduit-31jg.34: capture the ID, not the pointer; executeJob looks the
+	// job up under s.mu and runs a snapshot.
+	jobID := job.ID
 	entryID, err := s.cron.AddFunc(job.Schedule, func() {
-		s.executeJob(job)
+		s.executeJob(jobID)
 	})
 	if err != nil {
 		return fmt.Errorf("failed to schedule job: %v", err)
@@ -380,54 +435,111 @@ func (s *Scheduler) scheduleGoJob(job *Job) error {
 	return nil
 }
 
-// executeJob runs a job
-func (s *Scheduler) executeJob(job *Job) {
-	log.Printf("[Scheduler] Executing job: %s (%s)", job.ID, job.Name)
+// snapshotJob returns a copy of job that the executor may read without
+// holding s.mu. Caller must hold s.mu.
+func snapshotJob(job *Job) *Job {
+	c := *job
+	if job.Skills != nil {
+		c.Skills = append([]string(nil), job.Skills...)
+	}
+	if job.Metadata != nil {
+		c.Metadata = make(map[string]interface{}, len(job.Metadata))
+		for k, v := range job.Metadata {
+			c.Metadata[k] = v
+		}
+	}
+	if job.LastRun != nil {
+		t := *job.LastRun
+		c.LastRun = &t
+	}
+	if job.NextRun != nil {
+		t := *job.NextRun
+		c.NextRun = &t
+	}
+	return &c
+}
 
-	now := time.Now()
-
+// beginRun marks jobID running and records the run start, returning a
+// snapshot for the executor. conduit-31jg.34: the executor used to receive
+// the live *Job, which reloadFromData mutates under s.mu (data race), and
+// nothing stopped overlapping runs of a slow job.
+func (s *Scheduler) beginRun(jobID string) (*Job, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, exists := s.jobs[jobID]
+	if !exists {
+		return nil, fmt.Errorf("job %s not found", jobID)
+	}
+	if s.running[jobID] {
+		return nil, ErrJobRunning
+	}
+	s.running[jobID] = true
+	now := time.Now()
 	job.LastRun = &now
 	job.RunCount++
-	s.mu.Unlock()
+	return snapshotJob(job), nil
+}
+
+// executeJob is the cron entry point: it runs the job unless a previous run
+// is still in progress (SkipIfStillRunning semantics, shared with RunNow).
+func (s *Scheduler) executeJob(jobID string) {
+	snap, err := s.beginRun(jobID)
+	if err != nil {
+		if errors.Is(err, ErrJobRunning) {
+			log.Printf("[Scheduler] Skipping job %s: previous run still in progress", jobID)
+		}
+		return
+	}
+	s.runSnapshot(snap)
+}
+
+// runSnapshot executes a snapshot taken by beginRun and records the outcome
+// on the live job (if it still exists).
+func (s *Scheduler) runSnapshot(snap *Job) {
+	log.Printf("[Scheduler] Executing job: %s (%s)", snap.ID, snap.Name)
 
 	var err error
-	if job.Type == JobTypeGo {
-		// Use the executor callback for Go jobs
+	if snap.Type == JobTypeGo {
 		if s.executor != nil {
-			err = s.executor(s.ctx, job)
+			err = s.executor(s.ctx, snap)
 		}
-	} else if job.Type == JobTypeSystem {
+	} else if snap.Type == JobTypeSystem {
 		// System jobs are run by crontab, not us
-		// This shouldn't be called for system jobs
-		log.Printf("[Scheduler] Warning: executeJob called for system job %s", job.ID)
+		log.Printf("[Scheduler] Warning: executeJob called for system job %s", snap.ID)
 	}
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.running, snap.ID)
+
+	if err != nil {
+		log.Printf("[Scheduler] Job %s failed: %v", snap.ID, err)
+	} else {
+		log.Printf("[Scheduler] Job %s completed", snap.ID)
+	}
+
+	job, exists := s.jobs[snap.ID]
+	if !exists {
+		return // removed while running
+	}
 	if err != nil {
 		job.LastError = err.Error()
-		log.Printf("[Scheduler] Job %s failed: %v", job.ID, err)
 	} else {
 		job.LastError = ""
-		log.Printf("[Scheduler] Job %s completed", job.ID)
 	}
-	s.mu.Unlock()
 
 	// Handle one-shot jobs
 	if job.OneShot {
-		s.mu.Lock()
 		if job.Type == JobTypeGo && job.entryID != 0 {
 			s.cron.Remove(job.entryID)
 		}
 		delete(s.jobs, job.ID)
 		s.saveJobs()
-		s.mu.Unlock()
 		log.Printf("[Scheduler] One-shot job %s removed", job.ID)
 		return
 	}
 
 	// Update next run time
-	s.mu.Lock()
 	if job.Type == JobTypeGo && job.entryID != 0 {
 		entry := s.cron.Entry(job.entryID)
 		if !entry.Next.IsZero() {
@@ -435,7 +547,6 @@ func (s *Scheduler) executeJob(job *Job) {
 		}
 	}
 	s.saveJobs()
-	s.mu.Unlock()
 }
 
 // addSystemCrontab adds a job to the system crontab
@@ -558,7 +669,7 @@ func (s *Scheduler) loadJobs() error {
 				log.Printf("[Scheduler] Job %s: cannot fast-forward past-due next_run (unparseable schedule %q): %v — skipping", job.ID, job.Schedule, parseErr)
 			} else {
 				oldNextRun := *job.NextRun
-				newNextRun := schedule.Next(now)
+				newNextRun := schedule.Next(now.In(s.location)) // conduit-31jg.34
 				job.NextRun = &newNextRun
 				log.Printf("[Scheduler] Job %s: fast-forwarded past-due next_run from %v to %v", job.ID, oldNextRun.Format(time.RFC3339), newNextRun.Format(time.RFC3339))
 				fastForwarded = true

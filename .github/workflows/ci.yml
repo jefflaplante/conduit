@@ -6,10 +6,17 @@ on:
   pull_request:
     branches: [main]
 
+# conduit-31jg.41: every job goes through the same make targets that
+# `make ci` runs locally.
+
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
+    name: build, vet, race tests (default tags)
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -21,5 +28,87 @@ jobs:
       - name: Build
         run: make build
 
-      - name: Test
-        run: make test
+      - name: Vet
+        run: make vet
+
+      - name: Test (race)
+        run: make test-race
+
+  all-tags:
+    name: build, vet, race tests (all optional tool tags)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build (all tags)
+        run: make build-full
+
+      - name: Vet (all tags)
+        run: make vet-full
+
+      - name: Test (race, all tags)
+        run: make test-race-full
+
+  staticcheck:
+    name: staticcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      # Blocking: default checks minus the pre-existing backlog listed in
+      # staticcheck.conf (default tags and all optional tool tags).
+      - name: staticcheck
+        run: make staticcheck
+
+      # Non-blocking: full default check set, ignoring staticcheck.conf, so
+      # the backlog stays visible in the logs until it is burned down.
+      - name: staticcheck backlog report (non-blocking)
+        continue-on-error: true
+        run: |
+          mv staticcheck.conf "$RUNNER_TEMP/staticcheck.conf"
+          make staticcheck-report
+
+  gofmt:
+    name: gofmt (changed files)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      # Only files changed by the PR: ~20 files on main predate this check
+      # and are not gofmt-clean; formatting them wholesale is a follow-up.
+      - name: gofmt -l on changed .go files
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          files=$(git diff --name-only --diff-filter=ACMR "origin/${BASE_REF}...HEAD" -- '*.go')
+          if [ -z "$files" ]; then
+            echo "No Go files changed."
+            exit 0
+          fi
+          unformatted=$(gofmt -l $files)
+          if [ -n "$unformatted" ]; then
+            echo "These changed files are not gofmt-clean (run: gofmt -w <file>):"
+            echo "$unformatted"
+            exit 1
+          fi

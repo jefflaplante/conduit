@@ -120,7 +120,10 @@ func TestShutdownManager_SetOnShutdownAndTriggerAction(t *testing.T) {
 		t.Fatalf("BeginShutdown: %v", err)
 	}
 	// conduit-31jg.27: Done() closes after onShutdown has run (the old fixed
-	// 2s sleep hid the unsynchronized read of called here).
+	// 2s sleep hid the unsynchronized read of called here). close(done)
+	// happens-after the write to called, so the read below is race-free,
+	// and it also follows the breadcrumb write into DataDir, so t.TempDir
+	// cleanup no longer races the shutdown goroutine (conduit-31jg.52).
 	select {
 	case <-sm.Done():
 	case <-time.After(5 * time.Second):

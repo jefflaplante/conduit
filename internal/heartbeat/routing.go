@@ -70,7 +70,9 @@ func (r *AlertSeverityRouter) ShouldDeliverAlertAt(alert Alert, now time.Time) R
 			nextDeliveryTime := r.calculateNextDeliveryTime(now)
 			return RoutingDecision{
 				ShouldDeliver: false,
-				Reason: fmt.Sprintf("Warning alert delayed due to quiet hours (8 AM - 10 PM PT), will deliver at %s",
+				// conduit-31jg.33: describe the configured window, not a hardcoded one.
+				Reason: fmt.Sprintf("Warning alert delayed due to quiet hours (%s-%s %s), will deliver at %s",
+					r.config.QuietHours.StartTime, r.config.QuietHours.EndTime, r.config.GetLocation(),
 					nextDeliveryTime.In(r.config.GetLocation()).Format("15:04 MST")),
 				DelayUntil: &nextDeliveryTime,
 			}
@@ -91,64 +93,10 @@ func (r *AlertSeverityRouter) ShouldDeliverAlertAt(alert Alert, now time.Time) R
 	}
 }
 
-// calculateNextDeliveryTime calculates when an alert should be delivered after quiet hours
+// calculateNextDeliveryTime returns when quiet hours next end. conduit-31jg.33:
+// delegates to the single config implementation (wall-clock, DST-safe).
 func (r *AlertSeverityRouter) calculateNextDeliveryTime(currentTime time.Time) time.Time {
-	// Convert to configured timezone (Pacific Time)
-	loc := r.config.GetLocation()
-	localTime := currentTime.In(loc)
-
-	// Parse end time of quiet hours (08:00)
-	endTime, err := time.Parse("15:04", r.config.QuietHours.EndTime)
-	if err != nil {
-		// Fallback to 8 AM if parsing fails
-		endTime = time.Date(0, 1, 1, 8, 0, 0, 0, time.UTC)
-	}
-
-	// Create next delivery time
-	nextDelivery := time.Date(
-		localTime.Year(),
-		localTime.Month(),
-		localTime.Day(),
-		endTime.Hour(),
-		endTime.Minute(),
-		0, 0, loc)
-
-	// If we're past the end time today, delivery time is today
-	// If we're before the end time, it might be tomorrow depending on start time
-	startTime, err := time.Parse("15:04", r.config.QuietHours.StartTime)
-	if err != nil {
-		// Fallback to 11 PM if parsing fails
-		startTime = time.Date(0, 1, 1, 23, 0, 0, 0, time.UTC)
-	}
-
-	quietStart := time.Date(
-		localTime.Year(),
-		localTime.Month(),
-		localTime.Day(),
-		startTime.Hour(),
-		startTime.Minute(),
-		0, 0, loc)
-
-	// Check if quiet hours span midnight (end time < start time)
-	if endTime.Hour() < startTime.Hour() {
-		// Quiet hours span midnight (e.g., 23:00 to 08:00)
-		if localTime.Hour() >= startTime.Hour() {
-			// It's after quiet start time, deliver tomorrow at end time
-			nextDelivery = nextDelivery.AddDate(0, 0, 1)
-		}
-		// else: it's before end time today, deliver today at end time
-	} else {
-		// Normal quiet hours within same day
-		// This shouldn't happen with the default 23:00-08:00, but handle it
-		if localTime.After(quietStart) && localTime.Before(nextDelivery) {
-			// We're in quiet hours today, deliver today at end time
-		} else {
-			// Deliver next time quiet hours end
-			nextDelivery = nextDelivery.AddDate(0, 0, 1)
-		}
-	}
-
-	return nextDelivery
+	return r.config.NextQuietEnd(currentTime)
 }
 
 // GetDeliveryTargets returns the appropriate delivery targets for an alert
@@ -217,33 +165,9 @@ func (r *AlertSeverityRouter) GetQuietHoursInfo() QuietHoursInfo {
 	return info
 }
 
-// calculateNextQuietTime calculates when quiet hours will next begin
+// calculateNextQuietTime returns when quiet hours will next begin.
 func (r *AlertSeverityRouter) calculateNextQuietTime(currentTime time.Time) time.Time {
-	loc := r.config.GetLocation()
-	localTime := currentTime.In(loc)
-
-	// Parse start time of quiet hours (23:00)
-	startTime, err := time.Parse("15:04", r.config.QuietHours.StartTime)
-	if err != nil {
-		// Fallback to 11 PM if parsing fails
-		startTime = time.Date(0, 1, 1, 23, 0, 0, 0, time.UTC)
-	}
-
-	// Create next quiet time for today
-	nextQuiet := time.Date(
-		localTime.Year(),
-		localTime.Month(),
-		localTime.Day(),
-		startTime.Hour(),
-		startTime.Minute(),
-		0, 0, loc)
-
-	// If we've already passed today's quiet start time, use tomorrow
-	if localTime.After(nextQuiet) {
-		nextQuiet = nextQuiet.AddDate(0, 0, 1)
-	}
-
-	return nextQuiet
+	return r.config.NextQuietStart(currentTime)
 }
 
 // QuietHoursInfo provides information about quiet hours configuration and status
@@ -321,10 +245,15 @@ func (r *AlertSeverityRouter) ShouldRetryAlert(alert Alert) (bool, string) {
 			alert.RetryCount, r.config.AlertRetryPolicy.MaxRetries)
 	}
 
-	// Check if enough time has passed for retry
-	if alert.SentAt != nil {
+	// Check if enough time has passed for retry. conduit-31jg.33: backoff is
+	// measured from the last failed attempt (SentAt is only set on success).
+	last := alert.LastAttemptAt
+	if last == nil {
+		last = alert.SentAt
+	}
+	if last != nil {
 		retryDelay := r.CalculateRetryDelay(alert)
-		nextRetryTime := alert.SentAt.Add(retryDelay)
+		nextRetryTime := last.Add(retryDelay)
 		if time.Now().Before(nextRetryTime) {
 			return false, fmt.Sprintf("Retry delay not elapsed, next retry at %s",
 				nextRetryTime.Format("15:04:05"))
