@@ -72,6 +72,34 @@ func (s *MessageSyncer) DeleteSessionMessages(sessionKey string) error {
 	return nil
 }
 
+// DeleteMessages removes specific messages from the FTS index. Called from the
+// session store callback after compaction replaces them with a summary
+// (conduit-31jg.21).
+func (s *MessageSyncer) DeleteMessages(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.searchDB.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin FTS delete: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	stmt, err := tx.Prepare(`DELETE FROM messages_fts WHERE message_id = ?`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare FTS delete: %w", err)
+	}
+	defer stmt.Close()
+	for _, id := range ids {
+		if _, err := stmt.Exec(id); err != nil {
+			return fmt.Errorf("failed to delete FTS message %s: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // FullSync performs a complete synchronization from gateway.db messages to search.db.
 // This is run at startup to ensure the FTS index is complete.
 func (s *MessageSyncer) FullSync(ctx context.Context) error {
@@ -235,6 +263,16 @@ func (s *MessageSyncer) SessionClearedCallback() func(sessionKey string) {
 	return func(sessionKey string) {
 		if err := s.DeleteSessionMessages(sessionKey); err != nil {
 			log.Printf("Warning: MessageSyncer session clear callback failed: %v", err)
+		}
+	}
+}
+
+// MessagesDeletedCallback returns a callback suitable for the session store's
+// onMessagesDeleted hook (conduit-31jg.21).
+func (s *MessageSyncer) MessagesDeletedCallback() func(sessionKey string, ids []string) {
+	return func(sessionKey string, ids []string) {
+		if err := s.DeleteMessages(ids); err != nil {
+			log.Printf("Warning: MessageSyncer messages-deleted callback failed for session %s: %v", sessionKey, err)
 		}
 	}
 }
