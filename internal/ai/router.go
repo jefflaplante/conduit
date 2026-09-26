@@ -617,7 +617,13 @@ func (r *Router) ResolveEmptyFailover(failedProvider string) (string, Provider, 
 		log.Printf("[Router] Empty-failover asked about unknown provider %q — refusing (conduit-1z0g)", failedProvider)
 		return "", nil, false
 	}
-	return r.resolveFallbackRoute(failedProvider)
+	model, p, ok := r.resolveFallbackRoute(failedProvider)
+	if !ok {
+		return "", nil, false
+	}
+	// conduit-31jg.18(b): the failover call carries the full tool-loop
+	// history too — trim it to the failover route's window.
+	return model, r.guardedProvider(providerRoute{name: p.Name(), provider: p, model: model}), true
 }
 
 func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session, userMessage string, providerName string) (*GenerateResponse, error) {
@@ -660,55 +666,20 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 		Tools:     tools,
 		MaxTokens: r.chainMaxTokens(),
 	}
-	trimRequestToFitContext(req, r.contextWindowForProvider(providerName))
-
-	start := time.Now()
-	response, err := provider.GenerateResponse(ctx, req)
-	latencyMs := time.Since(start).Milliseconds()
+	// conduit-31jg.18: (provider, model) travel together through the
+	// quota-fallback and timeout retries; each attempt is trimmed to its
+	// route's window (callWithRecovery).
+	response, served, latencyMs, err := r.callWithRecovery(ctx,
+		providerRoute{name: providerName, provider: provider, model: req.Model},
+		req, recoveryOpts{phase: "generate"})
 	if err != nil {
-		// bd-6tb: retry on quota exhaustion
-		// bd-27ud: retry on the fallback model's OWN provider (req.Model is
-		// empty here — provider uses its default — so no model guard applies)
-		if IsQuotaError(err) {
-			fallbackModel, fallbackProvider, ok := r.resolveFallbackRoute(providerName)
-			if ok {
-				log.Printf("[Router] Quota error on %q, retrying with fallback model %q on provider %q (bd-27ud)", req.Model, fallbackModel, fallbackProvider.Name())
-				originalModel := req.Model
-				req.Model = fallbackModel
-				retryStart := time.Now()
-				response, err = fallbackProvider.GenerateResponse(ctx, req)
-				latencyMs = time.Since(retryStart).Milliseconds()
-				if err == nil {
-					log.Printf("[Router] Fallback retry succeeded (bd-27ud): %q -> %q", originalModel, fallbackModel)
-				} else {
-					log.Printf("[Router] Fallback retry failed: %v (bd-27ud)", err)
-				}
-			}
+		if r.usageTracker != nil {
+			r.usageTracker.RecordError(served.name, served.model)
 		}
-
-		// bd-13p: retry once on transient timeout. z.ai calls were dying with
-		// "context deadline exceeded" mid-session (sub-agent silent deaths).
-		// Only retry if the parent context is still live — retrying against a
-		// dead context would fail instantly.
-		if err != nil && IsTransientTimeoutError(err) && ctx.Err() == nil {
-			log.Printf("[Router] Transient timeout on %q, retrying once (bd-13p)", providerName)
-			retryStart := time.Now()
-			response, err = provider.GenerateResponse(ctx, req)
-			latencyMs = time.Since(retryStart).Milliseconds()
-			if err == nil {
-				log.Printf("[Router] Timeout retry succeeded (bd-13p)")
-			} else {
-				log.Printf("[Router] Timeout retry failed: %v (bd-13p)", err)
-			}
-		}
-
-		if err != nil {
-			if r.usageTracker != nil {
-				r.usageTracker.RecordError(providerName, req.Model)
-			}
-			return nil, err
-		}
+		return nil, err
 	}
+	providerName = served.name
+	provider = r.guardedProvider(served) // conduit-31jg.18(b): later calls re-trim
 	if r.usageTracker != nil {
 		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, latencyMs)
 	}
@@ -835,62 +806,25 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 		Tools:     tools,
 		MaxTokens: r.chainMaxTokens(),
 	}
-	trimRequestToFitContext(req, r.contextWindowForProvider(providerName))
-
-	// Get initial AI response
-	start := time.Now()
-	response, err := provider.GenerateResponse(ctx, req)
-	latencyMs := time.Since(start).Milliseconds()
+	// Get initial AI response. conduit-31jg.18: quota fallback and the
+	// timeout retry carry (provider, model) as a pair — a timed-out fallback
+	// call is retried on the FALLBACK provider, never the original.
+	response, served, latencyMs, err := r.callWithRecovery(ctx,
+		providerRoute{name: providerName, provider: provider, model: req.Model},
+		req, recoveryOpts{phase: "tool loop", quotaFallbackNeedsModel: true})
 	if err != nil {
-		// bd-6tb: retry on quota/auth error if fallback model is configured
-		// bd-27ud: retry on the fallback model's OWN provider, not this one
-		if IsQuotaError(err) {
-			fallbackModel, fallbackProvider, ok := r.resolveFallbackRoute(providerName)
-			// Only retry if we resolved a fallback provider and the original request used a model
-			if ok && req.Model != "" {
-				originalModel := req.Model
-				req.Model = fallbackModel
-				log.Printf("[Router] Quota error on %q, retrying with fallback model %q on provider %q (bd-27ud)", originalModel, fallbackModel, fallbackProvider.Name())
-
-				retryStart := time.Now()
-				response, err = fallbackProvider.GenerateResponse(ctx, req)
-				latencyMs = time.Since(retryStart).Milliseconds()
-				if err == nil {
-					log.Printf("[Router] Fallback retry succeeded (bd-27ud): %q -> %q", originalModel, fallbackModel)
-					// The tool-loop continuation (HandleToolCallFlow) reuses
-					// this provider variable; if we leave it pointing at the
-					// failed provider, the continuation sends the fallback
-					// model string to the wrong API (anthropic 404
-					// not_found_error, 2026-09-04 sub-agent death).
-					provider = fallbackProvider
-					providerName = fallbackProvider.Name()
-				} else {
-					log.Printf("[Router] Fallback retry failed: %v (bd-27ud)", err)
-				}
-			}
+		if r.usageTracker != nil {
+			r.usageTracker.RecordError(served.name, served.model)
 		}
-
-		// bd-13p: retry once on transient timeout (see GenerateResponse).
-		if err != nil && IsTransientTimeoutError(err) && ctx.Err() == nil {
-			log.Printf("[Router] Transient timeout on %q (tool loop), retrying once (bd-13p)", providerName)
-			retryStart := time.Now()
-			response, err = provider.GenerateResponse(ctx, req)
-			latencyMs = time.Since(retryStart).Milliseconds()
-			if err == nil {
-				log.Printf("[Router] Timeout retry succeeded (bd-13p)")
-			} else {
-				log.Printf("[Router] Timeout retry failed: %v (bd-13p)", err)
-			}
-		}
-
-		if err != nil {
-			if r.usageTracker != nil {
-				r.usageTracker.RecordError(providerName, req.Model)
-			}
-			chainErr = fmt.Errorf("AI provider error: %w", err)
-			return nil, chainErr
-		}
+		chainErr = fmt.Errorf("AI provider error: %w", err)
+		return nil, chainErr
 	}
+	// The tool-loop continuation (HandleToolCallFlow) must stay on the
+	// provider that served the response (bd-27ud: anthropic 404
+	// not_found_error, 2026-09-04 sub-agent death), and every later round
+	// is re-trimmed to that route's window (conduit-31jg.18(b)).
+	providerName = served.name
+	provider = r.guardedProvider(served)
 	if r.usageTracker != nil {
 		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, latencyMs)
 	}
@@ -1105,64 +1039,27 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		Tools:     tools,
 		MaxTokens: r.chainMaxTokens(),
 	}
-	trimRequestToFitContext(req, contextWindow)
-
-	// Call streaming API via the provider-agnostic interface
+	// Call streaming API via the provider-agnostic interface.
+	// conduit-31jg.18: recovery attempts carry (provider, model) as a pair,
+	// and the stream tracker mutes retry deltas once text has reached the
+	// client, so a replayed generation never duplicates streamed text.
 	streamStart := time.Now()
-	response, err := streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
+	response, served, _, err := r.callWithRecovery(ctx,
+		providerRoute{name: providerName, provider: streamingProvider, model: req.Model},
+		req, recoveryOpts{phase: "streaming", quotaFallbackNeedsModel: true, stream: newStreamTracker(onDelta)})
 	if err != nil {
-		// bd-6tb: retry on quota/auth error if fallback model is configured
-		// bd-27ud: retry on the fallback model's OWN provider, not this one
-		if IsQuotaError(err) {
-			fallbackModel, fallbackProvider, ok := r.resolveFallbackRoute(providerName)
-			// Only retry if we resolved a fallback provider and the original request used a model
-			if ok && req.Model != "" {
-				fallbackStream, canFallbackStream := fallbackProvider.(StreamingProvider)
-				if canFallbackStream {
-					originalModel := req.Model
-					req.Model = fallbackModel
-					log.Printf("[Router] Quota error on %q (streaming), retrying with fallback model %q on provider %q (bd-27ud)", originalModel, fallbackModel, fallbackProvider.Name())
-
-					response, err = fallbackStream.GenerateResponseStreaming(ctx, req, onDelta)
-					if err == nil {
-						log.Printf("[Router] Fallback retry succeeded (bd-27ud): %q -> %q", originalModel, fallbackModel)
-						// Keep the tool-loop continuation on the provider
-						// that actually served the response (see non-streaming
-						// path; same anthropic-404 failure mode).
-						provider = fallbackProvider
-						providerName = fallbackProvider.Name()
-					} else {
-						log.Printf("[Router] Fallback retry failed: %v (bd-27ud)", err)
-					}
-				} else {
-					log.Printf("[Router] Fallback provider %q cannot stream, surfacing original error (bd-27ud)", fallbackProvider.Name())
-				}
-			}
+		// conduit-31jg.12: streaming never reported to the usage tracker
+		// (non-streaming paths do). Latency spans retries here.
+		if r.usageTracker != nil {
+			r.usageTracker.RecordError(served.name, served.model)
 		}
-
-		// bd-13p: retry once on transient timeout (see GenerateResponse).
-		// Streams are more prone to mid-stream deadlocks; a retry replays the
-		// full generation but is still better than a silent session death.
-		if err != nil && IsTransientTimeoutError(err) && ctx.Err() == nil {
-			log.Printf("[Router] Transient timeout on %q (streaming), retrying once (bd-13p)", providerName)
-			response, err = streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
-			if err == nil {
-				log.Printf("[Router] Timeout retry succeeded (bd-13p)")
-			} else {
-				log.Printf("[Router] Timeout retry failed: %v (bd-13p)", err)
-			}
-		}
-
-		if err != nil {
-			// conduit-31jg.12: streaming never reported to the usage tracker
-			// (non-streaming paths do). Latency spans retries here.
-			if r.usageTracker != nil {
-				r.usageTracker.RecordError(providerName, req.Model)
-			}
-			chainErr = err
-			return nil, chainErr
-		}
+		chainErr = err
+		return nil, chainErr
 	}
+	// Keep the tool-loop continuation on the provider that actually served
+	// the response (bd-27ud), re-trimming every later round (conduit-31jg.18(b)).
+	providerName = served.name
+	provider = r.guardedProvider(served)
 	if r.usageTracker != nil && response != nil {
 		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, time.Since(streamStart).Milliseconds())
 	}
