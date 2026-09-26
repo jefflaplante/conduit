@@ -44,6 +44,9 @@ conduit token list
 # Revoke a token
 conduit token revoke conduit_v1_abc123
 
+# Show which database and token-secret source (never the secret) are used
+conduit token info
+
 # Export token for environment variable
 conduit token export conduit_v1_abc123 --format env
 ```
@@ -164,7 +167,9 @@ conduit backup restore backup-2026-02-26.tar.gz
 conduit backup restore backup.tar.gz --dry-run     # Preview without restoring
 ```
 
-Backups include: database, config, workspace files, SSH keys, and skills.
+Backups include: database, brain database (`brain.path`, or derived from `database.path`), config, workspace files, and optionally SSH keys and skills. Database snapshots use `VACUUM INTO`, so un-checkpointed WAL content is included.
+
+Restore refuses to run while the gateway is live (the `--pidfile` names a running process, or the `--config` port accepts connections); `--force` only skips the confirmation prompt. Databases are written to a temp file and renamed into place, and stale `-wal`/`-shm` files are removed. Archive entries that resolve outside their target directory (e.g. `workspace/../config.json`) are rejected.
 
 ### maintenance
 

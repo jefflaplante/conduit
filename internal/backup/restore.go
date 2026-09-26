@@ -4,11 +4,18 @@ import (
 	"archive/tar"
 	"bufio"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
+
+	"conduit/internal/config"
 )
 
 // RestoreBackup extracts a backup archive to the appropriate locations.
@@ -28,6 +35,13 @@ func RestoreBackup(opts RestoreOptions) (*RestoreResult, error) {
 
 	if opts.DryRun {
 		return dryRunRestore(manifest, opts, result)
+	}
+
+	// conduit-31jg.9: never overwrite files under a running gateway (its open
+	// DB handles and WAL would corrupt the restored databases). --force only
+	// skips the prompt below; it does not bypass this check.
+	if err := CheckGatewayStopped(opts.PidfilePath, opts.GatewayAddr); err != nil {
+		return nil, err
 	}
 
 	if !opts.Force {
@@ -68,7 +82,7 @@ func RestoreBackup(opts RestoreOptions) (*RestoreResult, error) {
 			return nil, fmt.Errorf("read tar entry: %w", err)
 		}
 
-		dest, skip := mapEntryToDestination(hdr.Name, manifest, opts)
+		dest, root, skip := mapEntryToDestination(hdr.Name, manifest, opts)
 		if skip {
 			result.FilesSkipped++
 			if opts.Verbose {
@@ -81,9 +95,15 @@ func RestoreBackup(opts RestoreOptions) (*RestoreResult, error) {
 			continue
 		}
 
-		if err := validateTarEntry(hdr, "", dest); err != nil {
+		// conduit-31jg.9: validate against the entry's containment root (the
+		// workspace/skills/database directory). Previously targetDir was
+		// always "", so "workspace/../config.json" escaped the workspace.
+		if err := validateTarEntry(hdr, root, dest); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("rejected %s: %v", hdr.Name, err))
 			result.FilesSkipped++
+			continue
+		}
+		if hdr.Typeflag == tar.TypeDir {
 			continue
 		}
 
@@ -99,34 +119,42 @@ func RestoreBackup(opts RestoreOptions) (*RestoreResult, error) {
 }
 
 // mapEntryToDestination determines the on-disk path for a tar entry.
-// Returns (path, skip). Empty path with skip=false means ignore silently.
-func mapEntryToDestination(name string, m *BackupManifest, opts RestoreOptions) (string, bool) {
+// Returns (path, root, skip). Empty path with skip=false means ignore
+// silently. root is the directory the destination must stay inside when the
+// path is derived from the (untrusted) entry name; it is "" for entries whose
+// destination is fixed by the manifest/options (config, SSH keys, DBs).
+func mapEntryToDestination(name string, m *BackupManifest, opts RestoreOptions) (string, string, bool) {
 	switch {
 	case name == "manifest.json":
-		return "", false
+		return "", "", false
 
 	case name == "database/brain.db":
-		restoreDBPath := m.OriginalPaths.Database
+		// conduit-31jg.9: restore to the brain DB path that was backed up
+		// (honours brain.path) unless the gateway DB is being relocated.
 		if opts.DatabasePath != "" {
-			restoreDBPath = opts.DatabasePath
+			return config.DeriveBrainDBPath(opts.DatabasePath), "", false
 		}
-		return deriveBrainDBPath(restoreDBPath), false
+		if m.OriginalPaths.BrainDatabase != "" {
+			return m.OriginalPaths.BrainDatabase, "", false
+		}
+		return config.DeriveBrainDBPath(m.OriginalPaths.Database), "", false
 
 	case strings.HasPrefix(name, "database/"):
 		relName := strings.TrimPrefix(name, "database/")
 		if opts.DatabasePath != "" {
-			return opts.DatabasePath, false
+			return opts.DatabasePath, "", false
 		}
-		return filepath.Join(filepath.Dir(m.OriginalPaths.Database), relName), false
+		root := filepath.Dir(m.OriginalPaths.Database)
+		return filepath.Join(root, relName), root, false
 
 	case strings.HasPrefix(name, "config/"):
 		if opts.SkipConfig {
-			return "", true
+			return "", "", true
 		}
 		if opts.ConfigPath != "" {
-			return opts.ConfigPath, false
+			return opts.ConfigPath, "", false
 		}
-		return m.OriginalPaths.Config, false
+		return m.OriginalPaths.Config, "", false
 
 	case strings.HasPrefix(name, "workspace/"):
 		rel := strings.TrimPrefix(name, "workspace/")
@@ -134,42 +162,42 @@ func mapEntryToDestination(name string, m *BackupManifest, opts RestoreOptions) 
 		if opts.WorkspacePath != "" {
 			baseDir = opts.WorkspacePath
 		}
-		return filepath.Join(baseDir, rel), false
+		return filepath.Join(baseDir, rel), baseDir, false
 
 	case strings.HasPrefix(name, "ssh/"):
 		if !opts.RestoreSSHKeys {
-			return "", true
+			return "", "", true
 		}
 		base := filepath.Base(name)
 		switch base {
 		case "ssh_host_key":
 			if m.OriginalPaths.SSHHostKey != "" {
-				return m.OriginalPaths.SSHHostKey, false
+				return m.OriginalPaths.SSHHostKey, "", false
 			}
 		case "authorized_keys":
 			if m.OriginalPaths.SSHAuthKeys != "" {
-				return m.OriginalPaths.SSHAuthKeys, false
+				return m.OriginalPaths.SSHAuthKeys, "", false
 			}
 		}
-		return "", true
+		return "", "", true
 
 	case strings.HasPrefix(name, "skills/"):
 		// Restore skills to original paths based on directory name.
 		parts := strings.SplitN(strings.TrimPrefix(name, "skills/"), "/", 2)
 		if len(parts) < 2 {
-			return "", false
+			return "", "", false
 		}
 		dirName := parts[0]
 		relPath := parts[1]
 		for _, sp := range m.OriginalPaths.SkillsPaths {
 			if filepath.Base(sp) == dirName {
-				return filepath.Join(sp, relPath), false
+				return filepath.Join(sp, relPath), sp, false
 			}
 		}
-		return "", true
+		return "", "", true
 
 	default:
-		return "", false
+		return "", "", false
 	}
 }
 
@@ -191,27 +219,51 @@ func validateTarEntry(hdr *tar.Header, targetDir, dest string) error {
 
 	// Clean the entry name and reject obviously malicious paths
 	cleaned := filepath.Clean(hdr.Name)
-	if filepath.IsAbs(cleaned) {
+	if filepath.IsAbs(cleaned) || strings.HasPrefix(hdr.Name, "/") {
 		return fmt.Errorf("absolute path in tar entry: %s", hdr.Name)
 	}
 	if strings.HasPrefix(cleaned, "..") {
 		return fmt.Errorf("path traversal in tar entry: %s", hdr.Name)
 	}
-
-	// Validate the resolved destination is within the target directory
+	// Validate the resolved destination is within the target directory.
+	// conduit-31jg.9: compare symlink-resolved paths so a symlinked
+	// directory inside the target cannot redirect the write elsewhere.
 	if targetDir != "" {
-		cleanDest := filepath.Clean(dest)
-		cleanTarget := filepath.Clean(targetDir)
+		cleanDest := resolveExisting(filepath.Clean(dest))
+		cleanTarget := resolveExisting(filepath.Clean(targetDir))
 		rel, err := filepath.Rel(cleanTarget, cleanDest)
 		if err != nil {
 			return fmt.Errorf("cannot resolve path %s relative to %s: %w", dest, targetDir, err)
 		}
-		if strings.HasPrefix(rel, "..") {
+		if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 			return fmt.Errorf("path escapes target directory: %s resolves to %s", hdr.Name, cleanDest)
 		}
 	}
 
 	return nil
+}
+
+// resolveExisting resolves symlinks in the longest existing prefix of p and
+// re-appends the non-existent remainder. conduit-31jg.9.
+func resolveExisting(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	var rest []string
+	cur := abs
+	for {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			parts := append([]string{resolved}, rest...)
+			return filepath.Join(parts...)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs
+		}
+		rest = append([]string{filepath.Base(cur)}, rest...)
+		cur = parent
+	}
 }
 
 // maxExtractFileSize is the maximum allowed size for a single extracted file (1 GB).
@@ -222,14 +274,23 @@ func validateTarEntry(hdr *tar.Header, targetDir, dest string) error {
 // of memory when exercising the size-limit path under the race detector.
 var maxExtractFileSize int64 = 1 << 30 // 1 GB
 
-// extractFile writes a tar entry to disk, creating parent directories as needed.
-// File size is capped at the smaller of hdr.Size and maxExtractFileSize.
+// extractFile writes a tar entry to disk, creating parent directories as
+// needed. File size is capped at the smaller of hdr.Size and
+// maxExtractFileSize.
+//
+// conduit-31jg.9: the content is written to a temp file in the destination
+// directory and renamed into place, so a failed/partial restore never leaves
+// a truncated file and an existing symlink at dest is replaced rather than
+// followed. For SQLite databases (*.db) any stale "-wal"/"-shm" sidecars are
+// removed before the rename — otherwise SQLite would replay the old WAL
+// frames onto the restored file.
 func extractFile(tr *tar.Reader, hdr *tar.Header, dest string) error {
-	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+	dir := filepath.Dir(dest)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
 
-	mode := os.FileMode(hdr.Mode)
+	mode := os.FileMode(hdr.Mode).Perm()
 	if mode == 0 {
 		mode = 0644
 	}
@@ -240,22 +301,86 @@ func extractFile(tr *tar.Reader, hdr *tar.Header, dest string) error {
 		limit = hdr.Size
 	}
 
-	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dest)+".restore-*")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	tmpName := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			tmp.Close()
+			os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+		return err
+	}
 
 	// Use LimitReader to prevent decompression bombs.
 	// Read limit+1 bytes so we can detect if the file exceeds the limit.
-	n, err := io.Copy(f, io.LimitReader(tr, limit+1))
+	n, err := io.Copy(tmp, io.LimitReader(tr, limit+1))
 	if err != nil {
 		return err
 	}
 	if n > limit {
 		return fmt.Errorf("file %s exceeds size limit (%d bytes > %d byte cap)", hdr.Name, n, limit)
 	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+
+	if isSQLiteDBPath(dest) {
+		for _, sfx := range []string{"-wal", "-shm", "-journal"} {
+			if err := os.Remove(dest + sfx); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("remove stale %s: %w", dest+sfx, err)
+			}
+		}
+	}
+	if err := os.Rename(tmpName, dest); err != nil {
+		return err
+	}
+	committed = true
 	return nil
+}
+
+// isSQLiteDBPath reports whether path names a SQLite database file.
+func isSQLiteDBPath(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".db", ".sqlite", ".sqlite3":
+		return true
+	}
+	return false
+}
+
+// CheckGatewayStopped returns an error when the gateway appears to be
+// running: pidfile names a live process, or addr (host:port) accepts a TCP
+// connection. Empty arguments skip that check. conduit-31jg.9.
+func CheckGatewayStopped(pidfile, addr string) error {
+	if pidfile != "" {
+		if data, err := os.ReadFile(pidfile); err == nil {
+			if pid, perr := strconv.Atoi(strings.TrimSpace(string(data))); perr == nil && pid > 0 && processAlive(pid) {
+				return fmt.Errorf("gateway appears to be running (pid %d from %s); stop it before restoring (if that process is not the gateway, remove the stale pidfile)", pid, pidfile)
+			}
+		}
+	}
+	if addr != "" {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return fmt.Errorf("gateway appears to be running (something is listening on %s); stop it before restoring", addr)
+		}
+	}
+	return nil
+}
+
+// processAlive reports whether a process with the given PID exists.
+func processAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // dryRunRestore reports what would be restored without writing any files.
@@ -287,13 +412,18 @@ func dryRunRestore(m *BackupManifest, opts RestoreOptions, result *RestoreResult
 			return nil, fmt.Errorf("read tar entry: %w", err)
 		}
 
-		dest, skip := mapEntryToDestination(hdr.Name, m, opts)
+		dest, root, skip := mapEntryToDestination(hdr.Name, m, opts)
 		if skip {
 			fmt.Printf("  SKIP  %s\n", hdr.Name)
 			result.FilesSkipped++
 			continue
 		}
 		if dest == "" {
+			continue
+		}
+		if err := validateTarEntry(hdr, root, dest); err != nil {
+			fmt.Printf("  REJECT %s: %v\n", hdr.Name, err)
+			result.FilesSkipped++
 			continue
 		}
 
