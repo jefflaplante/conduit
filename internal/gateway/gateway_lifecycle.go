@@ -18,43 +18,50 @@ import (
 func (g *Gateway) buildHTTPServer() *http.Server {
 	mux := http.NewServeMux()
 
+	// conduit-31jg.4: IP-keyed pre-auth limiter -> auth -> per-client
+	// limiter. Previously auth ran first, so floods of missing/invalid
+	// tokens were rejected (after SQLite lookups) without being counted.
+	protect := func(h http.Handler) http.Handler {
+		return g.rateLimitMiddleware.WrapPreAuth(g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(h)))
+	}
+
 	// Diagnostic endpoints - auth requirement controlled by diagnostics config.
 	// Auth middleware skip paths are configured at gateway initialization based
 	// on config. Default: /health is public (for load balancers), others
 	// require auth.
-	mux.Handle("/health", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleHealthEnhanced))))
-	mux.Handle("/metrics", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleMetrics))))
-	mux.Handle("/diagnostics", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleDiagnostics))))
-	mux.Handle("/prometheus", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handlePrometheusMetrics))))
+	mux.Handle("/health", protect(http.HandlerFunc(g.handleHealthEnhanced)))
+	mux.Handle("/metrics", protect(http.HandlerFunc(g.handleMetrics)))
+	mux.Handle("/diagnostics", protect(http.HandlerFunc(g.handleDiagnostics)))
+	mux.Handle("/prometheus", protect(http.HandlerFunc(g.handlePrometheusMetrics)))
 
 	// WebSocket endpoint with custom authentication and rate limiting.
 	mux.Handle("/ws", g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleWebSocket)))
 
 	// Protected API endpoints - wrapped with auth middleware and rate limiting.
-	// Order: auth middleware first (sets context), then rate limiting (uses
-	// context), then handler. POST endpoints also get request body size
+	// Order (see protect): pre-auth IP limiter, auth (sets context),
+	// per-client rate limiting (uses context), handler. POST endpoints also get request body size
 	// limiting to prevent OOM attacks.
-	mux.Handle("/debug/prompt", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleDebugPrompt))))
-	mux.Handle("/api/channels/status", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleChannelStatus))))
-	mux.Handle("/api/test/message", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
-		limitRequestBody(http.HandlerFunc(g.handleTestMessage), MaxRequestBodySize))))
+	mux.Handle("/debug/prompt", protect(http.HandlerFunc(g.handleDebugPrompt)))
+	mux.Handle("/api/channels/status", protect(http.HandlerFunc(g.handleChannelStatus)))
+	mux.Handle("/api/test/message", protect(
+		limitRequestBody(http.HandlerFunc(g.handleTestMessage), MaxRequestBodySize)))
 
 	// Vector API endpoints (registered unconditionally; handlers return 503
 	// when disabled).
 	vectorAPI := &VectorAPI{vectorService: g.search.VectorService}
-	mux.Handle("/api/vector/search", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
-		limitRequestBody(http.HandlerFunc(vectorAPI.handleSearch), MaxRequestBodySize))))
-	mux.Handle("/api/vector/index", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
-		limitRequestBody(http.HandlerFunc(vectorAPI.handleIndex), MaxRequestBodySize))))
-	mux.Handle("/api/vector/delete", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(
-		limitRequestBody(http.HandlerFunc(vectorAPI.handleDelete), MaxRequestBodySize))))
-	mux.Handle("/api/vector/status", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(vectorAPI.handleStatus))))
+	mux.Handle("/api/vector/search", protect(
+		limitRequestBody(http.HandlerFunc(vectorAPI.handleSearch), MaxRequestBodySize)))
+	mux.Handle("/api/vector/index", protect(
+		limitRequestBody(http.HandlerFunc(vectorAPI.handleIndex), MaxRequestBodySize)))
+	mux.Handle("/api/vector/delete", protect(
+		limitRequestBody(http.HandlerFunc(vectorAPI.handleDelete), MaxRequestBodySize)))
+	mux.Handle("/api/vector/status", protect(http.HandlerFunc(vectorAPI.handleStatus)))
 
 	// Brain memory-graph dashboard (gated by config.Brain.DashboardEnabled,
 	// enforced inside the handler). The HTML chrome at /dashboard/brain and
 	// the static asset bundle at /dashboard/assets/ are public; the JSON
 	// data feed at /api/brain/graph is auth-gated.
-	mux.Handle("/api/brain/graph", g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleBrainGraph))))
+	mux.Handle("/api/brain/graph", protect(http.HandlerFunc(g.handleBrainGraph)))
 	mux.Handle("/dashboard/brain", dashboard.BrainHandler())
 	mux.Handle("/dashboard/assets/", http.StripPrefix("/dashboard/assets/", dashboard.AssetsHandler()))
 

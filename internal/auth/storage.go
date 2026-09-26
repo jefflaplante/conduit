@@ -33,7 +33,17 @@ type TokenStorage struct {
 	secret   []byte // HMAC secret key for token hashing
 	onRevoke RevocationCallback
 	revokeMu sync.Mutex
+
+	// conduit-31jg.4: last_used_at writes are throttled to once per
+	// lastUsedInterval per token so every authenticated request does not
+	// turn into a SQLite write.
+	lastUsedMu      sync.Mutex
+	lastUsedWritten map[string]time.Time
 }
+
+// lastUsedInterval is the minimum time between last_used_at writes for a
+// single token (conduit-31jg.4).
+const lastUsedInterval = time.Minute
 
 // AuthToken represents an authentication token
 type AuthToken struct {
@@ -307,9 +317,10 @@ func (ts *TokenStorage) ValidateToken(rawToken string) (*TokenInfo, error) {
 		return nil, fmt.Errorf("token has expired")
 	}
 
-	// Update last_used_at
-	if err := ts.updateLastUsed(token.TokenID); err != nil {
-		// Log error but don't fail the validation
+	// Update last_used_at (throttled, conduit-31jg.4). Errors are ignored:
+	// bookkeeping must not fail validation.
+	if ts.shouldRecordLastUsed(token.TokenID, time.Now()) {
+		_ = ts.updateLastUsed(token.TokenID)
 	}
 
 	// Re-hash v1 token as v2 for future lookups
@@ -592,6 +603,21 @@ func hashTokenPlain(rawToken string) string {
 	h := sha256.New()
 	h.Write([]byte(rawToken))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// shouldRecordLastUsed reports whether last_used_at should be written for
+// tokenID now, and if so records the write time. conduit-31jg.4.
+func (ts *TokenStorage) shouldRecordLastUsed(tokenID string, now time.Time) bool {
+	ts.lastUsedMu.Lock()
+	defer ts.lastUsedMu.Unlock()
+	if ts.lastUsedWritten == nil {
+		ts.lastUsedWritten = make(map[string]time.Time)
+	}
+	if last, ok := ts.lastUsedWritten[tokenID]; ok && now.Sub(last) < lastUsedInterval {
+		return false
+	}
+	ts.lastUsedWritten[tokenID] = now
+	return true
 }
 
 // updateLastUsed updates the last_used_at timestamp for a token
