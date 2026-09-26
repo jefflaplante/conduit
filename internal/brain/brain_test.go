@@ -263,6 +263,13 @@ func TestMaxLTMEntries(t *testing.T) {
 		require.NoError(t, b.Store(ctx, key, "value", TierLongTerm, ""))
 	}
 
+	// conduit-31jg.28: rows inside the eviction grace window are never
+	// evicted, so the cap is enforced once they age out of it.
+	old := time.Now().Add(-2 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+	_, err := b.db.Exec(`UPDATE brain_ltm SET created_at = ?, accessed_at = ?`, old, old)
+	require.NoError(t, err)
+	require.NoError(t, b.Store(ctx, "entry.new", "value", TierLongTerm, ""))
+
 	status, err := b.Status(ctx)
 	require.NoError(t, err)
 	assert.LessOrEqual(t, status.LTMEntries, 5)
