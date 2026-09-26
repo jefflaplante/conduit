@@ -436,6 +436,10 @@ func New(cfg *config.Config) (*Gateway, error) {
 	if workspaceDir == "" {
 		workspaceDir = "./workspace"
 	}
+	// conduit-31jg.34: cron stays in time.Local on purpose. Existing
+	// cron_jobs.json expressions were written for the server zone (UTC);
+	// scheduler.WithLocation(cfg.GetLocation()) would shift them. Per-job
+	// "CRON_TZ=<zone> " prefixes are supported for opt-in migration.
 	gw.scheduler = scheduler.New(workspaceDir, gw.executeScheduledJob)
 
 	// Initialize heartbeat integration

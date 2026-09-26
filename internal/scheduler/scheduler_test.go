@@ -53,7 +53,7 @@ func TestScheduler_ConcurrentJobExecution(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.executeJob(job)
+			s.executeJob(job.ID)
 		}()
 	}
 
@@ -76,8 +76,10 @@ func TestScheduler_ConcurrentJobExecution(t *testing.T) {
 	count := executionCount
 	execMu.Unlock()
 
-	if count < 10 {
-		t.Errorf("expected at least 10 executions, got %d", count)
+	// conduit-31jg.34: overlapping triggers are skipped, so fewer than 10
+	// executions is expected; RunCount must match what actually ran.
+	if count < 1 {
+		t.Errorf("expected at least 1 execution, got %d", count)
 	}
 
 	// Verify job fields are accessible without panic
@@ -85,8 +87,11 @@ func TestScheduler_ConcurrentJobExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJob failed: %v", err)
 	}
-	if j.RunCount < 10 {
-		t.Errorf("expected RunCount >= 10, got %d", j.RunCount)
+	s.mu.RLock()
+	rc := j.RunCount
+	s.mu.RUnlock()
+	if int64(rc) < count {
+		t.Errorf("expected RunCount >= %d, got %d", count, rc)
 	}
 }
 
