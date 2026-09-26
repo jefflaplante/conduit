@@ -708,24 +708,24 @@ func (b *Brain) markPendingEdge(key string) {
 func (b *Brain) Get(ctx context.Context, key string) (*Entry, error) {
 	userID := userIDFromCtx(ctx)
 	now := time.Now()
-	b.mu.RLock()
+	// conduit-31jg.32: one write-locked section for the WM lookup + access
+	// bump, and callers always get a snapshot copy, never the live *Entry
+	// (autoFlush/Consolidate/Store mutate live entries under b.mu).
+	b.mu.Lock()
 	if wm, ok := b.working[userID]; ok {
 		if entry, ok := wm[key]; ok {
 			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
 				// Expired — delete and fall through to LTM lookup.
-				b.mu.RUnlock()
-				b.mu.Lock()
 				delete(wm, key)
 				b.mu.Unlock()
 				return b.getLTM(key)
 			}
-			b.mu.RUnlock()
-			b.mu.Lock()
-			entry.AccessedAt = time.Now()
+			entry.AccessedAt = now
 			entry.AccessCount++
 			entry.Salience = b.computeSalience(entry)
+			copied := *entry
 			b.mu.Unlock()
-			return entry, nil
+			return &copied, nil
 		}
 	}
 	// Check parent's WM (read-only — return a copy, no access bump)
@@ -735,16 +735,16 @@ func (b *Brain) Get(ctx context.Context, key string) (*Entry, error) {
 			if entry, ok := parentWM[key]; ok {
 				if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
 					// Expired parent entry — skip, fall through to LTM.
-					b.mu.RUnlock()
+					b.mu.Unlock()
 					return b.getLTM(key)
 				}
-				b.mu.RUnlock()
 				copied := *entry
+				b.mu.Unlock()
 				return &copied, nil
 			}
 		}
 	}
-	b.mu.RUnlock()
+	b.mu.Unlock()
 	entry, err := b.getLTM(key)
 	if err == nil && entry != nil {
 		// Fire-and-forget: spread activation to neighbours. Errors are non-fatal.
@@ -828,17 +828,22 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	parentID := parentUserIDFromCtx(ctx)
 	now := time.Now()
 
-	// First pass: identify matching WM entries under RLock.
-	var wmHits []*Entry
-	b.mu.RLock()
+	// conduit-31jg.32: match, bump access and snapshot our own WM hits in a
+	// single write-locked pass. Only copies go into `scored`: the sort below
+	// runs without the lock and the entries are returned to callers, while
+	// autoFlush/Consolidate/Store keep mutating the live entries under b.mu.
+	b.mu.Lock()
 	if wm, ok := b.working[userID]; ok {
 		for _, entry := range wm {
 			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
 				continue
 			}
 			if ms := queryMatchScore(entry, terms); ms > 0 {
-				wmHits = append(wmHits, entry)
-				scored = append(scored, scoredEntry{entry, ms})
+				entry.AccessedAt = now
+				entry.AccessCount++
+				entry.Salience = b.computeSalience(entry)
+				copied := *entry
+				scored = append(scored, scoredEntry{&copied, ms})
 				seen[entry.Key] = true
 			}
 		}
@@ -860,19 +865,7 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 			}
 		}
 	}
-	b.mu.RUnlock()
-
-	// Second pass: bump AccessCount/AccessedAt on our own WM hits under write lock.
-	if len(wmHits) > 0 {
-		now := time.Now()
-		b.mu.Lock()
-		for _, entry := range wmHits {
-			entry.AccessedAt = now
-			entry.AccessCount++
-			entry.Salience = b.computeSalience(entry)
-		}
-		b.mu.Unlock()
-	}
+	b.mu.Unlock()
 
 	// Build OR-joined SQL query with per-term match counting.
 	var whereClauses []string
@@ -1161,7 +1154,8 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 			}
 			if strings.HasPrefix(entry.Key, prefix) {
 				if sourcePrefix == "" || strings.HasPrefix(entry.Source, sourcePrefix) {
-					results = append(results, entry)
+					copied := *entry // conduit-31jg.32: snapshot, never the live entry
+					results = append(results, &copied)
 					seen[entry.Key] = true
 				}
 			}
@@ -1331,12 +1325,14 @@ func (b *Brain) Consolidate(ctx context.Context, autoPromote bool) (*Consolidati
 		return report, nil
 	}
 
-	var toPromote []*Entry
+	// conduit-31jg.32: toPromote holds snapshots — storeLTM runs outside the
+	// lock while Store/Get/autoFlush keep mutating the live entries.
+	var toPromote []Entry
 	var toEvict []string
 	for key, entry := range wm {
 		entry.Salience = b.computeSalience(entry)
 		if autoPromote && entry.Salience >= b.consolidateThreshold {
-			toPromote = append(toPromote, entry)
+			toPromote = append(toPromote, *entry)
 		} else if entry.Salience < b.evictThreshold {
 			toEvict = append(toEvict, key)
 		}
@@ -1359,8 +1355,12 @@ func (b *Brain) Consolidate(ctx context.Context, autoPromote bool) (*Consolidati
 	if len(promotedKeys) > 0 {
 		b.mu.Lock()
 		if wm, ok := b.working[userID]; ok {
-			for _, k := range promotedKeys {
-				delete(wm, k)
+			for _, snap := range toPromote {
+				// Only drop the WM copy if it still holds the value we
+				// promoted; a concurrent Store of a newer value stays in WM.
+				if live, ok := wm[snap.Key]; ok && live.Value == snap.Value && containsString(promotedKeys, snap.Key) {
+					delete(wm, snap.Key)
+				}
 			}
 		}
 		b.mu.Unlock()
@@ -1662,6 +1662,15 @@ func entryMatchesAnyTerm(e *Entry, terms []string) bool {
 	valueLower := strings.ToLower(e.Value)
 	for _, term := range terms {
 		if strings.Contains(keyLower, term) || strings.Contains(valueLower, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
 			return true
 		}
 	}
