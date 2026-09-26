@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -81,32 +82,40 @@ type CreateTokenResponse struct {
 	TokenInfo TokenInfo `json:"token_info"` // Public token information
 }
 
-// NewTokenStorage creates a new token storage instance.
-// The secret parameter is the HMAC key for token hashing. If empty, a random
-// 32-byte key is generated (tokens won't survive process restarts without a
-// configured secret).
+// ErrNoTokenSecret is returned when a token store is constructed without an
+// HMAC secret. conduit-31jg.48: there is no ephemeral-key fallback any more —
+// such a key silently invalidated every token on restart (and a CLI using one
+// minted tokens the server could never validate).
+var ErrNoTokenSecret = errors.New("token storage: no HMAC token secret configured (set auth.token_secret, " + TokenSecretEnvVar + ", or let ResolveTokenStore persist one)")
+
+// OpenTokenStorage creates a token storage instance, returning
+// ErrNoTokenSecret when secret is empty. Production callers obtain the
+// secret from ResolveTokenStore.
+func OpenTokenStorage(db *sql.DB, secret string) (*TokenStorage, error) {
+	if strings.TrimSpace(secret) == "" {
+		return nil, ErrNoTokenSecret
+	}
+	return NewTokenStorage(db, secret), nil
+}
+
+// NewTokenStorage creates a new token storage instance. The secret parameter
+// is the HMAC key for token hashing (hex-decoded when it is valid hex).
 //
-// conduit-31jg.3: production callers (server and token CLI) must obtain the
-// secret from ResolveTokenStore, which never yields an empty secret. The
-// ephemeral fallback here only remains for tests and ad-hoc callers.
+// conduit-31jg.48: an empty secret no longer generates an ephemeral random
+// key. The returned storage fails closed instead: CreateToken and
+// ValidateToken return ErrNoTokenSecret. Prefer OpenTokenStorage, which
+// reports the problem at construction time.
 func NewTokenStorage(db *sql.DB, secret string) *TokenStorage {
+	if strings.TrimSpace(secret) == "" {
+		log.Printf("ERROR: %v", ErrNoTokenSecret)
+		return &TokenStorage{db: db}
+	}
 	var key []byte
-	if secret != "" {
-		// Try hex-decoding first; fall back to raw string
-		decoded, err := hex.DecodeString(secret)
-		if err == nil {
-			key = decoded
-		} else {
-			key = []byte(secret)
-		}
+	// Try hex-decoding first; fall back to raw string
+	if decoded, err := hex.DecodeString(secret); err == nil {
+		key = decoded
 	} else {
-		key = make([]byte, 32)
-		if _, err := rand.Read(key); err != nil {
-			// This should never happen; if it does, fall back to an insecure key
-			log.Printf("WARNING: failed to generate random HMAC key: %v", err)
-			key = []byte("insecure-fallback-key-change-me!")
-		}
-		log.Printf("WARNING: No token_secret configured in auth config — generated ephemeral HMAC key. Tokens created now won't validate after restart. Set auth.token_secret in your config for persistence.")
+		key = []byte(secret)
 	}
 	return &TokenStorage{db: db, secret: key}
 }
@@ -122,6 +131,9 @@ func (ts *TokenStorage) OnRevoke(cb RevocationCallback) {
 
 // CreateToken generates and stores a new authentication token
 func (ts *TokenStorage) CreateToken(req CreateTokenRequest) (*CreateTokenResponse, error) {
+	if len(ts.secret) == 0 {
+		return nil, ErrNoTokenSecret // conduit-31jg.48: fail closed
+	}
 	// Validate input
 	if strings.TrimSpace(req.ClientName) == "" {
 		return nil, fmt.Errorf("client_name is required")
@@ -194,6 +206,9 @@ func (ts *TokenStorage) CreateTokenWithCustomFormat(req CreateTokenRequest, rawT
 	if rawToken == "" {
 		return nil, fmt.Errorf("token is required")
 	}
+	if len(ts.secret) == 0 {
+		return nil, ErrNoTokenSecret // conduit-31jg.48: fail closed
+	}
 
 	// Hash token for storage using HMAC-SHA256
 	hashedToken := ts.hashTokenHMAC(rawToken)
@@ -250,6 +265,9 @@ func (ts *TokenStorage) CreateTokenWithCustomFormat(req CreateTokenRequest, rawT
 func (ts *TokenStorage) ValidateToken(rawToken string) (*TokenInfo, error) {
 	if rawToken == "" {
 		return nil, fmt.Errorf("token is required")
+	}
+	if len(ts.secret) == 0 {
+		return nil, ErrNoTokenSecret // conduit-31jg.48: fail closed
 	}
 
 	// Try HMAC-SHA256 hash first (v2)

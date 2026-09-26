@@ -7,15 +7,67 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"conduit/internal/auth"
+	"conduit/internal/config"
 	"conduit/internal/database"
 
 	"github.com/spf13/cobra"
 )
 
-// PairingCLIConfig holds configuration for pairing CLI commands
+// PairingCLIConfig holds configuration for pairing CLI commands.
+//
+// conduit-31jg.48: the pairing CLI resolves its database exactly like the
+// server and the token CLI (conduit-31jg.3): it loads the gateway config
+// (ConfigPath, i.e. --config) and uses auth.ResolveDatabasePath. It used to
+// derive "<config-name>.db" from the config FILE NAME and pass it through a
+// CONDUIT_DB_PATH environment variable, which could open a different
+// database than the running server.
 type PairingCLIConfig struct {
+	// ConfigPath is the gateway config file (the --config flag).
+	ConfigPath string
+	// DatabasePath, when non-empty, is an explicit --database override.
 	DatabasePath string
 	Verbose      bool
+}
+
+// resolveDatabasePath returns the database the pairing commands operate on.
+func (c *PairingCLIConfig) resolveDatabasePath() (string, error) {
+	if c.DatabasePath != "" {
+		return c.DatabasePath, nil
+	}
+	if c.ConfigPath == "" {
+		return "", fmt.Errorf("no config file specified: pairing commands need the gateway config (--config) to find the database")
+	}
+	// config.Load writes a default config when the file is missing; that
+	// would point at a fresh database the server never reads.
+	if _, err := os.Stat(c.ConfigPath); err != nil {
+		return "", fmt.Errorf("cannot read gateway config %q (use --config to point at the server's config): %w", c.ConfigPath, err)
+	}
+	cfg, err := config.Load(c.ConfigPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to load gateway config %q: %w", c.ConfigPath, err)
+	}
+	path := auth.ResolveDatabasePath(cfg)
+	if path == "" {
+		return "", fmt.Errorf("gateway config %q has no database.path; pass --database explicitly", c.ConfigPath)
+	}
+	return path, nil
+}
+
+// openConfiguredDatabase resolves and opens the pairing database.
+func (c *PairingCLIConfig) openConfiguredDatabase() (*sql.DB, error) {
+	dbPath, err := c.resolveDatabasePath()
+	if err != nil {
+		return nil, err
+	}
+	if c.Verbose {
+		fmt.Fprintf(os.Stderr, "Using config %s, database %s\n", c.ConfigPath, dbPath)
+	}
+	db, err := openPairingDatabase(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database %q: %w", dbPath, err)
+	}
+	return db, nil
 }
 
 // ListPairingsCmd creates the pairing list command for Telegram
@@ -72,27 +124,9 @@ func TelegramPairingRootCmd(config *PairingCLIConfig) *cobra.Command {
 
 // listPairings handles listing of pairing codes
 func listPairings(config *PairingCLIConfig, includeExpired bool) error {
-	// Update config from environment if not set
-	if config.DatabasePath == "" {
-		if dbPath := os.Getenv("CONDUIT_DB_PATH"); dbPath != "" {
-			config.DatabasePath = dbPath
-		} else {
-			config.DatabasePath = "gateway.db" // default
-		}
-	}
-	if verbose := os.Getenv("CONDUIT_VERBOSE"); verbose == "true" {
-		config.Verbose = true
-	}
-
-	if config.Verbose {
-		fmt.Printf("pairing_cli.go:listPairings: Using database path: %s\n", config.DatabasePath)
-		fmt.Printf("pairing_cli.go:listPairings: CONDUIT_DB_PATH env var: %s\n", os.Getenv("CONDUIT_DB_PATH"))
-	}
-
-	// Open database
-	db, err := openPairingDatabase(config.DatabasePath)
+	db, err := config.openConfiguredDatabase()
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return err
 	}
 	defer db.Close()
 
@@ -157,27 +191,9 @@ func listPairings(config *PairingCLIConfig, includeExpired bool) error {
 
 // approvePairing handles approving a pairing code
 func approvePairing(config *PairingCLIConfig, codeInput string) error {
-	// Update config from environment if not set
-	if config.DatabasePath == "" {
-		if dbPath := os.Getenv("CONDUIT_DB_PATH"); dbPath != "" {
-			config.DatabasePath = dbPath
-		} else {
-			config.DatabasePath = "gateway.db" // default
-		}
-	}
-	if verbose := os.Getenv("CONDUIT_VERBOSE"); verbose == "true" {
-		config.Verbose = true
-	}
-
-	if config.Verbose {
-		fmt.Printf("pairing_cli.go:approvePairing: Using database path: %s\n", config.DatabasePath)
-		fmt.Printf("pairing_cli.go:approvePairing: CONDUIT_DB_PATH env var: %s\n", os.Getenv("CONDUIT_DB_PATH"))
-	}
-
-	// Open database
-	db, err := openPairingDatabase(config.DatabasePath)
+	db, err := config.openConfiguredDatabase()
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return err
 	}
 	defer db.Close()
 
@@ -254,7 +270,9 @@ func approvePairing(config *PairingCLIConfig, codeInput string) error {
 
 // openPairingDatabase opens the SQLite database and runs migrations
 func openPairingDatabase(dbPath string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// Same DSN (busy_timeout, WAL, ...) as the server so CLI writes wait on a
+	// running gateway instead of failing with SQLITE_BUSY. conduit-31jg.48
+	db, err := sql.Open("sqlite", database.BuildDSN(dbPath))
 	if err != nil {
 		return nil, err
 	}
