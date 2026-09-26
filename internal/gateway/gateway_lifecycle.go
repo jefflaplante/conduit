@@ -106,6 +106,7 @@ func (g *Gateway) startSSHServer(ctx context.Context) {
 			}
 			return NewDirectClient(DirectClientConfig{
 				ParentCtx:    ctx,
+				Approvals:    g.approvals, // conduit-31jg.43
 				UserID:       sshUser,
 				Sessions:     g.sessions,
 				AI:           g.ai,
@@ -149,6 +150,12 @@ func (g *Gateway) startSSHServer(ctx context.Context) {
 func (g *Gateway) stopAll(shutdownCtx context.Context, server *http.Server) {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		g.logger.Error("server shutdown error", "error", err)
+	}
+
+	// conduit-31jg.43: drop pending approvals (never run) and let in-flight
+	// approved actions finish while channels can still report the result.
+	if g.approvals != nil {
+		g.approvals.Close()
 	}
 
 	g.stopChannels()

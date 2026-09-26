@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"conduit/internal/approval"
 	"conduit/internal/channels"
 	"conduit/internal/protocol"
 	"conduit/internal/tools/types"
@@ -84,6 +85,9 @@ func (g *Gateway) wakeSession(sessionKey string) {
 	providerOverride := session.Context["provider"]
 	wakeCtx = types.WithRequestContext(wakeCtx, session.ChannelID, session.UserID, sessionKey)
 	wakeCtx = types.WithWakeSource(wakeCtx, wakeSource)
+	// conduit-31jg.43: a wake is model/inter-session driven, not a live
+	// human message — approval-gated actions fail closed.
+	wakeCtx = approval.WithNonInteractive(wakeCtx, "wake:"+wakeSource)
 
 	// Track this request so /stop can cancel it.
 	g.ws.ActiveRequestsMu.Lock()

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/go-telegram/bot/models"
 	"github.com/google/uuid"
 
+	"conduit/internal/approval"
 	"conduit/internal/channels"
 	"conduit/internal/protocol"
 	"conduit/internal/stt"
@@ -381,6 +383,13 @@ func (a *Adapter) SendMessage(msg *protocol.OutgoingMessage) error {
 		return nil
 	}
 
+	// conduit-31jg.43: approval notices are gateway-generated and must be
+	// shown verbatim (the sanitizer strips <addr> tags, which could hide a
+	// recipient from the human approving the action).
+	if msg.Metadata[approval.MetaNotice] != "" {
+		return a.sendApprovalNotice(chatID, msg)
+	}
+
 	// Process MEDIA protocol lines in the response
 	mediaSender := NewMediaSender(a.bot, a.ctx)
 	textAfterMedia, mediaErrors := mediaSender.ProcessAndSendMedia(chatID, msg.Text)
@@ -468,6 +477,44 @@ func (a *Adapter) SendMessage(msg *protocol.OutgoingMessage) error {
 	a.msgCount++
 	a.mutex.Unlock()
 
+	return nil
+}
+
+// sendApprovalNotice sends an approval prompt/result as plain text with no
+// sanitizing or markdown conversion. Approve/Deny inline buttons go on the
+// last chunk; pressing one arrives as a callback query whose Data is the
+// reply text ("YES <code>"), which is exactly what a typed reply would be
+// (conduit-31jg.43).
+func (a *Adapter) sendApprovalNotice(chatID int64, msg *protocol.OutgoingMessage) error {
+	var markup models.ReplyMarkup
+	if raw := msg.Metadata[approval.MetaChoices]; raw != "" {
+		var choices []approval.Choice
+		if err := json.Unmarshal([]byte(raw), &choices); err == nil && len(choices) > 0 {
+			row := make([]models.InlineKeyboardButton, 0, len(choices))
+			for _, c := range choices {
+				if c.Label == "" || c.Reply == "" || len(c.Reply) > 64 { // Telegram callback_data limit
+					continue
+				}
+				row = append(row, models.InlineKeyboardButton{Text: c.Label, CallbackData: c.Reply})
+			}
+			if len(row) > 0 {
+				markup = &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}}
+			}
+		}
+	}
+	chunks := splitMessage(msg.Text, TelegramMessageLimit)
+	for i, chunk := range chunks {
+		params := &bot.SendMessageParams{ChatID: chatID, Text: chunk}
+		if i == len(chunks)-1 && markup != nil {
+			params.ReplyMarkup = markup
+		}
+		if _, err := a.bot.SendMessage(a.ctx, params); err != nil {
+			return fmt.Errorf("failed to send approval notice chunk %d/%d: %w", i+1, len(chunks), err)
+		}
+	}
+	a.mutex.Lock()
+	a.msgCount++
+	a.mutex.Unlock()
 	return nil
 }
 

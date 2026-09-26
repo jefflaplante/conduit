@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,14 @@ type Executor struct {
 	workspaceDir string
 	timeout      time.Duration
 	environment  map[string]string
+
+	// approver gates owner-account sends (conduit-31jg.43). Nil => such
+	// sends fail closed.
+	approverMu sync.RWMutex
+	approver   Approver
+	// runApproved overrides how an approved owner send is executed. Tests
+	// only (never shell out to the real gog binary); nil => e.execute.
+	runApproved func(ctx context.Context, skill Skill, action string, args map[string]interface{}) (*ExecutionResult, error)
 }
 
 // NewExecutor creates a new skill executor
@@ -35,8 +44,19 @@ func NewExecutor(cfg ExecutionConfig) *Executor {
 	}
 }
 
-// ExecuteSkill executes a skill with the given action and arguments
+// ExecuteSkill executes a skill with the given action and arguments.
+// Owner-account email sends are diverted to the human approval gate and run
+// only after the originating human approves (conduit-31jg.43).
 func (e *Executor) ExecuteSkill(ctx context.Context, skill Skill, action string, args map[string]interface{}) (*ExecutionResult, error) {
+	if res, gated := e.gateOwnerSend(ctx, skill, action, args); gated {
+		return res, nil
+	}
+	return e.execute(ctx, skill, action, args)
+}
+
+// execute runs a skill with no approval gating. Only ExecuteSkill (after the
+// gate) and an approved owner-send ExecuteFunc may call it.
+func (e *Executor) execute(ctx context.Context, skill Skill, action string, args map[string]interface{}) (*ExecutionResult, error) {
 	// Create a context with timeout
 	timeoutCtx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
@@ -348,6 +368,18 @@ func isOwnerAccount(v string) bool {
 	return v == "jeff" || v == "owner@example.com" || v == "owner-alt@example.com"
 }
 
+// gogSendUsesOwner reports whether a gog/email send with these args goes out
+// as the owner ($GOG_ACCOUNT): any non-Jules account, or an owner-alias from.
+// Single source of truth for buildGogCommand and the approval gate
+// (conduit-31jg.43). Callers must run validateAccountArg first.
+func gogSendUsesOwner(args map[string]interface{}) bool {
+	if acct, ok := args["account"].(string); ok && acct != "" && !isJulesAccount(acct) {
+		return true
+	}
+	from, _ := args["from"].(string)
+	return isOwnerAccount(from)
+}
+
 // validateAccountArg rejects account/inbox values outside the known alias
 // set. Model-supplied identities are never interpolated into the shell;
 // they only select one of the fixed gog*Account expansions (conduit-31jg.2).
@@ -492,18 +524,15 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 		to := getArg("to")
 		subject := getArg("subject")
 		body := getArg("body")
-		from := getArg("from")
 		// Safety default: sends without an explicit identity go from Jules's
 		// account, never Jeff's. Matches email-safety policy (autonomous
-		// sends must use $JULES_ACCOUNT); $GOG_ACCOUNT requires Jeff's
-		// explicit approval in args.
-		// NOTE (conduit-31jg.2 follow-up): an owner-alias account/from
-		// switches to $GOG_ACCOUNT with no enforced approval check.
+		// sends must use $JULES_ACCOUNT). An owner-alias account/from selects
+		// $GOG_ACCOUNT; ExecuteSkill only reaches this point for an owner
+		// send after the human approved it in-channel (conduit-31jg.43,
+		// see owner_approval.go).
 		sendAccount := gogJulesAccount
-		if acct, ok := args["account"].(string); ok && acct != "" && !isJulesAccount(acct) {
+		if gogSendUsesOwner(args) {
 			sendAccount = gogOwnerAccount // validated owner alias above
-		} else if isOwnerAccount(from) {
-			sendAccount = gogOwnerAccount
 		}
 		if to == "" {
 			return false, nil
