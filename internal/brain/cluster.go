@@ -93,9 +93,9 @@ func (b *Brain) clusterNeighbours(seedKeys []string, matchedKeys map[string]bool
 	// BFS through namespace levels.
 	// discovered tracks all cluster entries found, keyed by entry key.
 	type scoredEntry struct {
-		entry    *Entry
-		score    float64 // higher = more relevant
-		depth    int     // BFS depth where discovered
+		entry *Entry
+		score float64 // higher = more relevant
+		depth int     // BFS depth where discovered
 	}
 	discovered := make(map[string]*scoredEntry)
 

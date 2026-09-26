@@ -295,7 +295,7 @@ func normalizeKey(key string) string {
 // gradually backfill the full graph without blocking or creating N-squared edges.
 func (r *REMCycle) backfillLTMEdeges(ctx context.Context, result *ConsolidationResult, dryRun bool) error {
 	if dryRun {
-	// In dry run, just count how many nodes would be backfilled
+		// In dry run, just count how many nodes would be backfilled
 		var isolatedNodeCount int
 		err := r.db.QueryRow(`
 			SELECT COUNT(*)

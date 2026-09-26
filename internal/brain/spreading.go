@@ -36,8 +36,8 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 	}
 
 	type neighbourUpdate struct {
-		key          string
-		warmthBoost  float64
+		key         string
+		warmthBoost float64
 	}
 
 	// Collect all (neighbour, boost) pairs for all source keys.

@@ -679,8 +679,8 @@ func TestSelfTestAll(t *testing.T) {
 
 func TestSelfTestResult_Helpers(t *testing.T) {
 	tests := []struct {
-		status       types.SelfTestStatus
-		wantOK       bool
+		status         types.SelfTestStatus
+		wantOK         bool
 		wantFunctional bool
 	}{
 		{types.SelfTestStatusOK, true, true},
@@ -722,10 +722,10 @@ func TestRegistrySelfTestResult_Summary(t *testing.T) {
 
 func TestRegistrySelfTestResult_IsHealthy(t *testing.T) {
 	tests := []struct {
-		name          string
-		failed        int
-		degraded      int
-		wantHealthy   bool
+		name        string
+		failed      int
+		degraded    int
+		wantHealthy bool
 	}{
 		{"all healthy", 0, 0, true},
 		{"has failed", 1, 0, false},

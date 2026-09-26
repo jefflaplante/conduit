@@ -89,10 +89,10 @@ type RestartBreadcrumb struct {
 }
 
 type BreadcrumbSession struct {
-	SessionKey   string `json:"session_key"`
-	UserID       string `json:"user_id"`
-	LastMsgID    string `json:"last_message_id,omitempty"`
-	ChannelID    string `json:"channel_id,omitempty"`
+	SessionKey string `json:"session_key"`
+	UserID     string `json:"user_id"`
+	LastMsgID  string `json:"last_message_id,omitempty"`
+	ChannelID  string `json:"channel_id,omitempty"`
 }
 
 // ShutdownManager orchestrates graceful shutdown in phases:

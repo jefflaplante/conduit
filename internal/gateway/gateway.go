@@ -150,12 +150,12 @@ type Gateway struct {
 
 // Client represents a WebSocket client connection
 type Client struct {
-	ID         string
-	Role       string // "client" or "node"
-	UserID     string // user identity for session scoping
-	TokenID    string // auth token ID used for this connection (for revocation)
-	Conn       *websocket.Conn
-	Send       chan []byte
+	ID      string
+	Role    string // "client" or "node"
+	UserID  string // user identity for session scoping
+	TokenID string // auth token ID used for this connection (for revocation)
+	Conn    *websocket.Conn
+	Send    chan []byte
 
 	// CloseFrame carries an out-of-band signal from off-goroutine callers
 	// (e.g. RevokeClientByToken running on the auth-revoke hook) asking the

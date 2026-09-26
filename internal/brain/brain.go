@@ -58,10 +58,10 @@ type Entry struct {
 	Salience    float64    `json:"salience"`
 	Warmth      float64    `json:"warmth,omitempty"`
 	Source      string     `json:"source,omitempty"`
-	Stale          bool       `json:"stale,omitempty"`
-	ClusterHit      bool       `json:"cluster_hit,omitempty"`
-	WarmthHit      bool       `json:"warmth_hit,omitempty"` // injected by warmth-floor, not a keyword/cluster match
-	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	Stale       bool       `json:"stale,omitempty"`
+	ClusterHit  bool       `json:"cluster_hit,omitempty"`
+	WarmthHit   bool       `json:"warmth_hit,omitempty"` // injected by warmth-floor, not a keyword/cluster match
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 }
 
 type ConsolidationReport struct {
@@ -82,15 +82,15 @@ type Status struct {
 	ExpiringSoon int      `json:"expiring_soon,omitempty"`
 
 	// Spreading activation metrics (session-lifetime counters).
-	SpreadEvents     int64          `json:"spread_events,omitempty"`
-	AvgWarmthBoost   float64        `json:"avg_warmth_boost,omitempty"`
-	ClusterHitRate   float64        `json:"cluster_hit_rate,omitempty"`
-	WarmthHitCount   int64          `json:"warmth_hit_count,omitempty"`
-	EdgeCountByType  map[string]int `json:"edge_count_by_type,omitempty"`
+	SpreadEvents    int64          `json:"spread_events,omitempty"`
+	AvgWarmthBoost  float64        `json:"avg_warmth_boost,omitempty"`
+	ClusterHitRate  float64        `json:"cluster_hit_rate,omitempty"`
+	WarmthHitCount  int64          `json:"warmth_hit_count,omitempty"`
+	EdgeCountByType map[string]int `json:"edge_count_by_type,omitempty"`
 
 	// Access bonus metrics.
-	AvgAccessBonus   float64 `json:"avg_access_bonus,omitempty"`
-	TopAccessBonus   []string `json:"top_access_bonus_keys,omitempty"`
+	AvgAccessBonus float64  `json:"avg_access_bonus,omitempty"`
+	TopAccessBonus []string `json:"top_access_bonus_keys,omitempty"`
 }
 
 // storeOpts holds options for Store calls, populated by StoreOption funcs.
@@ -137,17 +137,17 @@ func ParseDuration(s string) (time.Duration, error) {
 type Option func(*Brain)
 
 func WithMaxLTMEntries(n int) Option               { return func(b *Brain) { b.maxLTMEntries = n } }
-func WithAutoFlushInterval(d time.Duration) Option   { return func(b *Brain) { b.autoFlushInterval = d } }
-func WithConsolidateThreshold(t float64) Option      { return func(b *Brain) { b.consolidateThreshold = t } }
-func WithEvictThreshold(t float64) Option            { return func(b *Brain) { b.evictThreshold = t } }
-func WithAutoPromote(v bool) Option                  { return func(b *Brain) { b.autoPromote = v } }
-func WithWMGracePeriod(d time.Duration) Option       { return func(b *Brain) { b.wmGracePeriod = d } }
-func WithAccessWeight(w float64) Option              { return func(b *Brain) { b.accessWeight = w } }
-func WithRecencyWeight(w float64) Option             { return func(b *Brain) { b.recencyWeight = w } }
-func WithTierWeight(w float64) Option                { return func(b *Brain) { b.tierWeight = w } }
-func WithRecencyDecayRate(r float64) Option          { return func(b *Brain) { b.recencyDecayRate = r } }
-func WithAccessCountCap(n int) Option                { return func(b *Brain) { b.accessCountCap = n } }
-func WithHeatPromotionThreshold(n int) Option        { return func(b *Brain) { b.heatPromotionThreshold = n } }
+func WithAutoFlushInterval(d time.Duration) Option { return func(b *Brain) { b.autoFlushInterval = d } }
+func WithConsolidateThreshold(t float64) Option    { return func(b *Brain) { b.consolidateThreshold = t } }
+func WithEvictThreshold(t float64) Option          { return func(b *Brain) { b.evictThreshold = t } }
+func WithAutoPromote(v bool) Option                { return func(b *Brain) { b.autoPromote = v } }
+func WithWMGracePeriod(d time.Duration) Option     { return func(b *Brain) { b.wmGracePeriod = d } }
+func WithAccessWeight(w float64) Option            { return func(b *Brain) { b.accessWeight = w } }
+func WithRecencyWeight(w float64) Option           { return func(b *Brain) { b.recencyWeight = w } }
+func WithTierWeight(w float64) Option              { return func(b *Brain) { b.tierWeight = w } }
+func WithRecencyDecayRate(r float64) Option        { return func(b *Brain) { b.recencyDecayRate = r } }
+func WithAccessCountCap(n int) Option              { return func(b *Brain) { b.accessCountCap = n } }
+func WithHeatPromotionThreshold(n int) Option      { return func(b *Brain) { b.heatPromotionThreshold = n } }
 
 // WithMaxWMEntriesPerUser caps each user's working-memory bucket. When a
 // Store/StoreBulk pushes a bucket over the cap, the least valuable entries
@@ -167,12 +167,16 @@ func WithSpreadingDecay(d float64) Option { return func(b *Brain) { b.spreadingD
 
 // WithSpreadingEnabled enables or disables spreading activation globally.
 // Default: true.
-func WithSpreadingEnabled(enabled bool) Option { return func(b *Brain) { b.spreadingEnabled = enabled } }
+func WithSpreadingEnabled(enabled bool) Option {
+	return func(b *Brain) { b.spreadingEnabled = enabled }
+}
 
 // WithMinConfidenceThreshold sets the minimum edge confidence required for an
 // edge to participate in spreading activation. Edges below this threshold will
 // still be searchable but won't propagate warmth. Default: 0.3.
-func WithMinConfidenceThreshold(t float64) Option { return func(b *Brain) { b.minConfidenceThreshold = t } }
+func WithMinConfidenceThreshold(t float64) Option {
+	return func(b *Brain) { b.minConfidenceThreshold = t }
+}
 
 // WithMatchWeight sets the weight applied to per-entry keyword match score
 // during recall ranking. Default: 0.5.
@@ -234,13 +238,13 @@ type Brain struct {
 	ltmEvictionGrace       time.Duration // conduit-31jg.28: capacity-eviction immunity window
 
 	// Spreading activation
-	spreadingEnabled   bool
-	spreadingDecay     float64 // neighbour boost multiplier
-	warmthDecay        float64 // per-flush warmth cooling (was 0.95, now 0.85)
-	edgeDecay          float64 // per-flush edge confidence cooling (was 0.95, now 0.85)
+	spreadingEnabled       bool
+	spreadingDecay         float64 // neighbour boost multiplier
+	warmthDecay            float64 // per-flush warmth cooling (was 0.95, now 0.85)
+	edgeDecay              float64 // per-flush edge confidence cooling (was 0.95, now 0.85)
 	minConfidenceThreshold float64 // min edge confidence to participate in spreading (default 0.3)
-	edgeAccessAlpha    float64 // usage-weighted boost factor (default 0.1)
-	edgeAccessDecay    float64 // per-flush decay of edge access_count (default 0.95)
+	edgeAccessAlpha        float64 // usage-weighted boost factor (default 0.1)
+	edgeAccessDecay        float64 // per-flush decay of edge access_count (default 0.95)
 
 	// Recall blended-score weights. Defaults sum to 1.0 (match 0.5, salience 0.3,
 	// warmth 0.2) but aren't forced to — callers can overweight a signal if
@@ -272,12 +276,12 @@ type Brain struct {
 
 	// Spreading metrics (mu-protected). Session-lifetime counters; reset on
 	// Brain restart. Used by Status() to report effectiveness.
-	spreadEvents     int64
-	totalBoost       float64
-	totalBoostCount  int64
-	clusterHitCount  int64
-	directHitCount   int64
-	warmthHitCount   int64
+	spreadEvents    int64
+	totalBoost      float64
+	totalBoostCount int64
+	clusterHitCount int64
+	directHitCount  int64
+	warmthHitCount  int64
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -1153,7 +1157,7 @@ func (b *Brain) logRecallEvent(query string, results []*Entry) {
 		return
 	}
 	defer file.Close()
-	
+
 	if _, err := file.Write(append(data, '\n')); err != nil {
 		log.Printf("Brain: failed to write recall event: %v", err)
 	}
@@ -2037,4 +2041,3 @@ func (b *Brain) ExportGraphFile(path string) error {
 	}
 	return nil
 }
-

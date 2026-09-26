@@ -931,4 +931,3 @@ func (r *Registry) SelfTestAll(ctx context.Context, opts *types.SelfTestOptions)
 	result.TestDuration = time.Since(result.TestedAt)
 	return result
 }
-
