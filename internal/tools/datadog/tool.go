@@ -604,3 +604,8 @@ func parseTime(s string) (time.Time, error) {
 
 	return time.Time{}, fmt.Errorf("invalid time format: use RFC3339 or relative (-1h, -15m)")
 }
+
+// IncludeDataInModelOutput opts this tool into having ToolResult.Data
+// rendered for the model: ids and lists needed for follow-up calls live
+// only in Data (conduit-31jg.39).
+func (t *DatadogTool) IncludeDataInModelOutput() bool { return true }

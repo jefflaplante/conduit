@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"conduit/internal/ai"
 	"conduit/internal/tools/debuglog"
@@ -767,10 +768,11 @@ func (e *ExecutionEngine) formatToolResultForAI(result *ExecutionResult) string 
 		return msg
 	}
 
-	// Return the content, with metadata if available
+	// conduit-31jg.39: Data is appended only for tools that opt in (their
+	// payload lives in Data) or when Content is empty. Appending it to every
+	// result doubled Glob's file list and re-sent Chain step outputs.
 	content := result.Result.Content
-	if len(result.Result.Data) > 0 {
-		// Add structured data as JSON for AI context
+	if len(result.Result.Data) > 0 && (strings.TrimSpace(content) == "" || e.toolWantsDataInOutput(result.ToolCall.Name)) {
 		if dataJSON, err := json.Marshal(result.Result.Data); err == nil {
 			content += fmt.Sprintf("\n\nStructured data: %s", string(dataJSON))
 		}
@@ -786,6 +788,35 @@ func (e *ExecutionEngine) formatToolResultForAI(result *ExecutionResult) string 
 	}
 
 	return content
+}
+
+// toolWantsDataInOutput reports whether the named tool opted into having
+// ToolResult.Data rendered for the model (Registry.IncludeDataInModelOutput).
+func (e *ExecutionEngine) toolWantsDataInOutput(name string) bool {
+	p, ok := e.registry.(interface{ IncludeDataInModelOutput(name string) bool })
+	return ok && p.IncludeDataInModelOutput(name)
+}
+
+// headTailRunes keeps headSize bytes from the start and tailSize from the
+// end of s with marker between, never splitting a UTF-8 rune (conduit-31jg.39).
+func headTailRunes(s string, headSize, tailSize int, marker string) string {
+	if headSize < 0 {
+		headSize = 0
+	}
+	if tailSize < 0 {
+		tailSize = 0
+	}
+	if headSize+tailSize >= len(s) {
+		return s
+	}
+	for headSize > 0 && !utf8.RuneStart(s[headSize]) {
+		headSize--
+	}
+	tailStart := len(s) - tailSize
+	for tailStart < len(s) && !utf8.RuneStart(s[tailStart]) {
+		tailStart++
+	}
+	return s[:headSize] + marker + s[tailStart:]
 }
 
 // smartTruncate performs intelligent truncation preserving head, tail, and error lines.
@@ -808,9 +839,8 @@ func (e *ExecutionEngine) smartTruncate(content string, maxChars int) string {
 		// Simple char truncation: keep first 80% and last 20%
 		headSize := maxChars * 4 / 5
 		tailSize := maxChars / 5
-		return content[:headSize] +
-			fmt.Sprintf("\n\n...(truncated, showing %d of %d chars)...\n\n", maxChars, len(content)) +
-			content[len(content)-tailSize:]
+		return headTailRunes(content, headSize, tailSize,
+			fmt.Sprintf("\n\n...(truncated, showing %d of %d chars)...\n\n", maxChars, len(content)))
 	}
 
 	// Collect head lines
@@ -857,9 +887,8 @@ func (e *ExecutionEngine) smartTruncate(content string, maxChars int) string {
 		// Truncate preserved middle if still too long
 		headSize := maxChars * 4 / 5
 		tailSize := maxChars / 5
-		return finalContent[:headSize] +
-			fmt.Sprintf("\n\n...(final truncation, showing %d of %d chars)...\n\n", maxChars, len(finalContent)) +
-			finalContent[len(finalContent)-tailSize:]
+		return headTailRunes(finalContent, headSize, tailSize,
+			fmt.Sprintf("\n\n...(final truncation, showing %d of %d chars)...\n\n", maxChars, len(finalContent)))
 	}
 
 	return finalContent

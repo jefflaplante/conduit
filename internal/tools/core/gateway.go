@@ -700,3 +700,8 @@ func (t *GatewayTool) GetUsageExamples() []types.ToolExample {
 	}
 }
 
+
+// IncludeDataInModelOutput opts this tool into having ToolResult.Data
+// rendered for the model: ids and lists needed for follow-up calls live
+// only in Data (conduit-31jg.39).
+func (t *GatewayTool) IncludeDataInModelOutput() bool { return true }

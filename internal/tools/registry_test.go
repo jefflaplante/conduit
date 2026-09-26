@@ -289,7 +289,7 @@ func TestReadFileTool_AbsolutePath(t *testing.T) {
 		t.Fatalf("Tool execution failed: %s", result.Error)
 	}
 
-	if result.Content != content {
+	if result.Content != catN(content) { // conduit-31jg.39: Read returns cat -n lines
 		t.Errorf("Content mismatch: got %q, want %q", result.Content, content)
 	}
 }
@@ -323,7 +323,7 @@ func TestReadFileTool_RelativePathWithWorkspaceContext(t *testing.T) {
 		t.Fatalf("Tool execution failed: %s", result.Error)
 	}
 
-	if result.Content != content {
+	if result.Content != catN(content) { // conduit-31jg.39: Read returns cat -n lines
 		t.Errorf("Content mismatch: got %q, want %q", result.Content, content)
 	}
 }
@@ -357,7 +357,7 @@ func TestReadFileTool_RelativePathWithoutWorkspaceContext(t *testing.T) {
 		t.Fatalf("Tool execution failed: %s", result.Error)
 	}
 
-	if result.Content != content {
+	if result.Content != catN(content) { // conduit-31jg.39: Read returns cat -n lines
 		t.Errorf("Content mismatch: got %q, want %q", result.Content, content)
 	}
 }
@@ -460,7 +460,7 @@ func TestPathResolution_Integration(t *testing.T) {
 		t.Fatalf("Read execution failed: %s", readResult.Error)
 	}
 
-	if readResult.Content != writeContent {
+	if readResult.Content != catN(writeContent) { // conduit-31jg.39
 		t.Errorf("Content mismatch: got %q, want %q", readResult.Content, writeContent)
 	}
 

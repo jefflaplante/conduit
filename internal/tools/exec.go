@@ -16,6 +16,8 @@ import (
 
 // conduit-31jg.20 / .39: Bash limits.
 const (
+	// DefaultBashTimeout applies when no `timeout` parameter is given.
+	DefaultBashTimeout = 60 * time.Second
 	// MaxBashTimeout caps the per-call `timeout` parameter.
 	MaxBashTimeout = 10 * time.Minute
 	// MaxBashOutputBytes caps retained combined output (head + tail); the
@@ -192,13 +194,15 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 	startTime := time.Now()
 	log.Printf("[Exec] START command=%q cwd=%q", command, cwd)
 
-	// conduit-31jg.39: per-call timeout. The execution engine extends the
-	// batch deadline via CallTimeout; here it only ever shortens ctx.
-	if d, ok := t.CallTimeout(args); ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, d)
-		defer cancel()
+	// conduit-31jg.39: per-call timeout (default DefaultBashTimeout, which
+	// also bounds callers with no deadline, e.g. MCP). The execution engine
+	// extends its own deadline via CallTimeout; here ctx is only shortened.
+	d, ok := t.CallTimeout(args)
+	if !ok {
+		d = DefaultBashTimeout
 	}
+	ctx, cancelTimeout := context.WithTimeout(ctx, d)
+	defer cancelTimeout()
 
 	// conduit-31jg.20: own process group, group kill on cancel, bounded pipe
 	// wait, and capped output so timeouts return and `yes` cannot OOM us.

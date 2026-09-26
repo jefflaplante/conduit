@@ -354,7 +354,8 @@ func TestExecutionEngine_FormatToolResultForAI(t *testing.T) {
 					},
 				},
 			},
-			expected: "Tool executed successfully\n\nStructured data: {\"count\":5,\"items\":[\"a\",\"b\",\"c\"]}",
+			// conduit-31jg.39: Data is not appended unless the tool opts in.
+			expected: "Tool executed successfully",
 		},
 		{
 			name: "failed result",

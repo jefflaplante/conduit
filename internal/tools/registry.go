@@ -63,6 +63,7 @@ type Registry struct {
 	sandboxCfg   config.SandboxConfig
 	enabledTools map[string]bool
 	services     *types.ToolServices
+	resultChars  int // tools.max_tool_result_chars (conduit-31jg.39)
 }
 
 // Type aliases for backward compatibility
@@ -126,6 +127,7 @@ func NewRegistry(cfg config.ToolsConfig) *Registry {
 		sandboxCfg:   cfg.Sandbox,
 		enabledTools: make(map[string]bool),
 		services:     &types.ToolServices{}, // Initialize empty services
+		resultChars:  cfg.MaxToolResultChars,
 	}
 
 	// Mark enabled tools (normalized for case/underscore-insensitive matching)
@@ -531,6 +533,38 @@ func (r *Registry) CallTimeout(name string, args map[string]interface{}) (time.D
 		return p.CallTimeout(args)
 	}
 	return 0, false
+}
+
+// modelDataProvider is implemented (by duck typing, so optional-tool
+// subpackages need not import this package) by tools whose useful payload
+// lives in ToolResult.Data rather than Content. Only for these does the
+// execution engine append "Structured data: {json}" to the model-facing
+// text (conduit-31jg.39).
+type modelDataProvider interface {
+	IncludeDataInModelOutput() bool
+}
+
+// IncludeDataInModelOutput reports whether the named tool opted into having
+// its result Data rendered for the model (conduit-31jg.39).
+func (r *Registry) IncludeDataInModelOutput(name string) bool {
+	r.mu.RLock()
+	tool, ok := r.tools[name]
+	r.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	p, ok := tool.(modelDataProvider)
+	return ok && p.IncludeDataInModelOutput()
+}
+
+// maxResultChars is the model-facing result budget (config
+// tools.max_tool_result_chars, default DefaultMaxToolResultChars). Read uses
+// it to page output itself instead of being middle-truncated.
+func (r *Registry) maxResultChars() int {
+	if r.resultChars > 0 {
+		return r.resultChars
+	}
+	return DefaultMaxToolResultChars
 }
 
 // createValidationErrorResult creates a rich error result from validation failures
