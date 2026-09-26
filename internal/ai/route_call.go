@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,7 +57,10 @@ type recoveryOpts struct {
 //  1. call the primary route;
 //  2. bd-6tb/bd-27ud: quota error → the fallback model on ITS OWN provider;
 //  3. bd-13p: transient timeout → retry once on the route that timed out
-//     (the fallback route if step 2 ran — conduit-31jg.18(a)).
+//     (the fallback route if step 2 ran — conduit-31jg.18(a));
+//  4. conduit-31jg.46: streaming overload/rate-limit error AFTER text
+//     reached the client (providers only retry before first emission) →
+//     one muted retry on the same route.
 //
 // Each attempt works on a copy of req carrying the route's model, trimmed
 // to that route's context window. On success the served copy is written
@@ -117,10 +121,40 @@ func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, re
 		}
 	}
 
+	// conduit-31jg.46: providers retry overload/rate-limit errors only while
+	// nothing has been streamed (anthropic_retry.go). When text already
+	// reached the client, one muted retry on the same route; the final
+	// content replaces the partial stream.
+	if err != nil && opts.stream != nil && opts.stream.emitted() && IsRetryableOverloadError(err) && ctx.Err() == nil {
+		log.Printf("[Router] (%s) overload after %d streamed bytes on provider %q model=%q — one muted retry (conduit-31jg.46)",
+			opts.phase, opts.stream.emittedBytes(), cur.name, cur.model)
+		resp, latencyMs, err = attempt(cur)
+	}
+
 	if err == nil {
 		*req = served
 	}
 	return resp, cur, latencyMs, err
+}
+
+// IsRetryableOverloadError reports whether err is a transient
+// capacity/rate-limit failure (HTTP 429/503/529, Anthropic overloaded_error
+// or rate_limit_error, including mid-stream error events) that a later retry
+// can clear. Quota exhaustion is excluded — it goes to the fallback model.
+// conduit-31jg.46.
+func IsRetryableOverloadError(err error) bool {
+	if err == nil || IsQuotaError(err) {
+		return false
+	}
+	if se, ok := asAnthropicStreamError(err); ok {
+		return se.Type == "overloaded_error" || se.Type == "rate_limit_error"
+	}
+	switch providerStatusCode(err) {
+	case 429, 503, 529:
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "overloaded_error") || strings.Contains(msg, "rate_limit_error")
 }
 
 // streamTracker wraps a turn's StreamCallback so recovery attempts never

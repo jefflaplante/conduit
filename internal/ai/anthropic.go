@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -29,6 +28,7 @@ type AnthropicProvider struct {
 	isOAuth bool
 	caching config.PromptCachingConfig // conduit-3dru: prompt caching behavior
 	oauthMu sync.Mutex                 // protects apiKey, authCfg fields during OAuth refresh
+	retry   retryPolicy                // conduit-31jg.46: 429/529/5xx backoff
 }
 
 // isOAuthToken detects if the token is an OAuth token (Pro/Max subscription)
@@ -100,6 +100,7 @@ func NewAnthropicProvider(cfg config.ProviderConfig) (*AnthropicProvider, error)
 		baseURL: baseURL,
 		isOAuth: isOAuth,
 		caching: caching,
+		retry:   defaultAnthropicRetryPolicy,
 	}, nil
 }
 
@@ -265,22 +266,13 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 
 	// conduit-31jg.12: shared with GenerateResponseStreaming.
 	anthropicReq, modelToUse := a.buildMessagesRequest(req)
-	httpReq, err := a.newMessagesHTTPRequest(ctx, anthropicReq, false)
+	// conduit-31jg.46: bounded, jittered retry for 429/529/5xx honouring
+	// retry-after and the ctx deadline.
+	resp, err := a.postMessagesWithRetry(ctx, anthropicReq)
 	if err != nil {
 		return nil, err
 	}
-
-	resp, err := a.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		// Read body for error details
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
-	}
 
 	var anthropicResp map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&anthropicResp); err != nil {
