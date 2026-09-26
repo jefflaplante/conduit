@@ -511,6 +511,28 @@ func (r *Registry) ExecuteTool(ctx context.Context, name string, args map[string
 	return toolResult, nil
 }
 
+// callTimeoutProvider is implemented by tools that accept a per-call timeout
+// parameter (Bash). conduit-31jg.39.
+type callTimeoutProvider interface {
+	CallTimeout(args map[string]interface{}) (time.Duration, bool)
+}
+
+// CallTimeout reports the per-call timeout a tool call requests, if the
+// named tool supports one. The execution engine uses it to size that
+// call's deadline (conduit-31jg.39).
+func (r *Registry) CallTimeout(name string, args map[string]interface{}) (time.Duration, bool) {
+	r.mu.RLock()
+	tool, ok := r.tools[name]
+	r.mu.RUnlock()
+	if !ok {
+		return 0, false
+	}
+	if p, ok := tool.(callTimeoutProvider); ok {
+		return p.CallTimeout(args)
+	}
+	return 0, false
+}
+
 // createValidationErrorResult creates a rich error result from validation failures
 func (r *Registry) createValidationErrorResult(toolName string, validation *types.ValidationResult) *types.ToolResult {
 	if len(validation.Errors) == 0 {

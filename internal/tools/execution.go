@@ -244,10 +244,8 @@ func (e *ExecutionEngine) ExecuteToolCalls(ctx context.Context, calls []ai.ToolC
 		return nil, nil
 	}
 
-	// Add timeout to context
-	ctx, cancel := context.WithTimeout(ctx, e.timeout)
-	defer cancel()
-
+	// conduit-31jg.39: each call gets its own deadline in executeSingle
+	// (callTimeout) instead of one e.timeout shared by the whole batch.
 	results := make([]*ExecutionResult, len(calls))
 
 	if len(calls) == 1 {
@@ -311,8 +309,10 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 		}
 	}
 
-	// Execute tool
-	result, err := e.registry.ExecuteTool(ctx, call.Name, call.Args)
+	// Execute tool under its own deadline (conduit-31jg.39)
+	callCtx, cancelCall := context.WithTimeout(ctx, e.callTimeout(call))
+	result, err := e.registry.ExecuteTool(callCtx, call.Name, call.Args)
+	cancelCall()
 	execResult.Result = result
 	execResult.Error = err
 	execResult.Duration = time.Since(start)
@@ -386,6 +386,27 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 	}
 
 	return execResult
+}
+
+// callTimeoutSlack lets a tool's own per-call timeout fire (and report a
+// proper timeout result) before the engine deadline does.
+const callTimeoutSlack = 5 * time.Second
+
+// callTimeout returns the deadline for one call: the engine default, or
+// longer when the tool honours a per-call `timeout` (Bash). conduit-31jg.39.
+func (e *ExecutionEngine) callTimeout(call ai.ToolCall) time.Duration {
+	d := e.timeout
+	if d <= 0 {
+		d = 60 * time.Second
+	}
+	if p, ok := e.registry.(interface {
+		CallTimeout(name string, args map[string]interface{}) (time.Duration, bool)
+	}); ok {
+		if req, ok := p.CallTimeout(call.Name, call.Args); ok && req+callTimeoutSlack > d {
+			d = req + callTimeoutSlack
+		}
+	}
+	return d
 }
 
 // executeParallel executes multiple tools in parallel with controlled concurrency

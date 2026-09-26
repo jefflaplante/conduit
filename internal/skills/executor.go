@@ -14,7 +14,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"conduit/internal/procutil"
 )
+
+// maxSkillOutputBytes caps retained skill output (head + tail) so a runaway
+// script cannot OOM the gateway (conduit-31jg.20). Truncated output is no
+// longer valid JSON, so Data falls back to nil and Output carries the text.
+const maxSkillOutputBytes = 1 << 20
 
 // Executor handles skill execution through various methods
 type Executor struct {
@@ -197,7 +204,18 @@ func (e *Executor) runCommand(ctx context.Context, cmd *exec.Cmd, skill Skill, s
 	// Execute command
 	log.Printf("Executing skill %s: %s", skill.Name, strings.Join(cmd.Args, " "))
 
-	output, err := cmd.CombinedOutput()
+	// conduit-31jg.20: process-group kill on timeout, bounded pipe wait and
+	// capped output (was CombinedOutput: orphaned grandchildren blocked it
+	// past the deadline and output was unbounded).
+	procutil.ConfigureGroupKill(cmd, 0, 0)
+	buf := procutil.NewCappedBuffer(maxSkillOutputBytes)
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+	err := cmd.Run()
+	if err != nil && procutil.IsWaitDelayOnly(err) && ctx.Err() == nil {
+		err = nil // exited 0; a background child held the pipe open
+	}
+	output := buf.Bytes()
 	outputStr := string(output)
 
 	if err != nil {
