@@ -5,10 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"time"
+
+	"conduit/internal/httpsafe"
 )
 
 // WhisperTranscriber implements Transcriber using OpenAI Whisper API.
@@ -85,7 +86,7 @@ func (w *WhisperTranscriber) Transcribe(ctx context.Context, audio []byte, mimeT
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := httpsafe.ReadLimited(resp.Body, httpsafe.APIBodyLimit) // conduit-31jg.7
 	if err != nil {
 		return "", fmt.Errorf("stt: read response body: %w", err)
 	}

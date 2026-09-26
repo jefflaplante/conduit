@@ -80,7 +80,9 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 	// Resolve relative paths against workspace context directory
 	resolvedPath := t.resolvePath(path)
 
-	if !t.registry.isPathAllowed(resolvedPath) {
+	// conduit-31jg.6: symlink-aware check; do I/O on the canonical path.
+	realPath, allowed := t.registry.sandboxResolve(resolvedPath)
+	if !allowed {
 		return types.NewErrorResult("path_not_allowed",
 			fmt.Sprintf("Path '%s' is not allowed in sandbox", path)).
 			WithParameter("path", path).
@@ -95,6 +97,8 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 				"Check workspace configuration if using relative paths",
 			}), nil
 	}
+
+	resolvedPath = realPath
 
 	info, err := os.Stat(resolvedPath)
 	if err == nil && info.IsDir() {
@@ -557,7 +561,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 	// Resolve relative paths against workspace context directory
 	resolvedPath := t.resolvePath(path)
 
-	if !t.registry.isPathAllowed(resolvedPath) {
+	// conduit-31jg.6: symlink-aware check; do I/O on the canonical path.
+	realPath, allowed := t.registry.sandboxResolve(resolvedPath)
+	if !allowed {
 		return types.NewErrorResult("path_not_allowed",
 			fmt.Sprintf("Path '%s' is not allowed in sandbox", path)).
 			WithParameter("path", path).
@@ -572,6 +578,8 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 				"Check workspace configuration if using relative paths",
 			}), nil
 	}
+
+	resolvedPath = realPath
 
 	// Ensure directory exists
 	dir := filepath.Dir(resolvedPath)
@@ -857,12 +865,15 @@ func (t *ListFilesTool) Execute(ctx context.Context, args map[string]interface{}
 	path, _ := args["path"].(string)
 	dir := t.resolveDir(path)
 
-	if !t.registry.isPathAllowed(dir) {
+	// conduit-31jg.6: symlink-aware check; list the canonical directory.
+	realDir, allowed := t.registry.sandboxResolve(dir)
+	if !allowed {
 		return &types.ToolResult{
 			Success: false,
 			Error:   "path is not allowed in sandbox",
 		}, nil
 	}
+	dir = realDir
 
 	if pattern, _ := args["pattern"].(string); strings.TrimSpace(pattern) != "" {
 		return t.globPattern(ctx, dir, pattern)

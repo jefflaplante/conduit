@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	"conduit/internal/httpsafe"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
@@ -335,7 +335,7 @@ func (t *MonitorTool) executeListMonitors(ctx context.Context, args map[string]i
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("Datadog API error: %d - %s", resp.StatusCode, string(body)),
@@ -343,7 +343,7 @@ func (t *MonitorTool) executeListMonitors(ctx context.Context, args map[string]i
 	}
 
 	var monitors []Monitor
-	if err := json.NewDecoder(resp.Body).Decode(&monitors); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&monitors); err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to decode response: %v", err)}, nil
 	}
 
@@ -446,7 +446,7 @@ func (t *MonitorTool) executeGetMonitor(ctx context.Context, args map[string]int
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("Datadog API error: %d - %s", resp.StatusCode, string(body)),
@@ -454,7 +454,7 @@ func (t *MonitorTool) executeGetMonitor(ctx context.Context, args map[string]int
 	}
 
 	var monitor Monitor
-	if err := json.NewDecoder(resp.Body).Decode(&monitor); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&monitor); err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to decode response: %v", err)}, nil
 	}
 
@@ -524,7 +524,7 @@ func (t *MonitorTool) executeGetMonitorStatus(ctx context.Context, args map[stri
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("Datadog API error: %d - %s", resp.StatusCode, string(body)),
@@ -532,7 +532,7 @@ func (t *MonitorTool) executeGetMonitorStatus(ctx context.Context, args map[stri
 	}
 
 	var monitor Monitor
-	if err := json.NewDecoder(resp.Body).Decode(&monitor); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&monitor); err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to decode response: %v", err)}, nil
 	}
 
@@ -640,7 +640,7 @@ func (t *MonitorTool) executeMuteMonitor(ctx context.Context, args map[string]in
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("Datadog API error: %d - %s", resp.StatusCode, string(respBody)),
@@ -702,7 +702,7 @@ func (t *MonitorTool) executeUnmuteMonitor(ctx context.Context, args map[string]
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("Datadog API error: %d - %s", resp.StatusCode, string(respBody)),
@@ -763,7 +763,6 @@ func statePriority(state string) int {
 		return 4
 	}
 }
-
 
 // IncludeDataInModelOutput opts this tool into having ToolResult.Data
 // rendered for the model: ids and lists needed for follow-up calls live

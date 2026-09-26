@@ -7,10 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"conduit/internal/httpsafe"
 )
 
 // MaxMessageLength is the maximum number of characters to include in a log message.
@@ -143,7 +144,7 @@ func (lc *LogsClient) SearchLogs(ctx context.Context, params SearchLogsParams) (
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, truncateString(string(body), 500))
 	}
 
@@ -167,7 +168,7 @@ func (lc *LogsClient) SearchLogs(ctx context.Context, params SearchLogsParams) (
 		} `json:"meta"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -245,7 +246,7 @@ func (lc *LogsClient) GetLog(ctx context.Context, logID string) (*LogEntry, erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, truncateString(string(body), 500))
 	}
 
@@ -264,7 +265,7 @@ func (lc *LogsClient) GetLog(ctx context.Context, logID string) (*LogEntry, erro
 		} `json:"data"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -308,7 +309,7 @@ func (lc *LogsClient) ListIndexes(ctx context.Context) ([]LogIndex, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, truncateString(string(body), 500))
 	}
 
@@ -324,7 +325,7 @@ func (lc *LogsClient) ListIndexes(ctx context.Context) ([]LogIndex, error) {
 		} `json:"indexes"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 

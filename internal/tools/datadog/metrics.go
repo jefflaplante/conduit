@@ -6,13 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
 	"time"
 
+	"conduit/internal/httpsafe"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
@@ -131,7 +131,7 @@ func (t *DatadogTool) executeQueryMetrics(ctx context.Context, args map[string]i
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpsafe.ReadLimited(resp.Body, httpsafe.APIBodyLimit) // conduit-31jg.7
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,
@@ -246,7 +246,7 @@ func (t *DatadogTool) executeListMetrics(ctx context.Context, args map[string]in
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpsafe.ReadLimited(resp.Body, httpsafe.APIBodyLimit) // conduit-31jg.7
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,
@@ -328,7 +328,7 @@ func (t *DatadogTool) executeGetMetricMetadata(ctx context.Context, args map[str
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpsafe.ReadLimited(resp.Body, httpsafe.APIBodyLimit) // conduit-31jg.7
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,

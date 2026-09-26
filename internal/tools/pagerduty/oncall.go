@@ -6,10 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
+
+	"conduit/internal/httpsafe"
 )
 
 // OnCall represents a user who is currently on-call.
@@ -126,12 +127,12 @@ func (c *Client) GetOnCalls(ctx context.Context, opts GetOnCallsOptions) ([]OnCa
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return nil, fmt.Errorf("pagerduty: oncalls request failed: %s (%s)", resp.Status, string(body))
 	}
 
 	var result oncallsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("pagerduty: failed to decode oncalls response: %w", err)
 	}
 

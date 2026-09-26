@@ -6,10 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
+
+	"conduit/internal/httpsafe"
 )
 
 // Schedule represents a PagerDuty schedule.
@@ -110,12 +111,12 @@ func (c *Client) ListSchedules(ctx context.Context, opts ListSchedulesOptions) (
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return nil, fmt.Errorf("pagerduty: schedules request failed: %s (%s)", resp.Status, string(body))
 	}
 
 	var result schedulesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("pagerduty: failed to decode schedules response: %w", err)
 	}
 
@@ -155,12 +156,12 @@ func (c *Client) GetSchedule(ctx context.Context, scheduleID string, opts GetSch
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return nil, fmt.Errorf("pagerduty: get schedule failed: %s (%s)", resp.Status, string(body))
 	}
 
 	var result scheduleResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("pagerduty: failed to decode schedule response: %w", err)
 	}
 
@@ -254,12 +255,12 @@ func (c *Client) ListEscalationPolicies(ctx context.Context, opts ListEscalation
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return nil, fmt.Errorf("pagerduty: escalation_policies request failed: %s (%s)", resp.Status, string(body))
 	}
 
 	var result escalationPoliciesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("pagerduty: failed to decode escalation_policies response: %w", err)
 	}
 
@@ -291,12 +292,12 @@ func (c *Client) GetEscalationPolicy(ctx context.Context, policyID string, opts 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return nil, fmt.Errorf("pagerduty: get escalation_policy failed: %s (%s)", resp.Status, string(body))
 	}
 
 	var result escalationPolicyResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("pagerduty: failed to decode escalation_policy response: %w", err)
 	}
 

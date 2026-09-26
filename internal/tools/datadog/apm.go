@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"sort"
@@ -15,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"conduit/internal/httpsafe"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
@@ -176,7 +176,7 @@ func (ac *APMClient) SearchTraces(ctx context.Context, params SearchTracesParams
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, truncateString(string(body), 500))
 	}
 
@@ -208,7 +208,7 @@ func (ac *APMClient) SearchTraces(ctx context.Context, params SearchTracesParams
 		} `json:"meta"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -283,7 +283,7 @@ func (ac *APMClient) GetTrace(ctx context.Context, traceID string) (*Trace, erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, truncateString(string(body), 500))
 	}
 
@@ -307,7 +307,7 @@ func (ac *APMClient) GetTrace(ctx context.Context, traceID string) (*Trace, erro
 		} `json:"data"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 

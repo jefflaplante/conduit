@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -16,6 +15,8 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+
+	"conduit/internal/httpsafe"
 )
 
 // MediaType represents the type of media to send
@@ -246,7 +247,7 @@ func (s *MediaSender) sendAudioFromURLFallback(chatID int64, url, caption string
 		return "[Audio message failed: download error]", fmt.Errorf("download failed with status %d", resp.StatusCode)
 	}
 
-	audioData, err := io.ReadAll(resp.Body)
+	audioData, err := httpsafe.ReadLimited(resp.Body, httpsafe.MediaBodyLimit) // conduit-31jg.7
 	if err != nil {
 		log.Printf("[Telegram/Media] Failed to read audio data: %v", err)
 		return "[Audio message failed: read error]", err

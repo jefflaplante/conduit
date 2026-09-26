@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"conduit/internal/httpsafe"
 )
 
 // Anthropic retry/backoff (conduit-31jg.46).
@@ -172,7 +173,7 @@ func (a *AnthropicProvider) sendMessages(ctx context.Context, body map[string]in
 	if resp.StatusCode == http.StatusOK {
 		return resp, nil, nil
 	}
-	bodyBytes, _ := io.ReadAll(resp.Body)
+	bodyBytes, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 	resp.Body.Close()
 	he := &anthropicHTTPError{
 		status: resp.StatusCode,

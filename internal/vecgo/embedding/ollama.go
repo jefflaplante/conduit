@@ -5,12 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"time"
 
 	"github.com/jefflaplante/vecgo/embedder"
+
+	"conduit/internal/httpsafe"
 )
 
 // Compile-time interface check.
@@ -97,7 +98,7 @@ func (o *OllamaEmbedder) Embed(ctx context.Context, texts []string) ([][]float32
 			continue
 		}
 
-		respBody, err := io.ReadAll(httpResp.Body)
+		respBody, err := httpsafe.ReadLimited(httpResp.Body, httpsafe.APIBodyLimit) // conduit-31jg.7
 		httpResp.Body.Close()
 		if err != nil {
 			lastErr = fmt.Errorf("ollama embed: read response: %w", err)

@@ -3,7 +3,6 @@ package telegram
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
+	"conduit/internal/httpsafe"
 	"conduit/internal/protocol"
 )
 
@@ -132,7 +132,7 @@ func (a *Adapter) transcribeVoice(ctx context.Context, voice *models.Voice) (str
 		return "", fmt.Errorf("unexpected status downloading voice file: %d", resp.StatusCode)
 	}
 
-	audioData, err := io.ReadAll(resp.Body)
+	audioData, err := httpsafe.ReadLimited(resp.Body, httpsafe.MediaBodyLimit) // conduit-31jg.7
 	if err != nil {
 		return "", fmt.Errorf("failed to read voice file: %w", err)
 	}

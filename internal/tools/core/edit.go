@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"conduit/internal/config"
+	"conduit/internal/sandbox"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/schema"
 	"conduit/internal/tools/types"
@@ -105,8 +107,9 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 	// Resolve relative paths against workspace context directory
 	path = t.resolvePath(path)
 
-	// Validate path against sandbox restrictions
-	if !t.isPathAllowed(path) {
+	// Validate path against sandbox restrictions (conduit-31jg.6)
+	realPath, allowed := t.sandboxResolve(path)
+	if !allowed {
 		return types.NewErrorResult("path_not_allowed",
 			fmt.Sprintf("Path '%s' is not allowed in sandbox", path)).
 			WithParameter("path", path).
@@ -115,6 +118,8 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 				"Check workspace configuration if using relative paths",
 			}), nil
 	}
+
+	path = realPath
 
 	// Check if file exists with rich error
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -409,45 +414,20 @@ func (t *EditTool) resolvePath(path string) string {
 	return path
 }
 
-// isPathAllowed checks if the resolved path is within allowed sandbox directories
-func (t *EditTool) isPathAllowed(path string) bool {
-	if t.services == nil || t.services.ConfigMgr == nil {
-		return true // No sandbox config, allow all
+// sandboxResolve returns the canonical path if it is within the sandbox.
+// conduit-31jg.6: uses the same symlink-aware resolver as Read/Write/Glob.
+// Previously Edit allowed everything when the sandbox was unconfigured; now an
+// empty sandbox (no workspace_dir and no allowed_paths) denies, like Read/Write.
+func (t *EditTool) sandboxResolve(path string) (string, bool) {
+	var cfg config.SandboxConfig
+	if t.services != nil && t.services.ConfigMgr != nil {
+		cfg = t.services.ConfigMgr.Tools.Sandbox
 	}
-
-	sandboxCfg := t.services.ConfigMgr.Tools.Sandbox
-	if sandboxCfg.WorkspaceDir == "" && len(sandboxCfg.AllowedPaths) == 0 {
-		return true // No sandbox restrictions configured
-	}
-
-	absPath, err := filepath.Abs(path)
+	real, err := sandbox.FromConfig(cfg).Resolve(path)
 	if err != nil {
-		return false
+		return "", false
 	}
-	absPath = filepath.Clean(absPath)
-
-	// Check against allowed paths
-	for _, allowedPath := range sandboxCfg.AllowedPaths {
-		cleanAllowed := filepath.Clean(allowedPath)
-		rel, err := filepath.Rel(cleanAllowed, absPath)
-		if err != nil {
-			continue
-		}
-		if !strings.HasPrefix(rel, "..") {
-			return true
-		}
-	}
-
-	// Check against workspace directory
-	if sandboxCfg.WorkspaceDir != "" {
-		cleanWorkspace := filepath.Clean(sandboxCfg.WorkspaceDir)
-		rel, err := filepath.Rel(cleanWorkspace, absPath)
-		if err == nil && !strings.HasPrefix(rel, "..") {
-			return true
-		}
-	}
-
-	return false
+	return real, true
 }
 
 // GetSchemaHints implements types.EnhancedSchemaProvider.
