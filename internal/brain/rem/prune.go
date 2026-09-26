@@ -145,9 +145,9 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 		}
 	}
 
-	// 4. Evict cold LTM entries: access_count == 0 AND older than 30 days.
-	// Runs independently of the salience+age sweep above — tracks never-accessed
-	// facts that may never be useful even if their salience is non-trivial.
+	// 4. Archive cold LTM entries: stored once, never used since, and older
+	// than 30 days. Only runs at/over capacity and is batch-limited; see
+	// evictColdLTM. conduit-31jg.28
 	coldEvicted, err := r.evictColdLTM(ctx, dryRun)
 	if err != nil {
 		return result, fmt.Errorf("evict cold LTM: %w", err)
@@ -172,34 +172,91 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 	return result, nil
 }
 
-// evictColdLTM deletes LTM entries that were created >30 days ago and have never
-// been accessed (access_count == 0). These are reported separately from salience-based
-// archival so the report is transparent about why each entry was removed.
+// coldEvictBatchLimit caps how many cold entries one Prune run may archive,
+// so a large backlog is drained gradually rather than in one nightly sweep.
+// conduit-31jg.28
+const coldEvictBatchLimit = 100
+
+// evictColdLTM archives LTM entries that were stored once and never used
+// since: access_count <= 1 (Store inserts with access_count = 1, and every
+// Get, Recall hit or re-Store increments it), and neither created nor accessed
+// in the last 30 days.
+//
+// conduit-31jg.28: this previously matched `access_count = 0`, which no
+// Store-written row ever has, so it was a silent no-op. Widening the predicate
+// alone would have hard-deleted every write-once fact older than 30 days on
+// the next nightly run, so the sweep is now also:
+//   - gated on LTM being at/over MaxLTMEntries (same rule as the salience
+//     sweep: a table under capacity is never trimmed);
+//   - bounded to coldEvictBatchLimit rows per run, lowest salience first;
+//   - archived to brain_archive (reason 'cold') before deletion, in one tx.
 func (r *REMCycle) evictColdLTM(ctx context.Context, dryRun bool) (int, error) {
+	maxEntries := r.config.MaxLTMEntries
+	if maxEntries <= 0 {
+		maxEntries = 10000
+	}
+	var ltmCount int
+	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM brain_ltm").Scan(&ltmCount); err != nil {
+		return 0, fmt.Errorf("count LTM entries: %w", err)
+	}
+	if ltmCount < maxEntries {
+		return 0, nil
+	}
+
 	cutoff := time.Now().Add(-30 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
 
-	if dryRun {
-		var count int
-		err := r.db.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM brain_ltm WHERE access_count = 0 AND created_at < ?",
-			cutoff).Scan(&count)
-		if err != nil {
-			return 0, fmt.Errorf("count cold LTM candidates: %w", err)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin cold LTM tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT key, value, COALESCE(source, ''), salience
+		FROM brain_ltm
+		WHERE access_count <= 1 AND created_at < ? AND accessed_at < ?
+		ORDER BY salience ASC, accessed_at ASC
+		LIMIT ?`, cutoff, cutoff, coldEvictBatchLimit)
+	if err != nil {
+		return 0, fmt.Errorf("query cold LTM candidates: %w", err)
+	}
+	type coldCandidate struct {
+		key, value, source string
+		salience           float64
+	}
+	var candidates []coldCandidate
+	for rows.Next() {
+		var c coldCandidate
+		if err := rows.Scan(&c.key, &c.value, &c.source, &c.salience); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan cold LTM candidate: %w", err)
 		}
-		return count, nil
+		candidates = append(candidates, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate cold LTM candidates: %w", err)
 	}
 
-	res, err := r.db.ExecContext(ctx,
-		"DELETE FROM brain_ltm WHERE access_count = 0 AND created_at < ?",
-		cutoff)
-	if err != nil {
-		return 0, fmt.Errorf("delete cold LTM: %w", err)
+	if dryRun || len(candidates) == 0 {
+		return len(candidates), nil
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("cold LTM rows affected: %w", err)
+
+	for _, c := range candidates {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR REPLACE INTO brain_archive (key, value, source, tier, salience, reason, archived_at)
+			VALUES (?, ?, ?, 'longterm', ?, 'cold', datetime('now'))`,
+			c.key, c.value, c.source, c.salience); err != nil {
+			return 0, fmt.Errorf("archive cold entry %q: %w", c.key, err)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM brain_ltm WHERE key = ?", c.key); err != nil {
+			return 0, fmt.Errorf("delete cold entry %q: %w", c.key, err)
+		}
 	}
-	return int(n), nil
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit cold LTM eviction: %w", err)
+	}
+	return len(candidates), nil
 }
 
 // groomReflections deletes processed reflection entries older than retention days.
