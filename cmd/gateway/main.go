@@ -27,6 +27,9 @@ var (
 	dbPath  string
 	verbose bool
 	port    int
+
+	// tokenCLIConfig is shared with the `token` command tree.
+	tokenCLIConfig = &auth.CLIConfig{}
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -95,12 +98,8 @@ func init() {
 	// Add version command
 	rootCmd.AddCommand(versionCmd)
 
-	// Add token management commands
-	cliConfig := &auth.CLIConfig{
-		DatabasePath: "", // Will be set in initConfig
-		Verbose:      false,
-	}
-	rootCmd.AddCommand(auth.TokenRootCmd(cliConfig))
+	// Add token management commands (populated in PersistentPreRunE).
+	rootCmd.AddCommand(auth.TokenRootCmd(tokenCLIConfig))
 
 	// Add pairing management commands
 	rootCmd.AddCommand(PairingRootCmd("", false)) // Will be updated in PersistentPreRunE
@@ -296,6 +295,16 @@ func runServer() error {
 func main() {
 	// Update CLI config with actual values after flags are parsed
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		// conduit-31jg.3: token commands load the server's config (--config)
+		// and use its database.path + token secret via auth.ResolveTokenStore.
+		// Only an explicit --database overrides the path; the filename-derived
+		// auto-detection below does not match what the server opens.
+		tokenCLIConfig.ConfigPath = cfgFile
+		tokenCLIConfig.Verbose = verbose
+		if rootCmd.PersistentFlags().Changed("database") {
+			tokenCLIConfig.DatabasePath = dbPath
+		}
+
 		// Auto-detect database path if still empty
 		if dbPath == "" {
 			if cfgFile != "" && cfgFile != "config.json" {
@@ -311,12 +320,7 @@ func main() {
 			}
 		}
 
-		// Update auth CLI config
 		for _, subCmd := range rootCmd.Commands() {
-			if subCmd.Use == "token" {
-				// Update the CLIConfig in the token command tree
-				updateAuthConfig(subCmd, dbPath, verbose)
-			}
 			if subCmd.Use == "pairing" {
 				// Update the pairing CLI config
 				updatePairingConfig(subCmd, dbPath, verbose)
@@ -328,19 +332,6 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
-	}
-}
-
-// updateAuthConfig recursively updates CLIConfig in token command tree
-func updateAuthConfig(cmd *cobra.Command, dbPath string, verbose bool) {
-	// This is a bit hacky - we need a better way to pass config to auth commands
-	// For now, we'll set environment variables that the auth commands can read
-	os.Setenv("CONDUIT_DB_PATH", dbPath)
-	os.Setenv("CONDUIT_VERBOSE", fmt.Sprintf("%t", verbose))
-
-	// Recursively update subcommands
-	for _, subCmd := range cmd.Commands() {
-		updateAuthConfig(subCmd, dbPath, verbose)
 	}
 }
 

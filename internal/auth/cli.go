@@ -3,23 +3,35 @@ package auth
 import (
 	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"conduit/internal/config"
 	"conduit/internal/database"
 	tokenspkg "conduit/internal/tokens"
 
 	"github.com/spf13/cobra"
 )
 
-// CLIConfig holds configuration for CLI commands
+// CLIConfig holds configuration for CLI commands.
+//
+// conduit-31jg.3: token commands load the same config file as the server
+// (ConfigPath, i.e. --config) and resolve the database path and HMAC secret
+// through ResolveTokenStore, so tokens minted here validate on the server.
 type CLIConfig struct {
+	// ConfigPath is the gateway config file (the --config flag). Required.
+	ConfigPath string
+	// DatabasePath, when non-empty, is an explicit --database override. When
+	// empty the server's database.path from the config is used.
 	DatabasePath string
-	TokenSecret  string
 	Verbose      bool
+	// Stderr receives diagnostic output (secret source etc.). Defaults to
+	// os.Stderr.
+	Stderr io.Writer
 }
 
 // CreateTokenCmd creates the token create command
@@ -124,18 +136,6 @@ func TokenRootCmd(config *CLIConfig) *cobra.Command {
 
 // createToken handles token creation
 func createToken(config *CLIConfig, clientName, expiresIn string) error {
-	// Update config from environment if not set
-	if config.DatabasePath == "" {
-		if dbPath := os.Getenv("CONDUIT_DB_PATH"); dbPath != "" {
-			config.DatabasePath = dbPath
-		} else {
-			config.DatabasePath = "gateway.db" // default
-		}
-	}
-	if verbose := os.Getenv("CONDUIT_VERBOSE"); verbose == "true" {
-		config.Verbose = true
-	}
-	resolveTokenSecret(config)
 	// Validate input
 	if strings.TrimSpace(clientName) == "" {
 		return fmt.Errorf("client-name is required")
@@ -152,15 +152,12 @@ func createToken(config *CLIConfig, clientName, expiresIn string) error {
 		expiresAt = &expiry
 	}
 
-	// Open database
-	db, err := openDatabase(config.DatabasePath)
+	// Open database + token storage exactly as the server would.
+	storage, db, err := openTokenStorage(config)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return err
 	}
 	defer db.Close()
-
-	// Create token storage
-	storage := NewTokenStorage(db, config.TokenSecret)
 
 	// Generate new token
 	token, err := tokenspkg.GenerateToken()
@@ -202,24 +199,12 @@ func createToken(config *CLIConfig, clientName, expiresIn string) error {
 
 // listTokens handles token listing
 func listTokens(config *CLIConfig, includeRevoked bool) error {
-	// Update config from environment if not set
-	if config.DatabasePath == "" {
-		if dbPath := os.Getenv("CONDUIT_DB_PATH"); dbPath != "" {
-			config.DatabasePath = dbPath
-		} else {
-			config.DatabasePath = "gateway.db" // default
-		}
-	}
-	resolveTokenSecret(config)
-	// Open database
-	db, err := openDatabase(config.DatabasePath)
+	// Open database + token storage exactly as the server would.
+	storage, db, err := openTokenStorage(config)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return err
 	}
 	defer db.Close()
-
-	// Create token storage
-	storage := NewTokenStorage(db, config.TokenSecret)
 
 	// List tokens
 	tokenList, err := storage.ListTokens("", includeRevoked)
@@ -280,24 +265,12 @@ func listTokens(config *CLIConfig, includeRevoked bool) error {
 
 // revokeToken handles token revocation
 func revokeToken(config *CLIConfig, tokenPrefix string) error {
-	// Update config from environment if not set
-	if config.DatabasePath == "" {
-		if dbPath := os.Getenv("CONDUIT_DB_PATH"); dbPath != "" {
-			config.DatabasePath = dbPath
-		} else {
-			config.DatabasePath = "gateway.db" // default
-		}
-	}
-	resolveTokenSecret(config)
-	// Open database
-	db, err := openDatabase(config.DatabasePath)
+	// Open database + token storage exactly as the server would.
+	storage, db, err := openTokenStorage(config)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return err
 	}
 	defer db.Close()
-
-	// Create token storage
-	storage := NewTokenStorage(db, config.TokenSecret)
 
 	// Find token by prefix
 	tokenID, err := findTokenByPrefix(storage, tokenPrefix)
@@ -328,24 +301,12 @@ func revokeToken(config *CLIConfig, tokenPrefix string) error {
 
 // exportToken handles token export
 func exportToken(config *CLIConfig, tokenPrefix, format string) error {
-	// Update config from environment if not set
-	if config.DatabasePath == "" {
-		if dbPath := os.Getenv("CONDUIT_DB_PATH"); dbPath != "" {
-			config.DatabasePath = dbPath
-		} else {
-			config.DatabasePath = "gateway.db" // default
-		}
-	}
-	resolveTokenSecret(config)
-	// Open database
-	db, err := openDatabase(config.DatabasePath)
+	// Open database + token storage exactly as the server would.
+	storage, db, err := openTokenStorage(config)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return err
 	}
 	defer db.Close()
-
-	// Create token storage
-	storage := NewTokenStorage(db, config.TokenSecret)
 
 	// Find token by prefix
 	tokenID, err := findTokenByPrefix(storage, tokenPrefix)
@@ -387,16 +348,59 @@ func exportToken(config *CLIConfig, tokenPrefix, format string) error {
 
 // Helper functions
 
-// resolveTokenSecret populates the token secret from environment if not already set
-func resolveTokenSecret(config *CLIConfig) {
-	if config.TokenSecret == "" {
-		config.TokenSecret = os.Getenv("CONDUIT_TOKEN_SECRET")
+// openTokenStorage loads the gateway config and opens the token store with
+// the same database path and HMAC secret the server resolves.
+// conduit-31jg.3: previously the CLI only read CONDUIT_TOKEN_SECRET and fell
+// back to a random ephemeral key, printing success for tokens the server
+// would reject. Any resolution failure is now a hard error.
+func openTokenStorage(c *CLIConfig) (*TokenStorage, *sql.DB, error) {
+	stderr := c.Stderr
+	if stderr == nil {
+		stderr = os.Stderr
 	}
+	if c.ConfigPath == "" {
+		return nil, nil, fmt.Errorf("no config file specified: token commands need the gateway config (--config) to resolve the token secret")
+	}
+	// config.Load writes a default config when the file is missing; a token
+	// minted against a fresh default config would never match the server.
+	if _, err := os.Stat(c.ConfigPath); err != nil {
+		return nil, nil, fmt.Errorf("cannot read gateway config %q (use --config to point at the server's config): %w", c.ConfigPath, err)
+	}
+	cfg, err := config.Load(c.ConfigPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load gateway config %q: %w", c.ConfigPath, err)
+	}
+
+	settings, err := ResolveTokenStore(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot resolve the server's token secret; refusing to continue: %w", err)
+	}
+
+	dbPath := settings.DatabasePath
+	if c.DatabasePath != "" && c.DatabasePath != dbPath {
+		fmt.Fprintf(stderr, "WARNING: --database %q overrides database.path %q from %s; the server will not see tokens stored there\n",
+			c.DatabasePath, dbPath, c.ConfigPath)
+		dbPath = c.DatabasePath
+	}
+	if dbPath == "" {
+		return nil, nil, fmt.Errorf("gateway config %q has no database.path; pass --database explicitly", c.ConfigPath)
+	}
+
+	// Log the source, never the secret.
+	fmt.Fprintf(stderr, "Using config %s, database %s, token secret from %s\n", c.ConfigPath, dbPath, settings.Describe())
+
+	db, err := openDatabase(dbPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to open database %q: %w", dbPath, err)
+	}
+	return NewTokenStorage(db, settings.Secret), db, nil
 }
 
 // openDatabase opens the SQLite database and runs migrations
 func openDatabase(dbPath string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// conduit-31jg.3: same DSN (busy_timeout etc.) as the server's session store,
+	// so CLI writes wait on a running server instead of failing with SQLITE_BUSY.
+	db, err := sql.Open("sqlite", database.BuildDSN(dbPath))
 	if err != nil {
 		return nil, err
 	}

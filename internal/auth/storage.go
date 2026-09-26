@@ -75,6 +75,10 @@ type CreateTokenResponse struct {
 // The secret parameter is the HMAC key for token hashing. If empty, a random
 // 32-byte key is generated (tokens won't survive process restarts without a
 // configured secret).
+//
+// conduit-31jg.3: production callers (server and token CLI) must obtain the
+// secret from ResolveTokenStore, which never yields an empty secret. The
+// ephemeral fallback here only remains for tests and ad-hoc callers.
 func NewTokenStorage(db *sql.DB, secret string) *TokenStorage {
 	var key []byte
 	if secret != "" {

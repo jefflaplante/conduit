@@ -174,7 +174,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 	logger = logger.With("component", "gateway")
 
 	// Initialize session store
-	sessionStore, err := sessions.NewStore(cfg.Database.Path)
+	// conduit-31jg.3: same DB path resolver as the `conduit token` CLI.
+	sessionStore, err := sessions.NewStore(auth.ResolveDatabasePath(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create session store: %w", err)
 	}
