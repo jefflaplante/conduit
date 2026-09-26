@@ -133,6 +133,10 @@ func (a *AnthropicProvider) parseSSEStream(body io.Reader, onDelta StreamCallbac
 	var currentToolCall *ToolCall
 	var currentToolInput strings.Builder
 	var usage Usage
+	// conduit-31jg.11: stop_reason arrives in message_delta; lastBlockType
+	// tells us whether a max_tokens stop severed a tool_use block.
+	var stopReason string
+	var lastBlockType string
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -175,7 +179,9 @@ func (a *AnthropicProvider) parseSSEStream(body io.Reader, onDelta StreamCallbac
 		case "content_block_start":
 			// New content block starting
 			if cb, ok := event["content_block"].(map[string]interface{}); ok {
-				if cbType, _ := cb["type"].(string); cbType == "tool_use" {
+				cbType, _ := cb["type"].(string)
+				lastBlockType = cbType
+				if cbType == "tool_use" {
 					// Starting a tool call
 					currentToolCall = &ToolCall{
 						ID:   cb["id"].(string),
@@ -223,9 +229,10 @@ func (a *AnthropicProvider) parseSSEStream(body io.Reader, onDelta StreamCallbac
 		case "message_delta":
 			// Message-level delta (usually contains stop_reason and usage)
 			if delta, ok := event["delta"].(map[string]interface{}); ok {
-				if stopReason, ok := delta["stop_reason"].(string); ok {
+				if sr, ok := delta["stop_reason"].(string); ok {
+					stopReason = sr
 					if VerboseLogging {
-						log.Printf("[Streaming] Stop reason: %s", stopReason)
+						log.Printf("[Streaming] Stop reason: %s", sr)
 					}
 				}
 			}
@@ -265,11 +272,16 @@ func (a *AnthropicProvider) parseSSEStream(body io.Reader, onDelta StreamCallbac
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
 
-	return &GenerateResponse{
+	result := &GenerateResponse{
 		Content:   contentBuilder.String(),
 		ToolCalls: toolCalls,
 		Usage:     usage,
-	}, nil
+	}
+	// conduit-31jg.11: same stop_reason mapping as the non-streaming path.
+	// A tool_use severed by max_tokens reached content_block_stop with
+	// unparseable partial JSON (Args=nil) and used to be executed anyway.
+	applyAnthropicStopReason(result, stopReason, lastBlockType == "tool_use")
+	return result, nil
 }
 
 // GenerateResponseStreaming implements StreamingProvider for the Anthropic provider.

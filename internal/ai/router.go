@@ -160,6 +160,10 @@ type GenerateResponse struct {
 	// bd-1k3o: parsed from OpenAI-compatible responses so the tool loop can
 	// detect length-truncated finals instead of silently accepting them.
 	FinishReason string `json:"finish_reason,omitempty"`
+	// StopReason is the raw provider stop reason when it differs in
+	// vocabulary from FinishReason (Anthropic stop_reason: "end_turn",
+	// "max_tokens", "tool_use", "refusal", "pause_turn", ...). conduit-31jg.11.
+	StopReason string `json:"stop_reason,omitempty"`
 }
 
 // ChatMessage represents a message in a conversation
@@ -669,6 +673,9 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, latencyMs)
 	}
 
+	// conduit-31jg.11: length-truncated reply → auto-continue (bd-1k3o parity).
+	response = ContinueLengthTruncated(ctx, provider, req, response, "generate")
+
 	// Process response through agent system
 	if r.agentSystem != nil {
 		processed, err := r.agentSystem.ProcessResponse(ctx, response)
@@ -852,6 +859,10 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 	// never complete a turn silently — retry once, then deliver a visible
 	// fallback so every turn ends with SOMETHING.
 	response, err = GuardEmptyResponse(ctx, provider, req, response, err, "initial")
+
+	// conduit-31jg.11: honor FinishReason on the first round trip too — the
+	// bd-1k3o length guard previously only ran after tool execution.
+	response = ContinueLengthTruncated(ctx, provider, req, response, "initial")
 
 	// conduit-1z6d: per-round-trip instrumentation — dead turns diagnosable
 	// from the journal alone.
@@ -1123,6 +1134,11 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		chainErr = err
 		return nil, chainErr
 	}
+
+	// conduit-31jg.11: length-truncated first reply → auto-continue
+	// (non-streaming continuation; the gateway replaces the streamed text
+	// with the final content).
+	response = ContinueLengthTruncated(ctx, provider, req, response, "streaming")
 
 	// Process response through agent system (same as non-streaming path)
 	if r.agentSystem != nil {
