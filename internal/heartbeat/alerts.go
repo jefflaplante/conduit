@@ -145,6 +145,9 @@ type Alert struct {
 	RetryCount int         `json:"retry_count"`
 	MaxRetries int         `json:"max_retries"`
 	LastError  string      `json:"last_error,omitempty"`
+	// LastAttemptAt is when delivery last failed; drives retry backoff
+	// (conduit-31jg.33). SentAt is only set on success.
+	LastAttemptAt *time.Time `json:"last_attempt_at,omitempty"`
 
 	// Delivery tracking
 	SentAt      *time.Time `json:"sent_at,omitempty"`
@@ -262,6 +265,20 @@ func (a Alert) CanRetry() bool {
 	return a.Status == AlertStatusFailed && a.RetryCount < a.MaxRetries
 }
 
+// RecordFailedAttempt marks a delivery failure on the alert itself. Callers
+// must apply it to the persisted alert (SharedAlertQueue.UpdateAlert), not a
+// copy (conduit-31jg.33). RetryCount counts failed attempts and is capped at
+// MaxRetries so the alert stays valid.
+func (a *Alert) RecordFailedAttempt(errMsg string, at time.Time) {
+	a.Status = AlertStatusFailed
+	a.LastError = errMsg
+	t := at
+	a.LastAttemptAt = &t
+	if a.RetryCount < a.MaxRetries {
+		a.RetryCount++
+	}
+}
+
 // ShouldSuppressDuringQuietHours checks if this alert should be suppressed during quiet hours
 func (a Alert) ShouldSuppressDuringQuietHours() bool {
 	return a.Severity.ShouldRespectQuietHours()
@@ -364,6 +381,18 @@ func (q AlertQueue) GetPendingAlerts() []Alert {
 	}
 
 	return pending
+}
+
+// GetRetryableAlerts returns failed, unexpired alerts with retries left.
+// conduit-31jg.33: previously nothing ever selected failed alerts again.
+func (q AlertQueue) GetRetryableAlerts() []Alert {
+	var out []Alert
+	for _, alert := range q.Alerts {
+		if alert.CanRetry() && !alert.IsExpired() {
+			out = append(out, alert)
+		}
+	}
+	return out
 }
 
 // GetAlertsByStatus returns alerts with a specific status

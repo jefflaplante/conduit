@@ -66,6 +66,11 @@ func (p *AlertProcessorImpl) ProcessAlert(alert Alert) error {
 	// Check if we should process this alert
 	shouldProcess, reason := p.ShouldProcessAlert(alert)
 	if !shouldProcess {
+		// conduit-31jg.33: a failed alert that is not (yet) eligible for retry
+		// keeps its failed status; suppressing it would end retries for good.
+		if alert.Status == AlertStatusFailed {
+			return fmt.Errorf("alert retry skipped: %s", reason)
+		}
 		if err := p.SuppressAlert(alert, reason); err != nil {
 			return fmt.Errorf("failed to suppress alert: %w", err)
 		}
@@ -75,6 +80,11 @@ func (p *AlertProcessorImpl) ProcessAlert(alert Alert) error {
 	// Get routing decision
 	decision := p.router.ShouldDeliverAlert(alert)
 	if !decision.ShouldDeliver {
+		// conduit-31jg.33: quiet-hours delay leaves the alert pending so a
+		// later pass delivers it, instead of suppressing it permanently.
+		if decision.DelayUntil != nil {
+			return fmt.Errorf("alert delayed: %s", decision.Reason)
+		}
 		if err := p.SuppressAlert(alert, decision.Reason); err != nil {
 			return fmt.Errorf("failed to suppress alert: %w", err)
 		}
@@ -119,13 +129,10 @@ func (p *AlertProcessorImpl) ProcessAlert(alert Alert) error {
 		return nil
 	}
 
-	// All deliveries failed
-	alert.Status = AlertStatusFailed
-	alert.LastError = fmt.Sprintf("All delivery attempts failed: %v", deliveryErrors)
-	alert.RetryCount++
-
-	// Update alert in queue
-	if err := p.queue.UpdateAlertStatus(alert.ID, AlertStatusFailed); err != nil {
+	// All deliveries failed. conduit-31jg.33: persist RetryCount/LastError on
+	// the stored alert; incrementing the local copy was lost on return.
+	errMsg := fmt.Sprintf("All delivery attempts failed: %v", deliveryErrors)
+	if err := p.queue.UpdateAlert(alert.ID, func(a *Alert) { a.RecordFailedAttempt(errMsg, time.Now()) }); err != nil {
 		return fmt.Errorf("failed to update alert status after delivery failure: %w", err)
 	}
 
@@ -241,6 +248,13 @@ func (p *AlertProcessorImpl) ProcessPendingAlerts() error {
 	if err != nil {
 		return fmt.Errorf("failed to get pending alerts: %w", err)
 	}
+	// conduit-31jg.33: failed alerts with retries left are retried too
+	// (ShouldProcessAlert enforces the backoff delay).
+	retryable, err := p.queue.GetRetryableAlerts()
+	if err != nil {
+		return fmt.Errorf("failed to get retryable alerts: %w", err)
+	}
+	pendingAlerts = append(pendingAlerts, retryable...)
 
 	if len(pendingAlerts) == 0 {
 		return nil // Nothing to process

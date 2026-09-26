@@ -440,6 +440,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 	// Initialize heartbeat integration
 	hbIntegration := heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, gw.monitoring.MetricsCollector, cfg.AgentHeartbeat.Model, cfg.AgentHeartbeat.TimeoutSeconds)
+	hbIntegration.SetAgentHeartbeatConfig(cfg.AgentHeartbeat) // conduit-31jg.33: configured TZ + quiet window
 	if gw.brainService != nil {
 		hbIntegration.SetBrainWriter(newHeartbeatBrainWriter(gw.brainService))
 		logger.Info("heartbeat Brain writer enabled for sense.alerts.* namespace")

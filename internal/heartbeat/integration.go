@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"conduit/internal/ai"
 	"conduit/internal/channels"
+	"conduit/internal/config"
 	"conduit/internal/scheduler"
 	"conduit/internal/sessions"
 )
@@ -21,6 +23,15 @@ type GatewayIntegration struct {
 	channelSender    ChannelSender
 	metricsCollector MetricsCollector
 	brainWriter      BrainWriter
+
+	// conduit-31jg.33: quiet hours come from cfg.AgentHeartbeat (see
+	// SetAgentHeartbeatConfig); deferred actions are persisted, not dropped.
+	workspaceDir string
+	deferMu      sync.Mutex // guards hbCfg, deferred
+	flushMu      sync.Mutex // serializes FlushDeferred
+	hbCfg        *config.AgentHeartbeatConfig
+	deferred     *SharedAlertQueue
+	now          func() time.Time // test hook; nil means time.Now
 }
 
 // BrainWriter is an optional callback interface for writing heartbeat alerts into
@@ -67,6 +78,8 @@ func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, a
 		scheduler:        scheduler,
 		channelSender:    channelSender,
 		metricsCollector: metricsCollector,
+		workspaceDir:     workspaceDir,
+		deferred:         NewSharedAlertQueue(deferredQueuePath(workspaceDir, "")),
 	}
 }
 
@@ -80,6 +93,14 @@ func (g *GatewayIntegration) SetBrainWriter(bw BrainWriter) {
 // ExecuteHeartbeat executes a heartbeat job - this is called by the gateway's executeScheduledJob
 func (g *GatewayIntegration) ExecuteHeartbeat(ctx context.Context, job *scheduler.Job) error {
 	log.Printf("[HeartbeatIntegration] Executing heartbeat job: %s", job.ID)
+
+	// conduit-31jg.33: deliver anything deferred during quiet hours first, so
+	// a slow or failing AI call cannot hold it back.
+	if n, err := g.FlushDeferred(ctx); err != nil {
+		log.Printf("[HeartbeatIntegration] Deferred flush failed: %v", err)
+	} else if n > 0 {
+		log.Printf("[HeartbeatIntegration] Delivered %d deferred action(s)", n)
+	}
 
 	// Create AI executor adapter
 	aiExecutor := &gatewayAIExecutor{
@@ -279,16 +300,20 @@ func (g *GatewayIntegration) executeActions(ctx context.Context, actions []Heart
 		}
 	}
 
-	// Execute delayed actions (could be scheduled for later or executed based on quiet hours)
-	for _, action := range delayed {
+	// Delayed (quiet-aware) actions run now outside quiet hours; during quiet
+	// hours they are persisted and delivered by FlushDeferred (conduit-31jg.33).
+	for i, action := range delayed {
 		if g.shouldExecuteDelayedAction(action) {
 			if err := g.executeAction(ctx, action, job); err != nil {
 				log.Printf("[HeartbeatIntegration] Failed to execute delayed action: %v", err)
 			}
-		} else {
-			log.Printf("[HeartbeatIntegration] Delaying action due to quiet hours: %s", action.Content)
-			// Could schedule for later execution here
+			continue
 		}
+		if err := g.deferAction(action, job, i); err != nil {
+			log.Printf("[HeartbeatIntegration] Failed to defer quiet-hours action (dropped): %v", err)
+			continue
+		}
+		log.Printf("[HeartbeatIntegration] Deferred action until quiet hours end: %s", truncateString(action.Content, 80))
 	}
 
 	return nil
@@ -398,28 +423,14 @@ func (g *GatewayIntegration) categorizeActions(actions []HeartbeatAction) (immed
 	return immediate, delayed
 }
 
-// shouldExecuteDelayedAction determines if a delayed action should be executed now
+// shouldExecuteDelayedAction reports whether a quiet-aware action may run now.
+// conduit-31jg.33: uses cfg.AgentHeartbeat quiet hours in the configured
+// timezone instead of a hardcoded 22:00-08:00 in server-local time.
 func (g *GatewayIntegration) shouldExecuteDelayedAction(action HeartbeatAction) bool {
-	// For now, we'll use a simple time-based check
-	// In a full implementation, this would integrate with the AlertSeverityRouter's quiet hours logic
-	now := time.Now()
-	hour := now.Hour()
-
-	// Assume PT timezone quiet hours: 10 PM to 8 AM (22:00 to 08:00)
-	// This is a simplified check - real implementation would use proper timezone handling
-	isQuietHours := hour >= 22 || hour < 8
-
-	// If it's not quiet hours, execute the action
-	if !isQuietHours {
+	if quietAware, ok := action.Metadata["quiet_aware"].(bool); !ok || !quietAware {
 		return true
 	}
-
-	// During quiet hours, only execute if not marked as quiet-aware
-	if quietAware, ok := action.Metadata["quiet_aware"].(bool); ok && quietAware {
-		return false
-	}
-
-	return true
+	return !g.quietConfig().IsQuietTime(g.clock())
 }
 
 // resolveTarget determines the final target for message delivery
