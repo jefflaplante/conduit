@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 )
 
@@ -87,32 +88,83 @@ func (c *Config) expandTildeTagged() {
 	})
 }
 
-// expandEnvTagged expands ${ENV_VAR} placeholders using os.ExpandEnv
+// envRefPattern matches ${NAME} or ${NAME:-default} (NAME = group 2,
+// default = group 4) optionally preceded by an extra '$' escape (group 1).
+// NAME must be a valid shell identifier.
+var envRefPattern = regexp.MustCompile(`\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}`)
+
+// expandEnvBraced expands ONLY ${NAME} references in s.
+//
+// conduit-31jg.5: this replaces os.ExpandEnv, which also expanded bare
+// $name and collapsed $$ — so a secret such as "p@ss$word1" silently became
+// "p@ss" and "a$$b" became "ab". Rules:
+//
+//   - ${NAME}   -> value of environment variable NAME ("" when unset, as
+//     before; validation treats an empty credential as "not configured")
+//   - ${NAME:-default} -> NAME's value, or default when NAME is unset/empty
+//   - $${NAME}  -> the literal text ${NAME} (escape)
+//   - any other '$' (bare $name, $$, trailing $, ${not-an-identifier}) is
+//     left untouched.
+func expandEnvBraced(s string) string {
+	if !strings.Contains(s, "${") {
+		return s
+	}
+	return envRefPattern.ReplaceAllStringFunc(s, func(m string) string {
+		sub := envRefPattern.FindStringSubmatch(m)
+		if sub[1] != "" {
+			return m[1:] // escaped: drop the extra '$'
+		}
+		if v := os.Getenv(sub[2]); v != "" || sub[3] == "" {
+			return v
+		}
+		return sub[4]
+	})
+}
+
+// expandEnvTagged expands ${ENV_VAR} placeholders (see expandEnvBraced)
 // in all string fields tagged with cfg:"env".
 func (c *Config) expandEnvTagged() {
 	walkStringFields(reflect.ValueOf(c).Elem(), func(field reflect.Value, tags reflect.StructTag) {
 		if hasCfgFlag(tags, "env") {
-			field.SetString(os.ExpandEnv(field.String()))
+			field.SetString(expandEnvBraced(field.String()))
 		}
 	})
 }
 
 // expandEnvMaps expands ${ENV_VAR} in map[string]interface{} fields that
 // can't use struct tags (ChannelConfig.Config, ToolsConfig.Services).
+// conduit-31jg.5: recurses into nested maps and slices.
 func (c *Config) expandEnvMaps() {
 	for i := range c.Channels {
-		for key, value := range c.Channels[i].Config {
-			if strVal, ok := value.(string); ok {
-				c.Channels[i].Config[key] = os.ExpandEnv(strVal)
-			}
-		}
+		expandEnvInMap(c.Channels[i].Config)
 	}
 	for _, serviceConfig := range c.Tools.Services {
-		for key, value := range serviceConfig {
-			if strVal, ok := value.(string); ok {
-				serviceConfig[key] = os.ExpandEnv(strVal)
-			}
+		expandEnvInMap(serviceConfig)
+	}
+}
+
+// expandEnvInMap expands string values in m in place, recursing into nested
+// maps and slices.
+func expandEnvInMap(m map[string]interface{}) {
+	for key, value := range m {
+		m[key] = expandEnvValue(value)
+	}
+}
+
+func expandEnvValue(v interface{}) interface{} {
+	switch val := v.(type) {
+	case string:
+		return expandEnvBraced(val)
+	case map[string]interface{}:
+		expandEnvInMap(val)
+		return val
+	case []interface{}:
+		for i := range val {
+			val[i] = expandEnvValue(val[i])
 		}
+		return val
+	default:
+		return v
 	}
 }
 

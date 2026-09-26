@@ -330,36 +330,6 @@ func TestAuthMiddleware_APIKeyHeader(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_QueryParam(t *testing.T) {
-	db, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	storage := auth.NewTokenStorage(db, "test-secret")
-	token := createTestToken(t, storage, "query-client", nil)
-
-	middleware := NewAuthMiddleware(storage, AuthMiddlewareConfig{})
-	handler := middleware.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authInfo := GetAuthInfo(r.Context())
-		if authInfo == nil {
-			t.Error("Expected auth info in context")
-			return
-		}
-		if authInfo.Source != auth.TokenSourceQueryParam {
-			t.Errorf("Source = %v, want %v", authInfo.Source, auth.TokenSourceQueryParam)
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/test?token="+token, nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("Status = %d, want %d", rec.Code, http.StatusOK)
-	}
-}
-
 func TestGetAuthInfo_NoAuth(t *testing.T) {
 	ctx := context.Background()
 	info := GetAuthInfo(ctx)

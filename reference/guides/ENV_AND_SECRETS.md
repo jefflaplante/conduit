@@ -66,7 +66,14 @@ Files are loaded first-write-wins — earlier files take priority:
 | `vector.ollama.host` | `"${OLLAMA_HOST}"` (auto-detected) |
 | `data_dir` | `"${CONDUIT_DATA_DIR}"` |
 
-Expansion uses Go's `os.ExpandEnv` — undefined vars expand to empty string, no error.
+Expansion rules (conduit-31jg.5):
+
+- Only the braced form is expanded: `${NAME}` → value of `NAME`; undefined vars expand to an empty string, no error.
+- `${NAME:-default}` → value of `NAME`, or `default` when `NAME` is unset or empty.
+- Every other `$` is kept literally — bare `$name`, `$$`, and a trailing `$` are **not** expanded, so secrets such as `p@ss$word1` or `a$$b` can be written directly in `config.json`.
+- To write a literal `${NAME}` (braces included), escape it with an extra dollar: `$${NAME}` → `${NAME}`.
+
+Before this change the gateway used Go's `os.ExpandEnv`, which also expanded bare `$name` and collapsed `$$`. If a config relied on the bare `$NAME` form, rewrite it as `${NAME}`.
 
 ## The `secrets_file` Alternative
 

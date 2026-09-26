@@ -5,7 +5,7 @@ Complete reference for Conduit Go Gateway configuration.
 ## Overview
 
 Configuration is loaded from JSON files with support for:
-- Environment variable expansion: `${ENV_VAR}`
+- Environment variable expansion: `${ENV_VAR}` (braced form only — bare `$name` and `$$` are kept literally; write `$${ENV_VAR}` for a literal `${ENV_VAR}`). See [guides/ENV_AND_SECRETS.md](guides/ENV_AND_SECRETS.md).
 - Default values: `${ENV_VAR:-default}`
 - Multiple config files for different environments
 
@@ -886,14 +886,15 @@ The gateway looks for config in this order:
 3. `config.json` in current directory
 4. `~/.conduit/config.json`
 
-## Database Path Auto-Detection
+## Database Path
 
-Database path is auto-detected from config filename:
-- `config.json` → `gateway.db`
-- `config.telegram.json` → `config.telegram.db`
-- `config.live.json` → `config.live.db`
-
-Override with `--database` flag or `database` config field.
+The database is `database.path` from the loaded config (default `gateway.db`,
+relative to the working directory). It is **not** derived from the config file
+name. The server, `conduit token ...`, `conduit pairing ...` and the TUI all
+resolve it the same way (`auth.ResolveDatabasePath`), so they always open the
+same file. The global `--database` flag overrides it for all of them
+(conduit-31jg.48). `conduit token info` prints the resolved database and the
+token-secret source.
 
 ## Example Configs
 

@@ -55,17 +55,20 @@ type TokenExtractor struct {
 	extractors []func(*http.Request) ExtractedToken
 }
 
-// NewTokenExtractor creates a new TokenExtractor with default extraction sources
+// NewTokenExtractor creates a new TokenExtractor for plain HTTP routes.
 // Extraction is attempted in priority order:
 // 1. Authorization: Bearer <token>
 // 2. X-API-Key: <token>
-// 3. ?token=<token>
+//
+// conduit-31jg.4: the ?token= query parameter is intentionally NOT accepted
+// on plain HTTP routes — URLs end up in proxy/access logs and browser
+// history. It remains available on WebSocket upgrades only (see
+// NewWebSocketTokenExtractor), where browsers cannot set custom headers.
 func NewTokenExtractor() *TokenExtractor {
 	return &TokenExtractor{
 		extractors: []func(*http.Request) ExtractedToken{
 			extractFromBearerHeader,
 			extractFromAPIKeyHeader,
-			extractFromQueryParam,
 		},
 	}
 }

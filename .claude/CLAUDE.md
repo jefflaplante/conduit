@@ -71,7 +71,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 
 - `server` — Start the gateway (default)
 - `version` — Show version, git commit, build date
-- `token` — Token management (create, list, revoke)
+- `token` — Token management (create, list, revoke, export, info)
 - `pairing` — Telegram user pairing management
 - `tools` — Tool discovery (list, describe, schema, examples)
 - `tui` — Launch the BubbleTea terminal UI client
@@ -142,7 +142,7 @@ JSON config in configs/ directory with ${ENV_VAR} expansion. Key files:
 - configs/config-oauth-test.json — OAuth testing config
 - configs/examples/ — Example configs for new setups
 - config.live.json — Production (gitignored)
-- Database path auto-detected from config filename (e.g., config.telegram.json → config.telegram.db)
+- Database path is `database.path` from the loaded config (default `gateway.db`), NOT derived from the config filename. Server, `token`, `pairing` and TUI all use `auth.ResolveDatabasePath(cfg)`; the global `--database` flag overrides it everywhere. `conduit token info` shows the resolved DB and token-secret source (conduit-31jg.48).
 
 Config struct covers: port, database path, AI providers (Anthropic with OAuth or API key), agent personality/identity/capabilities, workspace context (core files, memory, security, caching), skills, tools (enabled list, max chains, sandbox, services), channels, debug logging, rate limiting (anonymous/authenticated tiers), heartbeat loop, agent heartbeat (quiet hours, alert targets, retry policy), SSH server, brain (tiered memory with configurable salience weights).
 

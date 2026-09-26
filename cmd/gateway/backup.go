@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"conduit/internal/backup"
+	"conduit/internal/config"
 
 	"github.com/spf13/cobra"
 )
@@ -93,6 +94,9 @@ var backupRestoreCmd = &cobra.Command{
 			DatabasePath:   restoreDBPath,
 			WorkspacePath:  restoreWSPath,
 			Verbose:        verbose,
+			// conduit-31jg.9: refuse to restore under a running gateway.
+			PidfilePath: resolvePidfilePath(),
+			GatewayAddr: restoreGatewayAddr(),
 		}
 
 		result, err := backup.RestoreBackup(opts)
@@ -155,7 +159,7 @@ func init() {
 
 	// Restore subcommand flags
 	backupRestoreCmd.Flags().BoolVar(&restoreDryRun, "dry-run", false, "Preview restore without writing files")
-	backupRestoreCmd.Flags().BoolVar(&restoreForce, "force", false, "Skip confirmation prompt")
+	backupRestoreCmd.Flags().BoolVar(&restoreForce, "force", false, "Skip confirmation prompt (does not bypass the running-gateway check)")
 	backupRestoreCmd.Flags().BoolVar(&restoreSkipConfig, "skip-config", false, "Don't restore config file")
 	backupRestoreCmd.Flags().BoolVar(&restoreSSHKeys, "restore-ssh-keys", false, "Restore SSH keys (explicit opt-in)")
 	backupRestoreCmd.Flags().StringVar(&restoreConfigPath, "config-path", "", "Override config destination path")
@@ -187,4 +191,17 @@ func formatSize(b int64) string {
 	default:
 		return fmt.Sprintf("%d B", b)
 	}
+}
+
+// restoreGatewayAddr returns the loopback address of the gateway configured
+// by --config (default port 18789) for the restore liveness check.
+// conduit-31jg.9.
+func restoreGatewayAddr() string {
+	port := 18789
+	if _, err := os.Stat(cfgFile); err == nil {
+		if cfg, err := config.Load(cfgFile); err == nil && cfg.Port > 0 {
+			port = cfg.Port
+		}
+	}
+	return fmt.Sprintf("127.0.0.1:%d", port)
 }

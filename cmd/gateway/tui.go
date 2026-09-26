@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
-	"path/filepath"
 
+	"conduit/internal/auth"
 	"conduit/internal/config"
 	"conduit/internal/tui"
 
@@ -115,22 +115,10 @@ func loadGatewayConfigForTUI(configPath string) (*config.Config, error) {
 	return cfg, nil
 }
 
-// deriveDBPath determines the database path from the config file path,
-// matching the same logic used by the server command and initConfig.
-func deriveDBPath(configPath string, cfg *config.Config) string {
-	// If the config specifies a database path, use it
-	if cfg.Database.Path != "" && cfg.Database.Path != "gateway.db" {
-		return cfg.Database.Path
-	}
-
-	// Derive from config filename (same logic as initConfig/PersistentPreRunE)
-	if configPath != "" && configPath != "config.json" {
-		dir := filepath.Dir(configPath)
-		base := filepath.Base(configPath)
-		ext := filepath.Ext(base)
-		name := base[:len(base)-len(ext)]
-		return filepath.Join(dir, name+".db")
-	}
-
-	return "gateway.db"
+// deriveDBPath returns the database the server opens for cfg.
+// conduit-31jg.48: previously derived "<config-name>.db" from the config
+// file name, which did not match the server; now shares
+// auth.ResolveDatabasePath with the server and the token/pairing CLIs.
+func deriveDBPath(_ string, cfg *config.Config) string {
+	return auth.ResolveDatabasePath(cfg)
 }

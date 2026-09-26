@@ -60,12 +60,15 @@ type BackupManifest struct {
 
 // OriginalPaths records where files were located on the source system.
 type OriginalPaths struct {
-	Config       string   `json:"config"`
-	Database     string   `json:"database"`
-	WorkspaceDir string   `json:"workspace_dir"`
-	SSHHostKey   string   `json:"ssh_host_key,omitempty"`
-	SSHAuthKeys  string   `json:"ssh_authorized_keys,omitempty"`
-	SkillsPaths  []string `json:"skills_paths,omitempty"`
+	Config   string `json:"config"`
+	Database string `json:"database"`
+	// BrainDatabase is the brain DB actually backed up (cfg.Brain.Path, or
+	// the path derived from Database). conduit-31jg.9
+	BrainDatabase string   `json:"brain_database,omitempty"`
+	WorkspaceDir  string   `json:"workspace_dir"`
+	SSHHostKey    string   `json:"ssh_host_key,omitempty"`
+	SSHAuthKeys   string   `json:"ssh_authorized_keys,omitempty"`
+	SkillsPaths   []string `json:"skills_paths,omitempty"`
 }
 
 // DatabaseInfo records basic database metadata.
@@ -94,6 +97,13 @@ type RestoreOptions struct {
 	DatabasePath   string
 	WorkspacePath  string
 	Verbose        bool
+
+	// conduit-31jg.9: when set, a non-dry-run restore refuses to run while
+	// the gateway looks live — PidfilePath names a live process, or
+	// GatewayAddr (host:port) accepts TCP connections. Force does not
+	// bypass this; it only skips the confirmation prompt.
+	PidfilePath string
+	GatewayAddr string
 }
 
 // ListOptions configures backup inspection.
