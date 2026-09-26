@@ -290,7 +290,7 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 			totalTokens = usage.TotalTokens
 
 			// Proactive context window warning
-			warning := contextWarningIfNeeded(session, promptTokens, modelOverride)
+			warning := contextWarningIfNeeded(session, usage.Context(), modelOverride) // conduit-31jg.15: last-call context, not the turn sum
 			if warning.Text != "" {
 				responseContent += warning.Text
 			}
@@ -325,7 +325,8 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 			if modelUsed == "" {
 				modelUsed = "claude-sonnet-4-20250514" // default model
 			}
-			if g.compactionEngine != nil && g.compactionEngine.ShouldCompact(promptTokens, modelUsed) {
+			// conduit-31jg.15: compaction keys off context occupancy, not the turn sum.
+			if g.compactionEngine != nil && g.compactionEngine.ShouldCompact(usage.Context(), modelUsed) {
 				// conduit-31jg.21: safe to run outside the turn lock — Compact
 				// only deletes the IDs it snapshotted, in one transaction, and
 				// its in-flight guard drops overlapping runs for this session.

@@ -65,6 +65,13 @@ type turnBudget struct {
 	started         time.Time
 	injected        bool        // conduit-8ba7: progress reminder already injected this chain
 	chain           *chainState // conduit-31jg.13: per-turn failure/pattern trackers (nil-safe)
+	usage           ai.Usage    // conduit-31jg.15: every billed round trip this turn
+}
+
+// usageSnapshot returns a copy of the turn's accumulated usage.
+func (tb *turnBudget) usageSnapshot() *ai.Usage {
+	u := tb.usage
+	return &u
 }
 
 func newTurnBudget(now time.Time) *turnBudget {

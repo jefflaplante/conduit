@@ -104,13 +104,23 @@ func GuardEmptyResponse(
 	log.Printf("[EmptyGuard] (%s) raw-empty response: 0 content bytes, %d tool calls — retrying once (conduit-18vj)",
 		label, len(resp.ToolCalls))
 
+	// conduit-31jg.15: the discarded empty attempts were billed too; the
+	// response returned carries the sum of every attempt made here.
+	var spent Usage
+	if resp != nil {
+		spent.Add(resp.Usage)
+	}
+
 	retryStart := time.Now()
 	retryResp, retryErr := provider.GenerateResponse(ctx, req)
 	log.Printf("[EmptyGuard] (%s) retry completed in %s: empty=%v err=%v",
 		label, time.Since(retryStart).Round(time.Millisecond), IsEmptyModelResponse(retryResp), retryErr)
 
 	if retryErr == nil && !IsEmptyModelResponse(retryResp) {
-		return retryResp, nil
+		return withSpentUsage(retryResp, spent), nil
+	}
+	if retryErr == nil && retryResp != nil {
+		spent.Add(retryResp.Usage)
 	}
 
 	// conduit-1z0g: same-model retry died too. One final cross-model attempt —
@@ -120,18 +130,34 @@ func GuardEmptyResponse(
 	if emptyFailoverRouter != nil {
 		failoverResp, failoverErr := emptyFailoverAttempt(ctx, emptyFailoverRouter, provider, req, label)
 		if failoverErr == nil && failoverResp != nil && !IsEmptyModelResponse(failoverResp) {
-			return failoverResp, nil
+			return withSpentUsage(failoverResp, spent), nil
+		}
+		if failoverErr == nil && failoverResp != nil {
+			spent.Add(failoverResp.Usage)
 		}
 		log.Printf("[EmptyGuard] (%s) failover also empty/failed — delivering visible fallback (conduit-18vj)", label)
 		return &GenerateResponse{
 			Content: EmptyResponseFallbackContent(),
+			Usage:   spent,
 		}, nil
 	}
 
 	log.Printf("[EmptyGuard] (%s) retry also empty/failed — delivering visible fallback (conduit-18vj)", label)
 	return &GenerateResponse{
 		Content: EmptyResponseFallbackContent(),
+		Usage:   spent,
 	}, nil
+}
+
+// withSpentUsage returns a copy of resp whose Usage also includes usage
+// already spent on discarded attempts (conduit-31jg.15). The provider's
+// response object is not mutated.
+func withSpentUsage(resp *GenerateResponse, spent Usage) *GenerateResponse {
+	out := *resp
+	total := spent
+	total.Add(resp.Usage)
+	out.Usage = total
+	return &out
 }
 
 // emptyFailoverAttempt resolves and executes the cross-model failover attempt

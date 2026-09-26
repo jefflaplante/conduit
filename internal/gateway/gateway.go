@@ -1333,7 +1333,9 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		// totals inside the turn lock. This block now only handles path-local
 		// concerns: proactive context-window warnings (and their dedup keys).
 		if usage := convResponse.GetUsage(); usage != nil {
-			if warning := contextWarningIfNeeded(session, usage.PromptTokens, modelOverride); warning.Text != "" {
+			// conduit-31jg.15: Usage is the whole-turn sum; the context
+			// gauge is the last round trip's prompt size.
+			if warning := contextWarningIfNeeded(session, usage.Context(), modelOverride); warning.Text != "" {
 				responseContent += warning.Text
 				batch := map[string]string{warning.Key: "true"}
 				// SPAR: trigger reflection on next message when context budget >= 80%

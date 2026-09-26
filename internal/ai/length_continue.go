@@ -39,6 +39,12 @@ func ContinueLengthTruncated(ctx context.Context, provider Provider, req *Genera
 		return resp
 	}
 
+	// conduit-31jg.15: every continuation is billed; the returned response
+	// carries the sum (and total.ContextTokens tracks the last call).
+	var total Usage
+	total.Add(resp.Usage)
+	defer func() { resp.Usage = total }()
+
 	var fragments []string
 	for cont := 0; resp.FinishReason == "length" && len(resp.ToolCalls) == 0 && cont < maxLengthAutoContinues; cont++ {
 		if strings.TrimSpace(resp.Content) == "" {
@@ -69,6 +75,7 @@ func ContinueLengthTruncated(ctx context.Context, provider Provider, req *Genera
 			fragments = fragments[:len(fragments)-1]
 			break
 		}
+		total.Add(contResp.Usage)
 		log.Printf("[RoundTrip] phase=%s-continue continue=%d model=%q duration=%s prompt_tokens=%d completion_tokens=%d content_bytes=%d tool_calls=%d finish_reason=%q",
 			label, cont+1, req.Model, time.Since(start).Round(time.Millisecond),
 			contResp.Usage.PromptTokens, contResp.Usage.CompletionTokens,

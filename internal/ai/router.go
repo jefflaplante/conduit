@@ -218,6 +218,10 @@ type Usage struct {
 	TotalTokens              int `json:"total_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	// ContextTokens is the full prompt size of the LAST round trip folded in
+	// by Add (see Usage.Context). The fields above are whole-turn sums.
+	// conduit-31jg.15
+	ContextTokens int `json:"context_tokens,omitempty"`
 }
 
 // DefaultContextWindow is the fallback context window size in tokens.

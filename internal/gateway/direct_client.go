@@ -300,7 +300,7 @@ func (c *DirectClient) streamChatWithID(session *sessions.Session, text, request
 			totalTokens = usage.TotalTokens
 
 			// Proactive context window warning
-			warning := contextWarningIfNeeded(session, promptTokens, modelOverride)
+			warning := contextWarningIfNeeded(session, usage.Context(), modelOverride) // conduit-31jg.15: last-call context, not the turn sum
 			if warning.Text != "" {
 				responseContent += warning.Text
 			}
