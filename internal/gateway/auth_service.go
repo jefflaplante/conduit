@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -50,7 +51,14 @@ type AuthService struct {
 // the Gateway struct exists.
 func NewAuthService(cfg *config.Config, logger *slog.Logger, db *sql.DB) (*AuthService, error) {
 	// Initialize token storage using the shared database.
-	authStorage := auth.NewTokenStorage(db, cfg.Auth.TokenSecret)
+	// conduit-31jg.3: resolve the HMAC secret through the resolver shared with
+	// the `conduit token` CLI (config > env > persisted file; never ephemeral).
+	settings, err := auth.ResolveTokenStore(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("auth: %w", err)
+	}
+	logger.Info("token HMAC secret resolved", "source", settings.Describe())
+	authStorage := auth.NewTokenStorage(db, settings.Secret)
 
 	// Build auth skip paths based on diagnostics config.
 	// By default, require auth for /metrics, /diagnostics, /prometheus.

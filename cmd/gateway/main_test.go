@@ -37,6 +37,9 @@ func TestGatewayCLISearchIntegration(t *testing.T) {
 	// Skip if no Anthropic credentials are available
 	skipWithoutCredentials(t)
 
+	// conduit-31jg.3: keep any persisted token secret out of ~/.conduit.
+	t.Setenv("CONDUIT_DATA_DIR", t.TempDir())
+
 	// Load test configuration
 	configPath := "../../test/configs/config.search-integration.json"
 	cfg, err := config.Load(configPath)
@@ -202,6 +205,7 @@ func BenchmarkSearchRequestThroughAPI(b *testing.B) {
 	}
 
 	cfg.Database.Path = "../../test/databases/bench-search.db"
+	b.Setenv("CONDUIT_DATA_DIR", b.TempDir()) // conduit-31jg.3
 
 	b.ResetTimer()
 

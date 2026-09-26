@@ -52,8 +52,9 @@ type Config struct {
 // AuthTokenConfig holds configuration for the token authentication system
 type AuthTokenConfig struct {
 	// TokenSecret is the HMAC key used for hashing tokens (hex-encoded, 32 bytes).
-	// If empty, a random key is generated at startup (tokens won't survive restarts).
-	// Supports ${ENV_VAR} expansion.
+	// Supports ${ENV_VAR} expansion. If empty, CONDUIT_TOKEN_SECRET is used,
+	// then a key persisted at {data_dir}/auth/token_secret (generated once,
+	// 0600). See auth.ResolveTokenStore (conduit-31jg.3).
 	TokenSecret string `json:"token_secret,omitempty" cfg:"env"`
 }
 

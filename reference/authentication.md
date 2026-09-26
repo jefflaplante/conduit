@@ -20,6 +20,34 @@ This guide covers how to set up and use authentication with the Conduit Go Gatew
 - SQLite database file (auto-created on first run)
 - Basic command-line knowledge
 
+### Token Secret and Database Resolution
+
+Tokens are stored as HMAC-SHA256 hashes. The `conduit token` commands and the
+server resolve the HMAC secret and the database path through one shared
+function (`auth.ResolveTokenStore`), so a token created by the CLI always
+validates on the server. Both load the same config file (`--config`, default
+`config.json`) through `config.Load`, including `${ENV_VAR}` expansion.
+
+- **Database:** `database.path` from the config. `--database` is only used if you
+  pass it explicitly, and the CLI then warns that the server won't see those
+  tokens. It is no longer derived from the config file name.
+- **HMAC secret**, first match wins:
+  1. `auth.token_secret` in the config (literal or `${VAR}`)
+  2. `CONDUIT_TOKEN_SECRET` environment variable
+  3. `{data_dir}/auth/token_secret` (data dir: `CONDUIT_DATA_DIR`, then
+     `data_dir` in config, then `~/.conduit`). If this file is missing, a random
+     32-byte key is generated once and written with mode `0600`. Later runs
+     reuse it. The CLI and server refuse to use the file if it is empty or
+     readable by group or others.
+
+The server logs which source it used, and the CLI prints it to stderr. The
+secret itself is never logged. If the CLI can't load the config or resolve a
+secret, it exits non-zero without creating a token. Run token commands with
+the same `--config`, working directory, and `CONDUIT_DATA_DIR` as the server.
+
+Changing the secret invalidates every v2 (HMAC) token. Legacy v1 (plain SHA256)
+tokens still validate and are re-hashed to v2 on first use.
+
 ### Creating Tokens
 
 #### Basic Token Creation
@@ -433,6 +461,10 @@ def request_with_retry(url, token, max_retries=3):
    conduit token list --include-revoked | grep your-token-id
    ```
 4. Verify the token hasn't been revoked
+5. Make sure the CLI and server resolve the same secret (see
+   [Token Secret and Database Resolution](#token-secret-and-database-resolution)).
+   Compare the "token secret from ..." line from `conduit token create` with the
+   "token HMAC secret resolved" line in the server log.
 
 ### "Missing token" error
 
@@ -507,10 +539,11 @@ curl "http://...?token=conduit_..."
    chmod 644 gateway.db
    ```
 
-3. Try with explicit database path:
+3. Point the CLI at the server's config (this sets both the database and the
+   token secret):
    ```bash
    conduit token create \
-     --database /path/to/gateway.db \
+     --config /path/to/config.json \
      --client-name "my-app"
    ```
 
