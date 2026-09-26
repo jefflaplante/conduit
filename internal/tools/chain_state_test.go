@@ -345,12 +345,19 @@ func TestChainState_GuidanceNotInAnthropicSystem(t *testing.T) {
 	if strings.Contains(string(sent.System), pivotText) {
 		t.Fatalf("guidance hoisted into system blocks: %s", sent.System)
 	}
+	// conduit-31jg.45: the round's tool_result blocks and the guidance text
+	// share ONE trailing user message, tool_result first.
 	lastMsg := sent.Messages[len(sent.Messages)-1]
-	prevMsg := sent.Messages[len(sent.Messages)-2]
-	if lastMsg["role"] != "user" || !strings.Contains(fmt.Sprint(lastMsg["content"]), pivotText) {
-		t.Errorf("guidance should be the trailing user message, got %v", lastMsg)
+	blocks, _ := lastMsg["content"].([]interface{})
+	if lastMsg["role"] != "user" || len(blocks) < 2 {
+		t.Fatalf("expected trailing user message with tool_result + guidance, got %v", lastMsg)
 	}
-	if prevMsg["role"] != "user" || !strings.Contains(fmt.Sprint(prevMsg["content"]), "tool_result") {
-		t.Errorf("guidance should directly follow the tool_result user turn, got %v", prevMsg)
+	first, _ := blocks[0].(map[string]interface{})
+	last, _ := blocks[len(blocks)-1].(map[string]interface{})
+	if first["type"] != "tool_result" {
+		t.Errorf("first block should be tool_result, got %v", first)
+	}
+	if last["type"] != "text" || !strings.Contains(fmt.Sprint(last["text"]), pivotText) {
+		t.Errorf("guidance should be the trailing text block, got %v", last)
 	}
 }

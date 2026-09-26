@@ -428,6 +428,11 @@ func (e *ExecutionEngine) HandleToolCallFlow(
 	// turn budget through the recursion and on ctx into executeSingle.
 	tb := newTurnBudget(time.Now())
 	tb.chain = e.newChainState(ctx)
+	// conduit-31jg.15: the router's first round trip (with its own guard
+	// retries / auto-continues folded in) opens the turn's usage.
+	if initialResp != nil {
+		tb.usage.Add(initialResp.Usage)
+	}
 	return e.handleToolCallFlowRecursive(withChainState(ctx, tb.chain), provider, initialReq, initialResp, 0, time.Now(), tb)
 }
 
@@ -484,7 +489,7 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 	// stops with a user-visible timeout — never a silent end.
 	if stop := e.checkTurnWindow(ctx, chainStart, tb, depth); stop != nil {
 		if stop.Usage == nil {
-			stop.Usage = &initialResp.Usage
+			stop.Usage = tb.usageSnapshot() // conduit-31jg.15
 		}
 		return stop, nil
 	}
@@ -507,7 +512,7 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 
 		return &ConversationResponse{
 			Content:    limitMessage,
-			Usage:      &initialResp.Usage,
+			Usage:      tb.usageSnapshot(), // conduit-31jg.15
 			Steps:      depth + 1,
 			ChainDepth: depth,
 		}, nil
@@ -515,7 +520,7 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 
 	// conduit-8ba7: mid-chain progress reminder. The old every-10-depth
 	// verbatim goal reminder is gone; deep chains instead get exactly one
-	// progress-aware system message at the first depth >= 20, and depth
+	// progress-aware user-role guidance message at the first depth >= 20, and depth
 	// milestones 30/40/50 emit chain_depth telemetry (log only, no injection).
 	const refocusDepthThreshold = 20
 	var refocusMessage string
@@ -571,14 +576,8 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 			Role:       "tool",
 			Content:    content,
 			ToolCallID: result.ToolCall.ID,
-		})
-	}
-
-	// Inject the one-per-chain progress reminder if applicable (conduit-8ba7)
-	if refocusMessage != "" {
-		conversationHistory = append(conversationHistory, ai.ChatMessage{
-			Role:    "system",
-			Content: refocusMessage,
+			// conduit-31jg.45: tell the model the call failed (tool_result.is_error).
+			IsError: result.Error != nil || (result.Result != nil && !result.Result.Success),
 		})
 	}
 
@@ -586,11 +585,14 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 	// trigger, from this turn's trackers only. Sent as a USER-role message
 	// after the tool results — not system-role — so providers that hoist
 	// system messages (anthropic.go, openai.go) don't rewrite the system
-	// prefix and bust the prompt cache. The Anthropic converter already
-	// emits one user turn per tool result; the API merges consecutive user
-	// turns into [tool_result..., text], which satisfies the "tool_result
-	// blocks first" rule. Stripped before recursing (stripEphemeral).
-	if guidance := tb.chain.takeGuidance(); guidance != "" {
+	// prefix and bust the prompt cache. The Anthropic converter puts it in
+	// the same user message as the tool_results, after them (conduit-31jg.45),
+	// satisfying the "tool_result blocks first" rule.
+	// Stripped before recursing (stripEphemeral).
+	// conduit-31jg.14: the one-per-chain conduit-8ba7 progress reminder rides
+	// in this same user-role message; as a system message it was hoisted
+	// into the system blocks and busted the cached prefix.
+	if guidance := tb.chain.takeGuidance(refocusMessage); guidance != "" {
 		log.Printf("[ExecutionEngine] Injecting tool-loop guidance at depth %d (conduit-31jg.13)", depth)
 		conversationHistory = append(conversationHistory, ai.ChatMessage{
 			Role:    "user",
@@ -617,6 +619,7 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 	// conduit-18vj: raw-empty round trips after tool execution were the proven
 	// dead-turn mechanism (2026-09-03) — retry once, then a visible fallback.
 	finalResp, err = ai.GuardEmptyResponse(ctx, provider, finalReq, finalResp, err, fmt.Sprintf("depth%d", depth))
+	tb.usage.Add(finalResp.Usage) // conduit-31jg.15 (includes guard retries)
 
 	// conduit-1z6d: per-round-trip instrumentation — dead turns diagnosable
 	// from the journal alone.
@@ -654,6 +657,7 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		if err != nil {
 			break
 		}
+		tb.usage.Add(contResp.Usage) // conduit-31jg.15
 		log.Printf("[RoundTrip] phase=post-tools-continue depth=%d continue=%d model=%q duration=%s prompt_tokens=%d completion_tokens=%d content_bytes=%d tool_calls=%d finish_reason=%q",
 			depth, cont+1, finalReq.Model, time.Since(rtContStart).Round(time.Millisecond),
 			contResp.Usage.PromptTokens, contResp.Usage.CompletionTokens,
@@ -687,9 +691,10 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 	}
 
 	// No more tool calls - return final response
+	// conduit-31jg.15: usage is the whole turn, not the last two calls.
 	return &ConversationResponse{
 		Content:     finalResp.Content,
-		Usage:       e.combineUsage(&initialResp.Usage, &finalResp.Usage),
+		Usage:       tb.usageSnapshot(),
 		Steps:       2 + depth, // Initial + final + any recursive steps
 		ToolResults: toolResults,
 		ChainDepth:  depth,
@@ -852,25 +857,6 @@ func (e *ExecutionEngine) lineContainsPattern(line string) bool {
 		}
 	}
 	return false
-}
-
-// combineUsage combines usage statistics from multiple AI calls
-func (e *ExecutionEngine) combineUsage(usage1, usage2 *ai.Usage) *ai.Usage {
-	if usage1 == nil && usage2 == nil {
-		return nil
-	}
-	if usage1 == nil {
-		return usage2
-	}
-	if usage2 == nil {
-		return usage1
-	}
-
-	return &ai.Usage{
-		PromptTokens:     usage1.PromptTokens + usage2.PromptTokens,
-		CompletionTokens: usage1.CompletionTokens + usage2.CompletionTokens,
-		TotalTokens:      usage1.TotalTokens + usage2.TotalTokens,
-	}
 }
 
 // extractOriginalGoal finds the original user goal from the message history.

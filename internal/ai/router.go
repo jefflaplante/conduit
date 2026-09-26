@@ -188,6 +188,11 @@ type SystemBlock struct {
 	Type string      `json:"type"`
 	Text string      `json:"text,omitempty"`
 	Meta interface{} `json:"meta,omitempty"`
+	// Dynamic marks per-turn content (timestamp, wake context). Providers
+	// with prompt caching place the system breakpoint on the last
+	// non-dynamic block so these never invalidate the cached prefix.
+	// conduit-31jg.14
+	Dynamic bool `json:"dynamic,omitempty"`
 }
 
 // ProcessedResponse represents processed AI response
@@ -245,6 +250,15 @@ type ChatMessage struct {
 	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`   // For assistant messages with tool calls
 	ToolCallID  string       `json:"tool_call_id,omitempty"` // For tool result messages
 	Attachments []Attachment `json:"attachments,omitempty"`  // In-memory media attachments (images, etc.)
+	// IsError marks a tool result message whose tool call failed (Go error or
+	// Result.Success=false). Anthropic receives it as tool_result.is_error.
+	// conduit-31jg.45
+	IsError bool `json:"is_error,omitempty"`
+	// SystemBlocks carries the agent's system prompt blocks on the leading
+	// system message. Content still holds them joined with "\n\n" for
+	// providers without block support; Anthropic sends the blocks so the
+	// cache breakpoint lands on the static one. conduit-31jg.14
+	SystemBlocks []SystemBlock `json:"system_blocks,omitempty"`
 }
 
 // Attachment represents media content attached to a message (e.g., images from Telegram).
@@ -276,6 +290,10 @@ type Usage struct {
 	TotalTokens              int `json:"total_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	// ContextTokens is the full prompt size of the LAST round trip folded in
+	// by Add (see Usage.Context). The fields above are whole-turn sums.
+	// conduit-31jg.15
+	ContextTokens int `json:"context_tokens,omitempty"`
 }
 
 // DefaultContextWindow is the fallback context window size in tokens.
@@ -982,7 +1000,17 @@ func (r *Router) recordUsageToStore(session *sessions.Session, response Conversa
 	if usage == nil {
 		return
 	}
-	if err := r.sessionStore.RecordTokenUsage(session.Key, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens); err != nil {
+	// conduit-31jg.15: usage is the whole-turn sum; the last_* context keys
+	// get the last round trip's prompt size (Context()), and the cache token
+	// fields are recorded too.
+	if err := r.sessionStore.RecordTurnUsage(session.Key, sessions.TurnUsage{
+		ContextTokens:            usage.Context(),
+		PromptTokens:             usage.PromptTokens,
+		CompletionTokens:         usage.CompletionTokens,
+		TotalTokens:              usage.TotalTokens,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     usage.CacheReadInputTokens,
+	}); err != nil {
 		log.Printf("[Router] token usage recording failed for session %s: %v", session.Key, err)
 	}
 }

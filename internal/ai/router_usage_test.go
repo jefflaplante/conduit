@@ -221,3 +221,54 @@ func TestRouter_UsageRecording_WithToolFlow(t *testing.T) {
 		t.Errorf("session_prompt_tokens_total = %q, want \"10\"", got)
 	}
 }
+
+// conduit-31jg.15 (integration with bd-27hs): the router records WHOLE-TURN
+// usage sums, so the last_* context-size keys must come from Usage.Context()
+// (the last round trip's full prompt, cached input included) rather than the
+// summed PromptTokens, and the cache token fields must be persisted.
+func TestRecordUsageToStore_UsesContextAndRecordsCacheTokens(t *testing.T) {
+	store := newUsageStore(t)
+	router, _ := newUsageTestRouter(t, store)
+	session := newStoredSession(t, store, "usage_turn_sum")
+
+	// Two round trips of a tool turn: round 1 prompt 1000 uncached + 9000
+	// cache read; round 2 prompt 1200 uncached + 500 cache write + 9000 read.
+	var turn Usage
+	turn.Add(Usage{PromptTokens: 1000, CompletionTokens: 50, CacheReadInputTokens: 9000})
+	turn.Add(Usage{PromptTokens: 1200, CompletionTokens: 80, CacheCreationInputTokens: 500, CacheReadInputTokens: 9000})
+
+	router.recordUsageToStore(session, &SimpleConversationResponse{Content: "ok", Usage: &turn})
+
+	got := mustGetSession(t, store, session.Key).Context
+	want := map[string]string{
+		"last_prompt_tokens":                  "10700", // Context(): 1200+500+9000, not the 2200 prompt sum
+		"last_completion_tokens":              "130",
+		"last_total_tokens":                   "10830",
+		"last_cache_creation_tokens":          "500",
+		"last_cache_read_tokens":              "18000",
+		"session_prompt_tokens_total":         "2200",
+		"session_completion_tokens_total":     "130",
+		"session_cache_creation_tokens_total": "500",
+		"session_cache_read_tokens_total":     "18000",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+
+	// A second turn accumulates the session totals, and last_* reflects it.
+	var turn2 Usage
+	turn2.Add(Usage{PromptTokens: 300, CompletionTokens: 20, CacheReadInputTokens: 10700})
+	router.recordUsageToStore(session, &SimpleConversationResponse{Content: "ok", Usage: &turn2})
+	got = mustGetSession(t, store, session.Key).Context
+	for k, v := range map[string]string{
+		"last_prompt_tokens":              "11000",
+		"session_prompt_tokens_total":     "2500",
+		"session_cache_read_tokens_total": "28700",
+	} {
+		if got[k] != v {
+			t.Errorf("after turn 2: %s = %q, want %q", k, got[k], v)
+		}
+	}
+}

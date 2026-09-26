@@ -240,6 +240,9 @@ func copySystemBlocks(blocks []ai.SystemBlock) []ai.SystemBlock {
 			Type: block.Type,
 			Text: block.Text,
 			Meta: block.Meta, // Note: Meta is interface{}, shallow copy only
+			// conduit-31jg.14: dropping this would put the cache breakpoint
+			// on the per-turn block for every prompt-cache hit.
+			Dynamic: block.Dynamic,
 		}
 	}
 	return copied

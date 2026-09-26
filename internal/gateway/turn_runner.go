@@ -500,7 +500,7 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 		}
 		batch := map[string]string{}
 		if !res.Silent && !res.Empty {
-			if w := contextWarningIfNeeded(session, u.PromptTokens, modelUsed); w.Text != "" {
+			if w := contextWarningIfNeeded(session, u.Context(), modelUsed); w.Text != "" { // conduit-31jg.15: last-call context, not the turn sum
 				content += w.Text
 				batch[w.Key] = "true"
 				// SPAR: trigger reflection on next message when context budget >= 80%
@@ -517,7 +517,7 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 		batch["session_request_count"] = strconv.Itoa(prevCount + 1)
 		_ = r.sessions.SetSessionContextBatch(key, batch)
 
-		r.maybeCompact(session, u.PromptTokens, modelUsed)
+		r.maybeCompact(session, u.Context(), modelUsed)
 	}
 
 	// 4c. Persist the reply inside the lock (conduit-31jg.22).
