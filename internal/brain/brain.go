@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"conduit/internal/database"
@@ -1087,9 +1088,13 @@ func (b *Brain) injectWarmEntries(ctx context.Context, results []*Entry, seen ma
 	return results
 }
 
+// defaultRecallEventsPath is the production location of the recall-event log
+// consumed by brain_spread reinforcement.
+const defaultRecallEventsPath = "/home/jules/ocgo/workspace/memory/recall-events.jsonl"
+
 // recallEventsPath is where recall events are logged for brain_spread
 // reinforcement. Package var so tests can redirect to a temp dir.
-var recallEventsPath = "/home/jules/ocgo/workspace/memory/recall-events.jsonl"
+var recallEventsPath = defaultRecallEventsPath
 
 func (b *Brain) logRecallEvent(query string, results []*Entry) {
 	// Best-effort logging: failure must not fail recall
@@ -1101,6 +1106,13 @@ func (b *Brain) logRecallEvent(query string, results []*Entry) {
 	}
 
 	if len(results) == 0 {
+		return
+	}
+	// Test binaries (this package and every package that drives a real Brain,
+	// e.g. tools/core, gateway, rem) must never append synthetic queries to
+	// the live production log. Tests that want events redirect
+	// recallEventsPath to a temp file first.
+	if recallEventsPath == defaultRecallEventsPath && testing.Testing() {
 		return
 	}
 
