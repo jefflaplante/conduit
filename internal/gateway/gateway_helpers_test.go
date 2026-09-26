@@ -261,15 +261,15 @@ func TestProcessRestartBreadcrumb_RestoresSessions(t *testing.T) {
 
 func TestGetDefaultModel_NoConfig(t *testing.T) {
 	gw := &Gateway{}
-	if m := gw.getDefaultModel(); m != "claude-sonnet-4-20250514" {
-		t.Errorf("expected fallback, got %q", m)
+	if m := gw.getDefaultModel(); m != "" {
+		t.Errorf("expected empty (provider default), got %q", m)
 	}
 }
 
 func TestGetDefaultModel_EmptyProviders(t *testing.T) {
 	gw := &Gateway{config: &config.Config{AI: config.AIConfig{Providers: nil}}}
-	if m := gw.getDefaultModel(); m != "claude-sonnet-4-20250514" {
-		t.Errorf("expected fallback, got %q", m)
+	if m := gw.getDefaultModel(); m != "" {
+		t.Errorf("expected empty (provider default), got %q", m)
 	}
 }
 

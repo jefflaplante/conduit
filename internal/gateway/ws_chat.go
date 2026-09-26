@@ -323,7 +323,7 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 			// Determine actual model used for context window calculation
 			modelUsed := modelOverride
 			if modelUsed == "" {
-				modelUsed = "claude-sonnet-4-20250514" // default model
+				modelUsed = g.getDefaultModel() // conduit-31jg.17: configured default
 			}
 			if g.compactionEngine != nil && g.compactionEngine.ShouldCompact(promptTokens, modelUsed) {
 				// conduit-31jg.21: safe to run outside the turn lock — Compact
@@ -489,7 +489,7 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			return
 		}
 		messages, _ := g.sessions.GetMessages(session.Key, 1000)
-		sendResponse(formatStatusResponse(session, len(messages), g.ai.GetUsageTracker()))
+		sendResponse(formatStatusResponse(session, len(messages), g.ai.GetUsageTracker(), g.ai.DefaultModel()))
 
 	case text == "/help" || text == "/commands":
 		help := "Available Commands:\n\n" +
@@ -518,7 +518,7 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			sendResponse("Could not retrieve session info.")
 			return
 		}
-		sendResponse(formatContextUsage(session))
+		sendResponse(formatContextUsage(session, g.ai.DefaultModel()))
 
 	case text == "/cost" || strings.HasPrefix(text, "/cost "):
 		if sessionKey == "" {

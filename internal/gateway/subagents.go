@@ -245,7 +245,10 @@ func (g *Gateway) getSubagentModel(model string) string {
 // getDefaultModel returns the gateway's configured default model
 func (g *Gateway) getDefaultModel() string {
 	if g.config == nil || len(g.config.AI.Providers) == 0 {
-		return "claude-sonnet-4-20250514" // Fallback
+		// conduit-31jg.17: nothing configured → "" (provider default;
+		// ai.ContextWindowForModel("") = DefaultContextWindow). No
+		// hardcoded model literal.
+		return ""
 	}
 
 	// Find the default provider

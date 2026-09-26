@@ -243,22 +243,48 @@ var ContextWindowSizes = map[string]int{
 }
 
 // ContextWindowForModel returns the context window size for a given model.
-// It tries an exact match first, then prefix matching, then returns the default.
+// It tries an exact match first, then the LONGEST matching prefix, then the
+// default. See LookupContextWindow.
 func ContextWindowForModel(model string) int {
+	size, _ := LookupContextWindow(model)
+	return size
+}
+
+// LookupContextWindow resolves a model's context window and reports whether
+// it matched a known entry (false = DefaultContextWindow was used).
+//
+// conduit-31jg.17: prefixes overlap (gpt-4/gpt-4o, llama3/llama3.1,
+// deepseek-coder/deepseek-coder2), and the old first-match loop over the map
+// was nondeterministic — "gpt-4o-2024-08-06" sometimes resolved to 8192 and
+// trimRequestToFitContext then dropped nearly all history. The longest
+// matching prefix is unique, so the result no longer depends on map order.
+// A "provider/model" ID that matches nothing is retried without the prefix.
+func LookupContextWindow(model string) (int, bool) {
 	if model == "" {
-		return DefaultContextWindow
+		return DefaultContextWindow, false
 	}
-	// Exact match
-	if size, ok := ContextWindowSizes[model]; ok {
-		return size
+	if size, ok := longestPrefixContextWindow(model); ok {
+		return size, true
 	}
-	// Prefix match (handles date-suffixed models like claude-sonnet-4-20250514)
-	for prefix, size := range ContextWindowSizes {
-		if strings.HasPrefix(model, prefix) {
-			return size
+	if i := strings.LastIndex(model, "/"); i >= 0 && i < len(model)-1 {
+		if size, ok := longestPrefixContextWindow(model[i+1:]); ok {
+			return size, true
 		}
 	}
-	return DefaultContextWindow
+	return DefaultContextWindow, false
+}
+
+func longestPrefixContextWindow(model string) (int, bool) {
+	if size, ok := ContextWindowSizes[model]; ok {
+		return size, true
+	}
+	best, bestLen := 0, 0
+	for prefix, size := range ContextWindowSizes {
+		if len(prefix) > bestLen && strings.HasPrefix(model, prefix) {
+			best, bestLen = size, len(prefix)
+		}
+	}
+	return best, bestLen > 0
 }
 
 // NewRouter creates a new AI router
@@ -437,6 +463,20 @@ func (r *Router) GetProviderMeta(name string) (ProviderMeta, bool) {
 // DefaultProviderName returns the name of the default provider.
 func (r *Router) DefaultProviderName() string {
 	return r.default_
+}
+
+// DefaultModel returns the configured model of the default provider, or ""
+// when none is configured (ContextWindowForModel("") then yields
+// DefaultContextWindow). conduit-31jg.17: the one place a "which model is
+// this turn on" default comes from, replacing hardcoded
+// "claude-sonnet-4-20250514" literals in the gateway.
+func (r *Router) DefaultModel() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.providerMeta[r.default_].DefaultModel
 }
 
 // contextWindowForProvider returns the configured context window for a provider,

@@ -186,21 +186,10 @@ func ContextBudgetFromSession(session *sessions.Session) ContextBudget {
 // resolveContextWindow returns the model window and whether the default was
 // used (i.e. the model name matched no known entry).
 func resolveContextWindow(model string) (int, bool) {
-	if model == "" {
-		return ai.DefaultContextWindow, true
-	}
-	// Exact match
-	if size, ok := ai.ContextWindowSizes[model]; ok {
-		return size, false
-	}
-	// Prefix match — same logic as ai.ContextWindowForModel, duplicated here
-	// so we can report whether the default was used without a second lookup.
-	for prefix, size := range ai.ContextWindowSizes {
-		if len(model) >= len(prefix) && model[:len(prefix)] == prefix {
-			return size, false
-		}
-	}
-	return ai.DefaultContextWindow, true
+	// conduit-31jg.17: delegate to the deterministic longest-prefix lookup
+	// (the duplicated first-match map loop here was nondeterministic too).
+	size, known := ai.LookupContextWindow(model)
+	return size, !known
 }
 
 // recordTokenUsage updates the running cumulative totals plus the

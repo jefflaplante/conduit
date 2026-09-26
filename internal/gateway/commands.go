@@ -102,7 +102,7 @@ func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessa
 
 	// Check for /context command
 	if text == "/context" || strings.HasPrefix(text, "/context ") {
-		g.sendCommandResponse(msg, formatContextUsage(session))
+		g.sendCommandResponse(msg, formatContextUsage(session, g.ai.DefaultModel()))
 		return true
 	}
 

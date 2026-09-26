@@ -13,7 +13,7 @@ import (
 
 // formatContextUsage reads token usage from a session's context and formats
 // a human-readable summary including percentages of the context window.
-func formatContextUsage(session *sessions.Session) string {
+func formatContextUsage(session *sessions.Session, defaultModel string) string {
 	if session == nil || session.Context == nil {
 		return "No context usage data available yet. Send a message first."
 	}
@@ -33,9 +33,13 @@ func formatContextUsage(session *sessions.Session) string {
 	// Determine model and context window
 	model := session.Context["model"]
 	if model == "" {
-		model = "claude-sonnet-4-20250514"
+		// conduit-31jg.17: the configured default, not a hardcoded model.
+		model = defaultModel
 	}
 	contextWindow := ai.ContextWindowForModel(model)
+	if model == "" {
+		model = "(provider default)"
+	}
 
 	// Calculate percentages
 	promptPct := float64(prompt) / float64(contextWindow) * 100
@@ -67,7 +71,7 @@ func formatContextUsage(session *sessions.Session) string {
 
 // formatStatusResponse builds the full /status response including session info,
 // cost data, context window usage, and global usage stats.
-func formatStatusResponse(session *sessions.Session, messageCount int, usageTracker *ai.UsageTracker) string {
+func formatStatusResponse(session *sessions.Session, messageCount int, usageTracker *ai.UsageTracker, defaultModel string) string {
 	var sb strings.Builder
 
 	sb.WriteString("Session Status\n\n")
@@ -100,7 +104,7 @@ func formatStatusResponse(session *sessions.Session, messageCount int, usageTrac
 
 	// Context window usage (embed existing helper's logic)
 	sb.WriteString("\n")
-	sb.WriteString(formatContextUsage(session))
+	sb.WriteString(formatContextUsage(session, defaultModel))
 
 	// Global usage (from UsageTracker, if available)
 	if usageTracker != nil {
