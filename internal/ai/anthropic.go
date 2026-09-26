@@ -107,16 +107,24 @@ func (a *AnthropicProvider) Name() string {
 	return a.name
 }
 
-func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+// buildMessagesRequest builds the Messages API request body for req and
+// returns it with the resolved model. conduit-31jg.12: this is the ONE request
+// builder for GenerateResponse and GenerateResponseStreaming — the streaming
+// path used to hand-roll its own body and drifted (hardcoded max_tokens, no
+// cache breakpoints, mid-conversation system messages dropped). Streaming
+// callers add "stream": true to the returned map.
+func (a *AnthropicProvider) buildMessagesRequest(req *GenerateRequest) (map[string]interface{}, string) {
 	// Determine which model to use
 	modelToUse := a.model
 	if req.Model != "" {
 		modelToUse = req.Model
 	}
 
-	// Refresh OAuth token if needed
-	if err := a.refreshOAuthToken(); err != nil {
-		return nil, fmt.Errorf("failed to refresh OAuth token: %w", err)
+	// max_tokens is required by the API. A zero value used to 400 on this
+	// path and was silently replaced by 16000 on the streaming path.
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = defaultChainMaxTokens
 	}
 
 	// Build messages, injecting Claude Code identity for OAuth
@@ -150,10 +158,9 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 	// Convert messages to Anthropic format (handles tool results)
 	anthropicMessages := a.convertMessagesToAnthropic(messages)
 
-	// Anthropic API request format (modelToUse already set at top of function)
 	anthropicReq := map[string]interface{}{
 		"model":      modelToUse,
-		"max_tokens": req.MaxTokens,
+		"max_tokens": maxTokens,
 		"messages":   anthropicMessages,
 	}
 
@@ -202,7 +209,20 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 		}
 	}
 
-	reqBody, err := json.Marshal(anthropicReq)
+	return anthropicReq, modelToUse
+}
+
+// newMessagesHTTPRequest serializes body and builds the POST to
+// {baseURL}/v1/messages with auth headers. conduit-31jg.12: shared by both
+// paths — streaming used to hardcode https://api.anthropic.com (ignoring a
+// configured base_url/proxy) and read a.apiKey without oauthMu.
+func (a *AnthropicProvider) newMessagesHTTPRequest(ctx context.Context, body map[string]interface{}, stream bool) (*http.Request, error) {
+	accept := "application/json"
+	if stream {
+		accept = "text/event-stream"
+	}
+
+	reqBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -224,14 +244,30 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 	if a.isOAuth {
 		httpReq.Header.Set("Authorization", "Bearer "+currentKey)
 		// Required headers for OAuth tokens - must match Claude Code exactly
-		httpReq.Header.Set("accept", "application/json")
+		httpReq.Header.Set("accept", accept)
 		httpReq.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14")
 		httpReq.Header.Set("anthropic-dangerous-direct-browser-access", "true")
 		httpReq.Header.Set("user-agent", "claude-cli/2.1.2 (external, cli)")
 		httpReq.Header.Set("x-app", "cli")
 	} else {
-		httpReq.Header.Set("Accept", "application/json")
+		httpReq.Header.Set("Accept", accept)
 		httpReq.Header.Set("x-api-key", currentKey)
+	}
+
+	return httpReq, nil
+}
+
+func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+	// Refresh OAuth token if needed
+	if err := a.refreshOAuthToken(); err != nil {
+		return nil, fmt.Errorf("failed to refresh OAuth token: %w", err)
+	}
+
+	// conduit-31jg.12: shared with GenerateResponseStreaming.
+	anthropicReq, modelToUse := a.buildMessagesRequest(req)
+	httpReq, err := a.newMessagesHTTPRequest(ctx, anthropicReq, false)
+	if err != nil {
+		return nil, err
 	}
 
 	resp, err := a.client.Do(httpReq)

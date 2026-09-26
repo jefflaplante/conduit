@@ -1068,6 +1068,7 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	trimRequestToFitContext(req, contextWindow)
 
 	// Call streaming API via the provider-agnostic interface
+	streamStart := time.Now()
 	response, err := streamingProvider.GenerateResponseStreaming(ctx, req, onDelta)
 	if err != nil {
 		// bd-6tb: retry on quota/auth error if fallback model is configured
@@ -1113,9 +1114,17 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		}
 
 		if err != nil {
+			// conduit-31jg.12: streaming never reported to the usage tracker
+			// (non-streaming paths do). Latency spans retries here.
+			if r.usageTracker != nil {
+				r.usageTracker.RecordError(providerName, req.Model)
+			}
 			chainErr = err
 			return nil, chainErr
 		}
+	}
+	if r.usageTracker != nil && response != nil {
+		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, time.Since(streamStart).Milliseconds())
 	}
 
 	// conduit-14qr: the streaming path never went through the empty guard —
