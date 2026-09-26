@@ -80,6 +80,28 @@ WARNING: rejected workspace/link.conf: symlink entry not allowed: workspace/link
 }
 ```
 
+## Human-in-the-Loop Approvals (conduit-31jg.43)
+
+Some tool actions are too risky to let the model perform alone. For these, the `internal/approval` package makes the agent ask the human who started the turn. The only action wired to it so far is **sending email as the owner's account** through the gog/email skill (`account` or `from` set to jeff, owner@example.com or owner-alt@example.com). Reading, searching and listing the owner inbox is unchanged. Sends from the agent's own account (jules) need no approval.
+
+**Interactive turns (Telegram, TUI over SSH, WebSocket chat).** The tool sends nothing. It registers a pending approval and returns "NOT SENT YET — awaiting the owner's approval" to the model. The gateway posts a prompt in the same chat showing the owner identity, recipients, subject and body, with a 6-character code. The human replies `YES <code>` or `NO <code>`. On Telegram they can instead tap the Approve/Deny inline buttons, which send exactly that text. On YES the gateway runs the frozen, approved send and reports the result in the chat. It also adds a `[System note: ...]` to the session so the model learns the outcome on its next turn.
+
+**Non-interactive turns (heartbeat, cron, sub-agents, session wake, HTTP test API, anything unknown).** The request hard-fails with `NOT SENT: ... non-interactive (origin: <source>)`. Nothing is prompted and nothing is sent.
+
+Guarantees:
+
+| Property | How |
+|---|---|
+| Only the human can approve | Approval replies are accepted only by `approval.Manager.HandleReply`. That function is called solely from human inbound paths: `handleIncomingMessage`, `handleWebSocketChat` and `DirectClient.SendChatWithID`. Tool args, assistant text, `SessionsSend` and wakes never reach it. The code is not shown to the model. |
+| Bound to exact parameters | The approved send runs a deep copy of the args that was frozen at request time. A SHA-256 fingerprint over (skill, action, canonical args) is re-checked before it runs. Approving A never authorizes B. Each request gets its own code. |
+| Bound to origin | The reply must come from the same channel, user and session that requested it. |
+| Single use, short-lived | The code is deleted on first use. TTL is 5 minutes. Three unmatched codes in a session cancel every pending approval in that session. |
+| No deadlock | Approval does not block the turn. The tool returns at once, so the per-session turn lock (`ai.Router.turnLocks`) is released normally. The reply is consumed before the busy-ack, the transcript write and the router call, so it is never queued behind an in-flight turn. |
+| Fail closed | An unknown or non-interactive origin, a channel that cannot prompt, no approver configured, a timeout, a NO, a wrong code or an execution error all mean nothing is sent. |
+| Audit | Every request, prompt failure, approval, denial, timeout, rejected reply and execution result is logged with slog (`component=approval`, `event=approval.*`). Recipient, subject and body length are logged. The body is never logged. |
+
+**Reusing it for other risky tools** (for example conduit-w3l7 runbook gates, or SSH/K8s actions that currently return "requires approval"): build an `approval.Action` with a Kind, Title, display Fields, loggable Audit fields and a `Fingerprint`. Then call `Manager.Request(ctx, action, execFn)` from the tool and return a pending result. `execFn` runs only after a bound human approves. Interactive entry points attach the origin with `approval.WithInteractiveOrigin`. New non-interactive entry points should call `approval.WithNonInteractive(ctx, "<source>")`, although an unmarked context already fails closed.
+
 ## Security Architecture
 
 ### Authentication Flow

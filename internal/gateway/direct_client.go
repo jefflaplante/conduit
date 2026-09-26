@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"conduit/internal/ai"
+	"conduit/internal/approval"
 	"conduit/internal/channels"
 	"conduit/internal/monitoring"
 	"conduit/internal/sessions"
@@ -25,6 +26,7 @@ import (
 // DirectClientConfig holds configuration for creating a DirectClient.
 type DirectClientConfig struct {
 	ParentCtx    context.Context
+	Approvals    *approval.Manager // conduit-31jg.43; nil => owner sends fail closed
 	UserID       string
 	Sessions     *sessions.Store
 	AI           *ai.Router
@@ -169,6 +171,15 @@ func (c *DirectClient) SendChatWithID(sessionKey, text, requestID string) error 
 		return err
 	}
 
+	// conduit-31jg.43: consume approval replies before the transcript and the
+	// per-session turn lock (see approval_wiring.go).
+	if c.config.Approvals.HandleReply(c.ctx, approval.Inbound{
+		ChannelID: session.ChannelID, UserID: c.userID, SessionKey: session.Key,
+		Text: text, Notify: c.directApprovalNotifier(session.Key),
+	}) {
+		return nil
+	}
+
 	// Check for commands embedded in chat text
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "/") {
@@ -204,6 +215,10 @@ func (c *DirectClient) streamChatWithID(session *sessions.Session, text, request
 	// Create cancellable context
 	reqCtx, cancel := context.WithCancel(c.ctx)
 	reqCtx = types.WithRequestContext(reqCtx, session.ChannelID, c.userID, session.Key)
+	reqCtx = approval.WithInteractiveOrigin(reqCtx, approval.Origin{ // conduit-31jg.43
+		Source: "tui", ChannelID: session.ChannelID, UserID: c.userID,
+		SessionKey: session.Key, Notify: c.directApprovalNotifier(session.Key),
+	})
 
 	// Track active request for /stop
 	c.activeRequestsMu.Lock()

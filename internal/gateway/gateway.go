@@ -14,6 +14,7 @@ import (
 
 	"conduit/internal/agent"
 	"conduit/internal/ai"
+	"conduit/internal/approval"
 	"conduit/internal/auth"
 	"conduit/internal/brain"
 	"conduit/internal/brain/rem"
@@ -129,6 +130,9 @@ type Gateway struct {
 
 	// Debug ring buffer (for /ring command)
 	ringBuffer *debuglog.RingBuffer
+
+	// Human-in-the-loop approvals for risky tool actions (conduit-31jg.43).
+	approvals *approval.Manager
 
 	// Graceful shutdown
 	shutdownMgr *ShutdownManager
@@ -365,6 +369,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	}
 
 	gw.shutdownMgr = NewShutdownManager(logger, gw)
+	gw.initApprovals() // conduit-31jg.43
 
 	// Register token revocation handler to close WebSocket connections
 	// using a revoked token. This callback lives on *Gateway because it needs
@@ -976,6 +981,17 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		return
 	}
 
+	// conduit-31jg.43: approval replies are consumed here, before the
+	// busy-ack, the transcript and the per-session turn lock, so a pending
+	// approval never waits behind (or deadlocks with) an in-flight turn.
+	notify := g.channelApprovalNotifier(msg.ChannelID, msg.UserID, msg.SessionKey)
+	if g.approvals.HandleReply(ctx, approval.Inbound{
+		ChannelID: msg.ChannelID, UserID: msg.UserID, SessionKey: session.Key,
+		Text: msg.Text, Notify: notify,
+	}) {
+		return
+	}
+
 	// Handle commands before AI processing
 	if handled := g.handleCommand(ctx, msg, session); handled {
 		return
@@ -1078,6 +1094,11 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		// Create cancellable context for this request
 		reqCtx, cancel := context.WithCancel(ctx)
 		reqCtx = types.WithRequestContext(reqCtx, msg.ChannelID, msg.UserID, session.Key)
+		// conduit-31jg.43: live human turn on a promptable channel.
+		reqCtx = approval.WithInteractiveOrigin(reqCtx, approval.Origin{
+			Source: msg.ChannelID, ChannelID: msg.ChannelID, UserID: msg.UserID,
+			SessionKey: session.Key, Notify: notify,
+		})
 
 		// Thread image attachments to the AI layer for vision analysis
 		if len(msg.Attachments) > 0 {

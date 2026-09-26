@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"conduit/internal/ai"
+	"conduit/internal/approval"
 	"conduit/internal/brain"
 	"conduit/internal/channels"
 	"conduit/internal/protocol"
@@ -58,6 +59,7 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 		// Sub-agents are fire-and-forget - they should outlive the parent request.
 		subCtx, cancel := deriveSubAgentContext(g.ctx, timeoutSeconds)
 		defer cancel()
+		subCtx = approval.WithNonInteractive(subCtx, "subagent") // conduit-31jg.43
 
 		// Share parent's brain working memory (read-only fallback)
 		if parentBrainUID != "" {

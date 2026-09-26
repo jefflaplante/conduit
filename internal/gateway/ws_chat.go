@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"conduit/internal/ai"
+	"conduit/internal/approval"
 	"conduit/internal/channels"
 	"conduit/internal/sessions"
 	"conduit/internal/tools"
@@ -89,6 +90,16 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	// Update client's active session
 	client.SessionKey = session.Key
 
+	// conduit-31jg.43: consume approval replies before the transcript and the
+	// per-session turn lock (see approval_wiring.go).
+	notify := g.wsApprovalNotifier(client, session.Key)
+	if g.approvals.HandleReply(ctx, approval.Inbound{
+		ChannelID: session.ChannelID, UserID: userID, SessionKey: session.Key,
+		Text: msg.Text, Notify: notify,
+	}) {
+		return
+	}
+
 	// Check for commands
 	text := strings.TrimSpace(msg.Text)
 	if strings.HasPrefix(text, "/") {
@@ -130,6 +141,10 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	// Create cancellable context for this request
 	reqCtx, cancel := context.WithCancel(ctx)
 	reqCtx = types.WithRequestContext(reqCtx, session.ChannelID, userID, session.Key)
+	reqCtx = approval.WithInteractiveOrigin(reqCtx, approval.Origin{ // conduit-31jg.43
+		Source: "websocket", ChannelID: session.ChannelID, UserID: userID,
+		SessionKey: session.Key, Notify: notify,
+	})
 
 	// Track active request for /stop support
 	g.ws.ActiveRequestsMu.Lock()

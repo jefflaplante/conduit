@@ -1095,6 +1095,15 @@ top -p $!
 
 For additional support, see the main Conduit documentation or file issues on the GitHub repository.
 
+## Owner-Account Email Sends Require Approval
+
+The built-in `email`/`gog` skill sends from the agent's own account (`$JULES_ACCOUNT`) by default, and those sends are never gated. A `send`/`reply`/`compose` action with `account` or `from` set to an owner alias (jeff, owner@example.com, owner-alt@example.com) would go out as the owner (`$GOG_ACCOUNT`). Such sends go through human approval (conduit-31jg.43):
+
+- **Interactive chat:** the skill returns `approval_status: pending` without sending. The owner gets a prompt in the same chat and answers `YES <code>` or `NO <code>`, or taps the Telegram buttons. The exact frozen send runs only after YES.
+- **Heartbeat, cron, sub-agents or wakes:** the skill fails with `NOT SENT ... non-interactive`.
+
+Reads, searches and lists of the owner inbox are not gated. See [security.md](security.md#human-in-the-loop-approvals-conduit-31jg43) for the design and guarantees.
+
 ---
 
 *Complete skills documentation for Conduit Go Gateway - Updated 2026-02-13*

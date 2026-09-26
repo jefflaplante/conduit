@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"conduit/internal/agent"
+	"conduit/internal/approval"
 	"conduit/internal/channels"
 	"conduit/internal/config"
 	"conduit/internal/heartbeat"
@@ -24,11 +25,16 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 
 	// Check if this is a heartbeat job.
 	if heartbeat.IsHeartbeatJob(job) {
+		// conduit-31jg.43: no live human; approval-gated actions fail closed
+		// even if this job was triggered from inside an interactive turn.
+		ctx = approval.WithNonInteractive(ctx, "heartbeat")
 		g.logger.Debug("routing to heartbeat execution framework", "job_id", job.ID)
 		return g.monitoring.HeartbeatIntegration.ExecuteHeartbeat(ctx, job)
 	}
 
 	// Handle regular cron jobs.
+	ctx = approval.WithNonInteractive(ctx, "cron") // conduit-31jg.43
+
 	// Create a session for this job.
 	sessionKey := fmt.Sprintf(agent.CronSessionKeyPrefix+"%s_%d", job.ID, time.Now().UnixNano())
 	session, err := g.sessions.GetOrCreateSession("cron", sessionKey)
