@@ -3,6 +3,8 @@ package ssh
 import (
 	"fmt"
 	"log"
+	"os"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -45,34 +47,42 @@ func NewServer(config SSHConfig) (*charmssh.Server, error) {
 		config.HostKeyPath = dir + "/ssh_host_key"
 	}
 
-	// Load authorized keys for public key auth
-	authorizedKeys, err := LoadAuthorizedKeys(config.AuthorizedKeysPath)
-	if err != nil {
-		log.Printf("[SSH] No authorized keys loaded: %v", err)
-		authorizedKeys = nil
-	} else {
-		log.Printf("[SSH] Loaded %d authorized keys", len(authorizedKeys))
+	// Load authorized keys for public key auth. Fail closed (conduit-31jg.1):
+	// charmbracelet/ssh sets NoClientAuth=true when no auth handler is
+	// registered, so starting without keys would admit anyone who can reach
+	// the port. Refuse to start instead.
+	if config.AuthorizedKeysPath == "" {
+		config.AuthorizedKeysPath = defaultAuthorizedKeysPath()
 	}
+	keyStore := newAuthorizedKeyStore(config.AuthorizedKeysPath)
+	authorizedKeys, err := keyStore.load()
+	if err != nil {
+		return nil, fmt.Errorf("no authorized SSH keys loaded from %s (%v); refusing to start SSH server without authentication; add keys with `conduit ssh-keys add`", config.AuthorizedKeysPath, err)
+	}
+	if len(authorizedKeys) == 0 {
+		return nil, fmt.Errorf("no authorized SSH keys loaded from %s; refusing to start SSH server without authentication; add keys with `conduit ssh-keys add`", config.AuthorizedKeysPath)
+	}
+	log.Printf("[SSH] Loaded %d authorized keys from %s", len(authorizedKeys), config.AuthorizedKeysPath)
 
 	handler := func(sess charmssh.Session) (tea.Model, []tea.ProgramOption) {
 		return sshBubbleTeaHandler(sess, config)
 	}
 
+	// Public key auth is always registered (defense in depth, conduit-31jg.1)
+	// so an empty key list denies rather than falling back to no-auth. Keys
+	// are re-read when authorized_keys changes, so `ssh-keys add/remove`
+	// take effect without a restart.
 	opts := []charmssh.Option{
 		wish.WithAddress(config.ListenAddr),
 		wish.WithHostKeyPath(config.HostKeyPath),
+		wish.WithPublicKeyAuth(func(ctx charmssh.Context, key charmssh.PublicKey) bool {
+			return publicKeyHandler(ctx, key, keyStore.keys())
+		}),
 		wish.WithMiddleware(
 			wishbubbletea.Middleware(handler),
 			activeterm.Middleware(),
 			logging.Middleware(),
 		),
-	}
-
-	// Add public key auth if we have authorized keys
-	if len(authorizedKeys) > 0 {
-		opts = append(opts, wish.WithPublicKeyAuth(func(ctx charmssh.Context, key charmssh.PublicKey) bool {
-			return publicKeyHandler(ctx, key, authorizedKeys)
-		}))
 	}
 
 	server, err := wish.NewServer(opts...)
@@ -134,4 +144,63 @@ func publicKeyHandler(ctx charmssh.Context, key charmssh.PublicKey, authorizedKe
 	}
 	log.Printf("[SSH] Public key rejected for user: %s", ctx.User())
 	return false
+}
+
+// authorizedKeyStore caches the parsed authorized_keys file and reloads it
+// when the file's mtime or size changes (conduit-31jg.1). A file that
+// disappears or cannot be read yields an empty list, which denies all keys.
+type authorizedKeyStore struct {
+	path string
+
+	mu      sync.Mutex
+	loaded  bool
+	modTime time.Time
+	size    int64
+	cached  []charmssh.PublicKey
+}
+
+func newAuthorizedKeyStore(path string) *authorizedKeyStore {
+	return &authorizedKeyStore{path: path}
+}
+
+// load reads the file unconditionally and refreshes the cache.
+func (s *authorizedKeyStore) load() ([]charmssh.PublicKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reloadLocked()
+}
+
+func (s *authorizedKeyStore) reloadLocked() ([]charmssh.PublicKey, error) {
+	s.loaded, s.cached = false, nil
+	if s.path == "" {
+		return nil, fmt.Errorf("no authorized keys path available")
+	}
+	info, err := os.Stat(s.path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open authorized keys: %w", err)
+	}
+	keys, err := LoadAuthorizedKeys(s.path)
+	if err != nil {
+		return nil, err
+	}
+	s.loaded, s.cached, s.modTime, s.size = true, keys, info.ModTime(), info.Size()
+	return keys, nil
+}
+
+// keys returns the current authorized keys, re-reading the file if its mtime
+// or size changed since the last load. Errors fail closed (no keys).
+func (s *authorizedKeyStore) keys() []charmssh.PublicKey {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if info, err := os.Stat(s.path); err == nil && s.loaded &&
+		info.ModTime().Equal(s.modTime) && info.Size() == s.size {
+		return s.cached
+	}
+	keys, err := s.reloadLocked()
+	if err != nil {
+		log.Printf("[SSH] Failed to reload authorized keys, denying all: %v", err)
+		return nil
+	}
+	log.Printf("[SSH] Reloaded %d authorized keys from %s", len(keys), s.path)
+	return keys
 }

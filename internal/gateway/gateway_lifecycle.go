@@ -123,7 +123,9 @@ func (g *Gateway) startSSHServer(ctx context.Context) {
 	}
 	sshServer, err := internalssh.NewServer(sshConfig)
 	if err != nil {
-		g.logger.Warn("failed to create SSH server", "error", err)
+		// SSH is optional: a misconfiguration (e.g. no authorized keys,
+		// conduit-31jg.1) disables SSH but must not take down the gateway.
+		g.logger.Error("SSH server disabled: failed to create SSH server; continuing without SSH", "error", err)
 		return
 	}
 
