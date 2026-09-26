@@ -6,9 +6,10 @@ import (
 	"strconv"
 	"time"
 
-	"conduit/internal/approval"
-	"conduit/internal/channels"
+	"conduit/internal/ai"
 	"conduit/internal/protocol"
+	"conduit/internal/sessions"
+	"conduit/internal/tools"
 	"conduit/internal/tools/types"
 )
 
@@ -55,11 +56,11 @@ func (g *Gateway) wakeSession(sessionKey string) {
 		_ = g.sessions.SetSessionContext(sessionKey, "wake_depth", "0")
 		return
 	}
-	var wakeMessage string
+	var wakeMessage, wakeMessageID string
 	var wakeSource string
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
-			wakeMessage = messages[i].Content
+			wakeMessage, wakeMessageID = messages[i].Content, messages[i].ID
 			if src, ok := messages[i].Metadata["wake_source"]; ok && src != "" {
 				wakeSource = src
 			} else if src, ok := messages[i].Metadata["source"]; ok && src == "inter_session" {
@@ -81,74 +82,78 @@ func (g *Gateway) wakeSession(sessionKey string) {
 	wakeCtx, cancel := context.WithTimeout(g.ctx, 5*time.Minute)
 	defer cancel()
 
-	modelOverride := session.Context["model"]
-	providerOverride := session.Context["provider"]
-	wakeCtx = types.WithRequestContext(wakeCtx, session.ChannelID, session.UserID, sessionKey)
-	wakeCtx = types.WithWakeSource(wakeCtx, wakeSource)
-	// conduit-31jg.43: a wake is model/inter-session driven, not a live
-	// human message — approval-gated actions fail closed.
-	wakeCtx = approval.WithNonInteractive(wakeCtx, "wake:"+wakeSource)
-
-	// Track this request so /stop can cancel it.
-	g.ws.ActiveRequestsMu.Lock()
-	g.ws.ActiveRequests[sessionKey] = cancel
-	g.ws.ActiveRequestsMu.Unlock()
-	defer func() {
-		g.ws.ActiveRequestsMu.Lock()
-		delete(g.ws.ActiveRequests, sessionKey)
-		g.ws.ActiveRequestsMu.Unlock()
-	}()
-
-	response, err := g.ai.GenerateResponseWithTools(wakeCtx, session, wakeMessage, providerOverride, modelOverride)
+	// conduit-31jg.35: run through the shared TurnRunner. The wake message is
+	// already in the transcript (mailbox delivery), so the runner does not
+	// store it again but drops exactly that row from history by ID
+	// (conduit-31jg.22). /stop registration happens only once the turn lock
+	// is held, so a wake queued behind a live turn no longer overwrites the
+	// live turn's cancel func (conduit-31jg.23).
+	g.turns().Run(wakeCtx, TurnRequest{
+		Session:                session,
+		ChannelID:              session.ChannelID,
+		UserID:                 session.UserID,
+		Text:                   wakeMessage,
+		PersistedUserMessageID: wakeMessageID,
+		// conduit-31jg.43: a wake is model/inter-session driven, not a live
+		// human message — approval-gated actions fail closed.
+		NonInteractiveSource: "wake:" + wakeSource,
+		Decorate: func(ctx context.Context) context.Context {
+			return types.WithWakeSource(ctx, wakeSource)
+		},
+	}, &wakeTurnSink{g: g, session: session, wakeSource: wakeSource, wakeMessageChars: len(wakeMessage)})
 
 	// Always reset wake depth when done (success or failure).
 	_ = g.sessions.SetSessionContext(sessionKey, "wake_depth", "0")
+}
 
-	if err != nil {
-		if wakeCtx.Err() == context.Canceled {
-			g.logger.Debug("session wakeup cancelled", "session_key", sessionKey)
-			return
-		}
-		g.logger.Error("session wakeup: AI generation failed", "session_key", sessionKey, "error", err)
+// wakeTurnSink routes a woken session's reply to the session's channel.
+type wakeTurnSink struct {
+	g                *Gateway
+	session          *sessions.Session
+	wakeSource       string
+	wakeMessageChars int
+}
+
+func (s *wakeTurnSink) Queued(context.Context)                         {}
+func (s *wakeTurnSink) Begin(context.Context) ai.StreamCallback        { return nil }
+func (s *wakeTurnSink) Progress(string)                                {}
+func (s *wakeTurnSink) ToolEvent(context.Context, tools.ToolEventInfo) {}
+
+func (s *wakeTurnSink) Finish(_ context.Context, res *TurnResult) {
+	key := s.session.Key
+	switch {
+	case res.Dropped, res.Cancelled:
+		s.g.logger.Debug("session wakeup cancelled", "session_key", key)
+		return
+	case res.Err != nil:
+		s.g.logger.Error("session wakeup: AI generation failed", "session_key", key, "error", res.Err)
 		return
 	}
 
-	responseContent := response.GetContent()
-
-	// Usage accounting is router-level since bd-27hs (GenerateResponseWithTools
-	// records it inside the turn lock); the wake path no longer records it here.
-
-	// Persist AI response to session history.
-	if _, addErr := g.sessions.AddMessage(sessionKey, "assistant", responseContent, nil); addErr != nil {
-		g.logger.Warn("session wakeup: failed to save AI response", "session_key", sessionKey, "error", addErr)
-	}
-
 	// Route non-silent responses to the session's channel.
-	if responseContent != "" && !channels.IsSilentResponse(responseContent) &&
-		session.ChannelID != "" && session.UserID != "" {
+	if res.Delivered() && s.session.ChannelID != "" && s.session.UserID != "" {
 		outgoingMsg := &protocol.OutgoingMessage{
 			BaseMessage: protocol.BaseMessage{
 				Type:      protocol.TypeOutgoingMessage,
 				ID:        fmt.Sprintf("wake_%d", time.Now().UnixNano()),
 				Timestamp: time.Now(),
 			},
-			ChannelID: session.ChannelID,
-			UserID:    session.UserID,
-			Text:      responseContent,
+			ChannelID: s.session.ChannelID,
+			UserID:    s.session.UserID,
+			Text:      res.Content,
 		}
-		if sendErr := g.channelManager.SendMessage(outgoingMsg); sendErr != nil {
-			g.logger.Warn("session wakeup: failed to send response to channel",
-				"session_key", sessionKey, "error", sendErr)
+		if sendErr := s.g.channelManager.SendMessage(outgoingMsg); sendErr != nil {
+			s.g.logger.Warn("session wakeup: failed to send response to channel",
+				"session_key", key, "error", sendErr)
 		}
-	} else if wakeSource == types.WakeSourceSubAgentSilent &&
-		channels.IsSilentResponse(responseContent) {
+	} else if s.wakeSource == types.WakeSourceSubAgentSilent && res.Silent {
 		// conduit-3qb1 observability: the sub-agent ran, produced output that
 		// was NOT posted to the channel (announce=false), and the parent LLM
 		// then chose to stay silent. The human never sees anything. Log this
 		// so we can observe the drop rate and tune the prompt guidance.
-		g.logger.Warn("session wakeup: sub-agent silent callback fully suppressed",
-			"session_key", sessionKey,
-			"wake_source", wakeSource,
-			"wake_message_chars", len(wakeMessage))
+		s.g.logger.Warn("session wakeup: sub-agent silent callback fully suppressed",
+			"session_key", key,
+			"wake_source", s.wakeSource,
+			"wake_message_chars", s.wakeMessageChars)
 	}
 }

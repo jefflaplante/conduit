@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -13,10 +12,9 @@ import (
 	"conduit/internal/ai"
 	"conduit/internal/approval"
 	"conduit/internal/channels"
+	"conduit/internal/protocol"
 	"conduit/internal/sessions"
 	"conduit/internal/tools"
-	"conduit/internal/tools/types"
-	"conduit/internal/protocol"
 )
 
 // sendToClient sends a protocol message to a WebSocket client (non-blocking)
@@ -108,297 +106,146 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		return
 	}
 
-	// SPAR reflection: check for farewell or context budget trigger before sending to AI.
-	isFarewell, _ := g.shouldTriggerReflection(text)
-	isContextBudgetReflect := false
-
-	// Save user message to session
-	_, err = g.sessions.AddMessage(session.Key, "user", msg.Text, nil)
-	if err != nil {
-		log.Printf("Error saving user message: %v", err)
-		g.sendErrorToClient(client, session.Key, "save_error", "Failed to save message")
+	if g.ai == nil {
+		g.sendErrorToClient(client, session.Key, "ai_error", "AI is not available")
 		return
 	}
-
-	// If farewell detected, append the reflection prompt to the message
-	// so the model sees it in the same turn and can reflect before signing off.
-	messageForAI := msg.Text
-	if isFarewell {
-		if reflPrompt := g.reflectHighConfidencePre(); reflPrompt != "" {
-			messageForAI = msg.Text + "\n\n[System: " + reflPrompt + "]"
-			log.Printf("SPAR reflection: farewell detected, injecting reflection prompt for session %s", session.Key)
-		}
-	} else if session.Context["reflection_context_budget_triggered"] == "true" {
-		if reflPrompt := g.reflectHighConfidencePre(); reflPrompt != "" {
-			messageForAI = msg.Text + "\n\n[System: " + reflPrompt + "]"
-			isContextBudgetReflect = true
-			_ = g.sessions.SetSessionContextBatch(session.Key, map[string]string{
-				"reflection_context_budget_triggered": "",
-			})
-			log.Printf("SPAR reflection: context budget triggered, injecting reflection prompt for session %s", session.Key)
-		}
-	}
-
-	// Create cancellable context for this request
-	reqCtx, cancel := context.WithCancel(ctx)
-	reqCtx = types.WithRequestContext(reqCtx, session.ChannelID, userID, session.Key)
-	reqCtx = approval.WithInteractiveOrigin(reqCtx, approval.Origin{ // conduit-31jg.43
-		Source: "websocket", ChannelID: session.ChannelID, UserID: userID,
-		SessionKey: session.Key, Notify: notify,
-	})
-
-	// Track active request for /stop support
-	g.ws.ActiveRequestsMu.Lock()
-	g.ws.ActiveRequests[session.Key] = cancel
-	requestCount := len(g.ws.ActiveRequests)
-	g.ws.ActiveRequestsMu.Unlock()
-
-	if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
-		g.monitoring.MetricsCollector.UpdateActiveRequests(requestCount)
-	}
-
-	defer func() {
-		g.ws.ActiveRequestsMu.Lock()
-		delete(g.ws.ActiveRequests, session.Key)
-		finalCount := len(g.ws.ActiveRequests)
-		g.ws.ActiveRequestsMu.Unlock()
-		if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
-			g.monitoring.MetricsCollector.UpdateActiveRequests(finalCount)
-		}
-	}()
 
 	requestID := msg.RequestID
 	if requestID == "" {
 		requestID = fmt.Sprintf("req_%d", time.Now().UnixNano())
 	}
 
-	// Send StreamStart
-	g.sendToClient(client, &protocol.StreamStart{
-		BaseMessage: protocol.BaseMessage{
-			Type:      protocol.TypeStreamStart,
-			ID:        fmt.Sprintf("ss_%d", time.Now().UnixNano()),
-			Timestamp: time.Now(),
-		},
-		SessionKey: session.Key,
-		RequestID:  requestID,
-	})
-
-	// Set up tool event callback in context
-	reqCtx = tools.WithToolEventCallback(reqCtx, func(event tools.ToolEventInfo) {
-		g.sendToClient(client, &protocol.ToolEvent{
-			BaseMessage: protocol.BaseMessage{
-				Type:      protocol.TypeToolEvent,
-				ID:        fmt.Sprintf("te_%d", time.Now().UnixNano()),
-				Timestamp: time.Now(),
-			},
-			SessionKey: session.Key,
-			RequestID:  requestID,
-			ToolName:   event.ToolName,
-			EventType:  event.EventType,
-			Args:       fmt.Sprintf("%v", event.Args),
-			Result:     event.Result,
-			Error:      event.Error,
-			Duration:   event.Duration,
-		})
-	})
-
-	// Get model and provider overrides from session context
-	modelOverride := session.Context["model"]
-	providerOverride := session.Context["provider"]
-
-	// Try streaming first
-	var responseContent string
-	onDelta := func(delta string, done bool) {
-		if delta != "" {
-			g.sendToClient(client, &protocol.StreamDelta{
-				BaseMessage: protocol.BaseMessage{
-					Type:      protocol.TypeStreamDelta,
-					ID:        fmt.Sprintf("sd_%d", time.Now().UnixNano()),
-					Timestamp: time.Now(),
-				},
-				SessionKey: session.Key,
-				RequestID:  requestID,
-				Delta:      delta,
-			})
-		}
-	}
-
 	// Check if smart routing should be used
-	smartRoutingEnabled := g.config.AI.SmartRouting != nil && g.config.AI.SmartRouting.Enabled
+	smartRoutingEnabled := g.config != nil && g.config.AI.SmartRouting != nil && g.config.AI.SmartRouting.Enabled
 	if sessionSmartOverride := session.Context["smart_routing_enabled"]; sessionSmartOverride == "false" {
 		smartRoutingEnabled = false
 	} else if sessionSmartOverride == "true" {
 		smartRoutingEnabled = true
 	}
 
-	var convResponse ai.ConversationResponse
+	// conduit-31jg.35: the shared TurnRunner owns the turn lock, transcript
+	// persistence (inside the lock, conduit-31jg.22), /stop registration
+	// (conduit-31jg.23), SPAR reflection, cost and compaction.
+	g.turns().Run(ctx, TurnRequest{
+		Session:   session,
+		ChannelID: session.ChannelID,
+		UserID:    userID,
+		Text:      msg.Text,
+		Origin: &approval.Origin{ // conduit-31jg.43
+			Source: "websocket", ChannelID: session.ChannelID, UserID: userID,
+			SessionKey: session.Key, Notify: notify,
+		},
+		SmartRouting:   smartRoutingEnabled,
+		SanitizeStored: true,
+	}, &wsTurnSink{g: g, client: client, sessionKey: session.Key, requestID: requestID})
+}
 
-	if smartRoutingEnabled && modelOverride == "" {
-		// Use smart routing: let the router select the optimal model
-		var routingResult *ai.SmartRoutingResult
-		convResponse, routingResult, err = g.ai.GenerateResponseSmartStreaming(reqCtx, session, messageForAI, providerOverride, onDelta)
-		if routingResult != nil {
-			// Store smart routing metadata in session context for debugging/visibility
-			_ = g.sessions.SetSessionContext(session.Key, "smart_routing_model", routingResult.SelectedModel)
-			_ = g.sessions.SetSessionContext(session.Key, "smart_routing_reason", routingResult.SelectionReason)
-			_ = g.sessions.SetSessionContext(session.Key, "smart_routing_complexity", fmt.Sprintf("%d", routingResult.Complexity.Score))
-			// Use the selected model for cost calculation
-			modelOverride = routingResult.SelectedModel
-		}
-	} else {
-		// Use direct streaming with explicit model (or default)
-		convResponse, err = g.ai.GenerateResponseStreaming(reqCtx, session, messageForAI, providerOverride, modelOverride, onDelta)
-	}
-	if err != nil {
-		// Check for cancellation from /stop
-		if reqCtx.Err() == context.Canceled {
-			log.Printf("WS request cancelled for session: %s", session.Key)
+// wsTurnSink renders a TurnRunner turn as the WebSocket streaming protocol
+// (StreamStart / StreamDelta / ToolEvent / StreamEnd).
+type wsTurnSink struct {
+	g          *Gateway
+	client     *Client
+	sessionKey string
+	requestID  string
+}
+
+// Queued: WebSocket chat never had a busy-ack; the StreamStart for the queued
+// turn simply arrives once the previous turn has finished.
+func (s *wsTurnSink) Queued(context.Context) {}
+
+func (s *wsTurnSink) Begin(context.Context) ai.StreamCallback {
+	s.g.sendToClient(s.client, &protocol.StreamStart{
+		BaseMessage: protocol.BaseMessage{
+			Type:      protocol.TypeStreamStart,
+			ID:        fmt.Sprintf("ss_%d", time.Now().UnixNano()),
+			Timestamp: time.Now(),
+		},
+		SessionKey: s.sessionKey,
+		RequestID:  s.requestID,
+	})
+	return func(delta string, done bool) {
+		if delta == "" {
 			return
 		}
-
-		log.Printf("Error generating AI response for WS client: %v", err)
-		g.sendErrorToClient(client, session.Key, "ai_error", ai.UserFriendlyError(err))
-
-		// Send StreamEnd with empty content to signal completion
-		g.sendToClient(client, &protocol.StreamEnd{
+		s.g.sendToClient(s.client, &protocol.StreamDelta{
 			BaseMessage: protocol.BaseMessage{
-				Type:      protocol.TypeStreamEnd,
-				ID:        fmt.Sprintf("se_%d", time.Now().UnixNano()),
+				Type:      protocol.TypeStreamDelta,
+				ID:        fmt.Sprintf("sd_%d", time.Now().UnixNano()),
 				Timestamp: time.Now(),
 			},
-			SessionKey: session.Key,
-			RequestID:  requestID,
-			Content:    "",
+			SessionKey: s.sessionKey,
+			RequestID:  s.requestID,
+			Delta:      delta,
 		})
-		return
 	}
+}
 
-	if convResponse != nil {
-		responseContent = convResponse.GetContent()
-	}
+func (s *wsTurnSink) Progress(string) {}
 
-	// Sanitize internal markers — TUI doesn't support reply threading
-	responseContent = channels.SanitizeOutgoingText(responseContent)
+func (s *wsTurnSink) ToolEvent(_ context.Context, event tools.ToolEventInfo) {
+	s.g.sendToClient(s.client, &protocol.ToolEvent{
+		BaseMessage: protocol.BaseMessage{
+			Type:      protocol.TypeToolEvent,
+			ID:        fmt.Sprintf("te_%d", time.Now().UnixNano()),
+			Timestamp: time.Now(),
+		},
+		SessionKey: s.sessionKey,
+		RequestID:  s.requestID,
+		ToolName:   event.ToolName,
+		EventType:  event.EventType,
+		Args:       fmt.Sprintf("%v", event.Args),
+		Result:     event.Result,
+		Error:      event.Error,
+		Duration:   event.Duration,
+	})
+}
 
-	// Extract usage and persist to session context
-	var promptTokens, completionTokens, totalTokens int
-	var requestCost, sessionCost float64
-	if convResponse != nil {
-		if usage := convResponse.GetUsage(); usage != nil {
-			promptTokens = usage.PromptTokens
-			completionTokens = usage.CompletionTokens
-			totalTokens = usage.TotalTokens
-
-			// Proactive context window warning
-			warning := contextWarningIfNeeded(session, promptTokens, modelOverride)
-			if warning.Text != "" {
-				responseContent += warning.Text
-			}
-
-			// Accumulate session cost
-			requestCost = ai.CalculateCost(modelOverride, promptTokens, completionTokens)
-			prevCost, _ := strconv.ParseFloat(session.Context["session_total_cost"], 64)
-			sessionCost = prevCost + requestCost
-			prevCount, _ := strconv.Atoi(session.Context["session_request_count"])
-
-			// Token usage recording is router-level since bd-27hs —
-			// GenerateResponseStreaming records last_* and cumulative totals
-			// inside the turn lock. This block now only handles path-local
-			// concerns: context warning, session cost, request count.
-
-			batch := map[string]string{
-				"session_total_cost":    fmt.Sprintf("%.6f", sessionCost),
-				"session_request_count": strconv.Itoa(prevCount + 1),
-			}
-			if warning.Text != "" {
-				batch[warning.Key] = "true"
-				// SPAR: trigger reflection on next message when context budget >= 80%
-				if warning.Key == "context_warned_80" && g.sessionReflector != nil {
-					batch["reflection_context_budget_triggered"] = "true"
-				}
-			}
-			_ = g.sessions.SetSessionContextBatch(session.Key, batch)
-
-			// Auto-compaction check (async, non-blocking)
-			// Determine actual model used for context window calculation
-			modelUsed := modelOverride
-			if modelUsed == "" {
-				modelUsed = "claude-sonnet-4-20250514" // default model
-			}
-			if g.compactionEngine != nil && g.compactionEngine.ShouldCompact(promptTokens, modelUsed) {
-				// conduit-31jg.21: safe to run outside the turn lock — Compact
-				// only deletes the IDs it snapshotted, in one transaction, and
-				// its in-flight guard drops overlapping runs for this session.
-				go func() {
-					compactCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-					defer cancel()
-					if _, err := g.compactionEngine.Compact(compactCtx, session); errors.Is(err, ai.ErrCompactionInProgress) {
-						log.Printf("[Compaction] Auto-compact skipped for session %s: already in progress", session.Key)
-					} else if err != nil {
-						log.Printf("[Compaction] Auto-compact failed for session %s: %v", session.Key, err)
-					}
-				}()
-			}
-		}
-	}
-
-	// Check for silent response tokens (NO_REPLY, HEARTBEAT_OK)
-	if channels.IsSilentResponse(responseContent) {
-		log.Printf("Silent response detected in WS chat (%d chars), suppressing", len(responseContent))
-		// Send StreamEnd with empty content so TUI stops its streaming state
-		g.sendToClient(client, &protocol.StreamEnd{
-			BaseMessage: protocol.BaseMessage{
-				Type:      protocol.TypeStreamEnd,
-				ID:        fmt.Sprintf("se_%d", time.Now().UnixNano()),
-				Timestamp: time.Now(),
-			},
-			SessionKey:       session.Key,
-			RequestID:        requestID,
-			Content:          "",
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			TotalTokens:      totalTokens,
-			Model:            modelOverride,
-			RequestCost:      requestCost,
-			SessionCost:      sessionCost,
-		})
-		return
-	}
-
-	// Send StreamEnd with final content and usage
-	g.sendToClient(client, &protocol.StreamEnd{
+func (s *wsTurnSink) streamEnd(content string, res *TurnResult) {
+	end := &protocol.StreamEnd{
 		BaseMessage: protocol.BaseMessage{
 			Type:      protocol.TypeStreamEnd,
 			ID:        fmt.Sprintf("se_%d", time.Now().UnixNano()),
 			Timestamp: time.Now(),
 		},
-		SessionKey:       session.Key,
-		RequestID:        requestID,
-		Content:          responseContent,
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		TotalTokens:      totalTokens,
-		Model:            modelOverride,
-		RequestCost:      requestCost,
-		SessionCost:      sessionCost,
-	})
-
-	// Save assistant message to session
-	if responseContent != "" {
-		_, err = g.sessions.AddMessage(session.Key, "assistant", responseContent, nil)
-		if err != nil {
-			log.Printf("Error saving AI message: %v", err)
-		}
+		SessionKey: s.sessionKey,
+		RequestID:  s.requestID,
+		Content:    content,
 	}
-
-	// SPAR reflection: after model responds to a farewell or context budget trigger,
-	// compute and write session metrics (high-confidence path: model was available to reflect).
-	if isFarewell || isContextBudgetReflect {
-		// Re-fetch session to get updated message count after saving the response
-		if updatedSession, sErr := g.sessions.GetSession(session.Key); sErr == nil {
-			g.reflectHighConfidencePost(ctx, updatedSession)
-		}
+	if res != nil && res.Usage != nil {
+		end.PromptTokens = res.Usage.PromptTokens
+		end.CompletionTokens = res.Usage.CompletionTokens
+		end.TotalTokens = res.Usage.TotalTokens
+		end.Model = res.Model
+		end.RequestCost = res.RequestCost
+		end.SessionCost = res.SessionCost
 	}
+	s.g.sendToClient(s.client, end)
+}
+
+func (s *wsTurnSink) Finish(_ context.Context, res *TurnResult) {
+	switch {
+	case res.Dropped:
+		return // stopped while queued; nothing was started
+	case res.Cancelled:
+		log.Printf("WS request cancelled for session: %s", s.sessionKey)
+		return
+	case res.Err != nil:
+		log.Printf("Error generating AI response for WS client: %v", res.Err)
+		s.g.sendErrorToClient(s.client, s.sessionKey, "ai_error", ai.UserFriendlyError(res.Err))
+		// Send StreamEnd with empty content to signal completion
+		s.streamEnd("", nil)
+		return
+	}
+	if !res.Delivered() {
+		// Silent/empty: StreamEnd with empty content so the client stops its
+		// streaming state.
+		log.Printf("Silent response detected in WS chat (%d chars), suppressing", len(res.Raw))
+		s.streamEnd("", res)
+		return
+	}
+	// Sanitize internal markers — TUI doesn't support reply threading
+	s.streamEnd(channels.SanitizeOutgoingText(res.Content), res)
 }
 
 // handleWebSocketCommand processes a slash command from a WebSocket client
@@ -667,16 +514,9 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 		}
 
 	case text == "/stop":
-		g.ws.ActiveRequestsMu.RLock()
-		cancel, exists := g.ws.ActiveRequests[sessionKey]
-		g.ws.ActiveRequestsMu.RUnlock()
-
-		if exists && cancel != nil {
-			cancel()
-			sendResponse("Stopping current operation...")
-		} else {
-			sendResponse("No active operation to stop.")
-		}
+		// conduit-31jg.23: running turn + queued turns (TurnRunner.Stop).
+		resp, _ := stopResponse(g.turns().Stop(sessionKey))
+		sendResponse(resp)
 
 	case text == "/smartroute" || strings.HasPrefix(text, "/smartroute "):
 		if sessionKey == "" {
