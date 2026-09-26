@@ -491,9 +491,16 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 	// 5b. Path-independent accounting: context warning, session cost,
 	// auto-compaction (conduit-31jg.49 — previously WS-only).
 	if u := res.Usage; u != nil {
+		// conduit-31jg.17: size the context window by the model actually
+		// used — the override, else the configured default (never a
+		// hardcoded literal).
+		modelUsed := modelOverride
+		if modelUsed == "" {
+			modelUsed = r.ai.DefaultModel()
+		}
 		batch := map[string]string{}
 		if !res.Silent && !res.Empty {
-			if w := contextWarningIfNeeded(session, u.PromptTokens, modelOverride); w.Text != "" {
+			if w := contextWarningIfNeeded(session, u.PromptTokens, modelUsed); w.Text != "" {
 				content += w.Text
 				batch[w.Key] = "true"
 				// SPAR: trigger reflection on next message when context budget >= 80%
@@ -510,7 +517,7 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 		batch["session_request_count"] = strconv.Itoa(prevCount + 1)
 		_ = r.sessions.SetSessionContextBatch(key, batch)
 
-		r.maybeCompact(session, u.PromptTokens, modelOverride)
+		r.maybeCompact(session, u.PromptTokens, modelUsed)
 	}
 
 	// 4c. Persist the reply inside the lock (conduit-31jg.22).
@@ -551,11 +558,9 @@ func (r *TurnRunner) maybeCompact(session *sessions.Session, promptTokens int, m
 	if r.compactor == nil {
 		return
 	}
-	modelUsed := model
-	if modelUsed == "" {
-		modelUsed = "claude-sonnet-4-20250514" // default model
-	}
-	if !r.compactor.ShouldCompact(promptTokens, modelUsed) {
+	// model is already resolved to the configured default by the caller;
+	// "" means provider default (ai.DefaultContextWindow).
+	if !r.compactor.ShouldCompact(promptTokens, model) {
 		return
 	}
 	go func() {

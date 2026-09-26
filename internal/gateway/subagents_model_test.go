@@ -79,7 +79,7 @@ func TestGetSubagentModel(t *testing.T) {
 	t.Run("nil config falls back to gateway default safely", func(t *testing.T) {
 		gw := &Gateway{} // no config at all
 		got := gw.getSubagentModel("")
-		want := "claude-sonnet-4-20250514" // getDefaultModel fallback
+		want := "" // getDefaultModel: nothing configured → provider default (conduit-31jg.17)
 		if got != want {
 			t.Errorf("getSubagentModel(\"\") = %q, want %q", got, want)
 		}

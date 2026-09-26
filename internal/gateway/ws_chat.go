@@ -336,7 +336,7 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			return
 		}
 		messages, _ := g.sessions.GetMessages(session.Key, 1000)
-		sendResponse(formatStatusResponse(session, len(messages), g.ai.GetUsageTracker()))
+		sendResponse(formatStatusResponse(session, len(messages), g.ai.GetUsageTracker(), g.ai.DefaultModel()))
 
 	case text == "/help" || text == "/commands":
 		help := "Available Commands:\n\n" +
@@ -365,7 +365,7 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			sendResponse("Could not retrieve session info.")
 			return
 		}
-		sendResponse(formatContextUsage(session))
+		sendResponse(formatContextUsage(session, g.ai.DefaultModel()))
 
 	case text == "/cost" || strings.HasPrefix(text, "/cost "):
 		if sessionKey == "" {

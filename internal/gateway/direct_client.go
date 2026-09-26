@@ -367,7 +367,7 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 			return
 		}
 		messages, _ := c.sessions.GetMessages(session.Key, 1000)
-		sendResponse(formatStatusResponse(session, len(messages), c.ai.GetUsageTracker()))
+		sendResponse(formatStatusResponse(session, len(messages), c.ai.GetUsageTracker(), c.ai.DefaultModel()))
 
 	case text == "/help" || text == "/commands":
 		help := "Available Commands:\n\n" +
@@ -393,7 +393,7 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 			sendResponse("Could not retrieve session info.")
 			return
 		}
-		sendResponse(formatContextUsage(session))
+		sendResponse(formatContextUsage(session, c.ai.DefaultModel()))
 
 	case text == "/cost" || strings.HasPrefix(text, "/cost "):
 		if sessionKey == "" {
