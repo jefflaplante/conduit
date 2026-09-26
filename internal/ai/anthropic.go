@@ -107,16 +107,24 @@ func (a *AnthropicProvider) Name() string {
 	return a.name
 }
 
-func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+// buildMessagesRequest builds the Messages API request body for req and
+// returns it with the resolved model. conduit-31jg.12: this is the ONE request
+// builder for GenerateResponse and GenerateResponseStreaming — the streaming
+// path used to hand-roll its own body and drifted (hardcoded max_tokens, no
+// cache breakpoints, mid-conversation system messages dropped). Streaming
+// callers add "stream": true to the returned map.
+func (a *AnthropicProvider) buildMessagesRequest(req *GenerateRequest) (map[string]interface{}, string) {
 	// Determine which model to use
 	modelToUse := a.model
 	if req.Model != "" {
 		modelToUse = req.Model
 	}
 
-	// Refresh OAuth token if needed
-	if err := a.refreshOAuthToken(); err != nil {
-		return nil, fmt.Errorf("failed to refresh OAuth token: %w", err)
+	// max_tokens is required by the API. A zero value used to 400 on this
+	// path and was silently replaced by 16000 on the streaming path.
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = defaultChainMaxTokens
 	}
 
 	// Build messages, injecting Claude Code identity for OAuth
@@ -150,10 +158,9 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 	// Convert messages to Anthropic format (handles tool results)
 	anthropicMessages := a.convertMessagesToAnthropic(messages)
 
-	// Anthropic API request format (modelToUse already set at top of function)
 	anthropicReq := map[string]interface{}{
 		"model":      modelToUse,
-		"max_tokens": req.MaxTokens,
+		"max_tokens": maxTokens,
 		"messages":   anthropicMessages,
 	}
 
@@ -202,7 +209,20 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 		}
 	}
 
-	reqBody, err := json.Marshal(anthropicReq)
+	return anthropicReq, modelToUse
+}
+
+// newMessagesHTTPRequest serializes body and builds the POST to
+// {baseURL}/v1/messages with auth headers. conduit-31jg.12: shared by both
+// paths — streaming used to hardcode https://api.anthropic.com (ignoring a
+// configured base_url/proxy) and read a.apiKey without oauthMu.
+func (a *AnthropicProvider) newMessagesHTTPRequest(ctx context.Context, body map[string]interface{}, stream bool) (*http.Request, error) {
+	accept := "application/json"
+	if stream {
+		accept = "text/event-stream"
+	}
+
+	reqBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -224,14 +244,30 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 	if a.isOAuth {
 		httpReq.Header.Set("Authorization", "Bearer "+currentKey)
 		// Required headers for OAuth tokens - must match Claude Code exactly
-		httpReq.Header.Set("accept", "application/json")
+		httpReq.Header.Set("accept", accept)
 		httpReq.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14")
 		httpReq.Header.Set("anthropic-dangerous-direct-browser-access", "true")
 		httpReq.Header.Set("user-agent", "claude-cli/2.1.2 (external, cli)")
 		httpReq.Header.Set("x-app", "cli")
 	} else {
-		httpReq.Header.Set("Accept", "application/json")
+		httpReq.Header.Set("Accept", accept)
 		httpReq.Header.Set("x-api-key", currentKey)
+	}
+
+	return httpReq, nil
+}
+
+func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+	// Refresh OAuth token if needed
+	if err := a.refreshOAuthToken(); err != nil {
+		return nil, fmt.Errorf("failed to refresh OAuth token: %w", err)
+	}
+
+	// conduit-31jg.12: shared with GenerateResponseStreaming.
+	anthropicReq, modelToUse := a.buildMessagesRequest(req)
+	httpReq, err := a.newMessagesHTTPRequest(ctx, anthropicReq, false)
+	if err != nil {
+		return nil, err
 	}
 
 	resp, err := a.client.Do(httpReq)
@@ -289,11 +325,104 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 			hitRate)
 	}
 
-	return &GenerateResponse{
+	result := &GenerateResponse{
 		Content:   content,
 		ToolCalls: toolCalls,
 		Usage:     usage,
-	}, nil
+	}
+	// conduit-31jg.11: map stop_reason so the bd-1k3o length guard, refusal
+	// handling and truncated-tool_use dropping work for Anthropic too.
+	stopReason, _ := anthropicResp["stop_reason"].(string)
+	applyAnthropicStopReason(result, stopReason, lastContentBlockType(anthropicResp) == "tool_use")
+	return result, nil
+}
+
+// mapAnthropicStopReason normalizes an Anthropic stop_reason into the
+// FinishReason vocabulary the rest of the codebase already uses (the OpenAI
+// finish_reason values documented on GenerateResponse.FinishReason).
+// conduit-31jg.11.
+func mapAnthropicStopReason(stopReason string) string {
+	switch stopReason {
+	case "":
+		return ""
+	case "end_turn", "stop_sequence":
+		return "stop"
+	case "max_tokens", "model_context_window_exceeded":
+		return "length"
+	case "tool_use":
+		return "tool_calls"
+	case "refusal":
+		return "content_filter"
+	case "pause_turn":
+		// Only produced when Anthropic server tools (web_search_2025xxxx,
+		// etc.) run a long turn. Conduit sends only custom tools
+		// (convertToolsToAnthropic) and the map-based parser does not keep
+		// server_tool_use blocks, so the paused turn cannot be faithfully
+		// resent to resume it. Treat it as a final answer.
+		return "stop"
+	default:
+		return stopReason
+	}
+}
+
+// refusalFallbackContent is delivered when the model refuses with no text,
+// so the turn ends visibly instead of tripping the empty-response retry.
+const refusalFallbackContent = "The model declined to respond to this request (stop_reason: refusal)."
+
+// applyAnthropicStopReason records the raw and normalized stop reason on resp
+// and enforces the invariants the tool loop relies on (conduit-31jg.11):
+//
+//   - max_tokens with a trailing tool_use: that tool call was cut off
+//     mid-input, so executing it would run a tool with partial/empty
+//     arguments. It is dropped. FinishReason stays "length", so when nothing
+//     else is left to execute the existing bd-1k3o auto-continue takes over
+//     (or, with no text either, the conduit-18vj empty guard). Earlier
+//     tool_use blocks in the same response are complete and are kept.
+//   - refusal: tool calls are dropped (nothing from a refused turn runs) and
+//     an empty body gets a visible explanation, making it a terminal answer
+//     rather than an empty response that would be retried.
+//   - pause_turn: final (see mapAnthropicStopReason).
+func applyAnthropicStopReason(resp *GenerateResponse, stopReason string, lastBlockIsToolUse bool) {
+	resp.StopReason = stopReason
+	resp.FinishReason = mapAnthropicStopReason(stopReason)
+
+	switch stopReason {
+	case "max_tokens", "model_context_window_exceeded":
+		if lastBlockIsToolUse && len(resp.ToolCalls) > 0 {
+			dropped := resp.ToolCalls[len(resp.ToolCalls)-1]
+			resp.ToolCalls = resp.ToolCalls[:len(resp.ToolCalls)-1]
+			if len(resp.ToolCalls) == 0 {
+				resp.ToolCalls = nil
+			}
+			log.Printf("[Anthropic] WARNING: tool_use %q (id=%s) truncated by stop_reason=%s — dropped, not executed (conduit-31jg.11)",
+				dropped.Name, dropped.ID, stopReason)
+		}
+	case "refusal":
+		if len(resp.ToolCalls) > 0 {
+			log.Printf("[Anthropic] stop_reason=refusal with %d tool call(s) — dropping them (conduit-31jg.11)", len(resp.ToolCalls))
+			resp.ToolCalls = nil
+		}
+		if strings.TrimSpace(resp.Content) == "" {
+			resp.Content = refusalFallbackContent
+		}
+	case "pause_turn":
+		log.Printf("[Anthropic] stop_reason=pause_turn — treating as final, no server tools in use (conduit-31jg.11)")
+	}
+}
+
+// lastContentBlockType returns the type of the final content block in a
+// non-streaming Messages API response, or "" if unavailable.
+func lastContentBlockType(resp map[string]interface{}) string {
+	blocks, ok := resp["content"].([]interface{})
+	if !ok || len(blocks) == 0 {
+		return ""
+	}
+	last, ok := blocks[len(blocks)-1].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	t, _ := last["type"].(string)
+	return t
 }
 
 // convertMessagesToAnthropic converts messages to Anthropic API format
