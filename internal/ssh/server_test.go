@@ -1,6 +1,8 @@
 package ssh
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"net"
 	"os"
 	"path/filepath"
@@ -159,11 +161,12 @@ func TestNewServer_NoAuthorizedKeys(t *testing.T) {
 		AuthorizedKeysPath: filepath.Join(tmpDir, "nonexistent"),
 	}
 
-	// Server should still be created, but without public key auth
+	// conduit-31jg.1: must refuse to start rather than run with no auth.
 	server, err := NewServer(cfg)
-	require.NoError(t, err)
-	require.NotNil(t, server)
-	defer server.Close()
+	require.Error(t, err)
+	assert.Nil(t, server)
+	assert.Contains(t, err.Error(), "refusing to start SSH server without authentication")
+	assert.Contains(t, err.Error(), "nonexistent")
 }
 
 // TestNewServer_EmptyAuthorizedKeys tests server with empty authorized_keys
@@ -173,16 +176,100 @@ func TestNewServer_EmptyAuthorizedKeys(t *testing.T) {
 	DataDirConfig = ""
 
 	authKeysPath := filepath.Join(tmpDir, "authorized_keys")
-	require.NoError(t, os.WriteFile(authKeysPath, []byte(""), 0600))
+	// Comments and invalid lines only: parses to zero keys.
+	require.NoError(t, os.WriteFile(authKeysPath, []byte("# Conduit authorized SSH keys\nnot-a-key\n"), 0600))
 
 	cfg := SSHConfig{
 		AuthorizedKeysPath: authKeysPath,
 	}
 
+	// conduit-31jg.1: an empty key list must also refuse to start.
 	server, err := NewServer(cfg)
+	require.Error(t, err)
+	assert.Nil(t, server)
+	assert.Contains(t, err.Error(), "refusing to start SSH server without authentication")
+}
+
+// TestNewServer_EndToEndAuth starts a real server and verifies that only the
+// authorized key can complete the SSH handshake (conduit-31jg.1).
+func TestNewServer_EndToEndAuth(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("CONDUIT_DATA_DIR", tmpDir)
+	DataDirConfig = ""
+
+	authorizedSigner := newTestSigner(t)
+	unauthorizedSigner := newTestSigner(t)
+
+	authKeysPath := filepath.Join(tmpDir, "authorized_keys")
+	require.NoError(t, os.WriteFile(authKeysPath, gossh.MarshalAuthorizedKey(authorizedSigner.PublicKey()), 0600))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	require.NotNil(t, server)
-	defer server.Close()
+	addr := ln.Addr().String()
+
+	server, err := NewServer(SSHConfig{
+		ListenAddr:         addr,
+		HostKeyPath:        filepath.Join(tmpDir, "host_key"),
+		AuthorizedKeysPath: authKeysPath,
+		ClientFactory:      func(string) tui.GatewayClient { return nil },
+	})
+	require.NoError(t, err)
+	go func() { _ = server.Serve(ln) }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	dial := func(auth ...gossh.AuthMethod) error {
+		client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+			User:            "tester",
+			Auth:            auth,
+			HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+			Timeout:         5 * time.Second,
+		})
+		if err == nil {
+			_ = client.Close()
+		}
+		return err
+	}
+
+	assert.Error(t, dial(), "no auth methods must be rejected")
+	assert.Error(t, dial(gossh.PublicKeys(unauthorizedSigner)), "unauthorized key must be rejected")
+	assert.NoError(t, dial(gossh.PublicKeys(authorizedSigner)), "authorized key must be accepted")
+
+	// Hot reload: emptying authorized_keys revokes access without a restart.
+	// Bump mtime explicitly so the change is visible on coarse-mtime filesystems.
+	require.NoError(t, os.WriteFile(authKeysPath, []byte("# revoked\n"), 0600))
+	future := time.Now().Add(2 * time.Second)
+	require.NoError(t, os.Chtimes(authKeysPath, future, future))
+	assert.Error(t, dial(gossh.PublicKeys(authorizedSigner)), "removed key must be rejected after reload")
+
+	// Removing the file entirely also fails closed.
+	require.NoError(t, os.Remove(authKeysPath))
+	assert.Error(t, dial(gossh.PublicKeys(authorizedSigner)), "missing file must deny all keys")
+}
+
+// TestAuthorizedKeyStore_HotReload verifies that key additions are picked up
+// on the next lookup.
+func TestAuthorizedKeyStore_HotReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "authorized_keys")
+	require.NoError(t, os.WriteFile(path, []byte(testSSHPublicKey+"\n"), 0600))
+
+	store := newAuthorizedKeyStore(path)
+	keys, err := store.load()
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+
+	require.NoError(t, os.WriteFile(path, []byte(testSSHPublicKey+"\n"+testSSHPublicKey2+"\n"), 0600))
+	future := time.Now().Add(2 * time.Second)
+	require.NoError(t, os.Chtimes(path, future, future))
+	assert.Len(t, store.keys(), 2)
+}
+
+func newTestSigner(t *testing.T) gossh.Signer {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	signer, err := gossh.NewSignerFromKey(priv)
+	require.NoError(t, err)
+	return signer
 }
 
 // TestNewServer_WithClientFactory tests server with client factory

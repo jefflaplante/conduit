@@ -149,6 +149,8 @@ The SSH username becomes your user identity for session scoping. You get the sam
 ./bin/gateway ssh-keys remove "SHA256:abc123..."
 ```
 
+The SSH server fails closed: if the authorized_keys file is missing, unreadable, or contains no valid keys, it refuses to start (the `ssh` command exits with an error; the gateway logs an error and continues without SSH) rather than accepting unauthenticated connections. Changes to authorized_keys are picked up on the next login attempt, so adding or removing keys does not require a restart.
+
 ### SSH Server Flags
 
 ```bash
