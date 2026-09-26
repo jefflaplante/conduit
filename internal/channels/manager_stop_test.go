@@ -2,6 +2,7 @@ package channels
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -80,6 +81,7 @@ func TestManagerStop_WhileSendsInFlight_NoPanic(t *testing.T) {
 				return
 			case ad.incoming <- &protocol.IncomingMessage{ChannelID: "s1"}:
 			default:
+				runtime.Gosched() // non-blocking producer; yield instead of hot-spinning (SA5004)
 			}
 		}
 	}()
