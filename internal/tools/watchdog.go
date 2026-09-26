@@ -58,12 +58,13 @@ var turnMaxExtensions = TurnMaxExtensions
 
 // turnBudget carries the per-chain extension state through recursion.
 type turnBudget struct {
-	extensions     int       // consumed extensions
-	lastProgress   time.Time // last round with >=1 successful tool result
-	coderToolRounds int      // rounds that included at least one coder-class tool
-	totalRounds    int
-	started        time.Time
-	injected       bool      // conduit-8ba7: progress reminder already injected this chain
+	extensions      int       // consumed extensions
+	lastProgress    time.Time // last round with >=1 successful tool result
+	coderToolRounds int       // rounds that included at least one coder-class tool
+	totalRounds     int
+	started         time.Time
+	injected        bool        // conduit-8ba7: progress reminder already injected this chain
+	chain           *chainState // conduit-31jg.13: per-turn failure/pattern trackers (nil-safe)
 }
 
 func newTurnBudget(now time.Time) *turnBudget {

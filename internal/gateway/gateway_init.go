@@ -183,6 +183,17 @@ func (g *Gateway) initReflectionSubsystem(cfg *config.Config, executionEngine *t
 		hook(ctx, info)
 	})
 
+	// conduit-31jg.13: failure/pattern trackers are per-turn now; their
+	// threshold crossings are promoted to SPAR here (conduit-17wz /
+	// conduit-2ngi) so cross-session learning flows through the store rather
+	// than through prompt injection into other sessions.
+	executionEngine.SetPivotHook(func(ctx context.Context, toolName string, failCount int, lastError string) {
+		reflMW.RecordConsecutiveFailure(types.RequestSessionKey(ctx), toolName, failCount, lastError)
+	})
+	executionEngine.SetCircularHook(func(ctx context.Context, pattern, signatureHash string) {
+		reflMW.RecordCircularPattern(types.RequestSessionKey(ctx), pattern, signatureHash)
+	})
+
 	g.logger.Info("reflection store initialized")
 }
 

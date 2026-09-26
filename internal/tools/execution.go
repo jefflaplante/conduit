@@ -134,9 +134,12 @@ type ExecutionEngine struct {
 	truncationConfig TruncationConfig     // Smart truncation configuration
 	debugBuffer      *debuglog.RingBuffer // In-memory ring buffer for debug entries (nil-safe)
 	verboseLogging   bool                 // When true, log full args to journal
-	patternTracker   *PatternTracker      // Detects circular tool call patterns
-	failureTracker   *FailureTracker      // Tracks consecutive tool failures for pivot prompts
 	afterExecHook    AfterExecutionFunc   // Optional hook for reflection capture (nil-safe)
+	// conduit-31jg.13: pattern/failure trackers are per-turn (chainState),
+	// never engine-wide. These hooks are config: they forward per-turn
+	// triggers to SPAR for cross-session learning.
+	pivotHook    PivotHook
+	circularHook CircularHook
 }
 
 // Middleware interface for tool execution pipeline
@@ -179,8 +182,6 @@ func NewExecutionEngine(registry ToolRegistry, maxParallel int, timeout time.Dur
 		maxChains:        maxChains,
 		maxResultChars:   DefaultMaxToolResultChars,
 		truncationConfig: DefaultTruncationConfig(),
-		patternTracker:   NewPatternTracker(10),
-		failureTracker:   NewFailureTracker(3),
 	}
 }
 
@@ -207,6 +208,20 @@ func (e *ExecutionEngine) SetMaxResultChars(maxChars int) {
 // previous hook. Pass nil to remove the hook.
 func (e *ExecutionEngine) SetAfterExecutionHook(fn AfterExecutionFunc) {
 	e.afterExecHook = fn
+}
+
+// SetPivotHook registers the SPAR callback fired when a tool crosses the
+// per-turn consecutive-failure threshold (conduit-17wz, conduit-31jg.13).
+// Call during construction only.
+func (e *ExecutionEngine) SetPivotHook(fn PivotHook) {
+	e.pivotHook = fn
+}
+
+// SetCircularHook registers the SPAR callback fired when a per-turn circular
+// tool-call pattern is detected (conduit-2ngi, conduit-31jg.13). Call during
+// construction only.
+func (e *ExecutionEngine) SetCircularHook(fn CircularHook) {
+	e.circularHook = fn
 }
 
 // SetTruncationConfig configures smart truncation behavior for tool results.
@@ -310,10 +325,8 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 		if e.debugBuffer != nil {
 			e.debugBuffer.Add(debuglog.ToolError(call.Name, execResult.Duration, err.Error()))
 		}
-		// Track consecutive failures for pivot detection
-		if e.failureTracker != nil {
-			e.failureTracker.RecordFailure(call.Name, err.Error())
-		}
+		// Track consecutive failures for pivot detection (per-turn, conduit-31jg.13)
+		chainStateFrom(ctx).recordOutcome(call, result, err)
 		// Create a user-friendly error result
 		if execResult.Result == nil {
 			execResult.Result = &ToolResult{
@@ -357,14 +370,9 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 				Duration:  execResult.Duration,
 			})
 		}
-		// Record successful call for pattern detection (with args for accurate detection)
-		if e.patternTracker != nil {
-			e.patternTracker.RecordCall(call.Name, call.Args)
-		}
-		// Reset consecutive failure count on success
-		if e.failureTracker != nil {
-			e.failureTracker.RecordSuccess(call.Name)
-		}
+		// conduit-31jg.13: per-turn pattern + failure tracking. A result
+		// with Success=false counts as a failure even with a nil error.
+		chainStateFrom(ctx).recordOutcome(call, result, nil)
 	}
 
 	// Run post-execution middleware
@@ -416,7 +424,11 @@ func (e *ExecutionEngine) HandleToolCallFlow(
 	for i, tc := range initialResp.ToolCalls {
 		log.Printf("[ExecutionEngine] Tool call %d: %s", i, tc.Name)
 	}
-	return e.handleToolCallFlowRecursive(ctx, provider, initialReq, initialResp, 0, time.Now(), newTurnBudget(time.Now()))
+	// conduit-31jg.13: fresh trackers per turn (not per depth), carried on the
+	// turn budget through the recursion and on ctx into executeSingle.
+	tb := newTurnBudget(time.Now())
+	tb.chain = e.newChainState(ctx)
+	return e.handleToolCallFlowRecursive(withChainState(ctx, tb.chain), provider, initialReq, initialResp, 0, time.Now(), tb)
 }
 
 // maybeSendExtensionNotice delivers the extension announcement via the
@@ -570,20 +582,20 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		})
 	}
 
-	// Check for consecutive tool failures and suggest pivoting if threshold reached
-	if e.failureTracker != nil {
-		failedTools := e.failureTracker.GetFailedTools()
-		for _, toolName := range failedTools {
-			pivotMsg := fmt.Sprintf(
-				"Multiple failures detected with '%s'. Consider a different approach or tool.",
-				toolName,
-			)
-			log.Printf("[ExecutionEngine] Injecting pivot suggestion for tool: %s", toolName)
-			conversationHistory = append(conversationHistory, ai.ChatMessage{
-				Role:    "system",
-				Content: pivotMsg,
-			})
-		}
+	// conduit-31jg.13: failure-pivot and circular-pattern guidance, once per
+	// trigger, from this turn's trackers only. Sent as a USER-role message
+	// after the tool results — not system-role — so providers that hoist
+	// system messages (anthropic.go, openai.go) don't rewrite the system
+	// prefix and bust the prompt cache. The Anthropic converter already
+	// emits one user turn per tool result; the API merges consecutive user
+	// turns into [tool_result..., text], which satisfies the "tool_result
+	// blocks first" rule. Stripped before recursing (stripEphemeral).
+	if guidance := tb.chain.takeGuidance(); guidance != "" {
+		log.Printf("[ExecutionEngine] Injecting tool-loop guidance at depth %d (conduit-31jg.13)", depth)
+		conversationHistory = append(conversationHistory, ai.ChatMessage{
+			Role:    "user",
+			Content: guidance,
+		})
 	}
 
 	// Get final AI response with tool results
@@ -664,30 +676,12 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		// build a stripped copy for recursion — never mutate finalReq in
 		// place (its pointer was already recorded by mocks/telemetry, and
 		// in-place edits would rewrite already-observed history).
-		if len(refocusMessage) > 0 {
-			stripped := make([]ai.ChatMessage, 0, len(finalReq.Messages))
-			for _, m := range finalReq.Messages {
-				if m.Role == "system" && strings.Contains(m.Content, progressReminderMarker) {
-					continue
-				}
-				stripped = append(stripped, m)
-			}
-			nextReq := *finalReq
-			nextReq.Messages = stripped
-			finalReq = &nextReq
-		}
-		// Check for circular tool call patterns before recursing
-		if e.patternTracker != nil {
-			if detected, pattern := e.patternTracker.DetectCircular(); detected {
-				log.Printf("[ExecutionEngine] Circular pattern detected: %s", pattern)
-				// Inject think step to force LLM to pause and reflect
-				thinkMsg := InjectThinkStep(pattern)
-				finalReq.Messages = append(finalReq.Messages, ai.ChatMessage{
-					Role:    "system",
-					Content: thinkMsg,
-				})
-			}
-		}
+		// conduit-31jg.13: pivot/think-step guidance is stripped the same
+		// way. Circular detection now runs right after this depth's tools
+		// execute (takeGuidance above), so the think-step lands after the
+		// results that closed the loop rather than being appended here and
+		// re-carried into every deeper request.
+		finalReq = stripEphemeral(finalReq)
 		// Recursive tool calling with depth tracking
 		return e.handleToolCallFlowRecursive(ctx, provider, finalReq, finalResp, depth+1, chainStart, tb)
 	}
