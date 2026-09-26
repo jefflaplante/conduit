@@ -16,7 +16,7 @@ func TestAnthropicModelsMatch(t *testing.T) {
 		want           bool
 	}{
 		{"claude-sonnet-4-6", "claude-sonnet-4-6", true},
-		{"claude-sonnet-4-6", "claude-sonnet-4-6-20260217", true},     // alias → 2026 snapshot
+		{"claude-sonnet-4-6", "claude-sonnet-4-6-20260217", true},        // alias → 2026 snapshot
 		{"claude-3-5-sonnet-latest", "claude-3-5-sonnet-20241022", true}, // -latest alias → 2024 snapshot
 		{"claude-sonnet-4-20250514", "claude-sonnet-4-20250514", true},
 		{"claude-opus-4-5", "claude-opus-4-5-20251101", true},
