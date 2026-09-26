@@ -25,7 +25,10 @@ EnvironmentFile=-/home/conduit/conduit/.conduit-secrets.env
 # Optional: override default data directory (~/.conduit/)
 # Environment=CONDUIT_DATA_DIR=/home/conduit/.conduit
 
-# Graceful shutdown (gateway handles SIGTERM)
+# Graceful shutdown: SIGTERM drains in-flight turns (<=15s), then stops
+# subsystems (<=10s); the gateway force-exits itself at 27s, under
+# TimeoutStopSec. A second SIGTERM/SIGINT forces immediate exit.
+# Keep TimeoutStopSec > 27s if you change it (conduit-31jg.27).
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30

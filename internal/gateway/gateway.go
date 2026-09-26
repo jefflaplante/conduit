@@ -517,6 +517,8 @@ func (g *Gateway) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	g.shutdownMgr.SetCancel(cancel)
+	// conduit-31jg.27: let ShutdownManager wait for stopAll to finish.
+	defer g.shutdownMgr.TrackGateway()()
 
 	// Store the gateway lifecycle context for WebSocket handlers.
 	// HTTP request contexts (r.Context()) are cancelled when the handler returns,
@@ -529,8 +531,18 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// with the request-ID middleware so auth/rate-limit logs can be correlated.
 	server := g.buildHTTPServer()
 
+	// conduit-31jg.27: bind synchronously so a port conflict fails startup
+	// (non-zero exit, visible to systemd) instead of logging and running on
+	// without HTTP/WS/health. Done before channels start so nothing needs
+	// unwinding.
+	listener, err := listenHTTP(server.Addr, httpBindRetryWindow)
+	if err != nil {
+		return fmt.Errorf("failed to bind HTTP listener on %s: %w", server.Addr, err)
+	}
+
 	// Start channel manager
 	if err := g.startChannels(ctx); err != nil {
+		_ = listener.Close()
 		return fmt.Errorf("failed to start channels: %w", err)
 	}
 
@@ -638,14 +650,17 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Start message processing goroutine.
 	go g.processMessages(ctx)
 
-	// Start HTTP server in goroutine.
+	// Serve on the pre-bound listener. A Serve failure after a successful
+	// bind is fatal: shut the gateway down so the supervisor restarts it
+	// rather than running headless (conduit-31jg.27).
 	go func() {
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			g.logger.Error("HTTP server error", "error", err)
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			g.logger.Error("HTTP server failed; shutting down gateway", "error", err)
+			cancel()
 		}
 	}()
 
-	g.logger.Info("gateway started", "port", g.config.Port)
+	g.logger.Info("gateway started", "port", g.config.Port, "addr", listener.Addr().String())
 
 	g.processRestartBreadcrumb()
 
@@ -653,8 +668,10 @@ func (g *Gateway) Start(ctx context.Context) error {
 	<-ctx.Done()
 	g.logger.Info("shutting down gateway")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Bounded so SIGTERM drain + stop stays under systemd's TimeoutStopSec
+	// (see gatewayStopTimeout, conduit-31jg.27).
+	shutdownCtx, stopCancel := context.WithTimeout(context.Background(), gatewayStopTimeout)
+	defer stopCancel()
 	g.stopAll(shutdownCtx, server)
 	return nil
 }
