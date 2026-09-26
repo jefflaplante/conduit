@@ -8,6 +8,8 @@ Wants=network-online.target
 Type=simple
 User=conduit
 Group=conduit
+# Files the gateway creates (SQLite DB/-wal/-shm, key files, logs) are owner-only.
+UMask=0077
 WorkingDirectory=/home/conduit/conduit
 
 # Binary and config
