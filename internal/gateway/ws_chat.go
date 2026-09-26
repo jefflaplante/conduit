@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -310,10 +311,15 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 				modelUsed = "claude-sonnet-4-20250514" // default model
 			}
 			if g.compactionEngine != nil && g.compactionEngine.ShouldCompact(promptTokens, modelUsed) {
+				// conduit-31jg.21: safe to run outside the turn lock — Compact
+				// only deletes the IDs it snapshotted, in one transaction, and
+				// its in-flight guard drops overlapping runs for this session.
 				go func() {
 					compactCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 					defer cancel()
-					if _, err := g.compactionEngine.Compact(compactCtx, session); err != nil {
+					if _, err := g.compactionEngine.Compact(compactCtx, session); errors.Is(err, ai.ErrCompactionInProgress) {
+						log.Printf("[Compaction] Auto-compact skipped for session %s: already in progress", session.Key)
+					} else if err != nil {
 						log.Printf("[Compaction] Auto-compact failed for session %s: %v", session.Key, err)
 					}
 				}()

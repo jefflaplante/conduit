@@ -144,6 +144,8 @@ func NewSearchService(cfg *config.Config, logger *slog.Logger, sessionStore *ses
 				svc.AsyncMsgSyncer.MessageAddedCallback(),  // non-blocking
 				svc.MessageSyncer.SessionClearedCallback(), // session clear stays synchronous (rare)
 			)
+			// conduit-31jg.21: compaction deletes specific IDs; drop them from FTS too.
+			sessionStore.SetMessagesDeletedCallback(svc.MessageSyncer.MessagesDeletedCallback())
 
 			// Run initial sync operations
 			indexCtx, indexCancel := context.WithTimeout(context.Background(), 60*time.Second)
