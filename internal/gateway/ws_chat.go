@@ -67,7 +67,7 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	// Determine session key
 	sessionKey := msg.SessionKey
 	if sessionKey == "" {
-		sessionKey = client.SessionKey
+		sessionKey = client.SessionKey()
 	}
 
 	// Retrieve existing session by key, or create a new one.
@@ -87,7 +87,7 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	}
 
 	// Update client's active session
-	client.SessionKey = session.Key
+	client.SetSessionKey(session.Key) // conduit-31jg.25
 
 	// conduit-31jg.43: consume approval replies before the transcript and the
 	// per-session turn lock (see approval_wiring.go).
@@ -252,7 +252,7 @@ func (s *wsTurnSink) Finish(_ context.Context, res *TurnResult) {
 func (g *Gateway) handleWebSocketCommand(ctx context.Context, client *Client, msg *protocol.CommandMessage) {
 	sessionKey := msg.SessionKey
 	if sessionKey == "" {
-		sessionKey = client.SessionKey
+		sessionKey = client.SessionKey()
 	}
 
 	commandText := msg.Command
@@ -758,7 +758,7 @@ func (g *Gateway) handleWebSocketSessionSwitch(client *Client, msg *protocol.Ses
 			g.sendErrorToClient(client, "", "session_error", fmt.Sprintf("Failed to create session: %v", err))
 			return
 		}
-		client.SessionKey = session.Key
+		client.SetSessionKey(session.Key) // conduit-31jg.25
 
 		g.sendToClient(client, &protocol.SessionSwitch{
 			BaseMessage: protocol.BaseMessage{
@@ -785,7 +785,7 @@ func (g *Gateway) handleWebSocketSessionSwitch(client *Client, msg *protocol.Ses
 			return
 		}
 
-		client.SessionKey = session.Key
+		client.SetSessionKey(session.Key) // conduit-31jg.25
 
 		// Get message history for the session
 		messages, _ := g.sessions.GetMessages(session.Key, 100)

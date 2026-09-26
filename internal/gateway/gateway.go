@@ -153,7 +153,6 @@ type Client struct {
 	ID         string
 	Role       string // "client" or "node"
 	UserID     string // user identity for session scoping
-	SessionKey string // active session key for this client
 	TokenID    string // auth token ID used for this connection (for revocation)
 	Conn       *websocket.Conn
 	Send       chan []byte
@@ -169,6 +168,16 @@ type Client struct {
 	// (first non-blocking send wins, the rest drop). nil on pre-existing
 	// test fixtures is tolerated.
 	CloseFrame chan []byte
+
+	// conduit-31jg.25: the active session key is written by chat /
+	// session-switch goroutines and read by the read-loop teardown and the
+	// shutdown breadcrumb, so it lives behind mu. Use SessionKey() /
+	// SetSessionKey() (ws_client.go). done is closed when the read loop
+	// exits so the send-pump stops instead of leaking until shutdown.
+	mu         sync.Mutex
+	sessionKey string
+	done       chan struct{}
+	doneOnce   sync.Once
 }
 
 // New creates a new Gateway instance
@@ -509,6 +518,8 @@ func (g *Gateway) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	g.shutdownMgr.SetCancel(cancel)
+	// conduit-31jg.27: let ShutdownManager wait for stopAll to finish.
+	defer g.shutdownMgr.TrackGateway()()
 
 	// Store the gateway lifecycle context for WebSocket handlers.
 	// HTTP request contexts (r.Context()) are cancelled when the handler returns,
@@ -521,8 +532,18 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// with the request-ID middleware so auth/rate-limit logs can be correlated.
 	server := g.buildHTTPServer()
 
+	// conduit-31jg.27: bind synchronously so a port conflict fails startup
+	// (non-zero exit, visible to systemd) instead of logging and running on
+	// without HTTP/WS/health. Done before channels start so nothing needs
+	// unwinding.
+	listener, err := listenHTTP(server.Addr, httpBindRetryWindow)
+	if err != nil {
+		return fmt.Errorf("failed to bind HTTP listener on %s: %w", server.Addr, err)
+	}
+
 	// Start channel manager
 	if err := g.startChannels(ctx); err != nil {
+		_ = listener.Close()
 		return fmt.Errorf("failed to start channels: %w", err)
 	}
 
@@ -630,14 +651,17 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Start message processing goroutine.
 	go g.processMessages(ctx)
 
-	// Start HTTP server in goroutine.
+	// Serve on the pre-bound listener. A Serve failure after a successful
+	// bind is fatal: shut the gateway down so the supervisor restarts it
+	// rather than running headless (conduit-31jg.27).
 	go func() {
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			g.logger.Error("HTTP server error", "error", err)
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			g.logger.Error("HTTP server failed; shutting down gateway", "error", err)
+			cancel()
 		}
 	}()
 
-	g.logger.Info("gateway started", "port", g.config.Port)
+	g.logger.Info("gateway started", "port", g.config.Port, "addr", listener.Addr().String())
 
 	g.processRestartBreadcrumb()
 
@@ -645,8 +669,10 @@ func (g *Gateway) Start(ctx context.Context) error {
 	<-ctx.Done()
 	g.logger.Info("shutting down gateway")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Bounded so SIGTERM drain + stop stays under systemd's TimeoutStopSec
+	// (see gatewayStopTimeout, conduit-31jg.27).
+	shutdownCtx, stopCancel := context.WithTimeout(context.Background(), gatewayStopTimeout)
+	defer stopCancel()
 	g.stopAll(shutdownCtx, server)
 	return nil
 }
@@ -748,8 +774,25 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Use g.ctx (gateway lifecycle) instead of r.Context() because the HTTP request
 	// context is cancelled when this handler returns, which happens immediately
 	// after spawning these goroutines.
-	go g.handleClientWrite(client)
-	go g.handleClientRead(g.ctx, client)
+	//
+	// conduit-31jg.25: both goroutines are tracked so WebSocketService.Stop
+	// can wait for them; if Stop already began, tear the conn down instead.
+	if !g.ws.Track(2) {
+		g.ws.ClientMu.Lock()
+		delete(g.ws.Clients, client.ID)
+		g.ws.ClientMu.Unlock()
+		g.ws.WSConnCount.Add(-1)
+		_ = conn.Close()
+		return
+	}
+	go func() {
+		defer g.ws.Untrack()
+		g.handleClientWrite(client)
+	}()
+	go func() {
+		defer g.ws.Untrack()
+		g.handleClientRead(g.ctx, client)
+	}()
 }
 
 // handleTokenRevocation closes all WebSocket connections authenticated with the
@@ -773,12 +816,15 @@ func (g *Gateway) handleTokenRevocation(tokenID string) {
 // handleClientRead handles incoming messages from a WebSocket client
 func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 	defer func() {
+		// conduit-31jg.25: stop the send-pump now rather than at gateway shutdown.
+		client.markDone()
+
 		// SPAR reflection: fire low-confidence (Go-only) reflection on WS disconnect
 		// for substantive sessions. This runs before cleanup so the session data is
 		// still available.
-		if client.SessionKey != "" {
+		if sk := client.SessionKey(); sk != "" {
 			reflCtx, reflCancel := context.WithTimeout(g.ctx, 5*time.Second)
-			g.reflectOnSessionEnd(reflCtx, client.SessionKey)
+			g.reflectOnSessionEnd(reflCtx, sk)
 			reflCancel()
 		}
 
@@ -799,12 +845,15 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 		g.logger.Debug("client disconnected", "client_id", client.ID)
 	}()
 
-	// Set message size limit to prevent DoS via large messages
-	maxMessageSize := g.config.WebSocket.GetMaxMessageSize()
-	client.Conn.SetReadLimit(maxMessageSize)
+	// Set message size limit to prevent DoS via large messages, plus read
+	// deadline + pong handler so half-open peers are reaped (conduit-31jg.25).
+	g.ws.PrepareRead(client, g.config.WebSocket.GetMaxMessageSize())
 
 	for {
 		_, message, err := client.Conn.ReadMessage()
+		if err == nil {
+			g.ws.ExtendReadDeadline(client)
+		}
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				g.logger.Debug("client closed connection normally", "client_id", client.ID)

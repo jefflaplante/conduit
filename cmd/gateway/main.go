@@ -240,44 +240,19 @@ func runServer() error {
 	defer cancel()
 
 	var gatewayReady atomic.Bool
-	var hupInFlight atomic.Bool
 
-	sigCh := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
 
+	// conduit-31jg.27: SIGTERM/SIGINT go through ShutdownManager's drain
+	// (bounded, under systemd's TimeoutStopSec) instead of cancelling
+	// immediately; a second one forces exit. See signals.go.
+	sm := gw.ShutdownManager()
+	sigCtl := newSignalController(sm, cancel, &gatewayReady)
 	go func() {
 		for sig := range sigCh {
-			switch sig {
-			case syscall.SIGHUP:
-				if !gatewayReady.Load() {
-					log.Println("SIGHUP received before gateway ready, exiting")
-					cancel()
-					return
-				}
-				if !hupInFlight.CompareAndSwap(false, true) {
-					log.Println("SIGHUP already in progress, ignoring")
-					continue
-				}
-				log.Println("SIGHUP received, initiating graceful restart")
-				sm := gw.ShutdownManager()
-				// Under systemd we drain and exit 0; systemd's Restart= policy brings
-				// the unit back up. In-process re-exec under systemd breaks process
-				// tracking (MainPID changes without systemd's knowledge) and previously
-				// caused a self-kill loop when LLM actions triggered `conduit restart`.
-				// In containers, orchestrators likewise own restart. Only re-exec on
-				// bare-metal / dev.
-				if !isContainer() && !isUnderSystemd() {
-					sm.SetOnShutdown(reExec)
-				}
-				if err := sm.BeginShutdown("SIGHUP", 30*time.Second); err != nil {
-					log.Printf("Failed to begin shutdown: %v", err)
-					hupInFlight.Store(false)
-				}
-			case syscall.SIGINT, syscall.SIGTERM:
-				log.Printf("Received signal: %v", sig)
-				cancel()
-				return
-			}
+			sigCtl.handle(sig)
 		}
 	}()
 
@@ -286,6 +261,16 @@ func runServer() error {
 	gatewayReady.Store(true)
 	if err := gw.Start(ctx); err != nil {
 		return fmt.Errorf("gateway failed: %w", err)
+	}
+
+	// If a drain was in progress, let the shutdown sequence finish (it may
+	// re-exec on SIGHUP) before main returns and the process exits.
+	if sm.State() != gateway.StateRunning {
+		select {
+		case <-sm.Done():
+		case <-time.After(5 * time.Second):
+			log.Println("Timed out waiting for shutdown sequence to finish")
+		}
 	}
 
 	log.Println("Gateway stopped gracefully")

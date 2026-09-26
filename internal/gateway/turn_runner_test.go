@@ -93,7 +93,7 @@ func waitEntered(t *testing.T, p *turnProvider, want int) {
 	}
 }
 
-func waitFor(t *testing.T, what string, cond func() bool) {
+func waitForCond(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for !cond() {
@@ -160,7 +160,7 @@ func TestTurnRunner_QueuedTurnSeesPreviousReply(t *testing.T) {
 
 	doneB := make(chan struct{})
 	go func() { defer close(doneB); gw.handleIncomingMessage(context.Background(), tgMsg("message B")) }()
-	waitFor(t, "B queued", func() bool { return gw.turns().queuedCount(sess.Key) == 1 })
+	waitForCond(t, "B queued", func() bool { return gw.turns().queuedCount(sess.Key) == 1 })
 
 	// B is queued: its user row must NOT be in the transcript yet.
 	if got := transcript(t, store, sess.Key); len(got) != 1 || got[0] != "user:message A" {
@@ -197,7 +197,7 @@ func TestTurnRunner_StopCancelsRunningAndDropsQueued(t *testing.T) {
 	waitEntered(t, p, 1)
 	doneB := make(chan struct{})
 	go func() { defer close(doneB); gw.handleIncomingMessage(context.Background(), tgMsg("message B")) }()
-	waitFor(t, "B queued", func() bool { return gw.turns().queuedCount(sess.Key) == 1 })
+	waitForCond(t, "B queued", func() bool { return gw.turns().queuedCount(sess.Key) == 1 })
 
 	gw.handleIncomingMessage(context.Background(), tgMsg("/stop"))
 
@@ -234,7 +234,7 @@ func TestTurnRunner_StopReachesPreviouslyQueuedTurn(t *testing.T) {
 	waitEntered(t, p, 1)
 	doneB := make(chan struct{})
 	go func() { defer close(doneB); gw.handleIncomingMessage(context.Background(), tgMsg("message B")) }()
-	waitFor(t, "B queued", func() bool { return gw.turns().queuedCount(sess.Key) == 1 })
+	waitForCond(t, "B queued", func() bool { return gw.turns().queuedCount(sess.Key) == 1 })
 
 	p.release(1)
 	<-doneA
@@ -403,5 +403,5 @@ func TestTurnRunner_DirectClientUsesSharedRunner(t *testing.T) {
 		t.Fatal("TUI turn not registered in the gateway's ActiveRequests")
 	}
 	c.handleCommand(sess.Key, "/stop")
-	waitFor(t, "TUI turn stopped", func() bool { return !gw.turns().Busy(sess.Key) })
+	waitForCond(t, "TUI turn stopped", func() bool { return !gw.turns().Busy(sess.Key) })
 }

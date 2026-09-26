@@ -23,7 +23,7 @@ func TestHandleWebSocketSessionSwitch_Create(t *testing.T) {
 	if out["action"] != "created" {
 		t.Errorf("expected action=created, got %v", out["action"])
 	}
-	if c.SessionKey == "" {
+	if c.SessionKey() == "" {
 		t.Error("expected SessionKey to be set")
 	}
 }
@@ -65,8 +65,8 @@ func TestHandleWebSocketSessionSwitch_SwitchSuccess(t *testing.T) {
 	if out["action"] != "switched" {
 		t.Errorf("expected action=switched, got %v", out["action"])
 	}
-	if c.SessionKey != sess.Key {
-		t.Errorf("expected SessionKey updated, got %q", c.SessionKey)
+	if c.SessionKey() != sess.Key {
+		t.Errorf("expected SessionKey updated, got %q", c.SessionKey())
 	}
 }
 

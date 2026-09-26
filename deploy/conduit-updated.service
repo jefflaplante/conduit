@@ -19,7 +19,10 @@ ExecStart=/home/conduit/conduit/bin/conduit server --config /home/conduit/condui
 Environment=PATH=/usr/local/go/bin:/usr/bin:/bin:/usr/local/bin
 EnvironmentFile=-/home/conduit/.conduit-secrets.env
 
-# Graceful shutdown (gateway handles SIGTERM)
+# Graceful shutdown: SIGTERM drains in-flight turns (<=15s), then stops
+# subsystems (<=10s); the gateway force-exits itself at 27s, under
+# TimeoutStopSec. A second SIGTERM/SIGINT forces immediate exit.
+# Keep TimeoutStopSec > 27s if you change it (conduit-31jg.27).
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30
