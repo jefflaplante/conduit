@@ -9,7 +9,6 @@ import (
 
 	"conduit/internal/ai"
 	"conduit/internal/approval"
-	"conduit/internal/brain"
 	"conduit/internal/channels"
 	"conduit/internal/protocol"
 	"conduit/internal/tools/types"
@@ -50,8 +49,9 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 		return "", fmt.Errorf("failed to create sub-agent session: %w", err)
 	}
 
-	// Capture parent's effective brain user ID for WM sharing
-	parentBrainUID := types.RequestUserID(ctx)
+	// Capture parent's effective brain user ID for WM sharing (the bucket the
+	// brain adapter scopes the parent's turn to). conduit-31jg.30
+	parentBrainUID := effectiveBrainUserID(ctx)
 
 	// Run the sub-agent in a goroutine
 	go func() {
@@ -61,10 +61,8 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 		defer cancel()
 		subCtx = approval.WithNonInteractive(subCtx, "subagent") // conduit-31jg.43
 
-		// Share parent's brain working memory (read-only fallback)
-		if parentBrainUID != "" {
-			subCtx = brain.WithParentUserID(subCtx, parentBrainUID)
-		}
+		// Own WM bucket + read-only fallback to the parent's WM. conduit-31jg.30
+		subCtx = withSubAgentBrainScope(subCtx, parentBrainUID, session.Key)
 
 		// Resolve model (explicit model wins; empty uses configured sub-agent
 		// default, falling back to the gateway default)

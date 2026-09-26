@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"conduit/internal/database"
@@ -148,6 +149,12 @@ func WithRecencyDecayRate(r float64) Option          { return func(b *Brain) { b
 func WithAccessCountCap(n int) Option                { return func(b *Brain) { b.accessCountCap = n } }
 func WithHeatPromotionThreshold(n int) Option        { return func(b *Brain) { b.heatPromotionThreshold = n } }
 
+// WithMaxWMEntriesPerUser caps each user's working-memory bucket. When a
+// Store/StoreBulk pushes a bucket over the cap, the least valuable entries
+// (lowest access+recency score) are evicted — hot ones are promoted to LTM
+// first when auto-promote is on. <= 0 disables the cap. conduit-31jg.29
+func WithMaxWMEntriesPerUser(n int) Option { return func(b *Brain) { b.maxWMEntriesPerUser = n } }
+
 // WithLTMEvictionGrace sets how long a freshly written or accessed LTM row is
 // immune from capacity eviction. Default: DefaultLTMEvictionGrace. Negative
 // values are treated as 0 (rows written in the current second stay protected).
@@ -223,6 +230,7 @@ type Brain struct {
 	recencyDecayRate       float64
 	accessCountCap         int
 	heatPromotionThreshold int
+	maxWMEntriesPerUser    int           // conduit-31jg.29: per-user WM cap (<=0 = unbounded)
 	ltmEvictionGrace       time.Duration // conduit-31jg.28: capacity-eviction immunity window
 
 	// Spreading activation
@@ -305,6 +313,7 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 		recencyDecayRate:       1.0,
 		accessCountCap:         100,
 		heatPromotionThreshold: 3,
+		maxWMEntriesPerUser:    DefaultMaxWMEntriesPerUser,
 		ltmEvictionGrace:       DefaultLTMEvictionGrace,
 		spreadingEnabled:       true,
 		spreadingDecay:         DefaultSpreadingDecay,
@@ -353,7 +362,6 @@ func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source 
 	case TierWorking:
 		userID := userIDFromCtx(ctx)
 		b.mu.Lock()
-		defer b.mu.Unlock()
 		if b.working[userID] == nil {
 			b.working[userID] = make(map[string]*Entry)
 		}
@@ -372,6 +380,9 @@ func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source 
 				ExpiresAt: expiresAt,
 			}
 		}
+		rescue := b.enforceWMCapLocked(userID, map[string]bool{key: true}, now)
+		b.mu.Unlock()
+		b.promoteEvicted(rescue)
 		return nil
 	default:
 		return fmt.Errorf("unsupported tier for store: %s (use Push for scratch)", tier)
@@ -489,7 +500,9 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 		if b.working[userID] == nil {
 			b.working[userID] = make(map[string]*Entry)
 		}
+		protect := make(map[string]bool, len(wmBatch))
 		for _, e := range wmBatch {
+			protect[e.Key] = true
 			if existing, ok := b.working[userID][e.Key]; ok {
 				existing.Value = e.Value
 				existing.AccessedAt = now
@@ -504,7 +517,14 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 				}
 			}
 		}
+		// A bulk larger than the cap can't protect every key it just wrote;
+		// in that case the batch's own writes are fair game too.
+		if b.maxWMEntriesPerUser > 0 && len(protect) >= b.maxWMEntriesPerUser {
+			protect = nil
+		}
+		rescue := b.enforceWMCapLocked(userID, protect, now)
 		b.mu.Unlock()
+		b.promoteEvicted(rescue)
 	}
 
 	return nil
@@ -707,43 +727,39 @@ func (b *Brain) markPendingEdge(key string) {
 func (b *Brain) Get(ctx context.Context, key string) (*Entry, error) {
 	userID := userIDFromCtx(ctx)
 	now := time.Now()
-	b.mu.RLock()
+	// conduit-31jg.32: one write-locked section for the WM lookup + access
+	// bump, and callers always get a snapshot copy, never the live *Entry
+	// (autoFlush/Consolidate/Store mutate live entries under b.mu).
+	b.mu.Lock()
 	if wm, ok := b.working[userID]; ok {
 		if entry, ok := wm[key]; ok {
 			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
 				// Expired — delete and fall through to LTM lookup.
-				b.mu.RUnlock()
-				b.mu.Lock()
 				delete(wm, key)
 				b.mu.Unlock()
 				return b.getLTM(key)
 			}
-			b.mu.RUnlock()
-			b.mu.Lock()
-			entry.AccessedAt = time.Now()
+			entry.AccessedAt = now
 			entry.AccessCount++
 			entry.Salience = b.computeSalience(entry)
+			copied := *entry
 			b.mu.Unlock()
-			return entry, nil
+			return &copied, nil
 		}
 	}
-	// Check parent's WM (read-only — return a copy, no access bump)
-	parentID := parentUserIDFromCtx(ctx)
-	if parentID != "" && parentID != userID {
-		if parentWM, ok := b.working[parentID]; ok {
-			if entry, ok := parentWM[key]; ok {
-				if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
-					// Expired parent entry — skip, fall through to LTM.
-					b.mu.RUnlock()
-					return b.getLTM(key)
-				}
-				b.mu.RUnlock()
-				copied := *entry
-				return &copied, nil
+	// Parent's WM, then the shared bucket (read-only — copies, no access
+	// bump). conduit-31jg.30
+	for _, bucket := range readOnlyBuckets(userID, parentUserIDFromCtx(ctx)) {
+		if entry, ok := b.working[bucket][key]; ok {
+			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+				continue // expired — keep looking, then LTM
 			}
+			copied := *entry
+			b.mu.Unlock()
+			return &copied, nil
 		}
 	}
-	b.mu.RUnlock()
+	b.mu.Unlock()
 	entry, err := b.getLTM(key)
 	if err == nil && entry != nil {
 		// Fire-and-forget: spread activation to neighbours. Errors are non-fatal.
@@ -827,62 +843,57 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	parentID := parentUserIDFromCtx(ctx)
 	now := time.Now()
 
-	// First pass: identify matching WM entries under RLock.
-	var wmHits []*Entry
-	b.mu.RLock()
+	// conduit-31jg.32: match, bump access and snapshot our own WM hits in a
+	// single write-locked pass. Only copies go into `scored`: the sort below
+	// runs without the lock and the entries are returned to callers, while
+	// autoFlush/Consolidate/Store keep mutating the live entries under b.mu.
+	b.mu.Lock()
 	if wm, ok := b.working[userID]; ok {
 		for _, entry := range wm {
 			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
 				continue
 			}
 			if ms := queryMatchScore(entry, terms); ms > 0 {
-				wmHits = append(wmHits, entry)
-				scored = append(scored, scoredEntry{entry, ms})
+				entry.AccessedAt = now
+				entry.AccessCount++
+				entry.Salience = b.computeSalience(entry)
+				copied := *entry
+				scored = append(scored, scoredEntry{&copied, ms})
 				seen[entry.Key] = true
 			}
 		}
 	}
-	// Include parent's WM entries (read-only copies, deduped by key)
-	if parentID != "" && parentID != userID {
-		if parentWM, ok := b.working[parentID]; ok {
-			for _, entry := range parentWM {
-				if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
-					continue
-				}
-				if !seen[entry.Key] {
-					if ms := queryMatchScore(entry, terms); ms > 0 {
-						copied := *entry
-						scored = append(scored, scoredEntry{&copied, ms})
-						seen[entry.Key] = true
-					}
+	// Include parent's WM, then the shared bucket (read-only copies, deduped
+	// by key). conduit-31jg.30
+	for _, bucket := range readOnlyBuckets(userID, parentID) {
+		for _, entry := range b.working[bucket] {
+			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+				continue
+			}
+			if !seen[entry.Key] {
+				if ms := queryMatchScore(entry, terms); ms > 0 {
+					copied := *entry
+					scored = append(scored, scoredEntry{&copied, ms})
+					seen[entry.Key] = true
 				}
 			}
 		}
 	}
-	b.mu.RUnlock()
-
-	// Second pass: bump AccessCount/AccessedAt on our own WM hits under write lock.
-	if len(wmHits) > 0 {
-		now := time.Now()
-		b.mu.Lock()
-		for _, entry := range wmHits {
-			entry.AccessedAt = now
-			entry.AccessCount++
-			entry.Salience = b.computeSalience(entry)
-		}
-		b.mu.Unlock()
-	}
+	b.mu.Unlock()
 
 	// Build OR-joined SQL query with per-term match counting.
 	var whereClauses []string
 	var matchExprs []string
 	var whereArgs []interface{}
 	var matchArgs []interface{}
+	// conduit-31jg.31: terms are LIKE-escaped (%, _ and \ literal) so a
+	// query like "100%" doesn't become a wildcard pattern.
 	for _, term := range terms {
-		whereClauses = append(whereClauses, "(LOWER(key) LIKE ? OR LOWER(value) LIKE ?)")
-		whereArgs = append(whereArgs, "%"+term+"%", "%"+term+"%")
-		matchExprs = append(matchExprs, "(CASE WHEN LOWER(key) LIKE ? OR LOWER(value) LIKE ? THEN 1 ELSE 0 END)")
-		matchArgs = append(matchArgs, "%"+term+"%", "%"+term+"%")
+		pat := likeContains(term)
+		whereClauses = append(whereClauses, `(LOWER(key) LIKE ? ESCAPE '\' OR LOWER(value) LIKE ? ESCAPE '\')`)
+		whereArgs = append(whereArgs, pat, pat)
+		matchExprs = append(matchExprs, `(CASE WHEN LOWER(key) LIKE ? ESCAPE '\' OR LOWER(value) LIKE ? ESCAPE '\' THEN 1 ELSE 0 END)`)
+		matchArgs = append(matchArgs, pat, pat)
 	}
 
 	sqlQuery := fmt.Sprintf(
@@ -924,6 +935,9 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 		}
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil { // conduit-31jg.31
+		return nil, fmt.Errorf("recall LTM rows: %w", err)
+	}
 
 	// Bump access_count/accessed_at for the LTM rows we matched (best-effort).
 	// Batched UPDATE keeps lock contention minimal; RetryOnBusy for robustness.
@@ -1087,9 +1101,13 @@ func (b *Brain) injectWarmEntries(ctx context.Context, results []*Entry, seen ma
 	return results
 }
 
+// defaultRecallEventsPath is the production location of the recall-event log
+// consumed by brain_spread reinforcement.
+const defaultRecallEventsPath = "/home/jules/ocgo/workspace/memory/recall-events.jsonl"
+
 // recallEventsPath is where recall events are logged for brain_spread
 // reinforcement. Package var so tests can redirect to a temp dir.
-var recallEventsPath = "/home/jules/ocgo/workspace/memory/recall-events.jsonl"
+var recallEventsPath = defaultRecallEventsPath
 
 func (b *Brain) logRecallEvent(query string, results []*Entry) {
 	// Best-effort logging: failure must not fail recall
@@ -1101,6 +1119,13 @@ func (b *Brain) logRecallEvent(query string, results []*Entry) {
 	}
 
 	if len(results) == 0 {
+		return
+	}
+	// Test binaries (this package and every package that drives a real Brain,
+	// e.g. tools/core, gateway, rem) must never append synthetic queries to
+	// the live production log. Tests that want events redirect
+	// recallEventsPath to a temp file first.
+	if recallEventsPath == defaultRecallEventsPath && testing.Testing() {
 		return
 	}
 
@@ -1149,24 +1174,25 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 			}
 			if strings.HasPrefix(entry.Key, prefix) {
 				if sourcePrefix == "" || strings.HasPrefix(entry.Source, sourcePrefix) {
-					results = append(results, entry)
+					copied := *entry // conduit-31jg.32: snapshot, never the live entry
+					results = append(results, &copied)
 					seen[entry.Key] = true
 				}
 			}
 		}
 	}
-	// Include parent's WM entries (read-only copies, deduped by key)
-	if parentID != "" && parentID != userID {
-		if parentWM, ok := b.working[parentID]; ok {
-			for _, entry := range parentWM {
-				if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
-					continue
-				}
-				if !seen[entry.Key] && strings.HasPrefix(entry.Key, prefix) {
-					if sourcePrefix == "" || strings.HasPrefix(entry.Source, sourcePrefix) {
-						copied := *entry
-						results = append(results, &copied)
-					}
+	// Include parent's WM, then the shared bucket (read-only copies, deduped
+	// by key). conduit-31jg.30
+	for _, bucket := range readOnlyBuckets(userID, parentID) {
+		for _, entry := range b.working[bucket] {
+			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+				continue
+			}
+			if !seen[entry.Key] && strings.HasPrefix(entry.Key, prefix) {
+				if sourcePrefix == "" || strings.HasPrefix(entry.Source, sourcePrefix) {
+					copied := *entry
+					results = append(results, &copied)
+					seen[entry.Key] = true
 				}
 			}
 		}
@@ -1174,11 +1200,11 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 	b.mu.RUnlock()
 
 	query := `SELECT key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at
-		FROM brain_ltm WHERE key LIKE ? AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))`
-	args := []interface{}{prefix + "%"}
+		FROM brain_ltm WHERE key LIKE ? ESCAPE '\' AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))`
+	args := []interface{}{EscapeLike(prefix) + "%"}
 	if sourcePrefix != "" {
-		query += " AND source LIKE ?"
-		args = append(args, sourcePrefix+"%")
+		query += ` AND source LIKE ? ESCAPE '\'`
+		args = append(args, EscapeLike(sourcePrefix)+"%")
 	}
 	query += " ORDER BY key"
 
@@ -1201,6 +1227,9 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 			entry.ExpiresAt = &t
 		}
 		results = append(results, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return results, fmt.Errorf("list LTM rows: %w", err)
 	}
 
 	return results, nil
@@ -1319,13 +1348,24 @@ func (b *Brain) Consolidate(ctx context.Context, autoPromote bool) (*Consolidati
 		return report, nil
 	}
 
-	var toPromote []*Entry
+	// conduit-31jg.32: toPromote holds snapshots — storeLTM runs outside the
+	// lock while Store/Get/autoFlush keep mutating the live entries.
+	var toPromote []Entry
 	var toEvict []string
+	now := time.Now()
 	for key, entry := range wm {
 		entry.Salience = b.computeSalience(entry)
 		if autoPromote && entry.Salience >= b.consolidateThreshold {
-			toPromote = append(toPromote, entry)
-		} else if entry.Salience < b.evictThreshold {
+			toPromote = append(toPromote, *entry)
+		} else if b.wmEvictable(entry, now) {
+			// conduit-31jg.29: hot entries are promoted (or kept, when
+			// promotion is off) rather than evicted.
+			if b.wmIsHot(entry) {
+				if autoPromote {
+					toPromote = append(toPromote, *entry)
+				}
+				continue
+			}
 			toEvict = append(toEvict, key)
 		}
 	}
@@ -1347,8 +1387,12 @@ func (b *Brain) Consolidate(ctx context.Context, autoPromote bool) (*Consolidati
 	if len(promotedKeys) > 0 {
 		b.mu.Lock()
 		if wm, ok := b.working[userID]; ok {
-			for _, k := range promotedKeys {
-				delete(wm, k)
+			for _, snap := range toPromote {
+				// Only drop the WM copy if it still holds the value we
+				// promoted; a concurrent Store of a newer value stays in WM.
+				if live, ok := wm[snap.Key]; ok && live.Value == snap.Value && containsString(promotedKeys, snap.Key) {
+					delete(wm, snap.Key)
+				}
 			}
 		}
 		b.mu.Unlock()
@@ -1611,6 +1655,133 @@ func (b *Brain) computeSalience(e *Entry) float64 {
 	return (accessScore * b.accessWeight) + (recencyScore * b.recencyWeight) + (tierScore * b.tierWeight)
 }
 
+// DefaultMaxWMEntriesPerUser is the default per-user working-memory cap.
+// conduit-31jg.29
+const DefaultMaxWMEntriesPerUser = 1000
+
+// wmEvictMinIdle is how long a WM entry must go untouched before it can be
+// evicted by score (autoFlush / Consolidate). conduit-31jg.29
+const wmEvictMinIdle = time.Hour
+
+// wmRef is a snapshot of a WM entry plus the bucket it lives in.
+type wmRef struct {
+	userID string
+	entry  Entry
+}
+
+// wmEvictScore is the part of a WM entry's salience that actually varies
+// between WM entries: access*accessWeight + recency*recencyWeight.
+//
+// conduit-31jg.29: eviction used to compare full salience against
+// evictThreshold, but full salience includes the constant tier term
+// (0.5*tierWeight = 0.1 by default), so with the default threshold of 0.1
+// `salience < evictThreshold` was unreachable and WM only drained via TTL or
+// promotion. The tier term carries no information when comparing WM entries
+// with each other, so it is excluded here. With defaults, an entry touched
+// once is evictable after ~3.2h idle; one touched 10 times after ~5.7h;
+// 25+ touches keep it indefinitely (it will have been promoted as hot).
+func (b *Brain) wmEvictScore(e *Entry, now time.Time) float64 {
+	accessScore := 0.0
+	if b.accessCountCap > 0 {
+		accessScore = math.Min(float64(e.AccessCount)/float64(b.accessCountCap), 1.0)
+	}
+	hoursSince := now.Sub(e.AccessedAt).Hours()
+	if hoursSince < 0 {
+		hoursSince = 0
+	}
+	recencyScore := 1.0 / (1.0 + hoursSince*b.recencyDecayRate)
+	return accessScore*b.accessWeight + recencyScore*b.recencyWeight
+}
+
+// wmEvictable reports whether a WM entry is cold enough to leave WM.
+func (b *Brain) wmEvictable(e *Entry, now time.Time) bool {
+	return now.Sub(e.AccessedAt) > wmEvictMinIdle && b.wmEvictScore(e, now) < b.evictThreshold
+}
+
+// wmIsHot mirrors REM's heat-promotion rule: an entry accessed at least
+// heatPromotionThreshold times is worth keeping in LTM regardless of salience.
+func (b *Brain) wmIsHot(e *Entry) bool {
+	return b.heatPromotionThreshold > 0 && e.AccessCount >= b.heatPromotionThreshold
+}
+
+// enforceWMCapLocked trims userID's WM bucket to maxWMEntriesPerUser, never
+// choosing a key in protect. Victims are the lowest wmEvictScore (oldest
+// AccessedAt breaks ties). Hot victims are returned for promotion to LTM when
+// autoPromote is on; everything else is dropped. Caller holds b.mu.
+// conduit-31jg.29
+func (b *Brain) enforceWMCapLocked(userID string, protect map[string]bool, now time.Time) []Entry {
+	if b.maxWMEntriesPerUser <= 0 {
+		return nil
+	}
+	wm := b.working[userID]
+	excess := len(wm) - b.maxWMEntriesPerUser
+	if excess <= 0 {
+		return nil
+	}
+	type cand struct {
+		e     *Entry
+		score float64
+	}
+	cands := make([]cand, 0, len(wm))
+	for k, e := range wm {
+		if protect[k] {
+			continue
+		}
+		cands = append(cands, cand{e, b.wmEvictScore(e, now)})
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].score != cands[j].score {
+			return cands[i].score < cands[j].score
+		}
+		return cands[i].e.AccessedAt.Before(cands[j].e.AccessedAt)
+	})
+	if excess > len(cands) {
+		excess = len(cands)
+	}
+	var rescue []Entry
+	for _, c := range cands[:excess] {
+		if b.autoPromote && b.wmIsHot(c.e) {
+			rescue = append(rescue, *c.e)
+		}
+		delete(wm, c.e.Key)
+	}
+	log.Printf("Brain: WM cap (%d) reached for user %q — evicted %d entries (%d promoted to LTM)",
+		b.maxWMEntriesPerUser, userID, excess, len(rescue))
+	return rescue
+}
+
+// promoteEvicted writes cap-evicted hot WM entries to LTM. Must be called
+// without b.mu held. Best-effort: failures are logged.
+func (b *Brain) promoteEvicted(entries []Entry) {
+	for _, e := range entries {
+		if err := b.storeLTM(e.Key, e.Value, e.Source, time.Now(), e.ExpiresAt); err != nil {
+			log.Printf("Brain: failed to promote cap-evicted WM key %q: %v", e.Key, err)
+		}
+	}
+}
+
+// promoteThenDrop promotes each snapshot to LTM and, only on success, removes
+// the WM entry if it is unchanged since the snapshot (a concurrent write keeps
+// it in WM). Must be called without b.mu held.
+func (b *Brain) promoteThenDrop(refs []wmRef) {
+	for _, r := range refs {
+		if err := b.storeLTM(r.entry.Key, r.entry.Value, r.entry.Source, time.Now(), r.entry.ExpiresAt); err != nil {
+			log.Printf("Brain: failed to promote idle hot WM key %q (kept in WM): %v", r.entry.Key, err)
+			continue
+		}
+		b.mu.Lock()
+		if wm, ok := b.working[r.userID]; ok {
+			if live, ok := wm[r.entry.Key]; ok && live.Value == r.entry.Value && live.AccessedAt.Equal(r.entry.AccessedAt) {
+				delete(wm, r.entry.Key)
+				if len(wm) == 0 {
+					delete(b.working, r.userID)
+				}
+			}
+		}
+		b.mu.Unlock()
+	}
+}
+
 // computeAccessBonus calculates a decaying access bonus for an entry at recall
 // time. The formula is:
 //
@@ -1656,6 +1827,35 @@ func entryMatchesAnyTerm(e *Entry, terms []string) bool {
 	return false
 }
 
+// EscapeLike escapes s for use inside a LIKE pattern with ESCAPE '\':
+// %, _ and \ become literal. conduit-31jg.31
+func EscapeLike(s string) string {
+	if !strings.ContainsAny(s, `%_\`) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 4)
+	for _, r := range s {
+		if r == '%' || r == '_' || r == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// likeContains returns a LIKE ... ESCAPE '\' pattern matching s anywhere.
+func likeContains(s string) string { return "%" + EscapeLike(s) + "%" }
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 // queryMatchScore returns the fraction of query terms found in the entry's key or value.
 // Returns 0.0 if no terms match, up to 1.0 if all terms match.
 func queryMatchScore(e *Entry, terms []string) float64 {
@@ -1675,15 +1875,57 @@ func queryMatchScore(e *Entry, terms []string) float64 {
 
 type brainUserIDKey struct{}
 
+// SharedUserID is the working-memory bucket used by callers that carry no
+// user (system writers such as heartbeat alerts under sense.alerts.*). Every
+// user can read it (read-only, after their own and their parent's WM); only
+// unscoped callers write to it. conduit-31jg.30
+const SharedUserID = "default"
+
+// WithUserID scopes working memory and the scratchpad to userID.
 func WithUserID(ctx context.Context, userID string) context.Context {
 	return context.WithValue(ctx, brainUserIDKey{}, userID)
 }
 
+// UserIDFromContext returns the brain user ID explicitly attached with
+// WithUserID, and whether one was set.
+func UserIDFromContext(ctx context.Context) (string, bool) {
+	uid, ok := ctx.Value(brainUserIDKey{}).(string)
+	return uid, ok && uid != ""
+}
+
 func userIDFromCtx(ctx context.Context) string {
-	if uid, ok := ctx.Value(brainUserIDKey{}).(string); ok && uid != "" {
+	if uid, ok := UserIDFromContext(ctx); ok {
 		return uid
 	}
-	return "default"
+	return SharedUserID
+}
+
+// readOnlyBuckets lists the WM buckets a caller may read but not write, in
+// lookup order: the parent's (sub-agent sharing), then the shared bucket.
+func readOnlyBuckets(userID, parentID string) []string {
+	var out []string
+	if parentID != "" && parentID != userID {
+		out = append(out, parentID)
+	}
+	if userID != SharedUserID && parentID != SharedUserID {
+		out = append(out, SharedUserID)
+	}
+	return out
+}
+
+// WorkingMemoryUserIDs returns the IDs of every user with a non-empty WM
+// bucket (used by REM to promote across all users). conduit-31jg.30
+func (b *Brain) WorkingMemoryUserIDs() []string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	ids := make([]string, 0, len(b.working))
+	for id, wm := range b.working {
+		if len(wm) > 0 {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 type brainParentUserIDKey struct{}
@@ -1722,19 +1964,34 @@ func (b *Brain) startAutoFlush() {
 }
 
 func (b *Brain) autoFlush() {
+	// conduit-31jg.29: eviction is decided by wmEvictable (access+recency
+	// score, idle > wmEvictMinIdle), which is actually reachable. Hot entries
+	// that go idle are promoted to LTM first (promote-then-delete, so a
+	// failed promotion loses nothing) instead of silently disappearing
+	// before the nightly REM cycle can see them.
+	now := time.Now()
+	var rescue []wmRef
 	b.mu.Lock()
 	for userID, wm := range b.working {
 		for key, entry := range wm {
 			entry.Salience = b.computeSalience(entry)
-			if time.Since(entry.AccessedAt) > time.Hour && entry.Salience < b.evictThreshold {
-				delete(wm, key)
+			if !b.wmEvictable(entry, now) {
+				continue
 			}
+			if b.wmIsHot(entry) {
+				if b.autoPromote {
+					rescue = append(rescue, wmRef{userID: userID, entry: *entry})
+				}
+				continue
+			}
+			delete(wm, key)
 		}
 		if len(wm) == 0 {
 			delete(b.working, userID)
 		}
 	}
 	b.mu.Unlock()
+	b.promoteThenDrop(rescue)
 
 	// The edge/warmth maintenance below must run without b.mu held:
 	// flushPendingEdges re-acquires b.mu, and holding it across DB work blocks

@@ -58,9 +58,13 @@ func (r *REMCycle) Consolidate(ctx context.Context, dryRun bool) (*Consolidation
 // promoteHighSalienceEntries promotes WM entries with high salience to LTM.
 // Also promotes entries with AccessCount >= HeatPromotionThreshold regardless of salience,
 // so frequently-used keys get persisted even if the salience formula under-values them.
+//
+// conduit-31jg.30: WM is per-user, and REM usually runs from a cron/system
+// context whose own bucket is empty, so every user's bucket is swept (LTM is
+// shared across users anyway).
 func (r *REMCycle) promoteHighSalienceEntries(ctx context.Context, result *ConsolidationResult, dryRun bool) error {
-	entries := r.brain.WorkingMemoryEntries(ctx)
-	if len(entries) == 0 {
+	users := r.brain.WorkingMemoryUserIDs()
+	if len(users) == 0 {
 		return nil
 	}
 
@@ -75,23 +79,26 @@ func (r *REMCycle) promoteHighSalienceEntries(ctx context.Context, result *Conso
 	}
 
 	promoted := make(map[string]bool)
-	for _, entry := range entries {
-		salienceHit := entry.Salience >= threshold
-		heatHit := entry.AccessCount >= heatThreshold
-		if !salienceHit && !heatHit {
-			continue
-		}
-		if promoted[entry.Key] {
-			continue
-		}
-		if !dryRun {
-			if err := r.brain.Promote(ctx, entry.Key); err != nil {
-				// Entry may have been removed between snapshot and promote, skip
+	for _, uid := range users {
+		userCtx := brain.WithUserID(ctx, uid)
+		for _, entry := range r.brain.WorkingMemoryEntries(userCtx) {
+			salienceHit := entry.Salience >= threshold
+			heatHit := entry.AccessCount >= heatThreshold
+			if !salienceHit && !heatHit {
 				continue
 			}
+			if promoted[entry.Key] {
+				continue
+			}
+			if !dryRun {
+				if err := r.brain.Promote(userCtx, entry.Key); err != nil {
+					// Entry may have been removed between snapshot and promote, skip
+					continue
+				}
+			}
+			result.Promoted = append(result.Promoted, entry.Key)
+			promoted[entry.Key] = true
 		}
-		result.Promoted = append(result.Promoted, entry.Key)
-		promoted[entry.Key] = true
 	}
 
 	return nil

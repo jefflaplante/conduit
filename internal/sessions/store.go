@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"conduit/internal/database"
+	"conduit/internal/ftsquery"
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
@@ -917,7 +918,7 @@ func (s *Store) SearchMessages(query string, limit int) ([]SearchMessagesResult,
 		WHERE messages_fts MATCH ?
 		ORDER BY fts.rank
 		LIMIT ?
-	`, "content:"+ftsQuery, limit)
+	`, ftsquery.Column("content", ftsQuery), limit) // conduit-31jg.31: scope every OR'd phrase
 
 	if err != nil {
 		// Fall back to LIKE search if FTS fails (e.g., table doesn't exist)
@@ -979,26 +980,9 @@ func (s *Store) SearchMessages(query string, limit int) ([]SearchMessagesResult,
 // buildFTSQuery converts a user query into FTS5 query syntax.
 // Escapes special characters and handles multi-word queries.
 func (s *Store) buildFTSQuery(query string) string {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return ""
-	}
-
-	// Split into words and escape each for FTS5
-	words := strings.Fields(query)
-	var escaped []string
-	for _, word := range words {
-		// Escape FTS5 special characters by quoting
-		// FTS5 special chars: AND OR NOT ( ) " *
-		if strings.ContainsAny(word, `"*()`) || strings.EqualFold(word, "AND") ||
-			strings.EqualFold(word, "OR") || strings.EqualFold(word, "NOT") {
-			word = `"` + strings.ReplaceAll(word, `"`, `""`) + `"`
-		}
-		escaped = append(escaped, word)
-	}
-
-	// Join with OR for flexible matching (any term matches)
-	return strings.Join(escaped, " OR ")
+	// conduit-31jg.31: shared quoted-phrase builder (the old partial escaper
+	// left . / @ % # : unquoted -> "fts5: syntax error" -> silent LIKE fallback).
+	return ftsquery.Build(query)
 }
 
 // searchMessagesLIKE is a fallback search using LIKE when FTS5 is unavailable.
