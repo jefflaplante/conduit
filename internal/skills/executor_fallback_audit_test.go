@@ -47,7 +47,7 @@ func TestRealSkills_NoHollowActions(t *testing.T) {
 			continue // nothing extractable; not actionable via subprocess anyway
 		}
 		for _, action := range loader.ExtractActionsFromContent(s.Content) {
-			if cmd := e.buildShellCommand(s, action, map[string]interface{}{}); cmd == "" {
+			if cmd, _ := e.buildShellCommand(s, action, map[string]interface{}{}); cmd == "" {
 				hollow = append(hollow, s.Name+"/"+action)
 			}
 		}

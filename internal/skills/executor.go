@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -116,7 +118,15 @@ func (e *Executor) executeScript(ctx context.Context, skill Skill, action string
 // executeSubprocess executes the skill through a shell subprocess
 func (e *Executor) executeSubprocess(ctx context.Context, skill Skill, action string, args map[string]interface{}) (*ExecutionResult, error) {
 	// Build shell command based on skill content and action
-	command := e.buildShellCommand(skill, action, args)
+	command, err := e.buildShellCommand(skill, action, args)
+	if err != nil {
+		// Invalid model-supplied args (conduit-31jg.2): refuse rather than
+		// interpolate anything suspicious into the shell line.
+		return &ExecutionResult{
+			Success: false,
+			Error:   fmt.Sprintf("invalid arguments for action %s: %v", action, err),
+		}, nil
+	}
 	if command == "" {
 		return &ExecutionResult{
 			Success: false,
@@ -227,8 +237,10 @@ func (e *Executor) findScript(skill Skill, action string) *SkillScript {
 	return nil
 }
 
-// buildShellCommand creates a shell command for the given skill and action
-func (e *Executor) buildShellCommand(skill Skill, action string, args map[string]interface{}) string {
+// buildShellCommand creates a shell command for the given skill and action.
+// It returns an error when model-supplied args fail validation
+// (conduit-31jg.2); an empty command with a nil error means no command exists.
+func (e *Executor) buildShellCommand(skill Skill, action string, args map[string]interface{}) (string, error) {
 	var command strings.Builder
 	action = normalizeAction(action)
 
@@ -240,7 +252,7 @@ func (e *Executor) buildShellCommand(skill Skill, action string, args map[string
 	}
 	for _, p := range secretsPaths {
 		if _, err := os.Stat(p); err == nil {
-			command.WriteString(fmt.Sprintf(". %s\n", p))
+			command.WriteString(fmt.Sprintf(". %s\n", shellQuote(p)))
 			break
 		}
 	}
@@ -249,8 +261,12 @@ func (e *Executor) buildShellCommand(skill Skill, action string, args map[string
 	command.WriteString("export PATH=\"$HOME/google-cloud-sdk/bin:$HOME/.local/bin:$PATH\"\n")
 
 	// Try skill-specific command builders first
-	if built := e.buildSkillSpecificCommand(skill.Name, action, args, &command); built {
-		return command.String()
+	built, err := e.buildSkillSpecificCommand(skill.Name, action, args, &command)
+	if err != nil {
+		return "", err
+	}
+	if built {
+		return command.String(), nil
 	}
 
 	// Look for export statements in the skill content
@@ -265,7 +281,7 @@ func (e *Executor) buildShellCommand(skill Skill, action string, args map[string
 	// Fallback: extract single-line command from skill content
 	if actionCmd := e.extractSingleLineCommand(content, action); actionCmd != "" {
 		command.WriteString(actionCmd)
-		return command.String()
+		return command.String(), nil
 	}
 
 	// No real command found. Return an empty command so executeSubprocess
@@ -273,7 +289,7 @@ func (e *Executor) buildShellCommand(skill Skill, action string, args map[string
 	// "Executed action: X" and exited 0 — the executor reported Success:true
 	// while doing nothing at all (state-skill silent-failure bug, Sep 2026).
 	log.Printf("[skills] no command found for skill %q action %q — failing honestly (no echo fallback)", skill.Name, action)
-	return ""
+	return "", nil
 }
 
 // normalizeAction maps legacy heading-derived action names onto the executor's
@@ -300,26 +316,132 @@ func normalizeAction(action string) string {
 }
 
 // buildSkillSpecificCommand builds commands for known skill types using args
-func (e *Executor) buildSkillSpecificCommand(skillName, action string, args map[string]interface{}, command *strings.Builder) bool {
+func (e *Executor) buildSkillSpecificCommand(skillName, action string, args map[string]interface{}, command *strings.Builder) (bool, error) {
 	switch skillName {
 	case "email", "gog":
 		return e.buildGogCommand(action, args, command)
 	default:
-		return false
+		return false, nil
 	}
 }
 
-// buildGogCommand builds gog CLI commands from action and args
-func (e *Executor) buildGogCommand(action string, args map[string]interface{}, command *strings.Builder) bool {
+// Shell expansions for the gog account identities. These are the ONLY
+// values ever emitted after --account; they are double-quoted so the shell
+// expands the env var without word-splitting or globbing (conduit-31jg.2).
+const (
+	gogOwnerAccount = `"$GOG_ACCOUNT"`
+	gogJulesAccount = `"$JULES_ACCOUNT"`
+)
+
+// Bounds for gog --max (conduit-31jg.2).
+const (
+	gogDefaultMax = 20
+	gogMinMax     = 1
+	gogMaxMax     = 100
+)
+
+// isJulesAccount / isOwnerAccount define the known account aliases the
+// email skill already recognizes. Anything else is rejected.
+func isJulesAccount(v string) bool { return v == "jules" || v == "agent@example.com" }
+
+func isOwnerAccount(v string) bool {
+	return v == "jeff" || v == "owner@example.com" || v == "owner-alt@example.com"
+}
+
+// validateAccountArg rejects account/inbox values outside the known alias
+// set. Model-supplied identities are never interpolated into the shell;
+// they only select one of the fixed gog*Account expansions (conduit-31jg.2).
+func validateAccountArg(args map[string]interface{}, key string) error {
+	raw, present := args[key]
+	if !present || raw == nil {
+		return nil
+	}
+	v, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("%s must be a string", key)
+	}
+	if v == "" || isJulesAccount(v) || isOwnerAccount(v) {
+		return nil
+	}
+	return fmt.Errorf("unknown %s %q (allowed: jules, agent@example.com, jeff, owner@example.com, owner-alt@example.com)", key, v)
+}
+
+// parseMaxResults reads the first present key from args as a whole number,
+// accepting JSON numbers and numeric strings, and clamps it to
+// [gogMinMax, gogMaxMax]. Non-numeric values are rejected so nothing but
+// digits ever reaches the shell line (conduit-31jg.2).
+func parseMaxResults(args map[string]interface{}, keys ...string) (int, error) {
+	for _, key := range keys {
+		raw, present := args[key]
+		if !present || raw == nil {
+			continue
+		}
+		var n float64
+		switch v := raw.(type) {
+		case float64:
+			n = v
+		case float32:
+			n = float64(v)
+		case int:
+			n = float64(v)
+		case int64:
+			n = float64(v)
+		case json.Number:
+			f, err := v.Float64()
+			if err != nil {
+				return 0, fmt.Errorf("%s must be a number, got %q", key, v.String())
+			}
+			n = f
+		case string:
+			s := strings.TrimSpace(v)
+			if s == "" {
+				continue // legacy: empty string means "use default"
+			}
+			i, err := strconv.Atoi(s)
+			if err != nil {
+				return 0, fmt.Errorf("%s must be an integer, got %q", key, v)
+			}
+			n = float64(i)
+		default:
+			return 0, fmt.Errorf("%s must be a number, got %T", key, raw)
+		}
+		if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
+			return 0, fmt.Errorf("%s must be a whole number, got %v", key, raw)
+		}
+		if n < gogMinMax {
+			return gogMinMax, nil
+		}
+		if n > gogMaxMax {
+			return gogMaxMax, nil
+		}
+		return int(n), nil
+	}
+	return gogDefaultMax, nil
+}
+
+// buildGogCommand builds gog CLI commands from action and args.
+//
+// Security (conduit-31jg.2): every model-supplied value that reaches the
+// bash -c line is either shellQuote'd (free text) or parsed to an int
+// (max/limit). Account selection maps validated aliases onto fixed
+// env-var expansions; raw account strings are never interpolated.
+func (e *Executor) buildGogCommand(action string, args map[string]interface{}, command *strings.Builder) (bool, error) {
+	if err := validateAccountArg(args, "account"); err != nil {
+		return false, err
+	}
+	if err := validateAccountArg(args, "inbox"); err != nil {
+		return false, err
+	}
+
 	// Determine which account to use
-	account := "$GOG_ACCOUNT" // default to Jeff's account
+	account := gogOwnerAccount // default to Jeff's account
 	if acct, ok := args["account"].(string); ok && acct != "" {
-		if acct == "jules" || acct == "agent@example.com" {
-			account = "$JULES_ACCOUNT"
+		if isJulesAccount(acct) {
+			account = gogJulesAccount
 		}
 	} else if inbox, ok := args["inbox"].(string); ok {
-		if inbox == "jules" || inbox == "agent@example.com" {
-			account = "$JULES_ACCOUNT"
+		if isJulesAccount(inbox) {
+			account = gogJulesAccount
 		}
 	}
 
@@ -342,17 +464,12 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 		if query == "" {
 			query = "is:unread"
 		}
-		maxResults := "20"
-		if m, ok := args["max"].(string); ok && m != "" {
-			maxResults = m
-		} else if m, ok := args["max"].(float64); ok {
-			maxResults = fmt.Sprintf("%.0f", m)
-		} else if m, ok := args["limit"].(string); ok && m != "" {
-			maxResults = m
-		} else if m, ok := args["limit"].(float64); ok {
-			maxResults = fmt.Sprintf("%.0f", m)
+		// conduit-31jg.2: max/limit were interpolated unquoted; parse to int.
+		maxResults, err := parseMaxResults(args, "max", "limit")
+		if err != nil {
+			return false, err
 		}
-		command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail search %s --account %s --max %s\n", shellQuote(query), account, maxResults))
+		command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail search %s --account %s --max %d\n", shellQuote(query), account, maxResults))
 
 	case "read":
 		msgID := getArg("message_id")
@@ -368,7 +485,7 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 		} else if threadID != "" {
 			command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail thread get %s --account %s\n", shellQuote(threadID), account))
 		} else {
-			return false
+			return false, nil
 		}
 
 	case "send":
@@ -380,15 +497,16 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 		// account, never Jeff's. Matches email-safety policy (autonomous
 		// sends must use $JULES_ACCOUNT); $GOG_ACCOUNT requires Jeff's
 		// explicit approval in args.
-		sendAccount := "$JULES_ACCOUNT"
-		if acct, ok := args["account"].(string); ok && acct != "" &&
-			acct != "jules" && acct != "agent@example.com" {
-			sendAccount = "$GOG_ACCOUNT"
-		} else if from == "owner-alt@example.com" || from == "owner@example.com" || from == "jeff" {
-			sendAccount = "$GOG_ACCOUNT"
+		// NOTE (conduit-31jg.2 follow-up): an owner-alias account/from
+		// switches to $GOG_ACCOUNT with no enforced approval check.
+		sendAccount := gogJulesAccount
+		if acct, ok := args["account"].(string); ok && acct != "" && !isJulesAccount(acct) {
+			sendAccount = gogOwnerAccount // validated owner alias above
+		} else if isOwnerAccount(from) {
+			sendAccount = gogOwnerAccount
 		}
 		if to == "" {
-			return false
+			return false, nil
 		}
 		cmd := fmt.Sprintf("/usr/local/bin/gog gmail send --to %s", shellQuote(to))
 		if subject != "" {
@@ -408,32 +526,33 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 
 	case "list":
 		listAccount := account
-		if args["inbox"] == "jules" || args["inbox"] == "agent@example.com" {
-			listAccount = "$JULES_ACCOUNT"
+		if inbox, ok := args["inbox"].(string); ok && isJulesAccount(inbox) {
+			listAccount = gogJulesAccount
 		}
-		maxResults := "20"
-		if m, ok := args["max"].(string); ok && m != "" {
-			maxResults = m
-		} else if m, ok := args["max"].(float64); ok {
-			maxResults = fmt.Sprintf("%.0f", m)
+		// conduit-31jg.2: max was interpolated unquoted; parse to int.
+		maxResults, err := parseMaxResults(args, "max", "limit")
+		if err != nil {
+			return false, err
 		}
 		query := "is:unread"
 		if q := getArg("query"); q != "" {
 			query = q
 		}
-		command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail search %s --account %s --max %s\n", shellQuote(query), listAccount, maxResults))
+		command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail search %s --account %s --max %d\n", shellQuote(query), listAccount, maxResults))
 
 	case "status":
-		command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail search \"is:unread\" --account %s --max 5\n", account))
+		command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail search 'is:unread' --account %s --max 5\n", account))
 
 	default:
-		return false
+		return false, nil
 	}
 
-	return true
+	return true, nil
 }
 
-// shellQuote wraps a string in single quotes, escaping any embedded single quotes
+// shellQuote wraps a string in single quotes for POSIX sh/bash, escaping any
+// embedded single quotes. Inside single quotes nothing ($, `, \, newlines)
+// is special, so the result is always one literal word (conduit-31jg.2).
 func shellQuote(s string) string {
 	// Replace ' with '\'' (end quote, escaped quote, start quote)
 	escaped := strings.ReplaceAll(s, "'", "'\\''")
