@@ -5,7 +5,7 @@ Complete reference for Conduit Go Gateway configuration.
 ## Overview
 
 Configuration is loaded from JSON files with support for:
-- Environment variable expansion: `${ENV_VAR}`
+- Environment variable expansion: `${ENV_VAR}` (braced form only — bare `$name` and `$$` are kept literally; write `$${ENV_VAR}` for a literal `${ENV_VAR}`). See [guides/ENV_AND_SECRETS.md](guides/ENV_AND_SECRETS.md).
 - Default values: `${ENV_VAR:-default}`
 - Multiple config files for different environments
 
