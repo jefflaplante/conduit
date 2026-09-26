@@ -18,12 +18,48 @@ func newBrainAdapter(b *brain.Brain) *brainAdapter {
 	return &brainAdapter{b: b}
 }
 
+// brainScope maps the request's user (types.RequestUserID, set by the
+// gateway for Telegram/TUI/WS turns) onto brain.WithUserID so working memory
+// and the scratchpad are per-user. An explicit brain.WithUserID already on the
+// context (sub-agent scope, briefing's "system") wins. Contexts with neither
+// fall through to brain.SharedUserID. conduit-31jg.30
+func brainScope(ctx context.Context) context.Context {
+	if _, ok := brain.UserIDFromContext(ctx); ok {
+		return ctx
+	}
+	if uid := types.RequestUserID(ctx); uid != "" {
+		return brain.WithUserID(ctx, uid)
+	}
+	return ctx
+}
+
+// effectiveBrainUserID is the WM bucket brainScope would use for ctx, or ""
+// when ctx has no user (the shared bucket). conduit-31jg.30
+func effectiveBrainUserID(ctx context.Context) string {
+	if uid, ok := brain.UserIDFromContext(ctx); ok {
+		return uid
+	}
+	return types.RequestUserID(ctx)
+}
+
+// withSubAgentBrainScope gives a sub-agent its own WM/scratchpad bucket
+// ("subagent:<sessionKey>") and read-only access to its parent's WM. Without
+// its own bucket the sub-agent (whose ctx carries no request user) would
+// write into the shared bucket that every user reads. conduit-31jg.30
+func withSubAgentBrainScope(ctx context.Context, parentBrainUID, sessionKey string) context.Context {
+	ctx = brain.WithUserID(ctx, "subagent:"+sessionKey)
+	if parentBrainUID != "" {
+		ctx = brain.WithParentUserID(ctx, parentBrainUID)
+	}
+	return ctx
+}
+
 func (a *brainAdapter) Store(ctx context.Context, key, value string, tier types.BrainTier, source string) error {
-	return a.b.Store(ctx, key, value, brain.Tier(tier), source)
+	return a.b.Store(brainScope(ctx), key, value, brain.Tier(tier), source)
 }
 
 func (a *brainAdapter) StoreWithTTL(ctx context.Context, key, value string, tier types.BrainTier, source string, ttl time.Duration) error {
-	return a.b.StoreWithTTL(ctx, key, value, brain.Tier(tier), source, ttl)
+	return a.b.StoreWithTTL(brainScope(ctx), key, value, brain.Tier(tier), source, ttl)
 }
 
 func (a *brainAdapter) StoreBulk(ctx context.Context, entries []types.BrainBulkEntry) error {
@@ -39,11 +75,11 @@ func (a *brainAdapter) StoreBulk(ctx context.Context, entries []types.BrainBulkE
 			Source: e.Source,
 		}
 	}
-	return a.b.StoreBulk(ctx, converted)
+	return a.b.StoreBulk(brainScope(ctx), converted)
 }
 
 func (a *brainAdapter) Get(ctx context.Context, key string) (*types.BrainEntry, error) {
-	e, err := a.b.Get(ctx, key)
+	e, err := a.b.Get(brainScope(ctx), key)
 	if err != nil || e == nil {
 		return nil, err
 	}
@@ -51,7 +87,7 @@ func (a *brainAdapter) Get(ctx context.Context, key string) (*types.BrainEntry, 
 }
 
 func (a *brainAdapter) Recall(ctx context.Context, query string, limit int) ([]*types.BrainEntry, error) {
-	entries, err := a.b.Recall(ctx, query, limit)
+	entries, err := a.b.Recall(brainScope(ctx), query, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +95,7 @@ func (a *brainAdapter) Recall(ctx context.Context, query string, limit int) ([]*
 }
 
 func (a *brainAdapter) RecallWithContext(ctx context.Context, query string, limit int, contextStr string) ([]*types.BrainEntry, error) {
-	entries, err := a.b.RecallWithContext(ctx, query, limit, contextStr)
+	entries, err := a.b.RecallWithContext(brainScope(ctx), query, limit, contextStr)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +103,7 @@ func (a *brainAdapter) RecallWithContext(ctx context.Context, query string, limi
 }
 
 func (a *brainAdapter) RecallWithCluster(ctx context.Context, query string, limit int) (*types.BrainClusterResult, error) {
-	result, err := a.b.RecallWithCluster(ctx, query, limit)
+	result, err := a.b.RecallWithCluster(brainScope(ctx), query, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +114,7 @@ func (a *brainAdapter) RecallWithCluster(ctx context.Context, query string, limi
 }
 
 func (a *brainAdapter) List(ctx context.Context, prefix string, sourcePrefix string) ([]*types.BrainEntry, error) {
-	entries, err := a.b.List(ctx, prefix, sourcePrefix)
+	entries, err := a.b.List(brainScope(ctx), prefix, sourcePrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +122,7 @@ func (a *brainAdapter) List(ctx context.Context, prefix string, sourcePrefix str
 }
 
 func (a *brainAdapter) ListGraph(ctx context.Context, opts types.BrainGraphOptions) (*types.BrainGraph, error) {
-	g, err := a.b.ListGraph(ctx, brain.GraphOptions{
+	g, err := a.b.ListGraph(brainScope(ctx), brain.GraphOptions{
 		SourcePrefix:  opts.SourcePrefix,
 		MinSalience:   opts.MinSalience,
 		MinConfidence: opts.MinConfidence,
@@ -100,27 +136,27 @@ func (a *brainAdapter) ListGraph(ctx context.Context, opts types.BrainGraphOptio
 }
 
 func (a *brainAdapter) Delete(ctx context.Context, key string) error {
-	return a.b.Delete(ctx, key)
+	return a.b.Delete(brainScope(ctx), key)
 }
 
 func (a *brainAdapter) Push(ctx context.Context, userID, value string) error {
-	return a.b.Push(ctx, userID, value)
+	return a.b.Push(brainScope(ctx), userID, value)
 }
 
 func (a *brainAdapter) Pop(ctx context.Context, userID string) (string, error) {
-	return a.b.Pop(ctx, userID)
+	return a.b.Pop(brainScope(ctx), userID)
 }
 
 func (a *brainAdapter) Peek(ctx context.Context, userID string) (string, error) {
-	return a.b.Peek(ctx, userID)
+	return a.b.Peek(brainScope(ctx), userID)
 }
 
 func (a *brainAdapter) Promote(ctx context.Context, key string) error {
-	return a.b.Promote(ctx, key)
+	return a.b.Promote(brainScope(ctx), key)
 }
 
 func (a *brainAdapter) Consolidate(ctx context.Context, autoPromote bool) (*types.ConsolidationReport, error) {
-	r, err := a.b.Consolidate(ctx, autoPromote)
+	r, err := a.b.Consolidate(brainScope(ctx), autoPromote)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +167,7 @@ func (a *brainAdapter) Consolidate(ctx context.Context, autoPromote bool) (*type
 }
 
 func (a *brainAdapter) Status(ctx context.Context) (*types.BrainStatus, error) {
-	s, err := a.b.Status(ctx)
+	s, err := a.b.Status(brainScope(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +184,7 @@ func (a *brainAdapter) Status(ctx context.Context) (*types.BrainStatus, error) {
 }
 
 func (a *brainAdapter) WorkingMemoryEntries(ctx context.Context) []*types.BrainEntry {
-	return convertEntries(a.b.WorkingMemoryEntries(ctx))
+	return convertEntries(a.b.WorkingMemoryEntries(brainScope(ctx)))
 }
 
 func (a *brainAdapter) Close() error {

@@ -747,20 +747,16 @@ func (b *Brain) Get(ctx context.Context, key string) (*Entry, error) {
 			return &copied, nil
 		}
 	}
-	// Check parent's WM (read-only — return a copy, no access bump)
-	parentID := parentUserIDFromCtx(ctx)
-	if parentID != "" && parentID != userID {
-		if parentWM, ok := b.working[parentID]; ok {
-			if entry, ok := parentWM[key]; ok {
-				if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
-					// Expired parent entry — skip, fall through to LTM.
-					b.mu.Unlock()
-					return b.getLTM(key)
-				}
-				copied := *entry
-				b.mu.Unlock()
-				return &copied, nil
+	// Parent's WM, then the shared bucket (read-only — copies, no access
+	// bump). conduit-31jg.30
+	for _, bucket := range readOnlyBuckets(userID, parentUserIDFromCtx(ctx)) {
+		if entry, ok := b.working[bucket][key]; ok {
+			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+				continue // expired — keep looking, then LTM
 			}
+			copied := *entry
+			b.mu.Unlock()
+			return &copied, nil
 		}
 	}
 	b.mu.Unlock()
@@ -867,19 +863,18 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 			}
 		}
 	}
-	// Include parent's WM entries (read-only copies, deduped by key)
-	if parentID != "" && parentID != userID {
-		if parentWM, ok := b.working[parentID]; ok {
-			for _, entry := range parentWM {
-				if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
-					continue
-				}
-				if !seen[entry.Key] {
-					if ms := queryMatchScore(entry, terms); ms > 0 {
-						copied := *entry
-						scored = append(scored, scoredEntry{&copied, ms})
-						seen[entry.Key] = true
-					}
+	// Include parent's WM, then the shared bucket (read-only copies, deduped
+	// by key). conduit-31jg.30
+	for _, bucket := range readOnlyBuckets(userID, parentID) {
+		for _, entry := range b.working[bucket] {
+			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+				continue
+			}
+			if !seen[entry.Key] {
+				if ms := queryMatchScore(entry, terms); ms > 0 {
+					copied := *entry
+					scored = append(scored, scoredEntry{&copied, ms})
+					seen[entry.Key] = true
 				}
 			}
 		}
@@ -1180,18 +1175,18 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 			}
 		}
 	}
-	// Include parent's WM entries (read-only copies, deduped by key)
-	if parentID != "" && parentID != userID {
-		if parentWM, ok := b.working[parentID]; ok {
-			for _, entry := range parentWM {
-				if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
-					continue
-				}
-				if !seen[entry.Key] && strings.HasPrefix(entry.Key, prefix) {
-					if sourcePrefix == "" || strings.HasPrefix(entry.Source, sourcePrefix) {
-						copied := *entry
-						results = append(results, &copied)
-					}
+	// Include parent's WM, then the shared bucket (read-only copies, deduped
+	// by key). conduit-31jg.30
+	for _, bucket := range readOnlyBuckets(userID, parentID) {
+		for _, entry := range b.working[bucket] {
+			if entry.ExpiresAt != nil && !entry.ExpiresAt.After(now) {
+				continue
+			}
+			if !seen[entry.Key] && strings.HasPrefix(entry.Key, prefix) {
+				if sourcePrefix == "" || strings.HasPrefix(entry.Source, sourcePrefix) {
+					copied := *entry
+					results = append(results, &copied)
+					seen[entry.Key] = true
 				}
 			}
 		}
@@ -1851,15 +1846,57 @@ func queryMatchScore(e *Entry, terms []string) float64 {
 
 type brainUserIDKey struct{}
 
+// SharedUserID is the working-memory bucket used by callers that carry no
+// user (system writers such as heartbeat alerts under sense.alerts.*). Every
+// user can read it (read-only, after their own and their parent's WM); only
+// unscoped callers write to it. conduit-31jg.30
+const SharedUserID = "default"
+
+// WithUserID scopes working memory and the scratchpad to userID.
 func WithUserID(ctx context.Context, userID string) context.Context {
 	return context.WithValue(ctx, brainUserIDKey{}, userID)
 }
 
+// UserIDFromContext returns the brain user ID explicitly attached with
+// WithUserID, and whether one was set.
+func UserIDFromContext(ctx context.Context) (string, bool) {
+	uid, ok := ctx.Value(brainUserIDKey{}).(string)
+	return uid, ok && uid != ""
+}
+
 func userIDFromCtx(ctx context.Context) string {
-	if uid, ok := ctx.Value(brainUserIDKey{}).(string); ok && uid != "" {
+	if uid, ok := UserIDFromContext(ctx); ok {
 		return uid
 	}
-	return "default"
+	return SharedUserID
+}
+
+// readOnlyBuckets lists the WM buckets a caller may read but not write, in
+// lookup order: the parent's (sub-agent sharing), then the shared bucket.
+func readOnlyBuckets(userID, parentID string) []string {
+	var out []string
+	if parentID != "" && parentID != userID {
+		out = append(out, parentID)
+	}
+	if userID != SharedUserID && parentID != SharedUserID {
+		out = append(out, SharedUserID)
+	}
+	return out
+}
+
+// WorkingMemoryUserIDs returns the IDs of every user with a non-empty WM
+// bucket (used by REM to promote across all users). conduit-31jg.30
+func (b *Brain) WorkingMemoryUserIDs() []string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	ids := make([]string, 0, len(b.working))
+	for id, wm := range b.working {
+		if len(wm) > 0 {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 type brainParentUserIDKey struct{}
