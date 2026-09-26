@@ -89,10 +89,10 @@ type RestartBreadcrumb struct {
 }
 
 type BreadcrumbSession struct {
-	SessionKey   string `json:"session_key"`
-	UserID       string `json:"user_id"`
-	LastMsgID    string `json:"last_message_id,omitempty"`
-	ChannelID    string `json:"channel_id,omitempty"`
+	SessionKey string `json:"session_key"`
+	UserID     string `json:"user_id"`
+	LastMsgID  string `json:"last_message_id,omitempty"`
+	ChannelID  string `json:"channel_id,omitempty"`
 }
 
 // ShutdownManager orchestrates graceful shutdown in phases:
@@ -107,6 +107,15 @@ type ShutdownManager struct {
 	cancel        context.CancelFunc // cancels the gateway lifecycle context
 	gateway       *Gateway
 	onShutdown    func() // called after shutdown completes (e.g. re-exec)
+
+	// conduit-31jg.27: replace the fixed 2s post-cancel sleep with a real
+	// handshake. gatewayStopped is created by Gateway.Start (TrackGateway)
+	// and closed when Start has finished stopAll; nil means no gateway run
+	// loop to wait for (unit tests). done is closed when the whole sequence
+	// (including onShutdown) has finished.
+	gatewayStopped chan struct{}
+	stopWait       time.Duration
+	done           chan struct{}
 }
 
 func NewShutdownManager(logger *slog.Logger, gw *Gateway) *ShutdownManager {
@@ -114,7 +123,28 @@ func NewShutdownManager(logger *slog.Logger, gw *Gateway) *ShutdownManager {
 		logger:       logger,
 		gateway:      gw,
 		drainTimeout: 30 * time.Second,
+		stopWait:     gatewayStopTimeout + 5*time.Second,
+		done:         make(chan struct{}),
 	}
+}
+
+// TrackGateway is called by Gateway.Start; the returned func must be called
+// when Start's shutdown sequence (stopAll) has completed. The shutdown
+// sequence waits for it (bounded) before running onShutdown / reporting
+// StateStopped, so a re-exec never races the old listener. conduit-31jg.27.
+func (sm *ShutdownManager) TrackGateway() (markStopped func()) {
+	ch := make(chan struct{})
+	sm.mu.Lock()
+	sm.gatewayStopped = ch
+	sm.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { close(ch) }) }
+}
+
+// Done is closed once a shutdown sequence begun by BeginShutdown has fully
+// completed (drain, gateway stop, onShutdown hook).
+func (sm *ShutdownManager) Done() <-chan struct{} {
+	return sm.done
 }
 
 func (sm *ShutdownManager) State() ShutdownState {
@@ -191,9 +221,19 @@ func (sm *ShutdownManager) runShutdownSequence() {
 		cancelFn()
 	}
 
-	// Give the gateway shutdown sequence time to finish
-	// (it has its own 30s http server shutdown timeout)
-	time.Sleep(2 * time.Second)
+	// Wait for the gateway's own stop sequence (HTTP, WS drain, channels,
+	// ...) to finish instead of guessing with a fixed sleep (conduit-31jg.27).
+	sm.mu.Lock()
+	stopped := sm.gatewayStopped
+	stopWait := sm.stopWait
+	sm.mu.Unlock()
+	if stopped != nil {
+		select {
+		case <-stopped:
+		case <-time.After(stopWait):
+			sm.logger.Warn("gateway stop sequence did not finish in time", "wait", stopWait)
+		}
+	}
 
 	sm.state.Store(int32(StateStopped))
 	sm.logger.Info("shutdown complete", "reason", sm.reason)
@@ -203,9 +243,12 @@ func (sm *ShutdownManager) runShutdownSequence() {
 	onShutdown := sm.onShutdown
 	sm.mu.Unlock()
 
+	// onShutdown (re-exec) runs before done is closed: main waits on Done()
+	// after Start returns, so the process cannot exit ahead of the re-exec.
 	if onShutdown != nil {
 		onShutdown()
 	}
+	close(sm.done)
 }
 
 func (sm *ShutdownManager) notifyClients() {
@@ -290,10 +333,11 @@ func (sm *ShutdownManager) writeBreadcrumb() {
 		gw.ws.ClientMu.RLock()
 		seen := make(map[string]bool)
 		for _, client := range gw.ws.Clients {
-			if client.SessionKey != "" && !seen[client.SessionKey] {
-				seen[client.SessionKey] = true
+			sk := client.SessionKey() // conduit-31jg.25
+			if sk != "" && !seen[sk] {
+				seen[sk] = true
 				activeSessions = append(activeSessions, BreadcrumbSession{
-					SessionKey: client.SessionKey,
+					SessionKey: sk,
 					UserID:     client.UserID,
 					ChannelID:  client.ID,
 				})

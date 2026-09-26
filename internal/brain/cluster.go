@@ -93,9 +93,9 @@ func (b *Brain) clusterNeighbours(seedKeys []string, matchedKeys map[string]bool
 	// BFS through namespace levels.
 	// discovered tracks all cluster entries found, keyed by entry key.
 	type scoredEntry struct {
-		entry    *Entry
-		score    float64 // higher = more relevant
-		depth    int     // BFS depth where discovered
+		entry *Entry
+		score float64 // higher = more relevant
+		depth int     // BFS depth where discovered
 	}
 	discovered := make(map[string]*scoredEntry)
 
@@ -114,8 +114,8 @@ func (b *Brain) clusterNeighbours(seedKeys []string, matchedKeys map[string]bool
 		var conditions []string
 		var args []interface{}
 		for _, prefix := range prefixSlice {
-			conditions = append(conditions, "(key LIKE ? OR key = ?)")
-			args = append(args, prefix+".%", prefix)
+			conditions = append(conditions, `(key LIKE ? ESCAPE '\' OR key = ?)`)
+			args = append(args, EscapeLike(prefix)+".%", prefix) // conduit-31jg.31: '_' in keys is literal
 		}
 
 		query := fmt.Sprintf(`
@@ -168,6 +168,9 @@ func (b *Brain) clusterNeighbours(seedKeys []string, matchedKeys map[string]bool
 			}
 		}
 		rows.Close()
+		if err := rows.Err(); err != nil { // conduit-31jg.31
+			return nil, fmt.Errorf("cluster neighbours rows: %w", err)
+		}
 
 		// Prepare next level: expand to broader prefixes from discovered entries.
 		currentPrefixes = make(map[string]bool)

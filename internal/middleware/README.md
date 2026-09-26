@@ -19,7 +19,7 @@ Extracts tokens from multiple sources in priority order:
 
 1. `Authorization: Bearer <token>` header
 2. `X-API-Key: <token>` header
-3. `?token=<token>` query parameter
+3. `?token=<token>` query parameter (WebSocket extractor only; ignored on plain HTTP routes — conduit-31jg.4)
 4. WebSocket: `Sec-WebSocket-Protocol: conduit-auth, <token>`
 
 ```go

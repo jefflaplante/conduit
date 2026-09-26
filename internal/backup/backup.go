@@ -70,8 +70,16 @@ func CreateBackup(ctx context.Context, opts BackupOptions) (*BackupResult, error
 		return nil, fmt.Errorf("snapshot database: %w", err)
 	}
 
-	// Snapshot brain database if it exists.
-	brainDBPath := deriveBrainDBPath(dbPath)
+	// Snapshot brain database if it exists. conduit-31jg.9: honour
+	// brain.path (as the gateway does) instead of only the path derived from
+	// database.path; relative paths resolve against the config directory like
+	// database.path above.
+	brainDBPath := cfg.Brain.Path
+	if brainDBPath == "" {
+		brainDBPath = config.DeriveBrainDBPath(dbPath)
+	} else if !filepath.IsAbs(brainDBPath) {
+		brainDBPath = filepath.Join(configDir, brainDBPath)
+	}
 	var brainSnapshotPath string
 	if _, err := os.Stat(brainDBPath); err == nil {
 		brainSnapshotPath = filepath.Join(tmpDir, "brain.db")
@@ -91,6 +99,9 @@ func CreateBackup(ctx context.Context, opts BackupOptions) (*BackupResult, error
 		Config:       absConfigPath,
 		Database:     dbPath,
 		WorkspaceDir: wsDir,
+	}
+	if brainSnapshotPath != "" {
+		paths.BrainDatabase = brainDBPath
 	}
 
 	if opts.IncludeSSHKeys {
@@ -215,7 +226,15 @@ func CreateBackup(ctx context.Context, opts BackupOptions) (*BackupResult, error
 	return result, nil
 }
 
-// snapshotDatabase creates a clean snapshot via VACUUM INTO, falling back to file copy.
+// snapshotDatabase creates a clean, self-contained snapshot via VACUUM INTO.
+//
+// conduit-31jg.9: VACUUM INTO reads a consistent snapshot through SQLite, so
+// it includes committed pages still in the -wal file. The previous code
+// opened "path?mode=ro" — modernc ignores query parameters on non-URI names,
+// so that was a read-write open — and on any VACUUM failure fell back to a
+// raw copy of the main file, which silently dropped everything not yet
+// checkpointed from the WAL. There is no raw-copy fallback any more: a
+// failure is returned to the caller.
 func snapshotDatabase(ctx context.Context, srcPath, dstPath string) (DatabaseInfo, error) {
 	info := DatabaseInfo{}
 
@@ -225,30 +244,27 @@ func snapshotDatabase(ctx context.Context, srcPath, dstPath string) (DatabaseInf
 	}
 	info.Size = stat.Size()
 
-	// Try VACUUM INTO for a clean, WAL-free snapshot.
-	db, err := sql.Open("sqlite", srcPath+"?mode=ro")
-	if err == nil {
-		defer db.Close()
+	// Real read-only URI open (file: form so mode=ro is honoured) with a busy
+	// timeout so a concurrently-writing gateway does not fail the backup.
+	dsn := "file:" + srcPath + "?mode=ro&_pragma=busy_timeout%3D5000"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return info, fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
 
-		// Count tables.
-		var count int
-		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'").Scan(&count); err == nil {
-			info.TableCount = count
-		}
-
-		_, vacErr := db.ExecContext(ctx, fmt.Sprintf("VACUUM INTO '%s'", strings.ReplaceAll(dstPath, "'", "''")))
-		if vacErr == nil {
-			// Restrict permissions on the snapshot file created by SQLite.
-			if chmodErr := os.Chmod(dstPath, 0600); chmodErr != nil {
-				return info, fmt.Errorf("restrict snapshot permissions: %w", chmodErr)
-			}
-			return info, nil
-		}
+	// Count tables.
+	var count int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'").Scan(&count); err == nil {
+		info.TableCount = count
 	}
 
-	// Fallback: file copy.
-	if err := copyFile(srcPath, dstPath); err != nil {
-		return info, fmt.Errorf("copy database: %w", err)
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("VACUUM INTO '%s'", strings.ReplaceAll(dstPath, "'", "''"))); err != nil {
+		return info, fmt.Errorf("VACUUM INTO snapshot: %w", err)
+	}
+	// Restrict permissions on the snapshot file created by SQLite.
+	if err := os.Chmod(dstPath, 0600); err != nil {
+		return info, fmt.Errorf("restrict snapshot permissions: %w", err)
 	}
 	return info, nil
 }
@@ -344,16 +360,6 @@ func writeSSHKeys(tw *tar.Writer, cfg *config.Config) (int, []string) {
 	}
 
 	return count, warnings
-}
-
-// deriveBrainDBPath returns a brain DB path derived from the gateway DB path.
-func deriveBrainDBPath(gatewayDBPath string) string {
-	ext := filepath.Ext(gatewayDBPath)
-	base := strings.TrimSuffix(gatewayDBPath, ext)
-	if ext == "" {
-		ext = ".db"
-	}
-	return base + ".brain" + ext
 }
 
 // copyFile is a simple file copy helper.

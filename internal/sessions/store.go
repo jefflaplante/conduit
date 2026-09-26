@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
 
 	"conduit/internal/database"
+	"conduit/internal/ftsquery"
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
@@ -64,6 +66,126 @@ type Message struct {
 	Metadata   map[string]string `json:"metadata,omitempty"`
 }
 
+// updatedAtLayout is the canonical on-disk format for sessions.updated_at:
+// UTC, fixed-width nanoseconds, so lexicographic ORDER BY / < comparisons
+// match chronological order and modernc parses it back into a time.Time.
+//
+// conduit-31jg.24: previously updated_at was written both by Go (the
+// driver's time.Time.String(), in the process's local zone, with a
+// monotonic "m=+..." suffix) and by SQL CURRENT_TIMESTAMP (UTC, second
+// precision), so ORDER BY updated_at could pick the wrong "latest" session.
+const updatedAtLayout = "2006-01-02 15:04:05.000000000"
+
+// canonicalUpdatedAtGlob matches an updated_at already in updatedAtLayout.
+const canonicalUpdatedAtGlob = `updated_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'`
+
+// formatUpdatedAt renders t in the canonical updated_at format.
+func formatUpdatedAt(t time.Time) string {
+	return t.UTC().Format(updatedAtLayout)
+}
+
+// nowUpdatedAt returns the current time in the canonical updated_at format.
+func nowUpdatedAt() string { return formatUpdatedAt(time.Now()) }
+
+// legacyTimeLayouts are the formats legacy rows may hold in updated_at.
+var legacyTimeLayouts = []string{
+	"2006-01-02 15:04:05.999999999 -0700 MST", // Go time.Time.String() (m=+ stripped)
+	time.RFC3339Nano,
+	"2006-01-02 15:04:05.999999999-07:00",
+	"2006-01-02T15:04:05.999999999",
+	"2006-01-02 15:04:05.999999999", // CURRENT_TIMESTAMP (UTC) and friends
+	"2006-01-02 15:04",
+	"2006-01-02",
+}
+
+// parseLegacyTime parses a legacy updated_at string. Zone-less forms are
+// UTC (that is what SQLite's CURRENT_TIMESTAMP produces).
+func parseLegacyTime(v string) (time.Time, bool) {
+	v = strings.TrimSpace(v)
+	if i := strings.Index(v, " m="); i > 0 {
+		v = v[:i]
+	}
+	for _, layout := range legacyTimeLayouts {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// normalizeUpdatedAt rewrites every sessions.updated_at value that is not
+// already canonical into updatedAtLayout (UTC). It is idempotent: once all
+// rows are canonical it only performs a read. Unparseable values are left
+// untouched. Returns the number of rows rewritten. conduit-31jg.24.
+func (s *Store) normalizeUpdatedAt() (int, error) {
+	rows, err := s.db.Query(`SELECT rowid, CAST(updated_at AS TEXT) FROM sessions
+		WHERE updated_at IS NOT NULL AND typeof(updated_at) = 'text' AND NOT (` + canonicalUpdatedAtGlob + `)`)
+	if err != nil {
+		return 0, fmt.Errorf("scan legacy updated_at: %w", err)
+	}
+	type fix struct {
+		rowid int64
+		val   string
+	}
+	var fixes []fix
+	for rows.Next() {
+		var id int64
+		var v string
+		if err := rows.Scan(&id, &v); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan legacy updated_at: %w", err)
+		}
+		if t, ok := parseLegacyTime(v); ok {
+			fixes = append(fixes, fix{id, formatUpdatedAt(t)})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if len(fixes) == 0 {
+		return 0, nil
+	}
+
+	// Batched transactions keep each write-lock hold short on a large live DB.
+	const batch = 5000
+	for start := 0; start < len(fixes); start += batch {
+		end := min(start+batch, len(fixes))
+		err := database.RetryOnBusy(5, func() error {
+			tx, err := s.db.Begin()
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback() //nolint:errcheck // no-op after Commit
+			stmt, err := tx.Prepare(`UPDATE sessions SET updated_at = ? WHERE rowid = ?`)
+			if err != nil {
+				return err
+			}
+			defer stmt.Close()
+			for _, f := range fixes[start:end] {
+				if _, err := stmt.Exec(f.val, f.rowid); err != nil {
+					return err
+				}
+			}
+			return tx.Commit()
+		})
+		if err != nil {
+			return start, fmt.Errorf("normalize updated_at: %w", err)
+		}
+	}
+	return len(fixes), nil
+}
+
+// sessionNotFoundError keeps the historical error text while letting
+// callers test errors.Is(err, sql.ErrNoRows). conduit-31jg.24.
+type sessionNotFoundError struct{ msg string }
+
+func (e *sessionNotFoundError) Error() string { return e.msg }
+func (e *sessionNotFoundError) Unwrap() error { return sql.ErrNoRows }
+
 // NewStore creates a new session store
 func NewStore(dbPath string) (*Store, error) {
 	db, err := sql.Open("sqlite", database.BuildDSN(dbPath))
@@ -79,6 +201,15 @@ func NewStore(dbPath string) (*Store, error) {
 	// Configure database and run migrations
 	if err := database.ConfigureDatabase(db); err != nil {
 		return nil, fmt.Errorf("failed to configure database: %w", err)
+	}
+
+	// conduit-31jg.24: bring legacy mixed-format updated_at values into the
+	// canonical format so ORDER BY updated_at is chronological. Best-effort:
+	// a failure here must not stop the gateway from starting.
+	if n, err := store.normalizeUpdatedAt(); err != nil {
+		log.Printf("[sessions] WARNING: updated_at normalization incomplete (%d rows fixed): %v", n, err)
+	} else if n > 0 {
+		log.Printf("[sessions] normalized %d legacy updated_at values", n)
 	}
 
 	return store, nil
@@ -168,6 +299,12 @@ func (s *Store) GetOrCreateSession(userID, channelID string) (*Session, error) {
 	if err == nil {
 		return session, nil
 	}
+	// conduit-31jg.24: only a genuine "no rows" means create. Any other
+	// error (SQLITE_BUSY, scan failure, ...) must surface; creating a fresh
+	// session would silently drop the user's conversation continuity.
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
 
 	// Create new session if not found
 	sessionKey := fmt.Sprintf("%s_%s_%s", channelID, userID, uuid.New().String()[:8])
@@ -251,27 +388,29 @@ func (s *Store) GetLatestSession(userID, channelID string) (*Session, error) {
 	var session Session
 	var contextJSON string
 
-	row := s.db.QueryRow(`
-		SELECT key, user_id, channel_id, created_at, updated_at, message_count, context
-		FROM sessions 
-		WHERE user_id = ? AND channel_id = ?
-		ORDER BY updated_at DESC
-		LIMIT 1
-	`, userID, channelID)
-
-	err := row.Scan(
-		&session.Key,
-		&session.UserID,
-		&session.ChannelID,
-		&session.CreatedAt,
-		&session.UpdatedAt,
-		&session.MessageCount,
-		&contextJSON,
-	)
+	err := database.RetryOnBusy(5, func() error {
+		return s.db.QueryRow(`
+			SELECT key, user_id, channel_id, created_at, updated_at, message_count, context
+			FROM sessions
+			WHERE user_id = ? AND channel_id = ?
+			ORDER BY updated_at DESC
+			LIMIT 1
+		`, userID, channelID).Scan(
+			&session.Key,
+			&session.UserID,
+			&session.ChannelID,
+			&session.CreatedAt,
+			&session.UpdatedAt,
+			&session.MessageCount,
+			&contextJSON,
+		)
+	})
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("no session found for user %s in channel %s", userID, channelID)
+		if errors.Is(err, sql.ErrNoRows) {
+			// conduit-31jg.24: wraps sql.ErrNoRows so GetOrCreateSession can
+			// distinguish not-found from real DB errors.
+			return nil, &sessionNotFoundError{fmt.Sprintf("no session found for user %s in channel %s", userID, channelID)}
 		}
 		return nil, fmt.Errorf("failed to get latest session: %w", err)
 	}
@@ -316,7 +455,7 @@ func (s *Store) SaveSession(session *Session) error {
 			session.UserID,
 			session.ChannelID,
 			session.CreatedAt,
-			time.Now(),
+			nowUpdatedAt(), // conduit-31jg.24: canonical format
 			session.MessageCount,
 			string(contextJSON),
 		)
@@ -350,8 +489,17 @@ func (s *Store) AddMessage(sessionKey, role, content string, metadata map[string
 		return nil, fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
+	// conduit-31jg.24: the insert and the message_count/updated_at bump are
+	// one transaction, so a failed count update can no longer leave an
+	// orphan message behind (or a count that disagrees with the rows).
 	err = database.RetryOnBusy(5, func() error {
-		_, err := s.db.Exec(`
+		tx, err := s.db.Begin() // _txlock=immediate: takes the write lock up front
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback() //nolint:errcheck // no-op after Commit
+
+		if _, err := tx.Exec(`
 			INSERT INTO messages (id, session_key, role, content, timestamp, metadata)
 			VALUES (?, ?, ?, ?, ?, ?)
 		`,
@@ -361,22 +509,24 @@ func (s *Store) AddMessage(sessionKey, role, content string, metadata map[string
 			message.Content,
 			message.Timestamp,
 			string(metadataJSON),
-		)
-		return err
+		); err != nil {
+			return fmt.Errorf("failed to save message: %w", err)
+		}
+
+		if err := incrementMessageCountTx(tx, sessionKey); err != nil {
+			return err
+		}
+		return tx.Commit()
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to save message: %w", err)
+		return nil, err
 	}
 
-	// Sync to search.db FTS5 index via callback (best-effort — don't fail the message insert)
+	// Sync to search.db FTS5 index via callback, after commit (best-effort —
+	// never fails the message insert).
 	if s.onMessageAdded != nil {
 		s.onMessageAdded(message.ID, message.SessionKey, message.Role, message.Content)
-	}
-
-	// Update session message count
-	if err := s.updateSessionMessageCount(sessionKey); err != nil {
-		return nil, fmt.Errorf("failed to update session message count: %w", err)
 	}
 
 	// Mark session activity
@@ -451,23 +601,18 @@ func (s *Store) GetMessages(sessionKey string, limit int) ([]Message, error) {
 	return messages, nil
 }
 
-// updateSessionMessageCount increments the message count for a session.
-// Uses atomic increment instead of COUNT(*) subquery to avoid a table scan.
-func (s *Store) updateSessionMessageCount(sessionKey string) error {
-	err := database.RetryOnBusy(5, func() error {
-		_, execErr := s.db.Exec(`
-			UPDATE sessions
-			SET message_count = message_count + 1,
-			    updated_at = CURRENT_TIMESTAMP
-			WHERE key = ?
-		`, sessionKey)
-		return execErr
-	})
-
-	if err != nil {
+// incrementMessageCountTx increments the message count for a session inside
+// tx. Uses atomic increment instead of COUNT(*) subquery to avoid a table
+// scan.
+func incrementMessageCountTx(tx *sql.Tx, sessionKey string) error {
+	if _, err := tx.Exec(`
+		UPDATE sessions
+		SET message_count = message_count + 1,
+		    updated_at = ?
+		WHERE key = ?
+	`, nowUpdatedAt(), sessionKey); err != nil {
 		return fmt.Errorf("failed to update session message count: %w", err)
 	}
-
 	return nil
 }
 
@@ -494,9 +639,9 @@ func (s *Store) ClearSessionMessages(sessionKey string) error {
 	err = database.RetryOnBusy(5, func() error {
 		_, execErr := s.db.Exec(`
 			UPDATE sessions
-			SET message_count = 0, updated_at = CURRENT_TIMESTAMP
+			SET message_count = 0, updated_at = ?
 			WHERE key = ?
-		`, sessionKey)
+		`, nowUpdatedAt(), sessionKey)
 		return execErr
 	})
 	if err != nil {
@@ -600,9 +745,9 @@ func (s *Store) ApplyCompaction(sessionKey string, compactedIDs []string, summar
 		if _, err := tx.Exec(`
 			UPDATE sessions
 			SET message_count = (SELECT COUNT(*) FROM messages WHERE session_key = ?),
-			    updated_at = CURRENT_TIMESTAMP
+			    updated_at = ?
 			WHERE key = ?
-		`, sessionKey, sessionKey); err != nil {
+		`, sessionKey, nowUpdatedAt(), sessionKey); err != nil {
 			return fmt.Errorf("update message count: %w", err)
 		}
 
@@ -636,9 +781,9 @@ func (s *Store) SetSessionContext(sessionKey, key, value string) error {
 		result, execErr = s.db.Exec(`
 			UPDATE sessions
 			SET context = json_set(context, '$.' || ?, ?),
-			    updated_at = CURRENT_TIMESTAMP
+			    updated_at = ?
 			WHERE key = ?
-		`, key, value, sessionKey)
+		`, key, value, nowUpdatedAt(), sessionKey)
 		return execErr
 	})
 	if err != nil {
@@ -670,12 +815,12 @@ func (s *Store) SetSessionContextBatch(sessionKey string, kvPairs map[string]str
 		expr = fmt.Sprintf("json_set(%s, '$.'||?, ?)", expr)
 		args = append(args, key, value)
 	}
-	args = append(args, sessionKey)
+	args = append(args, nowUpdatedAt(), sessionKey)
 
 	query := fmt.Sprintf(`
 		UPDATE sessions
 		SET context = %s,
-		    updated_at = CURRENT_TIMESTAMP
+		    updated_at = ?
 		WHERE key = ?
 	`, expr)
 
@@ -733,14 +878,55 @@ const (
 // cron, wake, sub-agent, WS and HTTP callers. Zero-token usage is a no-op.
 // Best-effort: errors are returned for the caller to log/ignore.
 func (s *Store) RecordTokenUsage(sessionKey string, promptTokens, completionTokens, totalTokens int) error {
+	if totalTokens == 0 {
+		totalTokens = promptTokens + completionTokens
+	}
+	return s.RecordTurnUsage(sessionKey, TurnUsage{
+		ContextTokens:    promptTokens,
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      totalTokens,
+	})
+}
+
+// Cache token context keys written by RecordTurnUsage (conduit-31jg.15).
+const (
+	CtxKeyLastCacheCreationTokens     = "last_cache_creation_tokens"
+	CtxKeyLastCacheReadTokens         = "last_cache_read_tokens"
+	CtxKeySessionCacheCreationTotal   = "session_cache_creation_tokens_total"
+	CtxKeySessionCacheReadTokensTotal = "session_cache_read_tokens_total"
+)
+
+// TurnUsage is one turn's token accounting as recorded by RecordTurnUsage.
+// ContextTokens is the context-window occupancy (the prompt size of the
+// turn's last round trip, cached input included — ai.Usage.Context()); the
+// other fields are whole-turn sums across every billed round trip.
+type TurnUsage struct {
+	ContextTokens            int
+	PromptTokens             int
+	CompletionTokens         int
+	TotalTokens              int
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
+}
+
+// RecordTurnUsage persists a turn's usage (conduit-31jg.15). The
+// last_prompt_tokens / last_total_tokens keys drive the context-budget gauge
+// and /context, so they hold context occupancy (ContextTokens), not the
+// turn-wide prompt sum, which overstates occupancy on multi-round tool
+// turns. last_total_tokens is ContextTokens + the turn's completion tokens.
+// The session_*_total keys accumulate the billed sums, and the cache token
+// fields are recorded alongside (last_* = this turn's sums).
+func (s *Store) RecordTurnUsage(sessionKey string, u TurnUsage) error {
 	if sessionKey == "" {
 		return nil
 	}
-	if promptTokens == 0 && completionTokens == 0 {
+	if u.PromptTokens == 0 && u.CompletionTokens == 0 && u.ContextTokens == 0 &&
+		u.CacheCreationInputTokens == 0 && u.CacheReadInputTokens == 0 {
 		return nil
 	}
-	if totalTokens == 0 {
-		totalTokens = promptTokens + completionTokens
+	if u.ContextTokens == 0 {
+		u.ContextTokens = u.PromptTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
 	}
 
 	// Read current context to pick up the running cumulative totals.
@@ -750,14 +936,20 @@ func (s *Store) RecordTokenUsage(sessionKey string, promptTokens, completionToke
 	}
 	prevPrompt := atoiContext(session.Context, CtxKeySessionPromptTokensTotal)
 	prevCompletion := atoiContext(session.Context, CtxKeySessionCompletionTokens)
+	prevCacheCreate := atoiContext(session.Context, CtxKeySessionCacheCreationTotal)
+	prevCacheRead := atoiContext(session.Context, CtxKeySessionCacheReadTokensTotal)
 
 	return s.SetSessionContextBatch(sessionKey, map[string]string{
-		CtxKeyLastPromptTokens:         strconv.Itoa(promptTokens),
-		CtxKeyLastCompletionTokens:     strconv.Itoa(completionTokens),
-		CtxKeyLastTotalTokens:          strconv.Itoa(totalTokens),
-		CtxKeySessionPromptTokensTotal: strconv.Itoa(prevPrompt + promptTokens),
-		CtxKeySessionCompletionTokens:  strconv.Itoa(prevCompletion + completionTokens),
-		CtxKeyContextBudgetUpdatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		CtxKeyLastPromptTokens:            strconv.Itoa(u.ContextTokens),
+		CtxKeyLastCompletionTokens:        strconv.Itoa(u.CompletionTokens),
+		CtxKeyLastTotalTokens:             strconv.Itoa(u.ContextTokens + u.CompletionTokens),
+		CtxKeyLastCacheCreationTokens:     strconv.Itoa(u.CacheCreationInputTokens),
+		CtxKeyLastCacheReadTokens:         strconv.Itoa(u.CacheReadInputTokens),
+		CtxKeySessionPromptTokensTotal:    strconv.Itoa(prevPrompt + u.PromptTokens),
+		CtxKeySessionCompletionTokens:     strconv.Itoa(prevCompletion + u.CompletionTokens),
+		CtxKeySessionCacheCreationTotal:   strconv.Itoa(prevCacheCreate + u.CacheCreationInputTokens),
+		CtxKeySessionCacheReadTokensTotal: strconv.Itoa(prevCacheRead + u.CacheReadInputTokens),
+		CtxKeyContextBudgetUpdatedAt:      time.Now().UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -836,7 +1028,7 @@ func (s *Store) markSessionActivity(sessionKey string) {
 	// Update the database record's updated_at timestamp
 	// Best-effort — retry on BUSY so heartbeat-paced writers don't silently drop updates.
 	_ = database.RetryOnBusy(5, func() error {
-		_, err := s.db.Exec(`UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE key = ?`, sessionKey)
+		_, err := s.db.Exec(`UPDATE sessions SET updated_at = ? WHERE key = ?`, nowUpdatedAt(), sessionKey)
 		return err
 	})
 }
@@ -870,7 +1062,7 @@ func (s *Store) SearchMessages(query string, limit int) ([]SearchMessagesResult,
 		WHERE messages_fts MATCH ?
 		ORDER BY fts.rank
 		LIMIT ?
-	`, "content:"+ftsQuery, limit)
+	`, ftsquery.Column("content", ftsQuery), limit) // conduit-31jg.31: scope every OR'd phrase
 
 	if err != nil {
 		// Fall back to LIKE search if FTS fails (e.g., table doesn't exist)
@@ -932,26 +1124,9 @@ func (s *Store) SearchMessages(query string, limit int) ([]SearchMessagesResult,
 // buildFTSQuery converts a user query into FTS5 query syntax.
 // Escapes special characters and handles multi-word queries.
 func (s *Store) buildFTSQuery(query string) string {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return ""
-	}
-
-	// Split into words and escape each for FTS5
-	words := strings.Fields(query)
-	var escaped []string
-	for _, word := range words {
-		// Escape FTS5 special characters by quoting
-		// FTS5 special chars: AND OR NOT ( ) " *
-		if strings.ContainsAny(word, `"*()`) || strings.EqualFold(word, "AND") ||
-			strings.EqualFold(word, "OR") || strings.EqualFold(word, "NOT") {
-			word = `"` + strings.ReplaceAll(word, `"`, `""`) + `"`
-		}
-		escaped = append(escaped, word)
-	}
-
-	// Join with OR for flexible matching (any term matches)
-	return strings.Join(escaped, " OR ")
+	// conduit-31jg.31: shared quoted-phrase builder (the old partial escaper
+	// left . / @ % # : unquoted -> "fts5: syntax error" -> silent LIKE fallback).
+	return ftsquery.Build(query)
 }
 
 // searchMessagesLIKE is a fallback search using LIKE when FTS5 is unavailable.
@@ -1096,7 +1271,7 @@ func (s *Store) GetIdleSessions(olderThan time.Time, minMessages int) ([]string,
 	rows, err := s.db.Query(`
 		SELECT key FROM sessions
 		WHERE updated_at < ? AND message_count > ?
-	`, olderThan.UTC().Format("2006-01-02 15:04:05"), minMessages)
+	`, formatUpdatedAt(olderThan), minMessages)
 	if err != nil {
 		return nil, fmt.Errorf("query idle sessions: %w", err)
 	}

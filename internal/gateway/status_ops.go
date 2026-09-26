@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"conduit/internal/config"
 	"conduit/internal/sessions"
 	"conduit/internal/version"
 )
@@ -67,11 +68,25 @@ func (g *Gateway) DisableChannel(ctx context.Context, channelID string) error {
 	return fmt.Errorf("disable channel not yet implemented")
 }
 
-// GetConfiguration returns current configuration
+// GetConfiguration returns the AI and workspace configuration for the
+// Gateway tool, with every secret (provider API keys, OAuth access/refresh
+// tokens, client secrets, URL passwords) replaced by config.RedactedValue.
+// The result reaches the model and the transcript (conduit-31jg.56).
 func (g *Gateway) GetConfiguration() (map[string]interface{}, error) {
+	if g.config == nil {
+		return nil, fmt.Errorf("configuration not loaded")
+	}
+	ai, err := config.Redacted(g.config.AI)
+	if err != nil {
+		return nil, err
+	}
+	workspace, err := config.Redacted(g.config.Workspace)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]interface{}{
-		"ai":        g.config.AI,
-		"workspace": g.config.Workspace,
+		"ai":        ai,
+		"workspace": workspace,
 	}, nil
 }
 

@@ -11,6 +11,11 @@ type WindowBucket struct {
 	timestamps []time.Time  // Request timestamps within the window
 	lastAccess time.Time    // Last access time for cleanup
 	mu         sync.RWMutex // Per-bucket locking for fine-grained concurrency
+	// evicted is set (under mu) by performCleanup when the bucket has been
+	// removed from the map. Allow re-fetches a fresh bucket when it observes
+	// an evicted one so a request is never recorded on an orphaned bucket.
+	// conduit-31jg.4
+	evicted bool
 }
 
 // SlidingWindow implements sliding window rate limiting algorithm
@@ -21,6 +26,7 @@ type SlidingWindow struct {
 	cleanupTick *time.Ticker   // Periodic cleanup ticker
 	stopCleanup chan struct{}  // Signal to stop cleanup goroutine
 	cleanupWG   sync.WaitGroup // Wait group for cleanup goroutine
+	stopOnce    sync.Once      // conduit-31jg.4: makes Stop idempotent
 }
 
 // NewSlidingWindow creates a new sliding window rate limiter
@@ -44,14 +50,23 @@ func NewSlidingWindow(windowDuration time.Duration, limit int, cleanupInterval t
 func (sw *SlidingWindow) Allow(identifier string) (bool, int, time.Time, int) {
 	now := time.Now()
 
-	// Get or create bucket for this identifier
-	bucketInterface, _ := sw.buckets.LoadOrStore(identifier, &WindowBucket{
-		timestamps: make([]time.Time, 0),
-		lastAccess: now,
-	})
-	bucket := bucketInterface.(*WindowBucket)
-
-	bucket.mu.Lock()
+	// Get or create bucket for this identifier. conduit-31jg.4: the cleanup
+	// goroutine may evict the bucket between LoadOrStore and Lock; if so,
+	// retry so the request is recorded on the bucket that is actually in
+	// the map (otherwise it would silently not count toward the limit).
+	var bucket *WindowBucket
+	for {
+		bucketInterface, _ := sw.buckets.LoadOrStore(identifier, &WindowBucket{
+			timestamps: make([]time.Time, 0),
+			lastAccess: now,
+		})
+		bucket = bucketInterface.(*WindowBucket)
+		bucket.mu.Lock()
+		if !bucket.evicted {
+			break
+		}
+		bucket.mu.Unlock()
+	}
 	defer bucket.mu.Unlock()
 
 	// Update last access time
@@ -139,37 +154,30 @@ func (sw *SlidingWindow) performCleanup() {
 	now := time.Now()
 	cutoff := now.Add(-sw.windowDur * 2) // Remove buckets inactive for 2x window duration
 
-	keysToDelete := make([]string, 0)
-
+	// conduit-31jg.4: check staleness and delete while holding the bucket
+	// lock, marking it evicted, so a concurrent Allow that already loaded
+	// this bucket notices and re-fetches instead of recording on an orphan.
 	sw.buckets.Range(func(key, value interface{}) bool {
 		bucket := value.(*WindowBucket)
-		bucket.mu.RLock()
-		lastAccess := bucket.lastAccess
-		bucket.mu.RUnlock()
-
-		if lastAccess.Before(cutoff) {
-			keysToDelete = append(keysToDelete, key.(string))
+		bucket.mu.Lock()
+		if bucket.lastAccess.Before(cutoff) {
+			bucket.evicted = true
+			sw.buckets.CompareAndDelete(key, bucket)
 		}
+		bucket.mu.Unlock()
 		return true
 	})
-
-	// Delete expired buckets
-	for _, key := range keysToDelete {
-		sw.buckets.Delete(key)
-	}
-
-	if len(keysToDelete) > 0 {
-		// Note: In production, you might want to use a proper logger here
-		// log.Printf("[RateLimit] Cleaned up %d expired buckets", len(keysToDelete))
-	}
 }
 
 // Stop stops the sliding window rate limiter and cleans up resources
+// It is safe to call more than once (conduit-31jg.4).
 func (sw *SlidingWindow) Stop() {
-	if sw.cleanupTick != nil {
-		sw.cleanupTick.Stop()
-	}
-	close(sw.stopCleanup)
+	sw.stopOnce.Do(func() {
+		if sw.cleanupTick != nil {
+			sw.cleanupTick.Stop()
+		}
+		close(sw.stopCleanup)
+	})
 	sw.cleanupWG.Wait()
 }
 

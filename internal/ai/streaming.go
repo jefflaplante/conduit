@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"strings"
 )
 
@@ -46,25 +45,12 @@ func (a *AnthropicProvider) GenerateResponseStreaming(ctx context.Context, req *
 	body, modelToUse := a.buildMessagesRequest(req)
 	body["stream"] = true
 
-	httpReq, err := a.newMessagesHTTPRequest(ctx, body, true)
-	if err != nil {
-		return nil, err
-	}
-
 	log.Printf("[Anthropic] Streaming request: model=%s, isOAuth=%v", modelToUse, a.isOAuth)
 
-	resp, err := a.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	return a.parseSSEStream(resp.Body, onDelta)
+	// conduit-31jg.46: retries retryable HTTP statuses and mid-stream
+	// overloaded/rate-limit errors, the latter only before any text has
+	// been emitted to onDelta.
+	return a.streamMessagesWithRetry(ctx, body, onDelta)
 }
 
 // parseSSEStream parses Server-Sent Events from Anthropic's streaming API.
@@ -225,7 +211,8 @@ func (a *AnthropicProvider) parseSSEStream(body io.Reader, onDelta StreamCallbac
 				errMsg, _ = e["message"].(string)
 			}
 			log.Printf("[Streaming] error event mid-stream: %s: %s", errType, errMsg)
-			return partial(), fmt.Errorf("anthropic stream error: %s: %s", errType, errMsg)
+			// conduit-31jg.46: typed so retry logic can read the type.
+			return partial(), &anthropicStreamError{Type: errType, Message: errMsg}
 
 		case "ping":
 			// keepalive

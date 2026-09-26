@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	"conduit/internal/httpsafe"
 )
 
 const defaultOpenAIURL = "https://api.openai.com/v1/chat/completions"
@@ -201,7 +202,7 @@ func (o *OpenAIProvider) GenerateResponse(ctx context.Context, req *GenerateRequ
 			break // success
 		}
 
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		resp.Body.Close()
 		lastErr = fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
 
@@ -318,7 +319,7 @@ func (o *OpenAIProvider) GenerateResponseStreaming(ctx context.Context, req *Gen
 			break // success
 		}
 
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		resp.Body.Close()
 		lastErr = fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
 

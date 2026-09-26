@@ -183,7 +183,7 @@ func TestValidateToken(t *testing.T) {
 		},
 		{
 			name:  "corrupted token",
-			token: validToken[:len(validToken)-1] + "x", // Change last char
+			token: corruptLastChar(validToken), // conduit-31jg.52: always differs from the original
 			want:  false,
 		},
 		{
@@ -377,19 +377,25 @@ func TestTimingSafeValidation(t *testing.T) {
 	// Create tokens that differ at different positions
 	earlyDiffToken := "x" + validToken[1:]                     // Differs at position 0
 	middleDiffToken := validToken[:10] + "x" + validToken[11:] // Differs in middle
-	lateDiffToken := validToken[:len(validToken)-1] + "x"      // Differs at end
+	lateDiffToken := corruptLastChar(validToken)               // Differs at end
 
 	tokens := []string{earlyDiffToken, middleDiffToken, lateDiffToken}
 
-	// Measure timing for each validation
+	// Just ensure it completes reasonably quickly (not a precise timing test).
+	// conduit-31jg.52: a single wall-clock sample against 1ms failed under
+	// -race with parallel packages (seen: 4.4ms). Take the best of several
+	// runs so scheduler noise is filtered out, with a generous bound.
 	for _, token := range tokens {
-		start := time.Now()
-		ValidateToken(token)
-		elapsed := time.Since(start)
-
-		// Just ensure it completes reasonably quickly (not a precise timing test)
-		if elapsed > time.Millisecond {
-			t.Errorf("Validation took too long: %v", elapsed)
+		best := time.Duration(1<<63 - 1)
+		for i := 0; i < 20; i++ {
+			start := time.Now()
+			ValidateToken(token)
+			if d := time.Since(start); d < best {
+				best = d
+			}
+		}
+		if best > 20*time.Millisecond {
+			t.Errorf("Validation took too long: best of 20 = %v", best)
 		}
 	}
 }
@@ -541,4 +547,16 @@ func TestSecurityEdgeCases(t *testing.T) {
 			t.Logf("Warning: timing variance might be too high: %v vs %v", duration1, duration2)
 		}
 	})
+}
+
+// corruptLastChar replaces the final character with a different Base58
+// character. conduit-31jg.52: the old `+ "x"` was a no-op for tokens that
+// already ended in 'x' (~1/58 runs), making TestValidateToken flaky.
+func corruptLastChar(tok string) string {
+	last := tok[len(tok)-1]
+	repl := byte('2')
+	if last == repl {
+		repl = '3'
+	}
+	return tok[:len(tok)-1] + string(repl)
 }

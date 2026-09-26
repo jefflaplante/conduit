@@ -5,7 +5,7 @@ package tools
 //
 // New behavior:
 //   - NO injection at depth 10 (or any depth < 20).
-//   - FIRST time depth >= 20 in a chain: exactly one system message
+//   - FIRST time depth >= 20 in a chain: exactly one user-role guidance message (conduit-31jg.14)
 //     "Turn progress: depth N of max M. Original request: <first 200 chars>"
 //   - No second injection at depths 25/30/40+ in the same chain.
 //   - Each chain (HandleToolCallFlow call) gets its own injection at its own
@@ -60,13 +60,24 @@ func refocusTestRequest(goal string) (*ai.GenerateRequest, *ai.GenerateResponse)
 	return initialReq, initialResp
 }
 
+// isProgressInjection reports whether msg is the progress reminder.
+// conduit-31jg.14: it is a USER-role loop-guidance message now; a
+// system-role one would rewrite the cached system prefix.
+func isProgressInjection(msg ai.ChatMessage) bool {
+	if msg.Role == "system" && strings.Contains(msg.Content, refocusMarkerNew) {
+		panic("progress reminder must not be system-role (conduit-31jg.14): " + msg.Content)
+	}
+	return msg.Role == "user" && strings.HasPrefix(msg.Content, loopGuidanceMarker) &&
+		strings.Contains(msg.Content, refocusMarkerNew)
+}
+
 // chainProgressInjections returns the recorded provider calls whose request
-// contains a system message carrying the new progress marker.
+// contains the progress reminder.
 func chainProgressInjections(calls []ai.MockCall) []string {
 	var found []string
 	for _, call := range calls {
 		for _, msg := range call.Request.Messages {
-			if msg.Role == "system" && strings.Contains(msg.Content, refocusMarkerNew) {
+			if isProgressInjection(msg) {
 				found = append(found, msg.Content)
 			}
 		}
@@ -136,7 +147,7 @@ func TestProgressInjection_OnceAtDepth20(t *testing.T) {
 	depth20 := calls[20].Request
 	foundAt20 := false
 	for _, msg := range depth20.Messages {
-		if msg.Role == "system" && strings.Contains(msg.Content, refocusMarkerNew) {
+		if isProgressInjection(msg) {
 			foundAt20 = true
 			if !strings.Contains(msg.Content, "depth 20 of max 25") {
 				t.Errorf("Injection should report depth 20 of max 25, got: %s", msg.Content)
@@ -276,7 +287,7 @@ func TestProgressInjection_Ephemeral_NotCarriedForward(t *testing.T) {
 			continue
 		}
 		for _, msg := range call.Request.Messages {
-			if msg.Role == "system" && strings.Contains(msg.Content, refocusMarkerNew) {
+			if isProgressInjection(msg) {
 				t.Errorf("Reminder leaked into request %d (must be visible only at index 20): %s", i, msg.Content)
 			}
 		}

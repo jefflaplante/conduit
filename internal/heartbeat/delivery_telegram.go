@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
 	"conduit/internal/config"
+	"conduit/internal/httpsafe"
 )
 
 // TelegramDeliverer implements Deliverer for sending alerts via Telegram Bot API.
@@ -92,7 +92,7 @@ func (d *TelegramDeliverer) Deliver(ctx context.Context, alert Alert, target con
 	defer resp.Body.Close()
 
 	// Read response body
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := httpsafe.ReadLimited(resp.Body, httpsafe.SmallAPIBodyLimit) // conduit-31jg.7
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}

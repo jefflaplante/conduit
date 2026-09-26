@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -35,7 +33,6 @@ import (
 	"conduit/internal/stt"
 	"conduit/internal/tools"
 	"conduit/internal/tools/debuglog"
-	"conduit/internal/tools/types"
 	"conduit/internal/version"
 	"conduit/internal/workspace"
 
@@ -134,6 +131,10 @@ type Gateway struct {
 	// Human-in-the-loop approvals for risky tool actions (conduit-31jg.43).
 	approvals *approval.Manager
 
+	// Shared turn pipeline (conduit-31jg.35); built lazily by turns().
+	turnRunnerOnce sync.Once
+	turnRunner     *TurnRunner
+
 	// Graceful shutdown
 	shutdownMgr *ShutdownManager
 
@@ -149,13 +150,12 @@ type Gateway struct {
 
 // Client represents a WebSocket client connection
 type Client struct {
-	ID         string
-	Role       string // "client" or "node"
-	UserID     string // user identity for session scoping
-	SessionKey string // active session key for this client
-	TokenID    string // auth token ID used for this connection (for revocation)
-	Conn       *websocket.Conn
-	Send       chan []byte
+	ID      string
+	Role    string // "client" or "node"
+	UserID  string // user identity for session scoping
+	TokenID string // auth token ID used for this connection (for revocation)
+	Conn    *websocket.Conn
+	Send    chan []byte
 
 	// CloseFrame carries an out-of-band signal from off-goroutine callers
 	// (e.g. RevokeClientByToken running on the auth-revoke hook) asking the
@@ -168,6 +168,16 @@ type Client struct {
 	// (first non-blocking send wins, the rest drop). nil on pre-existing
 	// test fixtures is tolerated.
 	CloseFrame chan []byte
+
+	// conduit-31jg.25: the active session key is written by chat /
+	// session-switch goroutines and read by the read-loop teardown and the
+	// shutdown breadcrumb, so it lives behind mu. Use SessionKey() /
+	// SetSessionKey() (ws_client.go). done is closed when the read loop
+	// exits so the send-pump stops instead of leaking until shutdown.
+	mu         sync.Mutex
+	sessionKey string
+	done       chan struct{}
+	doneOnce   sync.Once
 }
 
 // New creates a new Gateway instance
@@ -436,10 +446,15 @@ func New(cfg *config.Config) (*Gateway, error) {
 	if workspaceDir == "" {
 		workspaceDir = "./workspace"
 	}
+	// conduit-31jg.34: cron stays in time.Local on purpose. Existing
+	// cron_jobs.json expressions were written for the server zone (UTC);
+	// scheduler.WithLocation(cfg.GetLocation()) would shift them. Per-job
+	// "CRON_TZ=<zone> " prefixes are supported for opt-in migration.
 	gw.scheduler = scheduler.New(workspaceDir, gw.executeScheduledJob)
 
 	// Initialize heartbeat integration
 	hbIntegration := heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, gw.monitoring.MetricsCollector, cfg.AgentHeartbeat.Model, cfg.AgentHeartbeat.TimeoutSeconds)
+	hbIntegration.SetAgentHeartbeatConfig(cfg.AgentHeartbeat) // conduit-31jg.33: configured TZ + quiet window
 	if gw.brainService != nil {
 		hbIntegration.SetBrainWriter(newHeartbeatBrainWriter(gw.brainService))
 		logger.Info("heartbeat Brain writer enabled for sense.alerts.* namespace")
@@ -508,6 +523,8 @@ func (g *Gateway) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	g.shutdownMgr.SetCancel(cancel)
+	// conduit-31jg.27: let ShutdownManager wait for stopAll to finish.
+	defer g.shutdownMgr.TrackGateway()()
 
 	// Store the gateway lifecycle context for WebSocket handlers.
 	// HTTP request contexts (r.Context()) are cancelled when the handler returns,
@@ -520,8 +537,18 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// with the request-ID middleware so auth/rate-limit logs can be correlated.
 	server := g.buildHTTPServer()
 
+	// conduit-31jg.27: bind synchronously so a port conflict fails startup
+	// (non-zero exit, visible to systemd) instead of logging and running on
+	// without HTTP/WS/health. Done before channels start so nothing needs
+	// unwinding.
+	listener, err := listenHTTP(server.Addr, httpBindRetryWindow)
+	if err != nil {
+		return fmt.Errorf("failed to bind HTTP listener on %s: %w", server.Addr, err)
+	}
+
 	// Start channel manager
 	if err := g.startChannels(ctx); err != nil {
+		_ = listener.Close()
 		return fmt.Errorf("failed to start channels: %w", err)
 	}
 
@@ -629,14 +656,17 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Start message processing goroutine.
 	go g.processMessages(ctx)
 
-	// Start HTTP server in goroutine.
+	// Serve on the pre-bound listener. A Serve failure after a successful
+	// bind is fatal: shut the gateway down so the supervisor restarts it
+	// rather than running headless (conduit-31jg.27).
 	go func() {
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			g.logger.Error("HTTP server error", "error", err)
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			g.logger.Error("HTTP server failed; shutting down gateway", "error", err)
+			cancel()
 		}
 	}()
 
-	g.logger.Info("gateway started", "port", g.config.Port)
+	g.logger.Info("gateway started", "port", g.config.Port, "addr", listener.Addr().String())
 
 	g.processRestartBreadcrumb()
 
@@ -644,8 +674,10 @@ func (g *Gateway) Start(ctx context.Context) error {
 	<-ctx.Done()
 	g.logger.Info("shutting down gateway")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Bounded so SIGTERM drain + stop stays under systemd's TimeoutStopSec
+	// (see gatewayStopTimeout, conduit-31jg.27).
+	shutdownCtx, stopCancel := context.WithTimeout(context.Background(), gatewayStopTimeout)
+	defer stopCancel()
 	g.stopAll(shutdownCtx, server)
 	return nil
 }
@@ -747,8 +779,25 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Use g.ctx (gateway lifecycle) instead of r.Context() because the HTTP request
 	// context is cancelled when this handler returns, which happens immediately
 	// after spawning these goroutines.
-	go g.handleClientWrite(client)
-	go g.handleClientRead(g.ctx, client)
+	//
+	// conduit-31jg.25: both goroutines are tracked so WebSocketService.Stop
+	// can wait for them; if Stop already began, tear the conn down instead.
+	if !g.ws.Track(2) {
+		g.ws.ClientMu.Lock()
+		delete(g.ws.Clients, client.ID)
+		g.ws.ClientMu.Unlock()
+		g.ws.WSConnCount.Add(-1)
+		_ = conn.Close()
+		return
+	}
+	go func() {
+		defer g.ws.Untrack()
+		g.handleClientWrite(client)
+	}()
+	go func() {
+		defer g.ws.Untrack()
+		g.handleClientRead(g.ctx, client)
+	}()
 }
 
 // handleTokenRevocation closes all WebSocket connections authenticated with the
@@ -772,12 +821,15 @@ func (g *Gateway) handleTokenRevocation(tokenID string) {
 // handleClientRead handles incoming messages from a WebSocket client
 func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 	defer func() {
+		// conduit-31jg.25: stop the send-pump now rather than at gateway shutdown.
+		client.markDone()
+
 		// SPAR reflection: fire low-confidence (Go-only) reflection on WS disconnect
 		// for substantive sessions. This runs before cleanup so the session data is
 		// still available.
-		if client.SessionKey != "" {
+		if sk := client.SessionKey(); sk != "" {
 			reflCtx, reflCancel := context.WithTimeout(g.ctx, 5*time.Second)
-			g.reflectOnSessionEnd(reflCtx, client.SessionKey)
+			g.reflectOnSessionEnd(reflCtx, sk)
 			reflCancel()
 		}
 
@@ -798,12 +850,15 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 		g.logger.Debug("client disconnected", "client_id", client.ID)
 	}()
 
-	// Set message size limit to prevent DoS via large messages
-	maxMessageSize := g.config.WebSocket.GetMaxMessageSize()
-	client.Conn.SetReadLimit(maxMessageSize)
+	// Set message size limit to prevent DoS via large messages, plus read
+	// deadline + pong handler so half-open peers are reaped (conduit-31jg.25).
+	g.ws.PrepareRead(client, g.config.WebSocket.GetMaxMessageSize())
 
 	for {
 		_, message, err := client.Conn.ReadMessage()
+		if err == nil {
+			g.ws.ExtendReadDeadline(client)
+		}
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				g.logger.Debug("client closed connection normally", "client_id", client.ID)
@@ -998,407 +1053,13 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		return
 	}
 
-	// conduit-1mnp: busy-ack. If a turn is already in flight for this session,
-	// the per-session turn lock will queue this message behind it — tell the
-	// user immediately instead of leaving them in silence. 30s cooldown per
-	// session so rapid nudges don't spam acks.
-	g.ws.ActiveRequestsMu.Lock()
-	_, turnInFlight := g.ws.ActiveRequests[session.Key]
-	g.ws.ActiveRequestsMu.Unlock()
-	if turnInFlight {
-		now := time.Now().Unix()
-		lastAck, _ := strconv.ParseInt(session.Context["last_busy_ack"], 10, 64)
-		if now-lastAck > 30 {
-			ack := &protocol.OutgoingMessage{
-				BaseMessage: protocol.BaseMessage{
-					Type:      protocol.TypeOutgoingMessage,
-					ID:        fmt.Sprintf("busyack_%d", time.Now().UnixNano()),
-					Timestamp: time.Now(),
-				},
-				ChannelID:  msg.ChannelID,
-				SessionKey: msg.SessionKey,
-				UserID:     msg.UserID,
-				Text:       "Still working on your previous request — this message is queued and I'll handle it right after.",
-			}
-			g.channelManager.SendMessage(ack)
-			_ = g.sessions.SetSessionContext(session.Key, "last_busy_ack", strconv.FormatInt(now, 10))
-			logging.Info(ctx, "busy-ack sent, message queued behind in-flight turn",
-				"session_key", session.Key)
-		}
-	}
-
 	// Reset wake_depth on normal user messages so the recursion guard resets
 	// after a human sends a message to the session.
 	if session.Context["wake_depth"] != "" && session.Context["wake_depth"] != "0" {
 		_ = g.sessions.SetSessionContext(session.Key, "wake_depth", "0")
 	}
 
-	// Add user message to session (store text marker for photos, not binary data)
-	textToStore := msg.Text
-	if len(msg.Attachments) > 0 {
-		if textToStore == "" {
-			textToStore = "[Sent a photo]"
-		} else {
-			textToStore = "[Photo] " + textToStore
-		}
-	}
-	_, err = g.sessions.AddMessage(session.Key, "user", textToStore, msg.Metadata)
-	if err != nil {
-		logging.Error(ctx, "error saving user message", "error", err)
-		return
-	}
-
-	// SPAR reflection: check for farewell or context budget trigger before sending to AI.
-	isFarewell, _ := g.shouldTriggerReflection(msg.Text)
-	isContextBudgetReflect := false
-	messageForAI := msg.Text
-	if isFarewell {
-		if reflPrompt := g.reflectHighConfidencePre(); reflPrompt != "" {
-			messageForAI = msg.Text + "\n\n[System: " + reflPrompt + "]"
-			g.logger.Info("SPAR reflection: farewell detected, injecting reflection prompt",
-				"session_key", session.Key, "channel_id", msg.ChannelID)
-		}
-	} else if session.Context["reflection_context_budget_triggered"] == "true" {
-		if reflPrompt := g.reflectHighConfidencePre(); reflPrompt != "" {
-			messageForAI = msg.Text + "\n\n[System: " + reflPrompt + "]"
-			isContextBudgetReflect = true
-			_ = g.sessions.SetSessionContextBatch(session.Key, map[string]string{
-				"reflection_context_budget_triggered": "",
-			})
-			g.logger.Info("SPAR reflection: context budget triggered, injecting reflection prompt",
-				"session_key", session.Key)
-		}
-	}
-
-	// Start typing indicator loop (refreshes every 4 seconds until done).
-	// Buffered to 1 to prevent goroutine leak if close() races with send.
-	typingDone := make(chan struct{}, 1)
-	go func() {
-		ticker := time.NewTicker(4 * time.Second)
-		defer ticker.Stop()
-
-		// Send immediately
-		g.channelManager.SendTypingIndicator(msg.ChannelID, msg.UserID)
-
-		for {
-			select {
-			case <-typingDone:
-				return
-			case <-ticker.C:
-				g.channelManager.SendTypingIndicator(msg.ChannelID, msg.UserID)
-			}
-		}
-	}()
-
-	// Generate AI response with tool execution support
-	if g.ai != nil {
-		// Create cancellable context for this request
-		reqCtx, cancel := context.WithCancel(ctx)
-		reqCtx = types.WithRequestContext(reqCtx, msg.ChannelID, msg.UserID, session.Key)
-		// conduit-31jg.43: live human turn on a promptable channel.
-		reqCtx = approval.WithInteractiveOrigin(reqCtx, approval.Origin{
-			Source: msg.ChannelID, ChannelID: msg.ChannelID, UserID: msg.UserID,
-			SessionKey: session.Key, Notify: notify,
-		})
-
-		// Thread image attachments to the AI layer for vision analysis
-		if len(msg.Attachments) > 0 {
-			aiAttachments := make([]ai.Attachment, len(msg.Attachments))
-			for i, att := range msg.Attachments {
-				aiAttachments[i] = ai.Attachment{
-					Type:      att.Type,
-					MediaType: att.MediaType,
-					Data:      att.Data,
-				}
-			}
-			reqCtx = ai.WithAttachments(reqCtx, aiAttachments)
-		}
-
-		// Track this request so /stop can cancel it
-		g.ws.ActiveRequestsMu.Lock()
-		g.ws.ActiveRequests[session.Key] = cancel
-		requestCount := len(g.ws.ActiveRequests)
-		g.ws.ActiveRequestsMu.Unlock()
-
-		// Update metrics
-		if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
-			g.monitoring.MetricsCollector.UpdateActiveRequests(requestCount)
-		}
-
-		// Ensure we clean up when done
-		defer func() {
-			g.ws.ActiveRequestsMu.Lock()
-			delete(g.ws.ActiveRequests, session.Key)
-			finalRequestCount := len(g.ws.ActiveRequests)
-			g.ws.ActiveRequestsMu.Unlock()
-
-			// Update metrics on cleanup
-			if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
-				g.monitoring.MetricsCollector.UpdateActiveRequests(finalRequestCount)
-			}
-		}()
-
-		// Attach tool event callback for thinking status and tool logging
-		reqCtx = tools.WithToolEventCallback(reqCtx, func(event tools.ToolEventInfo) {
-			if event.EventType == "thinking" {
-				g.channelManager.SendTypingIndicator(msg.ChannelID, msg.UserID)
-			}
-			logging.Debug(reqCtx, "tool event",
-				"channel", msg.ChannelID,
-				"event", event.EventType,
-				"tool", event.ToolName)
-		})
-
-		// Get model and provider overrides from session context
-		modelOverride := session.Context["model"]
-		providerOverride := session.Context["provider"]
-
-		// Check if adapter supports streaming
-		adapter, _ := g.channelManager.GetAdapter(msg.ChannelID)
-		streamingAdapter, supportsStreaming := adapter.(channels.StreamingAdapter)
-
-		var convResponse ai.ConversationResponse
-		var err error
-		typingClosed := false
-		streamingUsed := false
-
-		if supportsStreaming {
-			// Use streaming mode
-			chatID, _ := strconv.ParseInt(msg.UserID, 10, 64)
-
-			// Send placeholder message
-			placeholderMsgID, sendErr := streamingAdapter.SendMessageWithID(chatID, "...")
-			if sendErr != nil {
-				logging.Warn(reqCtx, "streaming: failed to send placeholder", "error", sendErr)
-				supportsStreaming = false // Fall back to non-streaming
-			} else {
-				close(typingDone) // Stop typing indicator since we have a message now
-				typingClosed = true
-
-				// Set up streaming state
-				var textBuilder strings.Builder
-				var lastEditTime time.Time
-				lastEditLen := 0 // track text length at last edit for delta detection
-				editInterval := 500 * time.Millisecond
-				minCharsForEdit := 50
-
-				onDelta := func(delta string, done bool) {
-					textBuilder.WriteString(delta)
-
-					currentText := textBuilder.String()
-					timeSinceEdit := time.Since(lastEditTime)
-
-					// Edit message if enough time passed or enough chars accumulated or done
-					shouldEdit := done ||
-						(timeSinceEdit >= editInterval && len(currentText) > minCharsForEdit) ||
-						(len(currentText)-lastEditLen > 100) // Every 100 new chars since last edit
-
-					if shouldEdit && len(currentText) > 0 {
-						// Strip trailing silent tokens before showing to user
-						displayText := channels.StripTrailingSilentTokens(currentText)
-						if displayText != "" {
-							if editErr := streamingAdapter.EditMessageText(chatID, placeholderMsgID, displayText); editErr != nil {
-								logging.Warn(reqCtx, "streaming: edit failed", "error", editErr)
-							}
-						}
-						lastEditTime = time.Now()
-						lastEditLen = len(currentText)
-					}
-				}
-
-				convResponse, err = g.ai.GenerateResponseStreaming(reqCtx, session, messageForAI, providerOverride, modelOverride, onDelta)
-
-				// Final edit with complete text
-				if err == nil && convResponse != nil {
-					finalContent := convResponse.GetContent()
-					streamedLength := textBuilder.Len()
-
-					// Check for silent response patterns in final content
-					if channels.IsSilentResponse(finalContent) {
-						logging.Debug(reqCtx, "streaming: silent response pattern detected, deleting placeholder")
-						// Delete the placeholder message since we don't want to show this
-						if deleteErr := streamingAdapter.DeleteMessage(chatID, placeholderMsgID); deleteErr != nil {
-							logging.Warn(reqCtx, "streaming: failed to delete placeholder", "error", deleteErr)
-						}
-						streamingUsed = true
-					} else if finalContent != "" {
-						// Sanitize internal markers before editing the placeholder
-						finalContent = channels.SanitizeOutgoingText(finalContent)
-						// If tool execution happened, the final content might be different from streamed text
-						if streamedLength > 0 && finalContent != textBuilder.String() {
-							logging.Debug(reqCtx, "streaming: tool execution detected",
-								"streamed_chars", streamedLength,
-								"final_chars", len(finalContent))
-						}
-						if finalContent != "" {
-							if editErr := streamingAdapter.EditMessageText(chatID, placeholderMsgID, finalContent); editErr != nil {
-								logging.Warn(reqCtx, "streaming: final edit failed, falling back to SendMessage", "error", editErr)
-								_ = streamingAdapter.DeleteMessage(chatID, placeholderMsgID)
-								// streamingUsed stays false → non-streaming SendMessage path will run
-							} else {
-								streamingUsed = true
-							}
-						} else {
-							logging.Warn(reqCtx, "streaming: finalContent empty after sanitization, deleting placeholder")
-							_ = streamingAdapter.DeleteMessage(chatID, placeholderMsgID)
-						}
-					} else if streamedLength > 0 {
-						// Fallback to streamed text if no final content
-						streamedText := textBuilder.String()
-						// Also check streamed text for silent patterns
-						if channels.IsSilentResponse(streamedText) {
-							logging.Debug(reqCtx, "streaming: silent response in streamed text, deleting placeholder")
-							if deleteErr := streamingAdapter.DeleteMessage(chatID, placeholderMsgID); deleteErr != nil {
-								logging.Warn(reqCtx, "streaming: failed to delete placeholder", "error", deleteErr)
-							}
-							streamingUsed = true
-						} else {
-							streamedText = channels.SanitizeOutgoingText(streamedText)
-							logging.Debug(reqCtx, "streaming: using streamed text only", "chars", streamedLength)
-							if streamedText != "" {
-								if editErr := streamingAdapter.EditMessageText(chatID, placeholderMsgID, streamedText); editErr != nil {
-									logging.Warn(reqCtx, "streaming: streamed text edit failed, falling back", "error", editErr)
-									_ = streamingAdapter.DeleteMessage(chatID, placeholderMsgID)
-								} else {
-									streamingUsed = true
-								}
-							} else {
-								logging.Warn(reqCtx, "streaming: streamedText empty after sanitization, deleting placeholder")
-								_ = streamingAdapter.DeleteMessage(chatID, placeholderMsgID)
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Fall back to non-streaming if streaming not used or failed
-		if !supportsStreaming || (convResponse == nil && err == nil) {
-			// Progress callback for status updates during long operations
-			onProgress := func(status string) {
-				progressMsg := &protocol.OutgoingMessage{
-					BaseMessage: protocol.BaseMessage{
-						Type:      protocol.TypeOutgoingMessage,
-						ID:        fmt.Sprintf("progress_%d", time.Now().UnixNano()),
-						Timestamp: time.Now(),
-					},
-					ChannelID:  msg.ChannelID,
-					SessionKey: msg.SessionKey,
-					UserID:     msg.UserID,
-					Text:       status,
-				}
-				g.channelManager.SendMessage(progressMsg)
-			}
-
-			convResponse, err = g.ai.GenerateResponseWithToolsAndProgress(reqCtx, session, messageForAI, providerOverride, modelOverride, onProgress)
-		}
-		if err != nil {
-			if !typingClosed {
-				close(typingDone) // Stop typing indicator
-			}
-
-			// Check if this was a cancellation (from /stop)
-			if reqCtx.Err() == context.Canceled {
-				logging.Debug(reqCtx, "request cancelled for session", "session_key", session.Key)
-				return // Silent return, /stop already sent a message
-			}
-
-			logging.Error(reqCtx, "error generating AI response", "error", err)
-
-			// Send error message back to user
-			errorMsg := &protocol.OutgoingMessage{
-				BaseMessage: protocol.BaseMessage{
-					Type:      protocol.TypeOutgoingMessage,
-					ID:        fmt.Sprintf("error_%d", time.Now().UnixNano()),
-					Timestamp: time.Now(),
-				},
-				ChannelID:  msg.ChannelID,
-				SessionKey: msg.SessionKey,
-				UserID:     msg.UserID,
-				Text:       ai.GetUserMessage(err),
-			}
-
-			g.channelManager.SendMessage(errorMsg)
-			return
-		}
-
-		if !typingClosed {
-			close(typingDone) // Stop typing indicator
-		}
-
-		responseContent := convResponse.GetContent()
-
-		// Token usage recording is router-level since bd-27hs —
-		// GenerateResponseWithTools/Streaming records last_* and cumulative
-		// totals inside the turn lock. This block now only handles path-local
-		// concerns: proactive context-window warnings (and their dedup keys).
-		if usage := convResponse.GetUsage(); usage != nil {
-			if warning := contextWarningIfNeeded(session, usage.PromptTokens, modelOverride); warning.Text != "" {
-				responseContent += warning.Text
-				batch := map[string]string{warning.Key: "true"}
-				// SPAR: trigger reflection on next message when context budget >= 80%
-				if warning.Key == "context_warned_80" && g.sessionReflector != nil {
-					batch["reflection_context_budget_triggered"] = "true"
-				}
-				_ = g.sessions.SetSessionContextBatch(session.Key, batch)
-			}
-		}
-
-		// Check for silent response tokens (NO_REPLY, HEARTBEAT_OK)
-		if responseContent == "" || channels.IsSilentResponse(responseContent) {
-			if responseContent == "" {
-				logging.Warn(ctx, "empty response content, not sending to channel")
-			} else {
-				logging.Debug(ctx, "silent response detected in channel message, suppressing",
-					"response_chars", len(responseContent))
-			}
-			return
-		}
-
-		// Add AI response to session
-		_, err = g.sessions.AddMessage(session.Key, "assistant", responseContent, nil)
-		if err != nil {
-			logging.Error(ctx, "error saving AI message", "error", err)
-		}
-
-		// SPAR reflection: after model responds to farewell or context budget trigger, compute session metrics
-		if isFarewell || isContextBudgetReflect {
-			if updatedSession, sErr := g.sessions.GetSession(session.Key); sErr == nil {
-				g.reflectHighConfidencePost(ctx, updatedSession)
-			}
-		}
-
-		// Skip sending if streaming already edited the message
-		if streamingUsed {
-			logging.Debug(ctx, "streaming: response delivered via message editing",
-				"response_chars", len(responseContent))
-			return
-		}
-
-		// Send response back through channel
-		outgoingMsg := &protocol.OutgoingMessage{
-			BaseMessage: protocol.BaseMessage{
-				Type:      protocol.TypeOutgoingMessage,
-				ID:        fmt.Sprintf("response_%d", time.Now().UnixNano()),
-				Timestamp: time.Now(),
-			},
-			ChannelID:  msg.ChannelID,
-			SessionKey: msg.SessionKey,
-			UserID:     msg.UserID,
-			Text:       responseContent,
-		}
-
-		// Forward source message ID so reply tags can resolve [[reply_to_current]]
-		if srcID, ok := msg.Metadata["message_id"]; ok && srcID != "" {
-			outgoingMsg.Metadata = map[string]string{
-				"source_message_id": srcID,
-			}
-		}
-
-		if err := g.channelManager.SendMessage(outgoingMsg); err != nil {
-			logging.Error(ctx, "error sending response", "error", err)
-		}
-	} else {
+	if g.ai == nil {
 		// Echo back if no AI available (for testing)
 		echoMsg := &protocol.OutgoingMessage{
 			BaseMessage: protocol.BaseMessage{
@@ -1411,7 +1072,41 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 			UserID:     msg.UserID,
 			Text:       fmt.Sprintf("Echo: %s", msg.Text),
 		}
-
 		g.channelManager.SendMessage(echoMsg)
+		return
 	}
+
+	// Transcript form of the message: a text marker for photos, not binary data.
+	textToStore := msg.Text
+	var aiAttachments []ai.Attachment
+	if len(msg.Attachments) > 0 {
+		if textToStore == "" {
+			textToStore = "[Sent a photo]"
+		} else {
+			textToStore = "[Photo] " + textToStore
+		}
+		// Thread image attachments to the AI layer for vision analysis
+		aiAttachments = make([]ai.Attachment, len(msg.Attachments))
+		for i, att := range msg.Attachments {
+			aiAttachments[i] = ai.Attachment{Type: att.Type, MediaType: att.MediaType, Data: att.Data}
+		}
+	}
+
+	// conduit-31jg.35: the shared TurnRunner owns the busy-ack decision, the
+	// turn lock, transcript persistence (inside the lock, conduit-31jg.22),
+	// /stop registration (conduit-31jg.23), reflection and compaction
+	// (conduit-31jg.49). This adapter only renders output for the channel.
+	g.turns().Run(ctx, TurnRequest{
+		Session:       session,
+		ChannelID:     msg.ChannelID,
+		UserID:        msg.UserID,
+		Text:          msg.Text,
+		StoreText:     textToStore,
+		StoreMetadata: msg.Metadata,
+		Attachments:   aiAttachments,
+		Origin: &approval.Origin{ // conduit-31jg.43: live human turn on a promptable channel
+			Source: msg.ChannelID, ChannelID: msg.ChannelID, UserID: msg.UserID,
+			SessionKey: session.Key, Notify: notify,
+		},
+	}, newChannelTurnSink(g, msg, session))
 }

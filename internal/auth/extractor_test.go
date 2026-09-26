@@ -137,8 +137,17 @@ func TestTokenExtractor_APIKeyHeader(t *testing.T) {
 	}
 }
 
+// conduit-31jg.4: ?token= is only honoured by the WebSocket extractor.
+func TestTokenExtractor_QueryParamIgnoredOnHTTP(t *testing.T) {
+	req := httptest.NewRequest("GET", "/metrics?token=claw_v1_query123", nil)
+	result := NewTokenExtractor().Extract(req)
+	if result.Token != "" || result.Source != TokenSourceNone {
+		t.Fatalf("HTTP extractor accepted query token: source=%v", result.Source)
+	}
+}
+
 func TestTokenExtractor_QueryParam(t *testing.T) {
-	extractor := NewTokenExtractor()
+	extractor := NewWebSocketTokenExtractor()
 
 	tests := []struct {
 		name          string

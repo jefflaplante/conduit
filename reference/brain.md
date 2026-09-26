@@ -42,9 +42,14 @@ SQLite-persisted key-value store. Entries survive restarts and are shared across
 
 In-process per-user key-value store. Scoped to the current user's session context. Entries exist only while the gateway is running.
 
-- Keyed by user ID extracted from request context
-- Sub-agents can read (but not write) their parent's working memory via `WithParentUserID` context propagation
-- Auto-flushed periodically: entries not accessed for over 1 hour with salience below the evict threshold are removed
+- Keyed by user ID. The gateway's brain adapter maps the request's user (`types.RequestUserID`, set for Telegram/TUI/WS turns) onto `brain.WithUserID`, so WM and the scratchpad share the same per-user bucket (conduit-31jg.30). An explicit `brain.WithUserID` on the context wins.
+- Callers with no user at all (heartbeat alerts under `sense.alerts.*`, other system writers) use the shared bucket `brain.SharedUserID` (`"default"`). Every user can read it, read-only, after their own and their parent's WM.
+- Sub-agents get their own bucket (`subagent:<session key>`) and can read (but not write) their parent's working memory via `WithParentUserID` context propagation
+- WM lives only in process memory (`Brain.working`); nothing persists it, so a restart clears it
+- Auto-flushed periodically: entries not accessed for over 1 hour whose *eviction score* is below `evict_threshold` leave WM. The eviction score is salience without the constant tier term (`access_score*access_weight + recency_score*recency_weight`) — the tier term is identical for every WM entry, and including it made the default threshold unreachable (conduit-31jg.29). With defaults, an entry touched once is evictable after ~3.2h idle, one touched 10 times after ~5.7h.
+- Hot entries (access count >= heat promotion threshold, default 3) are never silently dropped: when they become evictable they are promoted to LTM first (if `auto_promote` is on; otherwise they stay in WM). Cold entries are dropped.
+- Per-user cap: each user's WM holds at most 1000 entries (`WithMaxWMEntriesPerUser`). Writing past the cap evicts the lowest-scoring entries (hot ones promoted to LTM first); the key being written is never the victim.
+- Promotion paths, in order of when they fire: explicit `promote`; `consolidate` (salience >= `consolidate_threshold`, or hot + evictable); auto-flush/cap rescue of hot entries; nightly REM consolidation (salience or heat) across every user's WM.
 - High-salience entries can be promoted to LTM via the `promote` or `consolidate` actions
 
 ### Scratchpad
@@ -57,7 +62,7 @@ Per-user LIFO stack for temporary notes during multi-step reasoning. Push values
 
 ### Sub-Agent Working Memory Sharing
 
-When a sub-agent session is spawned, the parent's user ID is attached to the child context via `WithParentUserID`. The child can then:
+When a sub-agent session is spawned (`SpawnSubAgentWithCallback`), the gateway gives the child its own WM bucket (`subagent:<session key>`) and attaches the parent's effective brain user ID (the parent's explicit brain user, else its request user) via `WithParentUserID`. The child can then:
 
 - **Read** parent WM entries via `Get` and `Recall` (returns read-only copies, no access count bump on parent)
 - **Not write** to parent WM -- the child has its own isolated WM namespace
@@ -216,7 +221,7 @@ Weights should sum to 1.0. Adjusting them changes which entries float to the top
 | Threshold | Default | Purpose |
 |-----------|---------|---------|
 | `consolidate_threshold` | 0.6 | WM entries above this are auto-promoted to LTM during consolidation |
-| `evict_threshold` | 0.1 | WM entries below this are evicted during consolidation or auto-flush |
+| `evict_threshold` | 0.1 | WM entries idle > 1h whose access+recency score (salience minus the tier term) is below this are evicted during consolidation or auto-flush |
 
 ## REM Sleep Cycle
 
@@ -418,7 +423,7 @@ internal/brain/
   brain.go            # Core Brain struct: Store, Get, Recall, List, Delete, Push/Pop/Peek, Promote, Consolidate, Status
   migrations.go       # SQLite schema migrations (4 versions, includes brain_reflections)
   source.go           # Source provenance: prefix parsing, validation, staleness thresholds
-  tokenize.go         # Query tokenizer: stopword removal, delimiter splitting, dedup
+  tokenize.go         # TokenizeQuery wrapper; tokenizer lives in internal/ftsquery (shared with every FTS5 MATCH builder)
   rem/
     cycle.go          # REMCycle orchestrator: Run() dispatches phases in order
     triage.go         # Phase 1: daily log scanning, stale candidate detection

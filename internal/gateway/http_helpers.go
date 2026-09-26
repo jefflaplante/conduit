@@ -1,13 +1,16 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"conduit/internal/ai"
 	"conduit/internal/logging"
+	"conduit/internal/tools"
 )
 
 // checkOrigin returns a function that validates WebSocket Origin headers.
@@ -135,43 +138,46 @@ func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add user message to session.
-	_, err = g.sessions.AddMessage(session.Key, "user", req.Message, nil)
-	if err != nil {
-		g.logger.Error("test message: error saving user message", "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
 	// Generate AI response.
 	if g.ai == nil {
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	ctx := r.Context()
-	// Use GenerateResponseWithTools to enable tool execution.
-	modelOverride := session.Context["model"]
-	providerOverride := session.Context["provider"]
-	convResponse, err := g.ai.GenerateResponseWithTools(ctx, session, req.Message, providerOverride, modelOverride)
-	if err != nil {
-		g.logger.Error("test message: error generating AI response", "error", err)
+	// conduit-31jg.35: shared TurnRunner (user + reply persisted inside the
+	// turn lock, conduit-31jg.22). Test endpoint turns are non-interactive.
+	res := g.turns().Run(r.Context(), TurnRequest{
+		Session:              session,
+		ChannelID:            session.ChannelID,
+		UserID:               req.UserID,
+		Text:                 req.Message,
+		NonInteractiveSource: "http_test",
+	}, discardTurnSink{})
+	if res.Err != nil {
+		g.logger.Error("test message: error generating AI response", "error", res.Err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// Add AI response to session.
-	_, err = g.sessions.AddMessage(session.Key, "assistant", convResponse.GetContent(), nil)
-	if err != nil {
-		g.logger.Error("error saving AI message", "error", err)
-	}
-
 	// Return response.
+	var steps int
+	if res.Response != nil {
+		steps = res.Response.GetSteps()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":  true,
-		"response": convResponse.GetContent(),
-		"usage":    convResponse.GetUsage(),
-		"steps":    convResponse.GetSteps(),
+		"response": res.Raw,
+		"usage":    res.Usage,
+		"steps":    steps,
 	})
 }
+
+// discardTurnSink is a TurnSink for callers that only need Run's result.
+type discardTurnSink struct{}
+
+func (discardTurnSink) Queued(context.Context)                         {}
+func (discardTurnSink) Begin(context.Context) ai.StreamCallback        { return nil }
+func (discardTurnSink) Progress(string)                                {}
+func (discardTurnSink) ToolEvent(context.Context, tools.ToolEventInfo) {}
+func (discardTurnSink) Finish(context.Context, *TurnResult)            {}

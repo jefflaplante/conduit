@@ -130,6 +130,7 @@ func TokenRootCmd(config *CLIConfig) *cobra.Command {
 	cmd.AddCommand(ListTokensCmd(config))
 	cmd.AddCommand(RevokeTokenCmd(config))
 	cmd.AddCommand(ExportTokenCmd(config))
+	cmd.AddCommand(InfoTokenCmd(config)) // conduit-31jg.48
 
 	return cmd
 }
@@ -393,7 +394,12 @@ func openTokenStorage(c *CLIConfig) (*TokenStorage, *sql.DB, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open database %q: %w", dbPath, err)
 	}
-	return NewTokenStorage(db, settings.Secret), db, nil
+	ts, err := OpenTokenStorage(db, settings.Secret) // conduit-31jg.48
+	if err != nil {
+		db.Close()
+		return nil, nil, err
+	}
+	return ts, db, nil
 }
 
 // openDatabase opens the SQLite database and runs migrations

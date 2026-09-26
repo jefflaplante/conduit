@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,11 +15,10 @@ import (
 	"conduit/internal/approval"
 	"conduit/internal/channels"
 	"conduit/internal/monitoring"
+	"conduit/internal/protocol"
 	"conduit/internal/sessions"
 	"conduit/internal/tools"
-	"conduit/internal/tools/types"
 	"conduit/internal/tui"
-	"conduit/internal/protocol"
 )
 
 // DirectClientConfig holds configuration for creating a DirectClient.
@@ -39,6 +37,10 @@ type DirectClientConfig struct {
 	UptimeFunc   func() int64
 	ToolCount    int
 	SkillCount   int
+	// Turns is the gateway's shared turn pipeline (conduit-31jg.35). nil
+	// builds a private runner over Sessions/AI whose running-turn registry
+	// is this client's activeRequests map.
+	Turns *TurnRunner
 }
 
 // DirectClient implements tui.GatewayClient for in-process communication.
@@ -58,6 +60,9 @@ type DirectClient struct {
 	activeRequests   map[string]context.CancelFunc
 	activeRequestsMu sync.RWMutex
 
+	// turns runs chat turns (conduit-31jg.35).
+	turns *TurnRunner
+
 	// Dropped message tracking
 	droppedMessages atomic.Int64
 
@@ -68,7 +73,7 @@ type DirectClient struct {
 // NewDirectClient creates a DirectClient that talks to gateway services in-process.
 func NewDirectClient(cfg DirectClientConfig) *DirectClient {
 	ctx, cancel := context.WithCancel(cfg.ParentCtx)
-	return &DirectClient{
+	c := &DirectClient{
 		config:           cfg,
 		userID:           cfg.UserID,
 		agentName:        cfg.AgentName,
@@ -81,7 +86,17 @@ func NewDirectClient(cfg DirectClientConfig) *DirectClient {
 		activeRequests:   make(map[string]context.CancelFunc),
 		ctx:              ctx,
 		cancel:           cancel,
+		turns:            cfg.Turns,
 	}
+	if c.turns == nil {
+		c.turns = NewTurnRunner(cfg.Sessions, cfg.AI, nil, nil,
+			activeTurnRegistry{
+				mu:  &c.activeRequestsMu,
+				get: func() map[string]context.CancelFunc { return c.activeRequests },
+			},
+			func() monitoring.MetricsCollectorInterface { return cfg.Metrics }, nil)
+	}
+	return c
 }
 
 // ConnectCmd returns ConnectedMsg immediately — we're always "connected" in-process.
@@ -187,191 +202,112 @@ func (c *DirectClient) SendChatWithID(sessionKey, text, requestID string) error 
 		return nil
 	}
 
-	// Save user message
-	if _, err := c.sessions.AddMessage(session.Key, "user", text, nil); err != nil {
-		c.send(tui.ErrorMsg{SessionKey: session.Key, RequestID: requestID, Code: "save_error", Message: fmt.Sprintf("Failed to save message: %v", err)})
-		return err
-	}
-
-	// Launch streaming chat in a goroutine with the provided request ID
+	// conduit-31jg.35: persistence now happens inside the turn lock in the
+	// shared TurnRunner (conduit-31jg.22), so the whole turn runs async.
 	go c.streamChatWithID(session, text, requestID)
 
 	return nil
 }
 
-// streamChat runs the AI generation loop and sends results to the inbox.
-func (c *DirectClient) streamChat(session *sessions.Session, text string) {
-	requestID := fmt.Sprintf("req_%d", time.Now().UnixNano())
-	c.streamChatWithID(session, text, requestID)
-}
-
+// streamChatWithID runs one turn through the shared TurnRunner and renders it
+// into the TUI inbox.
 func (c *DirectClient) streamChatWithID(session *sessions.Session, text, requestID string) {
-
 	// Track activity
 	if c.metricsCollector != nil {
 		c.metricsCollector.MarkActivity()
 	}
+	c.turns.Run(c.ctx, TurnRequest{
+		Session:   session,
+		ChannelID: session.ChannelID,
+		UserID:    c.userID,
+		Text:      text,
+		Origin: &approval.Origin{ // conduit-31jg.43
+			Source: "tui", ChannelID: session.ChannelID, UserID: c.userID,
+			SessionKey: session.Key, Notify: c.directApprovalNotifier(session.Key),
+		},
+		SanitizeStored: true,
+	}, &directTurnSink{c: c, session: session, requestID: requestID})
+}
 
-	// Create cancellable context
-	reqCtx, cancel := context.WithCancel(c.ctx)
-	reqCtx = types.WithRequestContext(reqCtx, session.ChannelID, c.userID, session.Key)
-	reqCtx = approval.WithInteractiveOrigin(reqCtx, approval.Origin{ // conduit-31jg.43
-		Source: "tui", ChannelID: session.ChannelID, UserID: c.userID,
-		SessionKey: session.Key, Notify: c.directApprovalNotifier(session.Key),
-	})
+// directTurnSink renders a TurnRunner turn as TUI inbox messages.
+type directTurnSink struct {
+	c         *DirectClient
+	session   *sessions.Session
+	requestID string
+}
 
-	// Track active request for /stop
-	c.activeRequestsMu.Lock()
-	c.activeRequests[session.Key] = cancel
-	c.activeRequestsMu.Unlock()
+// Queued: the TUI never had a busy-ack; the queued turn's StreamStart arrives
+// once the previous turn finished.
+func (s *directTurnSink) Queued(context.Context) {}
 
-	defer func() {
-		c.activeRequestsMu.Lock()
-		delete(c.activeRequests, session.Key)
-		c.activeRequestsMu.Unlock()
-	}()
-
-	// Send StreamStart
-	c.send(tui.StreamStartMsg{
-		SessionKey: session.Key,
-		RequestID:  requestID,
-	})
-
-	// Attach tool event callback
-	reqCtx = tools.WithToolEventCallback(reqCtx, func(event tools.ToolEventInfo) {
-		c.send(tui.ToolEventMsg{
-			ToolEvent: protocol.ToolEvent{
-				BaseMessage: protocol.BaseMessage{
-					Type:      protocol.TypeToolEvent,
-					ID:        fmt.Sprintf("te_%d", time.Now().UnixNano()),
-					Timestamp: time.Now(),
-				},
-				SessionKey: session.Key,
-				RequestID:  requestID,
-				ToolName:   event.ToolName,
-				EventType:  event.EventType,
-				Args:       formatToolArgs(event.Args),
-				Result:     event.Result,
-				Error:      event.Error,
-				Duration:   event.Duration,
-			},
-		})
-	})
-
-	// Get model and provider overrides
-	modelOverride := session.Context["model"]
-	providerOverride := session.Context["provider"]
-
-	// Stream deltas
-	onDelta := func(delta string, done bool) {
+func (s *directTurnSink) Begin(context.Context) ai.StreamCallback {
+	s.c.send(tui.StreamStartMsg{SessionKey: s.session.Key, RequestID: s.requestID})
+	return func(delta string, done bool) {
 		if delta != "" {
-			c.send(tui.StreamDeltaMsg{
-				SessionKey: session.Key,
-				RequestID:  requestID,
-				Delta:      delta,
-			})
+			s.c.send(tui.StreamDeltaMsg{SessionKey: s.session.Key, RequestID: s.requestID, Delta: delta})
 		}
 	}
+}
 
-	convResponse, err := c.ai.GenerateResponseStreaming(reqCtx, session, text, providerOverride, modelOverride, onDelta)
-	if err != nil {
-		if reqCtx.Err() == context.Canceled {
-			log.Printf("[DirectClient] Request cancelled for session: %s", session.Key)
-			return
-		}
-		log.Printf("[DirectClient] AI error: %v", err)
-		c.send(tui.ErrorMsg{SessionKey: session.Key, RequestID: requestID, Code: "ai_error", Message: ai.UserFriendlyError(err)})
-		c.send(tui.StreamEndMsg{
-			SessionKey: session.Key,
-			RequestID:  requestID,
-			Content:    "",
-		})
-		return
-	}
+func (s *directTurnSink) Progress(string) {}
 
-	var responseContent string
-	var promptTokens, completionTokens, totalTokens int
-	var requestCost, sessionCost float64
-	if convResponse != nil {
-		responseContent = convResponse.GetContent()
-		if usage := convResponse.GetUsage(); usage != nil {
-			promptTokens = usage.PromptTokens
-			completionTokens = usage.CompletionTokens
-			totalTokens = usage.TotalTokens
-
-			// Proactive context window warning
-			warning := contextWarningIfNeeded(session, promptTokens, modelOverride)
-			if warning.Text != "" {
-				responseContent += warning.Text
-			}
-
-			// Accumulate session cost
-			requestCost = ai.CalculateCost(modelOverride, promptTokens, completionTokens)
-			prevCost, _ := strconv.ParseFloat(session.Context["session_total_cost"], 64)
-			sessionCost = prevCost + requestCost
-			prevCount, _ := strconv.Atoi(session.Context["session_request_count"])
-
-			// Token usage recording is router-level since bd-27hs —
-			// GenerateResponseStreaming records last_* and cumulative totals
-			// inside the turn lock. This block now only handles path-local
-			// concerns: context warning, session cost, request count.
-
-			batch := map[string]string{
-				"session_total_cost":    fmt.Sprintf("%.6f", sessionCost),
-				"session_request_count": strconv.Itoa(prevCount + 1),
-			}
-			if warning.Text != "" {
-				batch[warning.Key] = "true"
-			}
-			_ = c.sessions.SetSessionContextBatch(session.Key, batch)
-		}
-	}
-
-	// Get context window: prefer provider config, fall back to model-based detection
-	contextWindow := c.getContextWindow(providerOverride, modelOverride)
-
-	// Check for silent response tokens (NO_REPLY, HEARTBEAT_OK)
-	if channels.IsSilentResponse(responseContent) {
-		log.Printf("[DirectClient] Silent response detected (%d chars), suppressing", len(responseContent))
-		// Send StreamEnd with empty content so TUI stops its streaming state
-		c.send(tui.StreamEndMsg{
-			SessionKey:       session.Key,
-			RequestID:        requestID,
-			Content:          "",
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			TotalTokens:      totalTokens,
-			Model:            modelOverride,
-			ContextWindow:    contextWindow,
-			RequestCost:      requestCost,
-			SessionCost:      sessionCost,
-		})
-		return
-	}
-
-	// Sanitize internal markers before sending to TUI
-	responseContent = channels.SanitizeOutgoingText(responseContent)
-
-	// Send StreamEnd with usage
-	c.send(tui.StreamEndMsg{
-		SessionKey:       session.Key,
-		RequestID:        requestID,
-		Content:          responseContent,
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		TotalTokens:      totalTokens,
-		Model:            modelOverride,
-		ContextWindow:    contextWindow,
-		RequestCost:      requestCost,
-		SessionCost:      sessionCost,
+func (s *directTurnSink) ToolEvent(_ context.Context, event tools.ToolEventInfo) {
+	s.c.send(tui.ToolEventMsg{
+		ToolEvent: protocol.ToolEvent{
+			BaseMessage: protocol.BaseMessage{
+				Type:      protocol.TypeToolEvent,
+				ID:        fmt.Sprintf("te_%d", time.Now().UnixNano()),
+				Timestamp: time.Now(),
+			},
+			SessionKey: s.session.Key,
+			RequestID:  s.requestID,
+			ToolName:   event.ToolName,
+			EventType:  event.EventType,
+			Args:       formatToolArgs(event.Args),
+			Result:     event.Result,
+			Error:      event.Error,
+			Duration:   event.Duration,
+		},
 	})
+}
 
-	// Save assistant message
-	if responseContent != "" {
-		if _, err := c.sessions.AddMessage(session.Key, "assistant", responseContent, nil); err != nil {
-			log.Printf("[DirectClient] Error saving AI message: %v", err)
-		}
+func (s *directTurnSink) Finish(_ context.Context, res *TurnResult) {
+	key := s.session.Key
+	switch {
+	case res.Dropped:
+		return // stopped while queued; nothing was started
+	case res.Cancelled:
+		log.Printf("[DirectClient] Request cancelled for session: %s", key)
+		return
+	case res.Err != nil:
+		log.Printf("[DirectClient] AI error: %v", res.Err)
+		s.c.send(tui.ErrorMsg{SessionKey: key, RequestID: s.requestID, Code: "ai_error", Message: ai.UserFriendlyError(res.Err)})
+		s.c.send(tui.StreamEndMsg{SessionKey: key, RequestID: s.requestID, Content: ""})
+		return
 	}
+
+	end := tui.StreamEndMsg{
+		SessionKey:    key,
+		RequestID:     s.requestID,
+		Model:         res.Model,
+		ContextWindow: s.c.getContextWindow(s.session.Context["provider"], res.Model),
+		RequestCost:   res.RequestCost,
+		SessionCost:   res.SessionCost,
+	}
+	if res.Usage != nil {
+		end.PromptTokens = res.Usage.PromptTokens
+		end.CompletionTokens = res.Usage.CompletionTokens
+		end.TotalTokens = res.Usage.TotalTokens
+	}
+	if res.Delivered() {
+		// Sanitize internal markers before sending to TUI
+		end.Content = channels.SanitizeOutgoingText(res.Content)
+	} else {
+		// Silent/empty: StreamEnd with empty content so the TUI stops its
+		// streaming state.
+		log.Printf("[DirectClient] Silent response detected (%d chars), suppressing", len(res.Raw))
+	}
+	s.c.send(end)
 }
 
 // SendCommand processes a slash command in-process.
@@ -431,7 +367,7 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 			return
 		}
 		messages, _ := c.sessions.GetMessages(session.Key, 1000)
-		sendResponse(formatStatusResponse(session, len(messages), c.ai.GetUsageTracker()))
+		sendResponse(formatStatusResponse(session, len(messages), c.ai.GetUsageTracker(), c.ai.DefaultModel()))
 
 	case text == "/help" || text == "/commands":
 		help := "Available Commands:\n\n" +
@@ -457,7 +393,7 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 			sendResponse("Could not retrieve session info.")
 			return
 		}
-		sendResponse(formatContextUsage(session))
+		sendResponse(formatContextUsage(session, c.ai.DefaultModel()))
 
 	case text == "/cost" || strings.HasPrefix(text, "/cost "):
 		if sessionKey == "" {
@@ -604,16 +540,9 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 		}
 
 	case text == "/stop":
-		c.activeRequestsMu.RLock()
-		cancelFn, exists := c.activeRequests[sessionKey]
-		c.activeRequestsMu.RUnlock()
-
-		if exists && cancelFn != nil {
-			cancelFn()
-			sendResponse("Stopping current operation...")
-		} else {
-			sendResponse("No active operation to stop.")
-		}
+		// conduit-31jg.23: running turn + queued turns (TurnRunner.Stop).
+		resp, _ := stopResponse(c.turns.Stop(sessionKey))
+		sendResponse(resp)
 
 	default:
 		command := strings.Fields(text)[0]

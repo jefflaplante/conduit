@@ -318,6 +318,36 @@ func (q *SharedAlertQueue) GetPendingAlerts() ([]Alert, error) {
 	return queue.GetPendingAlerts(), nil
 }
 
+// UpdateAlert applies fn to the persisted alert with the given ID under the
+// queue lock (load-modify-save). conduit-31jg.33: lets callers persist
+// RetryCount/LastError instead of mutating a local copy.
+func (q *SharedAlertQueue) UpdateAlert(alertID string, fn func(*Alert)) error {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+
+	queue, err := q.loadQueueUnlocked()
+	if err != nil {
+		return fmt.Errorf("failed to load queue for updating alert: %w", err)
+	}
+	for i := range queue.Alerts {
+		if queue.Alerts[i].ID == alertID {
+			fn(&queue.Alerts[i])
+			queue.Version++
+			return q.saveQueueUnlocked(queue)
+		}
+	}
+	return fmt.Errorf("alert not found: %s", alertID)
+}
+
+// GetRetryableAlerts returns failed alerts that still have retries left.
+func (q *SharedAlertQueue) GetRetryableAlerts() ([]Alert, error) {
+	queue, err := q.LoadQueue()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load queue for getting retryable alerts: %w", err)
+	}
+	return queue.GetRetryableAlerts(), nil
+}
+
 // UpdateAlertStatus updates the status of a specific alert
 func (q *SharedAlertQueue) UpdateAlertStatus(alertID string, status AlertStatus) error {
 	// Hold write lock across load-modify-save to prevent TOCTOU races with

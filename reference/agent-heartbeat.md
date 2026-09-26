@@ -336,6 +336,26 @@ Quiet hours prevent non-critical alerts from disturbing you during sleep/off hou
 | `warning` | Queued until quiet hours end | Delivered immediately |
 | `info` | Queued until quiet hours end | Delivered immediately |
 
+### Evaluation Rules
+
+- Quiet hours are evaluated on the wall clock of `agent_heartbeat.timezone`,
+  never the server's local zone (containers and systemd units usually run in UTC).
+- The window is `[start_time, end_time)`: the start minute is quiet, the end minute is not.
+  `start_time == end_time` means no quiet hours. DST transition days are handled on the
+  wall clock (22:00 is 22:00 whether the offset is PST or PDT).
+- One implementation serves every caller: `config.AgentHeartbeatConfig.IsQuietTime` /
+  `NextQuietEnd` / `NextQuietStart` (`internal/config/quiet_hours.go`).
+
+### Deferred Delivery
+
+Quiet-aware heartbeat actions (non-critical, non-high-priority actions whose text marks them as
+quiet-aware) that come up during quiet hours are written to `deferred.json` in the same directory
+as `alert_queue_path` (default `memory/alerts/deferred.json`). At the start of every heartbeat cycle
+outside quiet hours, the gateway delivers the queued entries, so delivery lands on the first cycle
+after quiet hours end (at most `interval_minutes` late). The queue is on disk, so it survives restarts.
+A failed delivery stays queued for up to 5 attempts. Entries expire after 72 hours.
+`deferred.json` is owned by the gateway. External scripts should keep writing to `alert_queue_path`.
+
 ### Spanning Midnight
 
 Quiet hours can span midnight:

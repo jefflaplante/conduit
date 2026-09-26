@@ -380,3 +380,7 @@ func (t *PagerDutyTool) validateAPIConnection(ctx context.Context) error {
 	return fmt.Errorf("unexpected response (HTTP %d)", resp.StatusCode)
 }
 
+// IncludeDataInModelOutput opts this tool into having ToolResult.Data
+// rendered for the model: ids and lists needed for follow-up calls live
+// only in Data (conduit-31jg.39).
+func (t *PagerDutyTool) IncludeDataInModelOutput() bool { return true }

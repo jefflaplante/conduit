@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"conduit/internal/ai"
 	"conduit/internal/config"
@@ -34,6 +35,9 @@ type promptSection struct {
 	build    func() string
 	cached   string // cached result of build() to avoid double-building
 	built    bool   // whether cached has been populated
+	// dynamic marks per-turn content (timestamp, wake source, brain state).
+	// Rendered in the trailing uncached system block (conduit-31jg.14).
+	dynamic bool
 }
 
 // PromptSectionInfo describes a single section of the system prompt for debug inspection.
@@ -177,15 +181,23 @@ func (pb *PromptBuilder) Build(ctx context.Context, session *sessions.Session, i
 	isMinimal := false // Could be set based on config
 	localParams.IsMinimal = isMinimal
 
-	// Build the complete prompt text using the local copy
-	promptText := pb.buildFullPromptWithParams(ctx, session, isOAuth, &localParams)
+	// conduit-31jg.14: two blocks. The static block is byte-stable between
+	// turns and carries the provider cache breakpoint; the dynamic block
+	// (timestamp, wake context, situation awareness) follows it, outside the
+	// cached prefix. Providers without block support join them with "\n\n".
+	static, dynamic := pb.buildPromptPartsWithParams(ctx, session, isOAuth, &localParams)
 
-	return []ai.SystemBlock{
-		{
-			Type: "text",
-			Text: promptText,
-		},
-	}, nil
+	blocks := []ai.SystemBlock{{Type: "text", Text: static}}
+	if dynamic != "" {
+		blocks = append(blocks, ai.SystemBlock{Type: "text", Text: dynamic, Dynamic: true})
+	}
+	return blocks, nil
+}
+
+// SetClock overrides the time source used by time-dependent sections (tests).
+// conduit-31jg.14.
+func (pb *PromptBuilder) SetClock(now func() time.Time) {
+	pb.sectionParams.Now = now
 }
 
 // buildFullPrompt creates the complete system prompt text.
@@ -198,6 +210,12 @@ func (pb *PromptBuilder) buildFullPrompt(ctx context.Context, session *sessions.
 // buildFullPromptWithParams creates the complete system prompt text using the given params.
 // This avoids mutating shared state and is safe for concurrent use with different sessions.
 func (pb *PromptBuilder) buildFullPromptWithParams(ctx context.Context, session *sessions.Session, isOAuth bool, params *SectionParams) string {
+	return joinPromptParts(pb.buildPromptPartsWithParams(ctx, session, isOAuth, params))
+}
+
+// buildPromptPartsWithParams builds the prompt split into its byte-stable
+// static part and its per-turn dynamic part (conduit-31jg.14).
+func (pb *PromptBuilder) buildPromptPartsWithParams(ctx context.Context, session *sessions.Session, isOAuth bool, params *SectionParams) (string, string) {
 	isCron := session != nil && strings.HasPrefix(session.Key, CronSessionKeyPrefix)
 
 	// Build the priority-tagged section list using the provided params.
@@ -218,7 +236,7 @@ func (pb *PromptBuilder) buildFullPromptWithParams(ctx context.Context, session 
 
 	// Short circuit: large-context models get everything.
 	if contextWindow >= largeCtxThreshold {
-		return joinSectionsWithCache(allSections, nil)
+		return joinSectionPartsWithCache(allSections, nil)
 	}
 
 	// Get budget parameters from config
@@ -263,7 +281,7 @@ func (pb *PromptBuilder) buildFullPromptWithParams(ctx context.Context, session 
 			dropped, budgetChars, contextWindow)
 	}
 
-	return joinSectionsWithCache(allSections, included, dropped...)
+	return joinSectionPartsWithCache(allSections, included, dropped...)
 }
 
 // BuildDebug constructs the system prompt and returns detailed debug info about each section.
@@ -340,7 +358,7 @@ func (pb *PromptBuilder) BuildDebug(ctx context.Context, session *sessions.Sessi
 		sectionInfos[i] = info
 	}
 
-	promptText := joinSectionsWithCache(allSections, included, droppedNames...)
+	promptText := joinPromptParts(joinSectionPartsWithCache(allSections, included, droppedNames...))
 	totalChars := len(promptText)
 
 	return &PromptDebugInfo{
@@ -376,14 +394,14 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		{name: "Runtime", priority: 1, build: func() string {
 			return buildRuntimeSection(params, pb.buildRuntimeInfo(session))
 		}},
-		{name: "Wake Context", priority: 1, build: func() string { return buildWakeContextSection(wakeSource) }},
+		{name: "Wake Context", priority: 1, dynamic: true, build: func() string { return buildWakeContextSection(wakeSource) }},
 
 		// P2 — Grounding data: project context, memory, tool availability (reference)
 		{name: "Project Context", priority: 2, build: func() string { return pb.buildWorkspaceContextSection(ctx, session) }},
 		{name: "Memory Recall", priority: 2, build: func() string { return buildMemorySection(params) }},
 		{name: "Memory Persistence", priority: 2, build: func() string { return buildMemoryPersistenceSection(params) }},
 		{name: "Brain", priority: 2, build: func() string { return buildBrainSection(params) }},
-		{name: "Situation Awareness", priority: 2, build: func() string {
+		{name: "Situation Awareness", priority: 2, dynamic: true, build: func() string {
 			return pb.buildSituationAwareness(ctx, params)
 		}},
 		{name: "Tooling", priority: 2, build: func() string { return pb.buildToolingSection() }},
@@ -420,11 +438,11 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		{name: "Reactions", priority: 4, build: func() string { return buildReactionsSection(params) }},
 		{name: "Conduit CLI", priority: 4, build: func() string { return buildConduitCLISection(params.IsMinimal) }},
 		{name: "Gateway Actions", priority: 4, build: func() string { return buildSelfUpdateSection(params) }},
-		// P4 (LAST) — Time Context: registered last so it renders at the very end
-		// of the system prompt. The minute-resolution timestamp would otherwise
-		// invalidate the provider's prefix cache for the entire prompt on every
-		// call. Everything above must stay byte-stable between requests.
-		{name: "Time Context", priority: 4, build: func() string {
+		// P4 (LAST) — Time Context. Sections flagged dynamic (this one, Wake
+		// Context, Situation Awareness) render in the trailing dynamic system
+		// block, after the cache breakpoint (conduit-31jg.14). Every other
+		// section must stay byte-stable between requests.
+		{name: "Time Context", priority: 4, dynamic: true, build: func() string {
 			return buildTimeContextSection(params)
 		}},
 	}
@@ -460,6 +478,38 @@ func joinSections(sections []promptSection, included []bool, dropped ...string) 
 	}
 
 	return result
+}
+
+// joinPromptParts joins the static and dynamic prompt parts the way a
+// single-string system prompt carries them (conduit-31jg.14).
+func joinPromptParts(static, dynamic string) string {
+	switch {
+	case dynamic == "":
+		return static
+	case static == "":
+		return dynamic
+	}
+	return static + "\n\n" + dynamic
+}
+
+// joinSectionPartsWithCache assembles the static part (every non-dynamic
+// section, then the compact-mode notice) and the dynamic part (sections
+// flagged dynamic, in declaration order). conduit-31jg.14: dynamic sections
+// change every turn, so they must sit after the cached prefix.
+func joinSectionPartsWithCache(sections []promptSection, included []bool, dropped ...string) (string, string) {
+	var static, dynamic []promptSection
+	var staticIncl, dynamicIncl []bool
+	for i := range sections {
+		inc := included == nil || included[i]
+		if sections[i].dynamic {
+			dynamic = append(dynamic, sections[i])
+			dynamicIncl = append(dynamicIncl, inc)
+		} else {
+			static = append(static, sections[i])
+			staticIncl = append(staticIncl, inc)
+		}
+	}
+	return joinSectionsWithCache(static, staticIncl, dropped...), joinSectionsWithCache(dynamic, dynamicIncl)
 }
 
 // joinSectionsWithCache assembles prompt text using cached section values when available.
@@ -721,7 +771,16 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 
 	// Memory files — tail-truncated (recent entries are the signal; the file
 	// is appended chronologically so the last N chars are the most recent).
-	for filename, content := range files {
+	// conduit-31jg.14: sorted, not map order — random order across builds
+	// made the "static" system block differ byte-for-byte and missed the
+	// prompt cache whenever more than one daily memory file was loaded.
+	memoryFiles := make([]string, 0, len(files))
+	for filename := range files {
+		memoryFiles = append(memoryFiles, filename)
+	}
+	sort.Strings(memoryFiles)
+	for _, filename := range memoryFiles {
+		content := files[filename]
 		if strings.HasPrefix(filename, "memory/") && strings.HasSuffix(filename, ".md") {
 			if len(content) > 4000 {
 				cut := len(content) - 4000

@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -118,14 +119,19 @@ func TestShutdownManager_SetOnShutdownAndTriggerAction(t *testing.T) {
 	if err := sm.BeginShutdown("test", 100); err != nil {
 		t.Fatalf("BeginShutdown: %v", err)
 	}
-	// Give the goroutine a moment
-	for i := 0; i < 200 && !called; i++ {
-		// Loop up to ~100ms waiting for onShutdown to be invoked
-		sm.State()
+	// conduit-31jg.27: Done() closes after onShutdown has run (the old fixed
+	// 2s sleep hid the unsynchronized read of called here). close(done)
+	// happens-after the write to called, so the read below is race-free,
+	// and it also follows the breadcrumb write into DataDir, so t.TempDir
+	// cleanup no longer races the shutdown goroutine (conduit-31jg.52).
+	select {
+	case <-sm.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown sequence did not complete")
 	}
-	// onShutdown is invoked eventually; its exact timing depends on drainActiveRequests.
-	// Do not assert here — the setter path is what we're covering. Just ensure no panic.
-	_ = called
+	if !called {
+		t.Error("onShutdown was not invoked")
+	}
 }
 
 func TestAnnounceToParent(t *testing.T) {

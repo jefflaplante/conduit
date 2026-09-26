@@ -7,11 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
 
+	"conduit/internal/httpsafe"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
@@ -127,7 +127,7 @@ func (t *PagerDutyTool) listIncidents(ctx context.Context, args map[string]inter
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("PagerDuty API error (status %d): %s", resp.StatusCode, string(body)),
@@ -139,7 +139,7 @@ func (t *PagerDutyTool) listIncidents(ctx context.Context, args map[string]inter
 		Total     int        `json:"total"`
 		More      bool       `json:"more"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&result); err != nil {
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("failed to decode response: %v", err),
@@ -206,7 +206,7 @@ func (t *PagerDutyTool) getIncident(ctx context.Context, args map[string]interfa
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("PagerDuty API error (status %d): %s", resp.StatusCode, string(body)),
@@ -216,7 +216,7 @@ func (t *PagerDutyTool) getIncident(ctx context.Context, args map[string]interfa
 	var result struct {
 		Incident Incident `json:"incident"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&result); err != nil {
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("failed to decode response: %v", err),
@@ -332,7 +332,7 @@ func (t *PagerDutyTool) updateIncidentStatus(ctx context.Context, incidentID, st
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("PagerDuty API error (status %d): %s", resp.StatusCode, string(respBody)),
@@ -342,7 +342,7 @@ func (t *PagerDutyTool) updateIncidentStatus(ctx context.Context, incidentID, st
 	var result struct {
 		Incident Incident `json:"incident"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&result); err != nil {
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("failed to decode response: %v", err),
@@ -409,7 +409,7 @@ func (t *PagerDutyTool) snoozeIncident(ctx context.Context, args map[string]inte
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("PagerDuty API error (status %d): %s", resp.StatusCode, string(respBody)),
@@ -480,7 +480,7 @@ func (t *PagerDutyTool) addNote(ctx context.Context, args map[string]interface{}
 	}
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("PagerDuty API error (status %d): %s", resp.StatusCode, string(respBody)),
@@ -490,7 +490,7 @@ func (t *PagerDutyTool) addNote(ctx context.Context, args map[string]interface{}
 	var result struct {
 		Note Note `json:"note"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&result); err != nil {
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("failed to decode response: %v", err),
@@ -581,7 +581,7 @@ func (t *PagerDutyTool) triggerIncident(ctx context.Context, args map[string]int
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("PagerDuty API error (status %d): %s", resp.StatusCode, string(respBody)),
@@ -591,7 +591,7 @@ func (t *PagerDutyTool) triggerIncident(ctx context.Context, args map[string]int
 	var result struct {
 		Incident Incident `json:"incident"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, httpsafe.APIBodyLimit)).Decode(&result); err != nil {
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("failed to decode response: %v", err),

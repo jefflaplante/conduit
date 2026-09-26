@@ -117,11 +117,22 @@ func (cs *chainState) recordOutcome(call ai.ToolCall, result *ToolResult, err er
 // Each trigger yields guidance exactly once: pivots fire on the threshold
 // crossing (FailureTracker.OnPivot), and the pattern tracker is reset after a
 // detection so the same trailing calls cannot re-trigger it.
-func (cs *chainState) takeGuidance() string {
-	if cs == nil {
-		return ""
-	}
+//
+// lead parts (the conduit-8ba7 progress reminder, conduit-31jg.14) come first
+// and are emitted even when cs is nil.
+func (cs *chainState) takeGuidance(lead ...string) string {
 	var parts []string
+	for _, l := range lead {
+		if l != "" {
+			parts = append(parts, l)
+		}
+	}
+	if cs == nil {
+		if len(parts) == 0 {
+			return ""
+		}
+		return loopGuidanceMarker + strings.Join(parts, "\n\n")
+	}
 
 	cs.mu.Lock()
 	pivots := cs.pendingPivots

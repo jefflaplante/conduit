@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"conduit/internal/httpsafe"
 )
 
 // BraveSearchConfig configures the Brave search strategy
@@ -264,7 +266,7 @@ func (b *BraveDirectSearch) checkHTTPStatus(resp *http.Response) error {
 	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
 		return ErrAPIServerError
 	default:
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 }
@@ -291,7 +293,7 @@ func (b *BraveDirectSearch) parseResponse(resp *http.Response, params SearchPara
 		log.Printf("[BraveSearch] No gzip encoding detected, reading directly")
 	}
 
-	body, err := io.ReadAll(reader)
+	body, err := httpsafe.ReadLimited(reader, httpsafe.APIBodyLimit) // conduit-31jg.7
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}

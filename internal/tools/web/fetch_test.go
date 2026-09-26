@@ -29,7 +29,10 @@ func TestNewWebFetchTool_WithServices(t *testing.T) {
 
 	tool := NewWebFetchTool(services)
 	require.NotNil(t, tool)
-	assert.Equal(t, customClient, tool.httpClient, "should use provided HTTP client")
+	// conduit-31jg.7: the shared WebClient has no SSRF guard, so WebFetch
+	// builds its own guarded client and only inherits the timeout.
+	assert.NotSame(t, customClient, tool.httpClient, "must not use the unguarded shared client")
+	assert.Equal(t, customClient.Timeout, tool.httpClient.Timeout)
 }
 
 func TestNewWebFetchTool_ServicesNoClient(t *testing.T) {
@@ -43,19 +46,19 @@ func TestNewWebFetchTool_ServicesNoClient(t *testing.T) {
 }
 
 func TestWebFetchTool_Name(t *testing.T) {
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	assert.Equal(t, "WebFetch", tool.Name())
 }
 
 func TestWebFetchTool_Description(t *testing.T) {
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	desc := tool.Description()
 	assert.Contains(t, strings.ToLower(desc), "fetch")
 	assert.Contains(t, desc, "URL")
 }
 
 func TestWebFetchTool_Parameters(t *testing.T) {
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	params := tool.Parameters()
 
 	require.NotNil(t, params)
@@ -73,7 +76,7 @@ func TestWebFetchTool_Parameters(t *testing.T) {
 }
 
 func TestWebFetchTool_Execute_MissingURL(t *testing.T) {
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{})
 
 	require.NoError(t, err)
@@ -82,7 +85,7 @@ func TestWebFetchTool_Execute_MissingURL(t *testing.T) {
 }
 
 func TestWebFetchTool_Execute_InvalidURLType(t *testing.T) {
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": 12345,
 	})
@@ -93,7 +96,7 @@ func TestWebFetchTool_Execute_InvalidURLType(t *testing.T) {
 }
 
 func TestWebFetchTool_Execute_InvalidURLFormat(t *testing.T) {
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": "://invalid-url",
 	})
@@ -104,7 +107,7 @@ func TestWebFetchTool_Execute_InvalidURLFormat(t *testing.T) {
 }
 
 func TestWebFetchTool_Execute_UnsupportedScheme(t *testing.T) {
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": "ftp://example.com/file.txt",
 	})
@@ -115,7 +118,7 @@ func TestWebFetchTool_Execute_UnsupportedScheme(t *testing.T) {
 }
 
 func TestWebFetchTool_Execute_UnsupportedSchemeFile(t *testing.T) {
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": "file:///etc/passwd",
 	})
@@ -140,7 +143,7 @@ func TestWebFetchTool_Execute_HTMLContent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": server.URL,
 	})
@@ -160,7 +163,7 @@ func TestWebFetchTool_Execute_PlainTextContent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": server.URL,
 	})
@@ -178,7 +181,7 @@ func TestWebFetchTool_Execute_UnsupportedContentType(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": server.URL,
 	})
@@ -194,7 +197,7 @@ func TestWebFetchTool_Execute_HTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": server.URL,
 	})
@@ -210,7 +213,7 @@ func TestWebFetchTool_Execute_ServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": server.URL,
 	})
@@ -229,7 +232,7 @@ func TestWebFetchTool_Execute_Truncation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url":      server.URL,
 		"maxChars": 100,
@@ -249,7 +252,7 @@ func TestWebFetchTool_Execute_TextExtractMode(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url":         server.URL,
 		"extractMode": "text",
@@ -270,7 +273,7 @@ func TestWebFetchTool_Execute_ResultData(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url":         server.URL,
 		"maxChars":    50000,
@@ -286,7 +289,7 @@ func TestWebFetchTool_Execute_ResultData(t *testing.T) {
 }
 
 func TestWebFetchTool_Execute_ConnectionRefused(t *testing.T) {
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": "http://127.0.0.1:59999",
 	})
@@ -303,7 +306,7 @@ func TestWebFetchTool_Execute_ContextCancelled(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
@@ -680,7 +683,7 @@ func TestWebFetchTool_Execute_RequestHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	_, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": server.URL,
 	})
@@ -699,7 +702,7 @@ func TestWebFetchTool_Execute_TextCSS(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": server.URL,
 	})
@@ -718,7 +721,7 @@ func TestWebFetchTool_Execute_MaxCharsFromFloat(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url":      server.URL,
 		"maxChars": float64(100), // JSON numbers are float64
@@ -737,7 +740,7 @@ func TestWebFetchTool_Execute_EmptyHTMLBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url": server.URL,
 	})
@@ -754,7 +757,7 @@ func TestWebFetchTool_Execute_NoTruncation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetchTool(nil)
+	tool := newLoopbackFetchTool()
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"url":      server.URL,
 		"maxChars": 50000,

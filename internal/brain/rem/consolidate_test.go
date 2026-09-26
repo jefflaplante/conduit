@@ -359,3 +359,24 @@ func TestConsolidate_HeatBasedPromotion(t *testing.T) {
 	assert.Contains(t, result.Promoted, "hot.by.count",
 		"entry with AccessCount >= heat threshold should be promoted despite low salience")
 }
+
+// conduit-31jg.30: WM is per-user; REM runs from a system context and must
+// still promote hot entries from every user's bucket.
+func TestConsolidate_PromotesAcrossAllUsers(t *testing.T) {
+	r, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	for _, uid := range []string{"alice", "bob"} {
+		uctx := brain.WithUserID(context.Background(), uid)
+		key := "hot." + uid
+		require.NoError(t, b.Store(uctx, key, "v", brain.TierWorking, "tool"))
+		for i := 0; i < 5; i++ {
+			_, _ = b.Get(uctx, key)
+		}
+	}
+
+	result, err := r.Consolidate(context.Background(), false)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"hot.alice", "hot.bob"}, result.Promoted)
+	assert.Empty(t, b.WorkingMemoryUserIDs(), "promoted entries leave WM")
+}

@@ -484,10 +484,9 @@ curl -H "Authorization: Bearer conduit_..." http://...
 
 # X-API-Key header
 curl -H "X-API-Key: conduit_..." http://...
-
-# Query parameter
-curl "http://...?token=conduit_..."
 ```
+
+The `?token=` query parameter is accepted **only on the `/ws` WebSocket upgrade**; plain HTTP endpoints ignore it (URLs leak into proxy/access logs — conduit-31jg.4).
 
 ### WebSocket connection fails immediately
 

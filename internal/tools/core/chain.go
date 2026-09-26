@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"conduit/internal/chain"
 	"conduit/internal/config"
@@ -205,6 +206,13 @@ func (t *ChainTool) validateChain(args map[string]interface{}) (*types.ToolResul
 	}, nil
 }
 
+// maxChainNesting bounds Chain-within-Chain runs. A chain whose step runs
+// itself (directly or via another chain) otherwise recurses until the
+// goroutine stack overflows, which is fatal, not recoverable (conduit-31jg.39).
+const maxChainNesting = 3
+
+type chainDepthKey struct{}
+
 func (t *ChainTool) runChain(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
 	name := toolargs.GetString(args, "name", "")
 	if name == "" {
@@ -213,6 +221,16 @@ func (t *ChainTool) runChain(ctx context.Context, args map[string]interface{}) (
 			Error:   "name parameter is required for run action",
 		}, nil
 	}
+
+	depth, _ := ctx.Value(chainDepthKey{}).(int)
+	if depth >= maxChainNesting {
+		return &types.ToolResult{
+			Success: false,
+			Error: fmt.Sprintf("chain %q not run: chain nesting limit (%d) reached — a chain step runs Chain recursively; remove the self/cyclic Chain step",
+				name, maxChainNesting),
+		}, nil
+	}
+	ctx = context.WithValue(ctx, chainDepthKey{}, depth+1)
 
 	c, err := chain.FindChain(t.chainsDir(), name)
 	if err != nil {
@@ -277,7 +295,12 @@ func (t *ChainTool) runChain(ctx context.Context, args map[string]interface{}) (
 		if sr.Output != "" {
 			out := sr.Output
 			if len(out) > 500 {
-				out = out[:497] + "..."
+				// Rune-safe cut (conduit-31jg.39).
+				cut := 497
+				for cut > 0 && !utf8.RuneStart(out[cut]) {
+					cut--
+				}
+				out = out[:cut] + "..."
 			}
 			b.WriteString(fmt.Sprintf("  output: %s\n", out))
 		}

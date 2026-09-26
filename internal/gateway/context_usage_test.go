@@ -18,7 +18,7 @@ func TestFormatStatusResponse_NoCostData(t *testing.T) {
 		},
 	}
 
-	result := formatStatusResponse(session, 10, nil)
+	result := formatStatusResponse(session, 10, nil, "")
 
 	if !strings.Contains(result, "Session Status") {
 		t.Error("Expected 'Session Status' header")
@@ -52,7 +52,7 @@ func TestFormatStatusResponse_WithCostData(t *testing.T) {
 		},
 	}
 
-	result := formatStatusResponse(session, 42, nil)
+	result := formatStatusResponse(session, 42, nil, "")
 
 	if !strings.Contains(result, "Session Cost") {
 		t.Error("Expected 'Session Cost' section")
@@ -81,7 +81,7 @@ func TestFormatStatusResponse_WithUsageTracker(t *testing.T) {
 	tracker := ai.NewUsageTracker()
 	tracker.RecordUsage("anthropic", "claude-sonnet-4-20250514", 1000, 500, 0, 0, 1200)
 
-	result := formatStatusResponse(session, 5, tracker)
+	result := formatStatusResponse(session, 5, tracker, "")
 
 	if !strings.Contains(result, "Global Usage") {
 		t.Error("Expected 'Global Usage' section")
@@ -98,7 +98,7 @@ func TestFormatStatusResponse_DefaultModel(t *testing.T) {
 		Context: map[string]string{},
 	}
 
-	result := formatStatusResponse(session, 0, nil)
+	result := formatStatusResponse(session, 0, nil, "")
 
 	if !strings.Contains(result, "sonnet (default)") {
 		t.Error("Expected default model display")
@@ -366,5 +366,24 @@ func TestFormatDuration(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("formatDuration(%v) = %q, want %q", tt.input, result, tt.expected)
 		}
+	}
+}
+
+// conduit-31jg.17: a session with no model override reports the CONFIGURED
+// default model's window, not a hardcoded claude-sonnet-4-20250514.
+func TestFormatContextUsage_UsesConfiguredDefaultModel(t *testing.T) {
+	session := &sessions.Session{
+		Key:     "s-default",
+		Context: map[string]string{"last_prompt_tokens": "1000", "last_total_tokens": "1200"},
+	}
+	result := formatContextUsage(session, "gpt-4o-2024-08-06")
+	if !strings.Contains(result, "gpt-4o-2024-08-06") {
+		t.Errorf("expected configured default model in output, got:\n%s", result)
+	}
+	if !strings.Contains(result, formatNumber(128000)) {
+		t.Errorf("expected gpt-4o window 128,000, got:\n%s", result)
+	}
+	if strings.Contains(result, "claude-sonnet-4-20250514") {
+		t.Errorf("hardcoded default leaked into output:\n%s", result)
 	}
 }

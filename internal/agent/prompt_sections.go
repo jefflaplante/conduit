@@ -51,6 +51,17 @@ type SectionParams struct {
 	ReactionsMode    string
 	ModelAliases     map[string]string
 	Session          *sessions.Session
+	// Now is the clock for time-dependent sections; nil = time.Now.
+	// conduit-31jg.14: injectable so tests can pin the static/dynamic split.
+	Now func() time.Time
+}
+
+// now returns the current time from the injected clock, if any.
+func (p *SectionParams) now() time.Time {
+	if p != nil && p.Now != nil {
+		return p.Now()
+	}
+	return time.Now()
 }
 
 // NewSectionParams creates SectionParams from tools list
@@ -421,8 +432,15 @@ func buildModelAliasesSection(params *SectionParams) string {
 	builder.WriteString("## Model Aliases\n")
 	builder.WriteString("Prefer aliases when specifying model overrides; full provider/model is also accepted.\n")
 
-	for alias, model := range params.ModelAliases {
-		builder.WriteString(fmt.Sprintf("- %s: %s\n", alias, model))
+	// conduit-31jg.14: sorted — map order made this (static) section differ
+	// on almost every build and missed the system prompt cache.
+	aliases := make([]string, 0, len(params.ModelAliases))
+	for alias := range params.ModelAliases {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	for _, alias := range aliases {
+		builder.WriteString(fmt.Sprintf("- %s: %s\n", alias, params.ModelAliases[alias]))
 	}
 
 	builder.WriteString("\n")
@@ -467,7 +485,7 @@ Runtime: %s
 // everything above it is byte-stable between calls, keeping the provider
 // prefix cache warm. Do not move it earlier in the section list.
 func buildTimeContextSection(params *SectionParams) string {
-	now := time.Now()
+	now := params.now()
 	if params.UserTimezone != "" {
 		if loc, err := time.LoadLocation(params.UserTimezone); err == nil {
 			now = now.In(loc)
@@ -591,7 +609,7 @@ func (pb *PromptBuilder) buildSituationAwareness(ctx context.Context, params *Se
 	categories := pb.querySituationCategories(ctx)
 
 	// Compute time context (always available, independent of Brain data).
-	timeCtx := computeTimeContext(params.UserTimezone)
+	timeCtx := computeTimeContextAt(params.UserTimezone, params.now())
 
 	// Check if there's any data at all (besides time context).
 	hasData := false
@@ -730,7 +748,11 @@ func renderCategoryTruncated(cat *situationCategory) string {
 // computeTimeContext produces a compact time-awareness line.
 // It complements the Runtime section's timestamp with contextual hints.
 func computeTimeContext(timezone string) string {
-	now := time.Now()
+	return computeTimeContextAt(timezone, time.Now())
+}
+
+// computeTimeContextAt is computeTimeContext for a given instant.
+func computeTimeContextAt(timezone string, now time.Time) string {
 	if timezone != "" {
 		if loc, err := time.LoadLocation(timezone); err == nil {
 			now = now.In(loc)
