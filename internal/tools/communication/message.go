@@ -1124,3 +1124,8 @@ func (t *MessageTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions)
 
 	return result
 }
+
+// IncludeDataInModelOutput opts this tool into having ToolResult.Data
+// rendered for the model: ids and lists needed for follow-up calls live
+// only in Data (conduit-31jg.39).
+func (t *MessageTool) IncludeDataInModelOutput() bool { return true }

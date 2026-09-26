@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"conduit/internal/procutil"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -484,6 +486,7 @@ func executeShellCmdWithTimeout(sessionKey, cmdLine, workDir string, timeout tim
 
 		cmd := exec.CommandContext(ctx, "sh", "-c", cmdLine)
 		cmd.Dir = workDir
+		procutil.ConfigureGroupKill(cmd, 0, 0) // conduit-31jg.20: kill the whole group on timeout/cancel
 
 		// Create pipes for stdout and stderr
 		stdout, err := cmd.StdoutPipe()
@@ -592,6 +595,7 @@ func executeBackgroundCmd(sessionKey, cmdLine, workDir string, jobs *JobManager)
 		go func() {
 			cmd := exec.CommandContext(ctx, "sh", "-c", cmdLine)
 			cmd.Dir = workDir
+			procutil.ConfigureGroupKill(cmd, 0, 0) // conduit-31jg.20: kill the whole group on timeout/cancel
 
 			// Create pipes for output
 			stdout, err := cmd.StdoutPipe()
@@ -883,6 +887,7 @@ func executeShellCmdWithEnv(sessionKey, cmdLine, workDir string, envVars map[str
 
 		cmd := exec.CommandContext(ctx, "sh", "-c", cmdLine)
 		cmd.Dir = workDir
+		procutil.ConfigureGroupKill(cmd, 0, 0) // conduit-31jg.20: kill the whole group on timeout/cancel
 
 		// Set environment variables
 		cmd.Env = os.Environ()

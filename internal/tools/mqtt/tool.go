@@ -542,3 +542,8 @@ func (t *MQTTTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *t
 
 	return result
 }
+
+// IncludeDataInModelOutput opts this tool into having ToolResult.Data
+// rendered for the model: ids and lists needed for follow-up calls live
+// only in Data (conduit-31jg.39).
+func (t *MQTTTool) IncludeDataInModelOutput() bool { return true }

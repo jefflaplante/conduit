@@ -2,13 +2,27 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os/exec"
 	"strings"
 	"time"
 
+	"conduit/internal/procutil"
+	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
+)
+
+// conduit-31jg.20 / .39: Bash limits.
+const (
+	// DefaultBashTimeout applies when no `timeout` parameter is given.
+	DefaultBashTimeout = 60 * time.Second
+	// MaxBashTimeout caps the per-call `timeout` parameter.
+	MaxBashTimeout = 10 * time.Minute
+	// MaxBashOutputBytes caps retained combined output (head + tail); the
+	// middle is dropped with a byte-count marker instead of buffering it.
+	MaxBashOutputBytes = 256 << 10
 )
 
 // DefaultCommandDenylist contains patterns that should be blocked by default
@@ -56,7 +70,12 @@ func (t *ExecTool) Name() string {
 }
 
 func (t *ExecTool) Description() string {
-	return "Execute a shell command"
+	// conduit-31jg.39: tell the model how to use the tool well.
+	return "Run a shell command with sh -c and return combined stdout+stderr. " +
+		"Runs in the workspace directory unless `cwd` is set; state (cd, env vars) does not persist between calls. " +
+		"Default timeout is 60s; pass `timeout` in milliseconds (max 600000) for long builds or tests. " +
+		"Output over 256KB keeps the head and tail only, so filter noisy commands (grep, head, tail). " +
+		"Prefer Read/Glob/Edit over cat/find/sed for files."
 }
 
 func (t *ExecTool) Parameters() map[string]interface{} {
@@ -69,7 +88,13 @@ func (t *ExecTool) Parameters() map[string]interface{} {
 			},
 			"cwd": map[string]interface{}{
 				"type":        "string",
-				"description": "Working directory (optional)",
+				"description": "Working directory (optional, defaults to the workspace)",
+			},
+			"timeout": map[string]interface{}{
+				"type":        "integer",
+				"description": "Optional timeout in milliseconds (max 600000). Defaults to 60000.",
+				"minimum":     1,
+				"maximum":     int(MaxBashTimeout / time.Millisecond),
 			},
 		},
 		"required": []string{"command"},
@@ -169,10 +194,32 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 	startTime := time.Now()
 	log.Printf("[Exec] START command=%q cwd=%q", command, cwd)
 
+	// conduit-31jg.39: per-call timeout (default DefaultBashTimeout, which
+	// also bounds callers with no deadline, e.g. MCP). The execution engine
+	// extends its own deadline via CallTimeout; here ctx is only shortened.
+	d, ok := t.CallTimeout(args)
+	if !ok {
+		d = DefaultBashTimeout
+	}
+	ctx, cancelTimeout := context.WithTimeout(ctx, d)
+	defer cancelTimeout()
+
+	// conduit-31jg.20: own process group, group kill on cancel, bounded pipe
+	// wait, and capped output so timeouts return and `yes` cannot OOM us.
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = cwd
+	procutil.ConfigureGroupKill(cmd, 0, 0)
+	buf := procutil.NewCappedBuffer(MaxBashOutputBytes)
+	cmd.Stdout = buf
+	cmd.Stderr = buf
 
-	output, err := cmd.CombinedOutput()
+	err := cmd.Run()
+	if err != nil && procutil.IsWaitDelayOnly(err) && ctx.Err() == nil {
+		// Exited 0 but a background child kept the pipe open: success.
+		err = nil
+	}
+	timedOut := err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)
+	output := buf.Bytes()
 
 	// Audit log: command execution complete
 	duration := time.Since(startTime)
@@ -186,7 +233,14 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 		errorType := "command_failed"
 		suggestions := []string{"Check command syntax", "Verify the command exists"}
 
-		if exitError, ok := err.(*exec.ExitError); ok {
+		if timedOut {
+			errorType = "timeout_error"
+			suggestions = []string{
+				fmt.Sprintf("Command timed out after %s and its process group was killed", duration.Round(time.Millisecond)),
+				"Pass a larger `timeout` (milliseconds, max 600000) for long-running commands",
+				"Run long-lived processes in the background with nohup and redirect output to a file",
+			}
+		} else if exitError, ok := err.(*exec.ExitError); ok {
 			ec := exitError.ExitCode()
 			errorType = "command_failed"
 
@@ -232,8 +286,11 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 			}
 		}
 
-		result := types.NewErrorResult(errorType,
-			fmt.Sprintf("Command execution failed: %v", err)).
+		msg := fmt.Sprintf("Command execution failed: %v", err)
+		if timedOut {
+			msg = fmt.Sprintf("Command timed out after %s", duration.Round(time.Millisecond))
+		}
+		result := types.NewErrorResult(errorType, msg).
 			WithParameter("command", command).
 			WithContext(map[string]interface{}{
 				"working_directory": cwd,
@@ -242,6 +299,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 				"command_length":    len(command),
 				"exit_code":         getExitCode(err),
 				"has_output":        len(output) > 0,
+				"output_truncated":  buf.Truncated(),
 			}).
 			WithSuggestions(suggestions)
 
@@ -259,10 +317,27 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 		Data: map[string]interface{}{
 			"command":           command,
 			"working_directory": cwd,
-			"output_length":     len(output),
+			"output_length":     buf.Total(),
+			"output_truncated":  buf.Truncated(),
 			"exit_code":         0,
 		},
 	}, nil
+}
+
+// CallTimeout returns the per-call timeout requested via the `timeout`
+// parameter (milliseconds, Claude Code's Bash contract), clamped to
+// MaxBashTimeout. ok is false when no positive timeout was given
+// (conduit-31jg.39). The execution engine uses this to size the call's
+// deadline independently of the rest of a parallel batch.
+func (t *ExecTool) CallTimeout(args map[string]interface{}) (time.Duration, bool) {
+	ms := toolargs.GetInt64(args, "timeout", 0)
+	if ms <= 0 {
+		return 0, false
+	}
+	if ms > int64(MaxBashTimeout/time.Millisecond) {
+		return MaxBashTimeout, true
+	}
+	return time.Duration(ms) * time.Millisecond, true
 }
 
 // GetUsageExamples implements types.UsageExampleProvider for ExecTool.

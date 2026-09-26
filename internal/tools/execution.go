@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"conduit/internal/ai"
 	"conduit/internal/tools/debuglog"
@@ -244,10 +246,8 @@ func (e *ExecutionEngine) ExecuteToolCalls(ctx context.Context, calls []ai.ToolC
 		return nil, nil
 	}
 
-	// Add timeout to context
-	ctx, cancel := context.WithTimeout(ctx, e.timeout)
-	defer cancel()
-
+	// conduit-31jg.39: each call gets its own deadline in executeSingle
+	// (callTimeout) instead of one e.timeout shared by the whole batch.
 	results := make([]*ExecutionResult, len(calls))
 
 	if len(calls) == 1 {
@@ -262,8 +262,24 @@ func (e *ExecutionEngine) ExecuteToolCalls(ctx context.Context, calls []ai.ToolC
 }
 
 // executeSingle executes a single tool call
-func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *ExecutionResult {
+func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) (execResult *ExecutionResult) {
 	start := time.Now()
+
+	// conduit-31jg.47: middleware, hooks and event callbacks run outside
+	// Registry.ExecuteTool's recover. A panic before the tool ran becomes an
+	// error result; after it ran, the tool's result is kept (reporting a
+	// failure would invite a retry of a side-effecting call).
+	toolRan := false
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("[ExecutionEngine] PANIC in execution pipeline for tool %q (tool_ran=%v): %v\n%s",
+				call.Name, toolRan, rec, debug.Stack())
+			if toolRan && execResult != nil && execResult.Result != nil {
+				return
+			}
+			execResult = pipelinePanicResult(call, start, rec)
+		}
+	}()
 
 	// Log tool name only to journal (never args at INFO)
 	log.Printf("[ExecutionEngine] > Tool: %s", call.Name)
@@ -279,7 +295,7 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 	}
 
 	// Create result structure
-	execResult := &ExecutionResult{
+	execResult = &ExecutionResult{
 		ToolCall:   &call,
 		ExecutedAt: start,
 	}
@@ -311,8 +327,11 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 		}
 	}
 
-	// Execute tool
-	result, err := e.registry.ExecuteTool(ctx, call.Name, call.Args)
+	// Execute tool under its own deadline (conduit-31jg.39)
+	callCtx, cancelCall := context.WithTimeout(ctx, e.callTimeout(call))
+	result, err := e.registry.ExecuteTool(callCtx, call.Name, call.Args)
+	cancelCall()
+	toolRan = true
 	execResult.Result = result
 	execResult.Error = err
 	execResult.Duration = time.Since(start)
@@ -388,6 +407,44 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) *
 	return execResult
 }
 
+// pipelinePanicResult builds the error result for a panic in the execution
+// pipeline (conduit-31jg.47).
+func pipelinePanicResult(call ai.ToolCall, start time.Time, rec interface{}) *ExecutionResult {
+	err := fmt.Errorf("tool %q: panic in execution pipeline: %v", call.Name, rec)
+	return &ExecutionResult{
+		ToolCall:   &call,
+		Error:      err,
+		Duration:   time.Since(start),
+		ExecutedAt: start,
+		Result: &ToolResult{
+			Success: false,
+			Error:   err.Error(),
+			Content: fmt.Sprintf("Tool '%s' failed: %s", call.Name, err.Error()),
+		},
+	}
+}
+
+// callTimeoutSlack lets a tool's own per-call timeout fire (and report a
+// proper timeout result) before the engine deadline does.
+const callTimeoutSlack = 5 * time.Second
+
+// callTimeout returns the deadline for one call: the engine default, or
+// longer when the tool honours a per-call `timeout` (Bash). conduit-31jg.39.
+func (e *ExecutionEngine) callTimeout(call ai.ToolCall) time.Duration {
+	d := e.timeout
+	if d <= 0 {
+		d = 60 * time.Second
+	}
+	if p, ok := e.registry.(interface {
+		CallTimeout(name string, args map[string]interface{}) (time.Duration, bool)
+	}); ok {
+		if req, ok := p.CallTimeout(call.Name, call.Args); ok && req+callTimeoutSlack > d {
+			d = req + callTimeoutSlack
+		}
+	}
+	return d
+}
+
 // executeParallel executes multiple tools in parallel with controlled concurrency
 func (e *ExecutionEngine) executeParallel(ctx context.Context, calls []ai.ToolCall) []*ExecutionResult {
 	results := make([]*ExecutionResult, len(calls))
@@ -404,6 +461,14 @@ func (e *ExecutionEngine) executeParallel(ctx context.Context, calls []ai.ToolCa
 			// Acquire semaphore
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
+
+			// conduit-31jg.47: never let one call's panic kill the process.
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Printf("[ExecutionEngine] PANIC in parallel worker for tool %q: %v\n%s", toolCall.Name, rec, debug.Stack())
+					results[idx] = pipelinePanicResult(toolCall, time.Now(), rec)
+				}
+			}()
 
 			results[idx] = e.executeSingle(ctx, toolCall)
 		}(i, call)
@@ -704,7 +769,14 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 // formatToolResultForAI formats tool results for AI consumption
 func (e *ExecutionEngine) formatToolResultForAI(result *ExecutionResult) string {
 	if result.Error != nil {
-		return fmt.Sprintf("Tool '%s' failed: %s", result.ToolCall.Name, result.Error.Error())
+		msg := fmt.Sprintf("Tool '%s' failed: %s", result.ToolCall.Name, result.Error.Error())
+		// conduit-31jg.47: surface output a tool returned alongside its error.
+		if result.Result != nil {
+			if out := strings.TrimSpace(result.Result.Content); out != "" && !strings.Contains(msg, out) {
+				msg += "\nOutput:\n" + e.truncateForModel(out)
+			}
+		}
+		return msg
 	}
 
 	if result.Result == nil {
@@ -751,10 +823,11 @@ func (e *ExecutionEngine) formatToolResultForAI(result *ExecutionResult) string 
 		return msg
 	}
 
-	// Return the content, with metadata if available
+	// conduit-31jg.39: Data is appended only for tools that opt in (their
+	// payload lives in Data) or when Content is empty. Appending it to every
+	// result doubled Glob's file list and re-sent Chain step outputs.
 	content := result.Result.Content
-	if len(result.Result.Data) > 0 {
-		// Add structured data as JSON for AI context
+	if len(result.Result.Data) > 0 && (strings.TrimSpace(content) == "" || e.toolWantsDataInOutput(result.ToolCall.Name)) {
 		if dataJSON, err := json.Marshal(result.Result.Data); err == nil {
 			content += fmt.Sprintf("\n\nStructured data: %s", string(dataJSON))
 		}
@@ -770,6 +843,47 @@ func (e *ExecutionEngine) formatToolResultForAI(result *ExecutionResult) string 
 	}
 
 	return content
+}
+
+// truncateForModel applies the result budget to s (conduit-31jg.47).
+func (e *ExecutionEngine) truncateForModel(s string) string {
+	maxChars := e.maxResultChars
+	if maxChars <= 0 {
+		maxChars = DefaultMaxToolResultChars
+	}
+	if len(s) > maxChars {
+		return e.smartTruncate(s, maxChars)
+	}
+	return s
+}
+
+// toolWantsDataInOutput reports whether the named tool opted into having
+// ToolResult.Data rendered for the model (Registry.IncludeDataInModelOutput).
+func (e *ExecutionEngine) toolWantsDataInOutput(name string) bool {
+	p, ok := e.registry.(interface{ IncludeDataInModelOutput(name string) bool })
+	return ok && p.IncludeDataInModelOutput(name)
+}
+
+// headTailRunes keeps headSize bytes from the start and tailSize from the
+// end of s with marker between, never splitting a UTF-8 rune (conduit-31jg.39).
+func headTailRunes(s string, headSize, tailSize int, marker string) string {
+	if headSize < 0 {
+		headSize = 0
+	}
+	if tailSize < 0 {
+		tailSize = 0
+	}
+	if headSize+tailSize >= len(s) {
+		return s
+	}
+	for headSize > 0 && !utf8.RuneStart(s[headSize]) {
+		headSize--
+	}
+	tailStart := len(s) - tailSize
+	for tailStart < len(s) && !utf8.RuneStart(s[tailStart]) {
+		tailStart++
+	}
+	return s[:headSize] + marker + s[tailStart:]
 }
 
 // smartTruncate performs intelligent truncation preserving head, tail, and error lines.
@@ -792,9 +906,8 @@ func (e *ExecutionEngine) smartTruncate(content string, maxChars int) string {
 		// Simple char truncation: keep first 80% and last 20%
 		headSize := maxChars * 4 / 5
 		tailSize := maxChars / 5
-		return content[:headSize] +
-			fmt.Sprintf("\n\n...(truncated, showing %d of %d chars)...\n\n", maxChars, len(content)) +
-			content[len(content)-tailSize:]
+		return headTailRunes(content, headSize, tailSize,
+			fmt.Sprintf("\n\n...(truncated, showing %d of %d chars)...\n\n", maxChars, len(content)))
 	}
 
 	// Collect head lines
@@ -841,9 +954,8 @@ func (e *ExecutionEngine) smartTruncate(content string, maxChars int) string {
 		// Truncate preserved middle if still too long
 		headSize := maxChars * 4 / 5
 		tailSize := maxChars / 5
-		return finalContent[:headSize] +
-			fmt.Sprintf("\n\n...(final truncation, showing %d of %d chars)...\n\n", maxChars, len(finalContent)) +
-			finalContent[len(finalContent)-tailSize:]
+		return headTailRunes(finalContent, headSize, tailSize,
+			fmt.Sprintf("\n\n...(final truncation, showing %d of %d chars)...\n\n", maxChars, len(finalContent)))
 	}
 
 	return finalContent

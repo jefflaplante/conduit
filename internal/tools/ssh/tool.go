@@ -2317,3 +2317,8 @@ func (t *SSHTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *ty
 
 	return result
 }
+
+// IncludeDataInModelOutput opts this tool into having ToolResult.Data
+// rendered for the model: ids and lists needed for follow-up calls live
+// only in Data (conduit-31jg.39).
+func (t *SSHTool) IncludeDataInModelOutput() bool { return true }
