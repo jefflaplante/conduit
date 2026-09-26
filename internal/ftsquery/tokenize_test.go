@@ -1,4 +1,4 @@
-package brain
+package ftsquery
 
 import (
 	"testing"
@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestTokenizeQuery(t *testing.T) {
+func TestTokenize(t *testing.T) {
 	tests := []struct {
 		name     string
 		query    string
@@ -30,7 +30,7 @@ func TestTokenizeQuery(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := TokenizeQuery(tt.query)
+			result := Tokenize(tt.query)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

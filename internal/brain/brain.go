@@ -886,11 +886,14 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	var matchExprs []string
 	var whereArgs []interface{}
 	var matchArgs []interface{}
+	// conduit-31jg.31: terms are LIKE-escaped (%, _ and \ literal) so a
+	// query like "100%" doesn't become a wildcard pattern.
 	for _, term := range terms {
-		whereClauses = append(whereClauses, "(LOWER(key) LIKE ? OR LOWER(value) LIKE ?)")
-		whereArgs = append(whereArgs, "%"+term+"%", "%"+term+"%")
-		matchExprs = append(matchExprs, "(CASE WHEN LOWER(key) LIKE ? OR LOWER(value) LIKE ? THEN 1 ELSE 0 END)")
-		matchArgs = append(matchArgs, "%"+term+"%", "%"+term+"%")
+		pat := likeContains(term)
+		whereClauses = append(whereClauses, `(LOWER(key) LIKE ? ESCAPE '\' OR LOWER(value) LIKE ? ESCAPE '\')`)
+		whereArgs = append(whereArgs, pat, pat)
+		matchExprs = append(matchExprs, `(CASE WHEN LOWER(key) LIKE ? ESCAPE '\' OR LOWER(value) LIKE ? ESCAPE '\' THEN 1 ELSE 0 END)`)
+		matchArgs = append(matchArgs, pat, pat)
 	}
 
 	sqlQuery := fmt.Sprintf(
@@ -932,6 +935,9 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 		}
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil { // conduit-31jg.31
+		return nil, fmt.Errorf("recall LTM rows: %w", err)
+	}
 
 	// Bump access_count/accessed_at for the LTM rows we matched (best-effort).
 	// Batched UPDATE keeps lock contention minimal; RetryOnBusy for robustness.
@@ -1194,11 +1200,11 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 	b.mu.RUnlock()
 
 	query := `SELECT key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at
-		FROM brain_ltm WHERE key LIKE ? AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))`
-	args := []interface{}{prefix + "%"}
+		FROM brain_ltm WHERE key LIKE ? ESCAPE '\' AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))`
+	args := []interface{}{EscapeLike(prefix) + "%"}
 	if sourcePrefix != "" {
-		query += " AND source LIKE ?"
-		args = append(args, sourcePrefix+"%")
+		query += ` AND source LIKE ? ESCAPE '\'`
+		args = append(args, EscapeLike(sourcePrefix)+"%")
 	}
 	query += " ORDER BY key"
 
@@ -1221,6 +1227,9 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 			entry.ExpiresAt = &t
 		}
 		results = append(results, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return results, fmt.Errorf("list LTM rows: %w", err)
 	}
 
 	return results, nil
@@ -1817,6 +1826,26 @@ func entryMatchesAnyTerm(e *Entry, terms []string) bool {
 	}
 	return false
 }
+
+// EscapeLike escapes s for use inside a LIKE pattern with ESCAPE '\':
+// %, _ and \ become literal. conduit-31jg.31
+func EscapeLike(s string) string {
+	if !strings.ContainsAny(s, `%_\`) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 4)
+	for _, r := range s {
+		if r == '%' || r == '_' || r == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// likeContains returns a LIKE ... ESCAPE '\' pattern matching s anywhere.
+func likeContains(s string) string { return "%" + EscapeLike(s) + "%" }
 
 func containsString(list []string, s string) bool {
 	for _, v := range list {

@@ -423,7 +423,7 @@ internal/brain/
   brain.go            # Core Brain struct: Store, Get, Recall, List, Delete, Push/Pop/Peek, Promote, Consolidate, Status
   migrations.go       # SQLite schema migrations (4 versions, includes brain_reflections)
   source.go           # Source provenance: prefix parsing, validation, staleness thresholds
-  tokenize.go         # Query tokenizer: stopword removal, delimiter splitting, dedup
+  tokenize.go         # TokenizeQuery wrapper; tokenizer lives in internal/ftsquery (shared with every FTS5 MATCH builder)
   rem/
     cycle.go          # REMCycle orchestrator: Run() dispatches phases in order
     triage.go         # Phase 1: daily log scanning, stale candidate detection

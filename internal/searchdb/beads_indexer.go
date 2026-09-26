@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"conduit/internal/ftsquery"
 )
 
 // BeadsIssue represents a beads issue from issues.jsonl
@@ -206,41 +208,10 @@ func parseIssuesJSONL(data []byte) ([]BeadsIssue, error) {
 	return issues, scanner.Err()
 }
 
-// buildBeadsFTSQuery converts a user query into an FTS5 MATCH expression.
-// Searches across title, description, and issue_id fields.
+// buildBeadsFTSQuery converts a user query into an FTS5 MATCH expression
+// across all beads_fts columns. conduit-31jg.31: uses the shared quoted-phrase
+// builder, so bead IDs like "conduit-3dru" match (the phrase "conduit 3dru")
+// instead of being mangled to "conduit3dru" by the old denylist cleaner.
 func buildBeadsFTSQuery(query string) string {
-	words := strings.Fields(strings.ToLower(query))
-	if len(words) == 0 {
-		return ""
-	}
-
-	var terms []string
-	for _, w := range words {
-		cleaned := cleanFTSTerm(w)
-		if cleaned != "" {
-			// Search across multiple columns: title, description, issue_id
-			terms = append(terms, cleaned)
-		}
-	}
-
-	if len(terms) == 0 {
-		return ""
-	}
-
-	// Use OR to match any term across any indexed column
-	return strings.Join(terms, " OR ")
-}
-
-// cleanFTSTerm removes characters that have special meaning in FTS5 queries.
-func cleanFTSTerm(term string) string {
-	var b strings.Builder
-	for _, ch := range term {
-		switch ch {
-		case '"', '*', '(', ')', ':', '^', '{', '}', '+', '-':
-			// skip special FTS5 characters
-		default:
-			b.WriteRune(ch)
-		}
-	}
-	return strings.TrimSpace(b.String())
+	return ftsquery.Build(query)
 }

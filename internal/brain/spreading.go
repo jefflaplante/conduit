@@ -91,6 +91,9 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 			traversed = append(traversed, [2]string{srcKey, neighbour})
 		}
 		rows.Close()
+		if err := rows.Err(); err != nil { // conduit-31jg.31
+			return fmt.Errorf("spread activation neighbours for %q: %w", srcKey, err)
+		}
 	}
 
 	if len(bestBoost) == 0 {

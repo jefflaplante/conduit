@@ -241,17 +241,17 @@ func TestBuildBeadsFTSQuery(t *testing.T) {
 		{
 			name:     "single word",
 			input:    "test",
-			expected: "test",
+			expected: `"test"`,
 		},
 		{
 			name:     "multiple words",
 			input:    "test feature",
-			expected: "test OR feature",
+			expected: `"test" OR "feature"`,
 		},
 		{
 			name:     "with special characters",
 			input:    "test:feature (bug)",
-			expected: "testfeature OR bug", // Special chars are stripped, not split
+			expected: `"test:feature" OR "(bug)"`, // conduit-31jg.31: quoted, not stripped
 		},
 		{
 			name:     "empty query",
@@ -262,6 +262,11 @@ func TestBuildBeadsFTSQuery(t *testing.T) {
 			name:     "only special characters",
 			input:    ":()+-",
 			expected: "",
+		},
+		{
+			name:     "bead ID",
+			input:    "conduit-3dru",
+			expected: `"conduit-3dru" OR "conduit" OR "3dru"`,
 		},
 	}
 

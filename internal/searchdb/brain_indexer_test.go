@@ -192,15 +192,18 @@ func TestBuildBrainFTSQuery(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"single word", "conduit", "conduit"},
-		{"multiple words", "brain memory", "brain OR memory"},
-		{"with special chars", "key:value (test)", "keyvalue OR test"},
+		// conduit-31jg.31: every term is a quoted FTS5 phrase.
+		{"single word", "conduit", `"conduit"`},
+		{"multiple words", "brain memory", `"brain" OR "memory"`},
+		{"with special chars", "key:value (test)", `"key:value" OR "(test)"`},
 		{"empty query", "", ""},
 		{"only special chars", ":()+-", ""},
-		{"stopword stripping", "what is the helm config", "helm OR config"},
-		{"delimiter splitting", "helm/kustomize", "helm OR kustomize"},
-		{"all stopwords fallback", "what is it", "what OR is OR it"},
-		{"natural language", "who passed away recently", "passed OR away"},
+		{"stopword stripping", "what is the helm config", `"helm" OR "config"`},
+		{"delimiter splitting", "helm/kustomize", `"helm/kustomize" OR "helm" OR "kustomize"`},
+		{"all stopwords fallback", "what is it", `"what" OR "is" OR "it"`},
+		{"natural language", "who passed away recently", `"passed" OR "away"`},
+		{"dotted key", "jeff.birthday", `"jeff.birthday"`},
+		{"embedded quote", `say "hi`, `"say" OR """hi"`},
 	}
 
 	for _, tt := range tests {
