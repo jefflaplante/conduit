@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -215,6 +216,29 @@ func TestAdaptToolResult(t *testing.T) {
 		tc, ok := mcpResult.Content[0].(*sdkmcp.TextContent)
 		require.True(t, ok)
 		assert.Equal(t, "something went wrong", tc.Text)
+	})
+
+	// conduit-31jg.10: failed results must carry the tool's output, not just the error.
+	t.Run("error with output", func(t *testing.T) {
+		result := &types.ToolResult{
+			Success: false,
+			Error:   "Command execution failed: exit status 1",
+			Content: "./foo.go:12:2: undefined: bar",
+		}
+		mcpResult := AdaptToolResult(result)
+		assert.True(t, mcpResult.IsError)
+		require.Len(t, mcpResult.Content, 1)
+		tc, ok := mcpResult.Content[0].(*sdkmcp.TextContent)
+		require.True(t, ok)
+		assert.Contains(t, tc.Text, "Command execution failed: exit status 1")
+		assert.Contains(t, tc.Text, "undefined: bar")
+		assert.Equal(t, 1, strings.Count(tc.Text, "undefined: bar"))
+	})
+
+	t.Run("error equal to content not duplicated", func(t *testing.T) {
+		mcpResult := AdaptToolResult(&types.ToolResult{Success: false, Error: "boom", Content: "boom"})
+		tc := mcpResult.Content[0].(*sdkmcp.TextContent)
+		assert.Equal(t, "boom", tc.Text)
 	})
 
 	t.Run("nil result", func(t *testing.T) {

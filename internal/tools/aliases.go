@@ -66,7 +66,7 @@ func GetAnthropicToolWithInstance(alias string, registry *Registry) (*ToolConfig
 	// Note: The registry uses internal names, not Anthropic versioned names
 	// So we need to map back to the internal tool name
 	internalName := getInternalToolName(alias)
-	if tool, exists := registry.tools[internalName]; exists {
+	if tool, exists := registry.getTool(internalName); exists { // conduit-31jg.19: locked lookup
 		config.Tool = tool
 	}
 

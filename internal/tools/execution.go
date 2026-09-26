@@ -734,6 +734,21 @@ func (e *ExecutionEngine) formatToolResultForAI(result *ExecutionResult) string 
 			}
 		}
 
+		// conduit-31jg.10: surface the tool's output (e.g. compiler/test stderr
+		// from a non-zero Bash exit) so the model isn't blind to why it failed.
+		// ErrorDetails.Context["output"] is intentionally not rendered, so the
+		// output appears exactly once.
+		if out := strings.TrimSpace(result.Result.Content); out != "" && out != strings.TrimSpace(result.Result.Error) {
+			maxChars := e.maxResultChars
+			if maxChars <= 0 {
+				maxChars = DefaultMaxToolResultChars
+			}
+			if len(out) > maxChars {
+				out = e.smartTruncate(out, maxChars)
+			}
+			msg += "\nOutput:\n" + out
+		}
+
 		return msg
 	}
 
