@@ -44,7 +44,10 @@ In-process per-user key-value store. Scoped to the current user's session contex
 
 - Keyed by user ID extracted from request context
 - Sub-agents can read (but not write) their parent's working memory via `WithParentUserID` context propagation
-- Auto-flushed periodically: entries not accessed for over 1 hour with salience below the evict threshold are removed
+- Auto-flushed periodically: entries not accessed for over 1 hour whose *eviction score* is below `evict_threshold` leave WM. The eviction score is salience without the constant tier term (`access_score*access_weight + recency_score*recency_weight`) — the tier term is identical for every WM entry, and including it made the default threshold unreachable (conduit-31jg.29). With defaults, an entry touched once is evictable after ~3.2h idle, one touched 10 times after ~5.7h.
+- Hot entries (access count >= heat promotion threshold, default 3) are never silently dropped: when they become evictable they are promoted to LTM first (if `auto_promote` is on; otherwise they stay in WM). Cold entries are dropped.
+- Per-user cap: each user's WM holds at most 1000 entries (`WithMaxWMEntriesPerUser`). Writing past the cap evicts the lowest-scoring entries (hot ones promoted to LTM first); the key being written is never the victim.
+- Promotion paths, in order of when they fire: explicit `promote`; `consolidate` (salience >= `consolidate_threshold`, or hot + evictable); auto-flush/cap rescue of hot entries; nightly REM consolidation (salience or heat) across every user's WM.
 - High-salience entries can be promoted to LTM via the `promote` or `consolidate` actions
 
 ### Scratchpad
@@ -216,7 +219,7 @@ Weights should sum to 1.0. Adjusting them changes which entries float to the top
 | Threshold | Default | Purpose |
 |-----------|---------|---------|
 | `consolidate_threshold` | 0.6 | WM entries above this are auto-promoted to LTM during consolidation |
-| `evict_threshold` | 0.1 | WM entries below this are evicted during consolidation or auto-flush |
+| `evict_threshold` | 0.1 | WM entries idle > 1h whose access+recency score (salience minus the tier term) is below this are evicted during consolidation or auto-flush |
 
 ## REM Sleep Cycle
 
