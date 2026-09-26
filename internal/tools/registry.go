@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	"conduit/internal/sandbox"
 	"conduit/internal/skills"
 	"conduit/internal/tools/communication"
 	"conduit/internal/tools/core"
@@ -131,6 +131,13 @@ func NewRegistry(cfg config.ToolsConfig) *Registry {
 	// Mark enabled tools (normalized for case/underscore-insensitive matching)
 	for _, toolName := range cfg.EnabledTools {
 		registry.enabledTools[normalizeToolName(toolName)] = true
+	}
+
+	// conduit-31jg.6: symlinks are now resolved before the containment check.
+	// Warn about top-level links in a sandbox root that point outside it —
+	// file tools will refuse them until the target is added to allowed_paths.
+	for link, target := range sandbox.FromConfig(cfg.Sandbox).EscapingSymlinks() {
+		log.Printf("[Sandbox] WARNING: %s -> %s resolves outside tools.sandbox roots; Read/Write/Edit/Glob will deny it. Add %q to tools.sandbox.allowed_paths to keep access.", link, target, target)
 	}
 
 	// Don't register tools here - wait for services to be set
@@ -751,26 +758,23 @@ func (r *Registry) GetAllToolsHelp() map[string]interface{} {
 	}
 }
 
-// isPathAllowed checks if a file path is allowed within the sandbox
+// isPathAllowed checks if a file path is allowed within the sandbox.
+// conduit-31jg.6: delegates to the shared symlink-aware sandbox resolver.
 func (r *Registry) isPathAllowed(path string) bool {
-	absPath, err := filepath.Abs(path)
+	_, ok := r.sandboxResolve(path)
+	return ok
+}
+
+// sandboxResolve returns the canonical (symlink-resolved) path when path is
+// inside the sandbox. Callers should do their I/O on the returned path so the
+// checked path and the opened path are the same.
+// conduit-31jg.6
+func (r *Registry) sandboxResolve(path string) (string, bool) {
+	real, err := sandbox.FromConfig(r.sandboxCfg).Resolve(path)
 	if err != nil {
-		return false
+		return "", false
 	}
-	absPath = filepath.Clean(absPath)
-
-	for _, allowedPath := range r.sandboxCfg.AllowedPaths {
-		cleanAllowed := filepath.Clean(allowedPath)
-		rel, err := filepath.Rel(cleanAllowed, absPath)
-		if err != nil {
-			continue
-		}
-		if !strings.HasPrefix(rel, "..") {
-			return true
-		}
-	}
-
-	return false
+	return real, true
 }
 
 // RegistrySelfTestResult aggregates self-test results for all tools.

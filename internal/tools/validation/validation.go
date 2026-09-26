@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"conduit/internal/sandbox"
 	"conduit/internal/tools/types"
 )
 
@@ -325,14 +326,9 @@ func validateFilePath(path, parameter string, allowedPaths []string) *types.Vali
 		}
 	}
 
-	// Check sandbox restrictions
-	allowed := false
-	for _, allowedPath := range allowedPaths {
-		if strings.HasPrefix(absPath, allowedPath) {
-			allowed = true
-			break
-		}
-	}
+	// Check sandbox restrictions. conduit-31jg.6: shared symlink-aware
+	// resolver instead of a raw string-prefix match.
+	allowed := sandbox.New("", allowedPaths).Allowed(absPath)
 
 	if !allowed {
 		return &types.ValidationError{

@@ -57,7 +57,9 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 	// Resolve relative paths against workspace context directory
 	resolvedPath := t.resolvePath(path)
 
-	if !t.registry.isPathAllowed(resolvedPath) {
+	// conduit-31jg.6: symlink-aware check; do I/O on the canonical path.
+	realPath, allowed := t.registry.sandboxResolve(resolvedPath)
+	if !allowed {
 		return types.NewErrorResult("path_not_allowed",
 			fmt.Sprintf("Path '%s' is not allowed in sandbox", path)).
 			WithParameter("path", path).
@@ -72,6 +74,8 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 				"Check workspace configuration if using relative paths",
 			}), nil
 	}
+
+	resolvedPath = realPath
 
 	content, err := os.ReadFile(resolvedPath)
 	if err != nil {
@@ -455,7 +459,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 	// Resolve relative paths against workspace context directory
 	resolvedPath := t.resolvePath(path)
 
-	if !t.registry.isPathAllowed(resolvedPath) {
+	// conduit-31jg.6: symlink-aware check; do I/O on the canonical path.
+	realPath, allowed := t.registry.sandboxResolve(resolvedPath)
+	if !allowed {
 		return types.NewErrorResult("path_not_allowed",
 			fmt.Sprintf("Path '%s' is not allowed in sandbox", path)).
 			WithParameter("path", path).
@@ -470,6 +476,8 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 				"Check workspace configuration if using relative paths",
 			}), nil
 	}
+
+	resolvedPath = realPath
 
 	// Ensure directory exists
 	dir := filepath.Dir(resolvedPath)
@@ -748,12 +756,15 @@ func (t *ListFilesTool) Execute(ctx context.Context, args map[string]interface{}
 		path = t.registry.sandboxCfg.WorkspaceDir
 	}
 
-	if !t.registry.isPathAllowed(path) {
+	// conduit-31jg.6: symlink-aware check; list the canonical directory.
+	realPath, allowed := t.registry.sandboxResolve(path)
+	if !allowed {
 		return &types.ToolResult{
 			Success: false,
 			Error:   "path is not allowed in sandbox",
 		}, nil
 	}
+	path = realPath
 
 	entries, err := os.ReadDir(path)
 	if err != nil {
