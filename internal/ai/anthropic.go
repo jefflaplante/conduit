@@ -140,15 +140,30 @@ func (a *AnthropicProvider) buildMessagesRequest(req *GenerateRequest) (map[stri
 	}
 
 	// Extract ALL system messages from the array and consolidate into system blocks.
-	// This handles cases where system messages are injected mid-conversation
-	// (e.g., goal refocus during tool execution chains).
+	// This handles cases where system messages are injected mid-conversation.
+	// conduit-31jg.14: the leading system message is expanded into its
+	// agent blocks; staticEnd is the last block of the byte-stable prefix
+	// (OAuth identity + static agent block), where the system cache
+	// breakpoint goes. Dynamic blocks and any later system message come
+	// after it, so per-turn content never invalidates the cached prefix.
+	staticEnd := len(systemBlocks) - 1
+	prefixOpen := true
 	var filteredMessages []ChatMessage
 	for _, msg := range messages {
 		if msg.Role == "system" {
-			systemBlocks = append(systemBlocks, map[string]interface{}{
-				"type": "text",
-				"text": msg.Content,
-			})
+			for _, blk := range systemMessageBlocks(msg) {
+				systemBlocks = append(systemBlocks, map[string]interface{}{
+					"type": "text",
+					"text": blk.Text,
+				})
+				if blk.Dynamic {
+					prefixOpen = false
+				}
+				if prefixOpen {
+					staticEnd = len(systemBlocks) - 1
+				}
+			}
+			prefixOpen = false
 		} else {
 			filteredMessages = append(filteredMessages, msg)
 		}
@@ -177,7 +192,7 @@ func (a *AnthropicProvider) buildMessagesRequest(req *GenerateRequest) (map[stri
 	// conduit-3dru — previously markers were added after API-key auth had
 	// already flattened systemBlocks to a plain string, silently dropping
 	// the system breakpoint (the largest cacheable prefix) for API-key users.
-	a.addCacheBreakpoints(convertedTools, systemBlocks, anthropicMessages, modelToUse)
+	a.addCacheBreakpoints(convertedTools, systemBlocks, staticEnd, anthropicMessages, modelToUse)
 
 	// Detect whether any system block now carries a cache marker; if so the
 	// block-array form must be preserved even for API-key auth, because
@@ -674,12 +689,132 @@ func (a *AnthropicProvider) parseAnthropicUsage(resp map[string]interface{}) Usa
 	return usage
 }
 
+// maxCacheBreakpoints is the Anthropic limit on cache_control markers per
+// request (tools + system + messages combined). conduit-31jg.14.
+const maxCacheBreakpoints = 4
+
+// imageTokenEstimate is a flat per-image estimate; base64 length would
+// wildly overstate an image's token cost.
+const imageTokenEstimate = 1600
+
+// systemMessageBlocks returns the blocks a system ChatMessage contributes.
+// The agent's split (static + dynamic) is used only while it still matches
+// Content — if something rewrote Content after the prompt was built, the
+// joined Content wins as a single static block. Empty blocks are dropped
+// (the API rejects empty text blocks). conduit-31jg.14.
+func systemMessageBlocks(msg ChatMessage) []SystemBlock {
+	if len(msg.SystemBlocks) > 0 {
+		texts := make([]string, 0, len(msg.SystemBlocks))
+		out := make([]SystemBlock, 0, len(msg.SystemBlocks))
+		for _, b := range msg.SystemBlocks {
+			texts = append(texts, b.Text)
+			if b.Text != "" {
+				out = append(out, b)
+			}
+		}
+		if strings.Join(texts, "\n\n") == msg.Content {
+			return out
+		}
+	}
+	if msg.Content == "" {
+		return nil
+	}
+	return []SystemBlock{{Type: "text", Text: msg.Content}}
+}
+
+// estimateTokens is the rough 4-chars-per-token estimate used for cache
+// thresholds.
+func estimateTokens(s string) int { return len(s) / 4 }
+
+// estimateJSONTokens estimates the tokens of an arbitrary request fragment.
+func estimateJSONTokens(v interface{}) int {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return 0
+	}
+	return len(b) / 4
+}
+
+// estimateMessageTokens estimates one converted message. conduit-31jg.14:
+// the old estimate counted only string content, so tool turns (block
+// arrays: tool_use / tool_result / text) counted as zero.
+func estimateMessageTokens(msg map[string]interface{}) int {
+	switch c := msg["content"].(type) {
+	case string:
+		return estimateTokens(c)
+	case []map[string]interface{}:
+		n := 0
+		for _, block := range c {
+			if block["type"] == "image" {
+				n += imageTokenEstimate
+				continue
+			}
+			n += estimateJSONTokens(block)
+		}
+		return n
+	}
+	return 0
+}
+
+// markMessageBreakpoint puts cc on one content block of msg and reports
+// whether it did. String content is converted to a single text block. In a
+// block array the last tool_result is preferred: text after it is ephemeral
+// loop guidance (conduit-31jg.13) that the next request strips, so caching
+// through it would write an entry that is never read.
+func markMessageBreakpoint(msg map[string]interface{}, cc map[string]interface{}) bool {
+	switch c := msg["content"].(type) {
+	case string:
+		if c == "" {
+			return false
+		}
+		msg["content"] = []map[string]interface{}{
+			{"type": "text", "text": c, "cache_control": cc},
+		}
+		return true
+	case []map[string]interface{}:
+		target := -1
+		for i := len(c) - 1; i >= 0; i-- {
+			if c[i]["type"] == "tool_result" {
+				target = i
+				break
+			}
+		}
+		if target < 0 {
+			target = len(c) - 1
+		}
+		if target < 0 {
+			return false
+		}
+		if c[target]["type"] == "text" {
+			if text, _ := c[target]["text"].(string); text == "" {
+				return false
+			}
+		}
+		c[target]["cache_control"] = cc
+		return true
+	}
+	return false
+}
+
 // addCacheBreakpoints adds cache_control markers to the request components
 // based on the configured PromptCachingConfig (conduit-3dru). The master
 // switch gates everything; granular flags gate each breakpoint type.
+//
+// conduit-31jg.14: at most maxCacheBreakpoints markers, placed as
+//  1. last tool definition (CacheTools)
+//  2. systemBlocks[staticEnd] — the last byte-stable system block; dynamic
+//     blocks after it (timestamp etc.) are outside the cached prefix
+//  3. the LAST message — rolling breakpoint, so each tool-loop round trip
+//     reads everything the previous one wrote (CacheHistory)
+//  4. an anchor HistoryBreakpointInterval messages back, a second read
+//     point when a round adds more than the ~20-block lookback (CacheHistory)
+//
+// Each is placed only when the estimated prefix up to it (tools → system →
+// messages, in API order) reaches the model's minimum cacheable length.
 func (a *AnthropicProvider) addCacheBreakpoints(
 	tools []interface{},
 	systemBlocks []map[string]interface{},
+	staticEnd int,
 	messages []map[string]interface{},
 	model string,
 ) {
@@ -692,67 +827,60 @@ func (a *AnthropicProvider) addCacheBreakpoints(
 		cacheControl["ttl"] = "1h"
 	}
 
-	// Estimate tokens (rough: 4 chars per token)
-	estimateTokens := func(content string) int {
-		return len(content) / 4
-	}
+	used := 0
+	canMark := func() bool { return used < maxCacheBreakpoints }
 
-	// Breakpoint 1: Last tool definition (if tools meet threshold)
-	if a.caching.CacheTools && len(tools) > 0 {
-		// Estimate tool tokens (rough: 100 tokens per tool for schema)
-		toolTokens := len(tools) * 100
-		if toolTokens >= minTokens {
+	// prefix is the running estimate of everything before the next marker.
+	prefix := 0
+
+	// Breakpoint 1: last tool definition.
+	if len(tools) > 0 {
+		prefix += estimateJSONTokens(tools)
+		if a.caching.CacheTools && prefix >= minTokens && canMark() {
 			if lastTool, ok := tools[len(tools)-1].(map[string]interface{}); ok {
 				lastTool["cache_control"] = cacheControl
+				used++
 			}
 		}
 	}
 
-	// Breakpoint 2: Last system block
-	if a.caching.CacheSystem && len(systemBlocks) > 0 {
-		// Calculate total system prompt tokens
-		totalSystemTokens := 0
-		for _, block := range systemBlocks {
-			if text, ok := block["text"].(string); ok {
-				totalSystemTokens += estimateTokens(text)
-			}
-		}
-		if totalSystemTokens >= minTokens {
-			systemBlocks[len(systemBlocks)-1]["cache_control"] = cacheControl
+	// Breakpoint 2: last static system block.
+	for i, block := range systemBlocks {
+		text, _ := block["text"].(string)
+		prefix += estimateTokens(text)
+		if i == staticEnd && a.caching.CacheSystem && prefix >= minTokens && canMark() {
+			block["cache_control"] = cacheControl
+			used++
 		}
 	}
 
-	// Breakpoint 3: Conversation history (for longer conversations)
-	// Marks a stable prefix at the configured interval back from the end;
-	// the final turn stays uncached.
-	if a.caching.CacheHistory && len(messages) > 5 {
-		interval := a.caching.HistoryBreakpointInterval
-		if interval <= 0 {
-			interval = 6
-		}
-		totalHistoryTokens := 0
-		for _, msg := range messages[:len(messages)-1] { // Exclude last message
-			if content, ok := msg["content"].(string); ok {
-				totalHistoryTokens += estimateTokens(content)
-			}
-		}
+	if !a.caching.CacheHistory || len(messages) == 0 {
+		return
+	}
 
-		if totalHistoryTokens >= minTokens {
-			breakpointIdx := len(messages) - 1 - interval
-			if breakpointIdx < 0 {
-				breakpointIdx = 0
-			}
-			msg := messages[breakpointIdx]
-			// For string content, convert to block format with cache_control
-			if content, ok := msg["content"].(string); ok {
-				msg["content"] = []map[string]interface{}{
-					{
-						"type":          "text",
-						"text":          content,
-						"cache_control": cacheControl,
-					},
-				}
-			}
+	// Breakpoints 3 and 4: conversation history.
+	msgPrefix := make([]int, len(messages)) // estimated prefix through message i
+	running := prefix
+	for i, msg := range messages {
+		running += estimateMessageTokens(msg)
+		msgPrefix[i] = running
+	}
+
+	last := len(messages) - 1
+	if msgPrefix[last] >= minTokens && canMark() {
+		if markMessageBreakpoint(messages[last], cacheControl) {
+			used++
+		}
+	}
+
+	interval := a.caching.HistoryBreakpointInterval
+	if interval <= 0 {
+		interval = 6
+	}
+	anchor := last - interval
+	if anchor >= 0 && msgPrefix[anchor] >= minTokens && canMark() {
+		if markMessageBreakpoint(messages[anchor], cacheControl) {
+			used++
 		}
 	}
 }

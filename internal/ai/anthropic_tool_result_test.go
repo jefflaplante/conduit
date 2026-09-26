@@ -35,6 +35,8 @@ func sendAndCapture(t *testing.T, cfg config.PromptCachingConfig, req *GenerateR
 	if err != nil {
 		t.Fatalf("provider: %v", err)
 	}
+	// Pin API-key mode even if the host has a stored OAuth token.
+	p.isOAuth, p.authCfg = false, nil
 	if _, err := p.GenerateResponse(context.Background(), req); err != nil {
 		t.Fatalf("generate: %v", err)
 	}

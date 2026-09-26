@@ -91,6 +91,8 @@ func (r *Router) buildChatMessagesWithSystemPrompt(ctx context.Context, session 
 		messages = append(messages, ChatMessage{
 			Role:    "system",
 			Content: systemContent.String(),
+			// conduit-31jg.14: keep the block split for cache placement.
+			SystemBlocks: append([]SystemBlock(nil), systemBlocks...),
 		})
 	}
 

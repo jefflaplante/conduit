@@ -116,6 +116,11 @@ type SystemBlock struct {
 	Type string      `json:"type"`
 	Text string      `json:"text,omitempty"`
 	Meta interface{} `json:"meta,omitempty"`
+	// Dynamic marks per-turn content (timestamp, wake context). Providers
+	// with prompt caching place the system breakpoint on the last
+	// non-dynamic block so these never invalidate the cached prefix.
+	// conduit-31jg.14
+	Dynamic bool `json:"dynamic,omitempty"`
 }
 
 // ProcessedResponse represents processed AI response
@@ -177,6 +182,11 @@ type ChatMessage struct {
 	// Result.Success=false). Anthropic receives it as tool_result.is_error.
 	// conduit-31jg.45
 	IsError bool `json:"is_error,omitempty"`
+	// SystemBlocks carries the agent's system prompt blocks on the leading
+	// system message. Content still holds them joined with "\n\n" for
+	// providers without block support; Anthropic sends the blocks so the
+	// cache breakpoint lands on the static one. conduit-31jg.14
+	SystemBlocks []SystemBlock `json:"system_blocks,omitempty"`
 }
 
 // Attachment represents media content attached to a message (e.g., images from Telegram).

@@ -515,7 +515,7 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 
 	// conduit-8ba7: mid-chain progress reminder. The old every-10-depth
 	// verbatim goal reminder is gone; deep chains instead get exactly one
-	// progress-aware system message at the first depth >= 20, and depth
+	// progress-aware user-role guidance message at the first depth >= 20, and depth
 	// milestones 30/40/50 emit chain_depth telemetry (log only, no injection).
 	const refocusDepthThreshold = 20
 	var refocusMessage string
@@ -576,23 +576,18 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 		})
 	}
 
-	// Inject the one-per-chain progress reminder if applicable (conduit-8ba7)
-	if refocusMessage != "" {
-		conversationHistory = append(conversationHistory, ai.ChatMessage{
-			Role:    "system",
-			Content: refocusMessage,
-		})
-	}
-
 	// conduit-31jg.13: failure-pivot and circular-pattern guidance, once per
 	// trigger, from this turn's trackers only. Sent as a USER-role message
 	// after the tool results — not system-role — so providers that hoist
 	// system messages (anthropic.go, openai.go) don't rewrite the system
-	// prefix and bust the prompt cache. The Anthropic converter already
-	// emits one user turn per tool result; the API merges consecutive user
-	// turns into [tool_result..., text], which satisfies the "tool_result
-	// blocks first" rule. Stripped before recursing (stripEphemeral).
-	if guidance := tb.chain.takeGuidance(); guidance != "" {
+	// prefix and bust the prompt cache. The Anthropic converter puts it in
+	// the same user message as the tool_results, after them (conduit-31jg.45),
+	// satisfying the "tool_result blocks first" rule.
+	// Stripped before recursing (stripEphemeral).
+	// conduit-31jg.14: the one-per-chain conduit-8ba7 progress reminder rides
+	// in this same user-role message; as a system message it was hoisted
+	// into the system blocks and busted the cached prefix.
+	if guidance := tb.chain.takeGuidance(refocusMessage); guidance != "" {
 		log.Printf("[ExecutionEngine] Injecting tool-loop guidance at depth %d (conduit-31jg.13)", depth)
 		conversationHistory = append(conversationHistory, ai.ChatMessage{
 			Role:    "user",
