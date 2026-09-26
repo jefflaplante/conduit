@@ -571,6 +571,8 @@ func (e *ExecutionEngine) handleToolCallFlowRecursive(
 			Role:       "tool",
 			Content:    content,
 			ToolCallID: result.ToolCall.ID,
+			// conduit-31jg.45: tell the model the call failed (tool_result.is_error).
+			IsError: result.Error != nil || (result.Result != nil && !result.Result.Success),
 		})
 	}
 

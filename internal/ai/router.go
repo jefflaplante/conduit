@@ -173,6 +173,10 @@ type ChatMessage struct {
 	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`   // For assistant messages with tool calls
 	ToolCallID  string       `json:"tool_call_id,omitempty"` // For tool result messages
 	Attachments []Attachment `json:"attachments,omitempty"`  // In-memory media attachments (images, etc.)
+	// IsError marks a tool result message whose tool call failed (Go error or
+	// Result.Success=false). Anthropic receives it as tool_result.is_error.
+	// conduit-31jg.45
+	IsError bool `json:"is_error,omitempty"`
 }
 
 // Attachment represents media content attached to a message (e.g., images from Telegram).

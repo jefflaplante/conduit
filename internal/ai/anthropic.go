@@ -431,6 +431,7 @@ func (a *AnthropicProvider) convertMessagesToAnthropic(messages []ChatMessage) [
 	result := make([]map[string]interface{}, 0, len(messages))
 
 	for _, msg := range messages {
+		before := len(result)
 		switch msg.Role {
 		case "user":
 			if len(msg.Attachments) > 0 {
@@ -499,21 +500,74 @@ func (a *AnthropicProvider) convertMessagesToAnthropic(messages []ChatMessage) [
 				})
 			}
 		case "tool":
-			// Tool results must be sent as user messages with tool_result content
-			result = append(result, map[string]interface{}{
-				"role": "user",
-				"content": []map[string]interface{}{
-					{
-						"type":        "tool_result",
-						"tool_use_id": msg.ToolCallID,
-						"content":     msg.Content,
-					},
-				},
-			})
+			// Tool results must be sent as user messages with tool_result content.
+			// conduit-31jg.45: failed calls carry is_error, and all results of
+			// one round share ONE user message (the API requires every
+			// tool_result for an assistant turn in the next user turn; we no
+			// longer rely on it merging consecutive user turns).
+			block := map[string]interface{}{
+				"type":        "tool_result",
+				"tool_use_id": msg.ToolCallID,
+				"content":     msg.Content,
+			}
+			if msg.IsError {
+				block["is_error"] = true
+			}
+			if blocks := trailingToolResultBlocks(result); blocks != nil {
+				result[len(result)-1]["content"] = append(blocks, block)
+			} else {
+				result = append(result, map[string]interface{}{
+					"role":    "user",
+					"content": []map[string]interface{}{block},
+				})
+			}
+		}
+
+		// conduit-31jg.45: user text that follows a round's tool results
+		// (loop guidance, refocus) joins that same user message after the
+		// tool_result blocks instead of forming a second user turn.
+		if msg.Role == "user" && before > 0 && len(result) == before+1 {
+			if blocks := trailingToolResultBlocks(result[:len(result)-1]); blocks != nil {
+				result[len(result)-2]["content"] = append(blocks, userContentBlocks(result[len(result)-1]["content"])...)
+				result = result[:len(result)-1]
+			}
 		}
 	}
 
 	return result
+}
+
+// trailingToolResultBlocks returns the content blocks of the last converted
+// message when it is a user turn carrying tool_result blocks, else nil.
+// conduit-31jg.45.
+func trailingToolResultBlocks(converted []map[string]interface{}) []map[string]interface{} {
+	if len(converted) == 0 {
+		return nil
+	}
+	last := converted[len(converted)-1]
+	if last["role"] != "user" {
+		return nil
+	}
+	blocks, ok := last["content"].([]map[string]interface{})
+	if !ok || len(blocks) == 0 || blocks[0]["type"] != "tool_result" {
+		return nil
+	}
+	return blocks
+}
+
+// userContentBlocks normalizes converted user content (string or blocks) to
+// a block slice. conduit-31jg.45.
+func userContentBlocks(content interface{}) []map[string]interface{} {
+	switch c := content.(type) {
+	case []map[string]interface{}:
+		return c
+	case string:
+		if c == "" {
+			return nil
+		}
+		return []map[string]interface{}{{"type": "text", "text": c}}
+	}
+	return nil
 }
 
 // Claude Code tool names that are known to work with OAuth tokens
