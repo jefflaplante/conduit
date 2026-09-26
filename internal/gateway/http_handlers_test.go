@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -105,27 +107,29 @@ func TestShutdownManager_SetOnShutdownAndTriggerAction(t *testing.T) {
 	}
 	sm := NewShutdownManager(logger, gw)
 
-	var called bool
-	sm.SetOnShutdown(func() { called = true })
+	sm.SetOnShutdown(func() {})
 	sm.SetTriggerAction("test_trigger")
 
-	// Invoke the callback indirectly via BeginShutdown; but that would trigger
-	// the shutdown sequence. We only want to verify the setter doesn't panic and
-	// the field is stored. Direct-field access isn't possible from outside the
-	// struct, so we run a minimal shutdown flow and check the callback ran.
-	sm.SetCancel(func() {})
+	// conduit-31jg.52: the shutdown goroutine writes a restart breadcrumb into
+	// DataDir (a t.TempDir). Returning before it finished made TempDir cleanup
+	// fail with "directory not empty". The cancel func runs after the
+	// breadcrumb write and drain, so wait for it before returning. (The old
+	// unsynchronized `called` flag was also a data race.)
+	cancelled := make(chan struct{})
+	var once sync.Once
+	sm.SetCancel(func() { once.Do(func() { close(cancelled) }) })
 
 	if err := sm.BeginShutdown("test", 100); err != nil {
 		t.Fatalf("BeginShutdown: %v", err)
 	}
-	// Give the goroutine a moment
-	for i := 0; i < 200 && !called; i++ {
-		// Loop up to ~100ms waiting for onShutdown to be invoked
-		sm.State()
+	select {
+	case <-cancelled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("shutdown sequence never reached cancel")
 	}
-	// onShutdown is invoked eventually; its exact timing depends on drainActiveRequests.
-	// Do not assert here — the setter path is what we're covering. Just ensure no panic.
-	_ = called
+	if st := sm.State(); st != StateTerminate && st != StateStopped {
+		t.Fatalf("state after cancel = %s", st)
+	}
 }
 
 func TestAnnounceToParent(t *testing.T) {

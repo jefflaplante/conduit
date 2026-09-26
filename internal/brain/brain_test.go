@@ -896,18 +896,24 @@ func TestStoreWithTTL_LTMExpiry(t *testing.T) {
 	b := newTestBrain(t)
 	ctx := testCtx("user1")
 
-	require.NoError(t, b.StoreWithTTL(ctx, "pet.grooming_next", "April 23", TierLongTerm, "user", 50*time.Millisecond))
+	// conduit-31jg.52: under -race load the first Get could land after a
+	// 50ms TTL had already elapsed. Use a roomier TTL, only assert presence
+	// if we are provably still inside it, and poll for expiry.
+	const ttl = 250 * time.Millisecond
+	start := time.Now()
+	require.NoError(t, b.StoreWithTTL(ctx, "pet.grooming_next", "April 23", TierLongTerm, "user", ttl))
 
 	entry, err := b.Get(ctx, "pet.grooming_next")
 	require.NoError(t, err)
-	require.NotNil(t, entry)
-	require.NotNil(t, entry.ExpiresAt)
+	if time.Since(start) < ttl {
+		require.NotNil(t, entry)
+		require.NotNil(t, entry.ExpiresAt)
+	}
 
-	time.Sleep(80 * time.Millisecond)
-
-	got, err := b.Get(ctx, "pet.grooming_next")
-	require.NoError(t, err)
-	assert.Nil(t, got, "expired LTM entry must not be returned by Get")
+	require.Eventually(t, func() bool {
+		got, err := b.Get(ctx, "pet.grooming_next")
+		return err == nil && got == nil
+	}, 10*time.Second, 20*time.Millisecond, "expired LTM entry must not be returned by Get")
 }
 
 func TestRecallSkipsExpired(t *testing.T) {
