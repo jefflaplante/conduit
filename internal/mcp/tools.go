@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"strings"
 
 	"conduit/internal/tools/types"
 
@@ -89,6 +90,10 @@ func AdaptToolResult(result *types.ToolResult) *sdkmcp.CallToolResult {
 		errMsg := result.Error
 		if errMsg == "" {
 			errMsg = result.Content
+		} else if out := strings.TrimSpace(result.Content); out != "" && out != strings.TrimSpace(errMsg) {
+			// conduit-31jg.10: include the tool's output (e.g. stderr from a
+			// failed command) alongside the error instead of dropping it.
+			errMsg += "\nOutput:\n" + out
 		}
 		if errMsg == "" {
 			errMsg = "unknown error"
