@@ -80,7 +80,16 @@ type Adapter struct {
 	stt         stt.Transcriber
 	seenUpdates map[int64]time.Time
 	seenCalls   int64
+
+	// runDone is closed when the bot run goroutine started by Start exits
+	// (after bot.Start/StartWebhook return, i.e. no more handleUpdate calls
+	// from the poller). Stop waits on it. conduit-31jg.26.
+	runDone chan struct{}
 }
+
+// stopWaitTimeout bounds how long Stop waits for the poller goroutine.
+// A handler stuck in a long download/transcription must not wedge shutdown.
+var stopWaitTimeout = 5 * time.Second
 
 // TelegramConfig contains Telegram-specific configuration
 type TelegramConfig struct {
@@ -210,7 +219,10 @@ func (a *Adapter) Start(ctx context.Context) error {
 	a.registerCommands(ctx)
 
 	// Start bot in background
+	runDone := make(chan struct{})
+	a.runDone = runDone
 	go func() {
+		defer close(runDone)
 		defer func() {
 			a.mutex.Lock()
 			a.status = channels.StatusOffline
@@ -240,20 +252,38 @@ func (a *Adapter) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down the adapter
+// Stop gracefully shuts down the adapter.
+//
+// conduit-31jg.26: Stop no longer closes a.incoming. handleUpdate, photo.go
+// and voice.go send on it from the poller goroutine; closing it while they
+// were mid-flight panicked ("send on closed channel" — select's default does
+// not protect against a closed channel), and a second Stop panicked on the
+// double close. Following the conduit-3rhx pattern we cancel ctx, wait
+// (bounded) for the poller to return, and leave the channel open; readers
+// exit on their own ctx. Stop is idempotent and Start may be called again
+// afterwards (Manager.RestartAdapter).
 func (a *Adapter) Stop() error {
 	a.mutex.Lock()
-	defer a.mutex.Unlock()
-
-	if a.cancel != nil {
-		a.cancel()
-	}
-
+	cancel := a.cancel
+	runDone := a.runDone
+	a.cancel = nil
+	a.runDone = nil
 	a.status = channels.StatusOffline
 	a.statusMsg = "Adapter stopped"
+	a.mutex.Unlock()
 
-	// Close incoming message channel
-	close(a.incoming)
+	if cancel != nil {
+		cancel()
+	}
+
+	// Wait outside the lock: the run goroutine's defer takes a.mutex.
+	if runDone != nil {
+		select {
+		case <-runDone:
+		case <-time.After(stopWaitTimeout):
+			log.Printf("[Telegram] Adapter %s: poller did not exit within %v", a.Name(), stopWaitTimeout)
+		}
+	}
 
 	log.Printf("[Telegram] Adapter stopped: %s", a.Name())
 	return nil

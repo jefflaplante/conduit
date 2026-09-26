@@ -31,6 +31,15 @@ type Manager struct {
 	cancel       context.CancelFunc
 	mutex        sync.RWMutex
 	messageStats map[string]int64
+
+	// conduit-31jg.26: incoming/outgoing are NEVER closed — they have many
+	// senders (adapters' forwarders, every SendMessage caller). Shutdown is
+	// signalled by cancelling ctx; wg tracks routeMessages + forwarders so
+	// Stop can wait for them; forwarders holds per-adapter cancel funcs so a
+	// removed adapter's forwarder exits too.
+	wg         sync.WaitGroup
+	forwarders map[string]context.CancelFunc
+	stopped    bool
 }
 
 // NewManager creates a new channel manager
@@ -41,6 +50,7 @@ func NewManager() *Manager {
 		incoming:     make(chan *protocol.IncomingMessage, 1000),
 		outgoing:     make(chan *protocol.OutgoingMessage, 1000),
 		messageStats: make(map[string]int64),
+		forwarders:   make(map[string]context.CancelFunc),
 	}
 }
 
@@ -57,7 +67,11 @@ func (m *Manager) RegisterFactory(factory ChannelFactory) {
 
 // Start initializes and starts the channel manager
 func (m *Manager) Start(ctx context.Context, configs []ChannelConfig) error {
+	m.mutex.Lock()
 	m.ctx, m.cancel = context.WithCancel(ctx)
+	m.stopped = false
+	m.wg.Add(1)
+	m.mutex.Unlock()
 
 	// Create adapters from configurations
 	for _, config := range configs {
@@ -73,31 +87,47 @@ func (m *Manager) Start(ctx context.Context, configs []ChannelConfig) error {
 	}
 
 	// Start message routing
-	go m.routeMessages()
+	go func() {
+		defer m.wg.Done()
+		m.routeMessages()
+	}()
 
 	log.Printf("[ChannelManager] Started with %d adapters", len(m.adapters))
 	return nil
 }
 
-// Stop gracefully shuts down all adapters
+// Stop gracefully shuts down all adapters.
+//
+// conduit-31jg.26: Stop used to close(m.incoming) / close(m.outgoing) while
+// forwarders and SendMessage callers could still send (a send on a closed
+// channel is "ready" in select and panics even alongside ctx.Done), and the
+// gateway's processMessages would read nil messages. Now: cancel ctx, stop
+// adapters, wait for our goroutines, leave the channels open. Idempotent.
 func (m *Manager) Stop() error {
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
+	if m.stopped {
+		m.mutex.Unlock()
+		return nil
+	}
+	m.stopped = true
 	if m.cancel != nil {
 		m.cancel()
 	}
-
-	// Stop all adapters
+	adapters := make(map[string]ChannelAdapter, len(m.adapters))
 	for id, adapter := range m.adapters {
+		adapters[id] = adapter
+	}
+	m.mutex.Unlock()
+
+	// Stop adapters outside the lock: adapter Stop may block briefly
+	// (waiting on its poller), and routeMessages takes m.mutex.
+	for id, adapter := range adapters {
 		if err := adapter.Stop(); err != nil {
 			log.Printf("[ChannelManager] Error stopping adapter %s: %v", id, err)
 		}
 	}
 
-	// Close channels
-	close(m.incoming)
-	close(m.outgoing)
+	m.wg.Wait()
 
 	log.Printf("[ChannelManager] Stopped")
 	return nil
@@ -111,6 +141,10 @@ func (m *Manager) CreateAdapter(config ChannelConfig) error {
 	factory, exists := m.factories[config.Type]
 	if !exists {
 		return fmt.Errorf("no factory found for adapter type: %s", config.Type)
+	}
+
+	if m.stopped || m.ctx == nil {
+		return fmt.Errorf("channel manager is not running")
 	}
 
 	adapter, err := factory.CreateAdapter(config)
@@ -127,7 +161,7 @@ func (m *Manager) CreateAdapter(config ChannelConfig) error {
 	m.messageStats[config.ID] = 0
 
 	// Start message forwarding from this adapter
-	go m.forwardMessages(adapter)
+	m.startForwarderLocked(config.ID, adapter)
 
 	log.Printf("[ChannelManager] Created and started adapter: %s (%s)", config.ID, config.Type)
 	return nil
@@ -147,6 +181,10 @@ func (m *Manager) RemoveAdapter(id string) error {
 		log.Printf("[ChannelManager] Error stopping adapter %s: %v", id, err)
 	}
 
+	if cancelFwd, ok := m.forwarders[id]; ok {
+		cancelFwd()
+		delete(m.forwarders, id)
+	}
 	delete(m.adapters, id)
 	delete(m.messageStats, id)
 
@@ -156,10 +194,21 @@ func (m *Manager) RemoveAdapter(id string) error {
 
 // SendMessage sends a message through the specified channel
 func (m *Manager) SendMessage(msg *protocol.OutgoingMessage) error {
+	m.mutex.RLock()
+	ctx := m.ctx
+	m.mutex.RUnlock()
+	if ctx == nil {
+		return fmt.Errorf("channel manager is not running")
+	}
+	// Check shutdown first: select picks randomly among ready cases, so a
+	// message could otherwise be queued after Stop with nobody routing it.
+	if ctx.Err() != nil {
+		return fmt.Errorf("channel manager is shutting down")
+	}
 	select {
 	case m.outgoing <- msg:
 		return nil
-	case <-m.ctx.Done():
+	case <-ctx.Done():
 		return fmt.Errorf("channel manager is shutting down")
 	default:
 		return fmt.Errorf("outgoing message queue is full")
@@ -270,8 +319,24 @@ func (m *Manager) GetHealthyAdapters() []ChannelAdapter {
 	return healthy
 }
 
-// forwardMessages forwards incoming messages from an adapter to the main channel
-func (m *Manager) forwardMessages(adapter ChannelAdapter) {
+// startForwarderLocked spawns the forwarder for adapter under its own
+// cancelable context (child of the manager ctx). Caller holds m.mutex.
+func (m *Manager) startForwarderLocked(id string, adapter ChannelAdapter) {
+	if prev, ok := m.forwarders[id]; ok {
+		prev()
+	}
+	fctx, fcancel := context.WithCancel(m.ctx)
+	m.forwarders[id] = fcancel
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.forwardMessages(fctx, adapter)
+	}()
+}
+
+// forwardMessages forwards incoming messages from an adapter to the main
+// channel until ctx (the per-adapter forwarder context) is cancelled.
+func (m *Manager) forwardMessages(ctx context.Context, adapter ChannelAdapter) {
 	for {
 		select {
 		case msg, ok := <-adapter.ReceiveMessages():
@@ -283,15 +348,15 @@ func (m *Manager) forwardMessages(adapter ChannelAdapter) {
 			select {
 			case m.incoming <- msg:
 				m.mutex.Lock()
-				m.messageStats[adapter.ID()]++
+				if _, ok := m.messageStats[adapter.ID()]; ok {
+					m.messageStats[adapter.ID()]++
+				}
 				m.mutex.Unlock()
-			case <-m.ctx.Done():
-				return
 			default:
 				log.Printf("[ChannelManager] Warning: incoming message queue is full, dropping message from %s", adapter.ID())
 			}
 
-		case <-m.ctx.Done():
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -323,6 +388,9 @@ func processReplyTags(msg *protocol.OutgoingMessage) {
 
 // routeMessages handles outgoing message routing to appropriate adapters
 func (m *Manager) routeMessages() {
+	m.mutex.RLock()
+	ctx := m.ctx
+	m.mutex.RUnlock()
 	for {
 		select {
 		case msg, ok := <-m.outgoing:
@@ -376,7 +444,7 @@ func (m *Manager) routeMessages() {
 				log.Printf("[ChannelManager] Error sending message via %s: %v", msg.ChannelID, err)
 			}
 
-		case <-m.ctx.Done():
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -402,10 +470,19 @@ func (m *Manager) RestartAdapter(id string) error {
 	// Wait a moment for cleanup
 	time.Sleep(1 * time.Second)
 
-	// Restart the adapter
+	// Restart the adapter. conduit-31jg.26: adapters no longer close their
+	// ReceiveMessages channel on Stop, so the existing forwarder keeps
+	// working across the restart; re-arm it anyway in case an adapter
+	// implementation still closes (the forwarder would have exited).
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if m.stopped {
+		return fmt.Errorf("channel manager is not running")
+	}
 	if err := adapter.Start(m.ctx); err != nil {
 		return fmt.Errorf("failed to restart adapter %s: %w", id, err)
 	}
+	m.startForwarderLocked(id, adapter)
 
 	log.Printf("[ChannelManager] Successfully restarted adapter: %s", id)
 	return nil
