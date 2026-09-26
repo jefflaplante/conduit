@@ -375,3 +375,36 @@ func TestReflectionMiddleware_NoCallerDeadlineUsesDefaultTimeout(t *testing.T) {
 	assert.LessOrEqual(t, remaining, reflectionInsertTimeout+100*time.Millisecond,
 		"insert deadline should not exceed the default timeout")
 }
+
+// conduit-31jg.13: per-turn tracker triggers still promote to SPAR as
+// TypePattern entries attributed to the originating session.
+func TestReflectionMiddleware_PatternPromotion(t *testing.T) {
+	store := newTestStore(t)
+	mw := NewReflectionMiddleware(store, DefaultConfig())
+	ctx := context.Background()
+
+	mw.RecordConsecutiveFailure("sess-p", "Bash", 3, "exit 1")
+	mw.RecordCircularPattern("sess-p", "Read -> Edit", "abc123")
+
+	entries, err := store.QueryBySession(ctx, "sess-p")
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	byTag := map[string]*ReflectionEntry{}
+	for _, e := range entries {
+		assert.Equal(t, TypePattern, e.Type)
+		require.NotEmpty(t, e.Tags)
+		byTag[e.Tags[0]] = e
+	}
+	require.Contains(t, byTag, "consecutive_failure")
+	require.Contains(t, byTag, "circular")
+	assert.Equal(t, "Bash", byTag["consecutive_failure"].Tool)
+	assert.Equal(t, "exit 1", byTag["consecutive_failure"].Insight)
+	assert.Equal(t, []string{"reflect.tools.Bash.consecutive_failure"}, byTag["consecutive_failure"].RelatedKeys)
+	assert.Equal(t, []string{"reflect.tools.circular.abc123"}, byTag["circular"].RelatedKeys)
+
+	// SessionReflector aggregates TypePattern entries.
+	m, err := NewSessionReflector(store).ComputeMetrics(ctx, "sess-p", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, m.CircularCount)
+}

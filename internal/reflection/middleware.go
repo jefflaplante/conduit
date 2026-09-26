@@ -144,3 +144,54 @@ func IsTimeoutError(errStr string) bool {
 	return strings.Contains(lower, "context deadline exceeded") ||
 		strings.Contains(lower, "timeout")
 }
+
+// conduit-31jg.13 (SPAR conduit-17wz / conduit-2ngi): pattern promotion.
+// The execution engine's failure/pattern trackers are per-turn; these
+// methods receive their threshold crossings and persist them as TypePattern
+// entries so the aggregate store, not the prompt, carries the lesson across
+// sessions. Related keys mirror the Brain naming from the original beads.
+
+// ConsecutiveFailureKey is the related Brain key for a tool's pivot pattern.
+func ConsecutiveFailureKey(tool string) string {
+	return "reflect.tools." + tool + ".consecutive_failure"
+}
+
+// CircularPatternKey is the related Brain key for a circular call pattern.
+func CircularPatternKey(signatureHash string) string {
+	return "reflect.tools.circular." + signatureHash
+}
+
+// RecordConsecutiveFailure writes a TypePattern entry when a tool crosses the
+// per-turn consecutive-failure threshold. Best-effort: bounded detached
+// insert, errors are logged, never returned.
+func (m *ReflectionMiddleware) RecordConsecutiveFailure(sessionKey, tool string, failCount int, lastError string) {
+	entry := NewEntry("system", TypePattern, OutcomeFailure)
+	entry.Tool = tool
+	entry.RetryCount = failCount
+	entry.Insight = lastError
+	entry.Tags = []string{"consecutive_failure"}
+	entry.RelatedKeys = []string{ConsecutiveFailureKey(tool)}
+	m.recordPattern(sessionKey, entry)
+}
+
+// RecordCircularPattern writes a TypePattern entry for a per-turn circular
+// tool-call pattern detection.
+func (m *ReflectionMiddleware) RecordCircularPattern(sessionKey, pattern, signatureHash string) {
+	entry := NewEntry("system", TypePattern, OutcomePartial)
+	entry.Insight = "circular tool-call pattern: " + pattern
+	entry.Tags = []string{"circular"}
+	entry.RelatedKeys = []string{CircularPatternKey(signatureHash)}
+	m.recordPattern(sessionKey, entry)
+}
+
+func (m *ReflectionMiddleware) recordPattern(sessionKey string, entry *ReflectionEntry) {
+	if m.store == nil || m.config == nil || !m.config.Enabled || m.insertFn == nil {
+		return
+	}
+	entry.SessionKey = sessionKey
+	insertCtx, cancel := context.WithTimeout(context.Background(), reflectionInsertTimeout)
+	defer cancel()
+	if err := m.insertFn(insertCtx, entry); err != nil {
+		log.Printf("[ReflectionMiddleware] failed to insert pattern entry %v: %v", entry.Tags, err)
+	}
+}
