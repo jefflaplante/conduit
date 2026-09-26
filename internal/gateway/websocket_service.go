@@ -44,14 +44,14 @@ type WebSocketService struct {
 	// atomically before taking the write lock.
 	WSConnCount atomic.Int32
 
-	// ActiveRequests maps sessionKey → cancel function for the in-flight AI
-	// request associated with that session. Used by /stop and by
-	// ShutdownManager's drain phase to cancel stragglers at deadline.
+	// ActiveRequests maps sessionKey → cancel function for the RUNNING turn
+	// of that session. Used by /stop and by ShutdownManager's drain phase to
+	// cancel stragglers at deadline.
 	//
-	// NOTE: direct_client.go (TUI path) keeps its OWN separate activeRequests
-	// map on the DirectClient struct — the maps are intentionally not shared.
-	// The TUI bypasses WebSocket entirely and is a single-process-one-user
-	// path; merging the two would couple unrelated lifecycles.
+	// conduit-31jg.35: written only by the gateway TurnRunner while it holds
+	// the session's turn lock (queued turns are tracked by the runner), for
+	// channel, WebSocket, TUI (DirectClient built with Turns), wake and HTTP
+	// turns alike.
 	ActiveRequests   map[string]context.CancelFunc
 	ActiveRequestsMu sync.RWMutex
 

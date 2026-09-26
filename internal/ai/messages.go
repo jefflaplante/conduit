@@ -73,6 +73,48 @@ func dropTrailingCurrentUserDup(history []sessions.Message, userMessage string) 
 	return history
 }
 
+type currentUserMessageIDKey struct{}
+
+// WithCurrentUserMessageID records the transcript ID of the user row that
+// this turn's userMessage stands for (conduit-31jg.22). The gateway
+// TurnRunner stores that row inside the turn lock, but the text sent to the
+// model can differ from the stored text (photo markers, "[System: …]"
+// reflection suffixes), which defeats the text-based dropTrailingCurrentUserDup.
+// With the ID the history builder drops exactly that row instead.
+func WithCurrentUserMessageID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, currentUserMessageIDKey{}, id)
+}
+
+func currentUserMessageIDFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(currentUserMessageIDKey{}).(string)
+	return id
+}
+
+// dropCurrentUserRow removes the current turn's stored user row from history
+// so it is not sent twice (it is appended below as the current message). By
+// ID when the caller supplied one (conduit-31jg.22; the row may not be last,
+// e.g. an inter-session wake message followed by later rows), else by the
+// legacy trailing exact-text match (conduit-z7hu).
+func dropCurrentUserRow(ctx context.Context, history []sessions.Message, userMessage string) []sessions.Message {
+	if id := currentUserMessageIDFrom(ctx); id != "" {
+		for i := len(history) - 1; i >= 0; i-- {
+			if history[i].ID == id {
+				out := make([]sessions.Message, 0, len(history)-1)
+				out = append(out, history[:i]...)
+				return append(out, history[i+1:]...)
+			}
+		}
+		return history
+	}
+	return dropTrailingCurrentUserDup(history, userMessage)
+}
+
 // buildChatMessagesWithSystemPrompt constructs messages with agent system prompt.
 // Attachments from the context (via WithAttachments) are set on the final user message.
 func (r *Router) buildChatMessagesWithSystemPrompt(ctx context.Context, session *sessions.Session, userMessage string, systemBlocks []SystemBlock) ([]ChatMessage, error) {
@@ -101,8 +143,9 @@ func (r *Router) buildChatMessagesWithSystemPrompt(ctx context.Context, session 
 	}
 	// conduit-z7hu: history already contains the just-stored current user
 	// message (store-before-call); drop the trailing duplicate so the current
-	// message is not appended a second time below.
-	recentMessages = dropTrailingCurrentUserDup(recentMessages, userMessage)
+	// message is not appended a second time below. conduit-31jg.22: by
+	// transcript ID when the TurnRunner supplied one.
+	recentMessages = dropCurrentUserRow(ctx, recentMessages, userMessage)
 
 	for _, msg := range recentMessages {
 		// Skip messages with empty content - Anthropic API requires non-empty content

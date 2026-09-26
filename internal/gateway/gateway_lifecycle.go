@@ -119,6 +119,7 @@ func (g *Gateway) startSSHServer(ctx context.Context) {
 				UptimeFunc:   func() int64 { return int64(g.monitoring.GatewayMetrics.GetUptime().Seconds()) },
 				ToolCount:    toolCount,
 				SkillCount:   skillCount,
+				Turns:        g.turns(), // conduit-31jg.35: shared turn pipeline
 			})
 		},
 	}

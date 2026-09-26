@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	"conduit/internal/protocol"
 	"conduit/internal/sessions"
 	"conduit/internal/tools/debuglog"
 	"conduit/internal/version"
-	"conduit/internal/protocol"
 )
 
 // handleCommand handles slash commands and returns true if handled
@@ -114,16 +114,14 @@ func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessa
 
 	// Check for /stop command
 	if text == "/stop" {
-		g.ws.ActiveRequestsMu.RLock()
-		cancel, exists := g.ws.ActiveRequests[session.Key]
-		g.ws.ActiveRequestsMu.RUnlock()
-
-		if exists && cancel != nil {
-			cancel()
-			g.sendCommandResponse(msg, "🛑 Stopping current operation...")
+		// conduit-31jg.23: cancels the RUNNING turn and drops turns queued
+		// behind it (see TurnRunner.Stop).
+		resp, stopped := stopResponse(g.turns().Stop(session.Key))
+		if stopped {
+			g.sendCommandResponse(msg, "🛑 "+resp)
 			log.Printf("Cancelled active request for session: %s", session.Key)
 		} else {
-			g.sendCommandResponse(msg, "ℹ️ No active operation to stop.")
+			g.sendCommandResponse(msg, "ℹ️ "+resp)
 		}
 		return true
 	}
