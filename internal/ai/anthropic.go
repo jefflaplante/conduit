@@ -293,19 +293,12 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 		respModel = m
 	}
 
-	// Parity check: verify requested model matches response model
-	if modelToUse != "" && respModel != "" {
-		// Normalize for comparison (handle version suffixes like -20251101)
-		requestedBase := strings.Split(modelToUse, "-2025")[0] // Strip date suffix
-		responseBase := strings.Split(respModel, "-2025")[0]
-
-		if requestedBase != responseBase {
-			log.Printf("[Anthropic] WARNING: Model mismatch! Requested: %s, Got: %s", modelToUse, respModel)
-			// Return error that will surface to user
-			return &GenerateResponse{
-				Content: fmt.Sprintf("⚠️ Model mismatch detected!\nRequested: %s\nReceived: %s\n\nPlease try again or contact support.", modelToUse, respModel),
-			}, nil
-		}
+	// Parity check: requested vs served model. conduit-31jg.16: LOG ONLY.
+	// The old check split on "-2025" (so 2024/2026 snapshots behind an alias
+	// looked like a mismatch) and replaced the real reply — content and tool
+	// calls — with a warning string returned as a success.
+	if modelToUse != "" && respModel != "" && !anthropicModelsMatch(modelToUse, respModel) {
+		log.Printf("[Anthropic] WARNING: model mismatch: requested %q, served %q — keeping the response (conduit-31jg.16)", modelToUse, respModel)
 	}
 
 	// Extract content and tool calls from Anthropic response format
