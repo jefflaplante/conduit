@@ -3,7 +3,8 @@
 .PHONY: build build-prod build-full build-prod-full build-sre build-iot build-custom \
         run test test-full test-coverage clean deps format lint \
         install-deps channel-deps install init dev health help \
-        container-core container-full container-sre container-iot
+        container-core container-full container-sre container-iot \
+        vet vet-full test-race test-race-full staticcheck staticcheck-report ci
 
 # Build configuration
 BINARY_NAME=conduit
@@ -18,6 +19,11 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOFMT=gofmt
 GOLINT=golint
+# Pinned staticcheck (2026.1). v0.7.0 is the newest release whose go.mod
+# accepts Go 1.25; v0.8.x requires Go 1.26. GOTOOLCHAIN=local stops `go run`
+# from silently downloading a newer toolchain.
+STATICCHECK_VERSION=v0.7.0
+STATICCHECK=GOTOOLCHAIN=local $(GOCMD) run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 
 # Version information
 VERSION := $(shell git describe --tags --always --dirty)
@@ -108,6 +114,32 @@ build-custom:
 test-full:
 	@echo "Running tests with all optional tools..."
 	$(GOTEST) -v -tags "$(call tags_for,$(OPTIONAL_TOOLS))" ./...
+
+# --- CI targets (conduit-31jg.41); .github/workflows/ci.yml calls these ---
+
+vet:
+	$(GOCMD) vet ./...
+
+vet-full:
+	$(GOCMD) vet -tags "$(call tags_for,$(OPTIONAL_TOOLS))" ./...
+
+test-race:
+	$(GOTEST) -race -count=1 ./...
+
+test-race-full:
+	$(GOTEST) -race -count=1 -tags "$(call tags_for,$(OPTIONAL_TOOLS))" ./...
+
+# Blocking staticcheck: checks configured in staticcheck.conf.
+staticcheck:
+	$(STATICCHECK) ./...
+	$(STATICCHECK) -tags "$(call tags_for,$(OPTIONAL_TOOLS))" ./...
+
+# Full default check set (CI moves staticcheck.conf aside first). Informational.
+staticcheck-report:
+	$(STATICCHECK) ./...
+
+# Everything CI runs, locally.
+ci: build build-full vet vet-full staticcheck test-race test-race-full
 
 # =============================================================================
 
@@ -298,6 +330,8 @@ help:
 	@echo "  make test            Run core tests"
 	@echo "  make test-full       Run tests with all optional tools"
 	@echo "  make test-coverage   Run tests with coverage report"
+	@echo "  make test-race       Run tests with the race detector"
+	@echo "  make ci              Run everything CI runs (vet, staticcheck, race, all tags)"
 	@echo "  make dev             Development mode with auto-restart"
 	@echo "  make health          Check if gateway is running"
 	@echo ""

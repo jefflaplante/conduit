@@ -607,12 +607,12 @@ func TestAddJob_Upsert_AfterRestart(t *testing.T) {
 
 	// Pre-populate cron_jobs.json as if the job was registered in a previous run.
 	initial := []*Job{{
-		ID:      "agent_heartbeat_main",
-		Name:    "Heartbeat Task Execution",
+		ID:       "agent_heartbeat_main",
+		Name:     "Heartbeat Task Execution",
 		Schedule: "0 */5 * * * *",
-		Type:    JobTypeGo,
-		Command: "heartbeat",
-		Enabled: true,
+		Type:     JobTypeGo,
+		Command:  "heartbeat",
+		Enabled:  true,
 		Metadata: map[string]interface{}{"heartbeat": true},
 	}}
 	data, _ := json.MarshalIndent(initial, "", "  ")
@@ -665,13 +665,13 @@ func TestLoadJobs_FastForwardsPastDueNextRun(t *testing.T) {
 	// Use a schedule that fires every minute; set next_run to a year ago.
 	pastTime := time.Now().Add(-365 * 24 * time.Hour)
 	jobs := []*Job{{
-		ID:      "past-due",
-		Name:    "Past Due",
+		ID:       "past-due",
+		Name:     "Past Due",
 		Schedule: "0 * * * * *", // every minute (6-field Go job)
-		Type:    JobTypeGo,
-		Command: "test",
-		Enabled: true,
-		NextRun: &pastTime,
+		Type:     JobTypeGo,
+		Command:  "test",
+		Enabled:  true,
+		NextRun:  &pastTime,
 	}}
 	data, _ := json.MarshalIndent(jobs, "", "  ")
 	if err := os.WriteFile(jobsFile, data, 0644); err != nil {
@@ -740,13 +740,13 @@ func TestLoadJobs_FutureNextRunUntouched(t *testing.T) {
 
 	futureTime := time.Now().Add(1 * time.Hour)
 	jobs := []*Job{{
-		ID:      "future-job",
-		Name:    "Future Job",
+		ID:       "future-job",
+		Name:     "Future Job",
 		Schedule: "0 0 9 * * *",
-		Type:    JobTypeGo,
-		Command: "test",
-		Enabled: true,
-		NextRun: &futureTime,
+		Type:     JobTypeGo,
+		Command:  "test",
+		Enabled:  true,
+		NextRun:  &futureTime,
 	}}
 	data, _ := json.MarshalIndent(jobs, "", "  ")
 	if err := os.WriteFile(jobsFile, data, 0644); err != nil {
@@ -779,13 +779,13 @@ func TestLoadJobs_UnparseableScheduleSkipped(t *testing.T) {
 
 	pastTime := time.Now().Add(-1 * time.Hour)
 	jobs := []*Job{{
-		ID:      "bad-schedule",
-		Name:    "Bad Schedule",
+		ID:       "bad-schedule",
+		Name:     "Bad Schedule",
 		Schedule: "not-a-valid-cron-expression",
-		Type:    JobTypeGo,
-		Command: "test",
-		Enabled: true,
-		NextRun: &pastTime,
+		Type:     JobTypeGo,
+		Command:  "test",
+		Enabled:  true,
+		NextRun:  &pastTime,
 	}}
 	data, _ := json.MarshalIndent(jobs, "", "  ")
 	if err := os.WriteFile(jobsFile, data, 0644); err != nil {
