@@ -290,10 +290,11 @@ func (sm *ShutdownManager) writeBreadcrumb() {
 		gw.ws.ClientMu.RLock()
 		seen := make(map[string]bool)
 		for _, client := range gw.ws.Clients {
-			if client.SessionKey != "" && !seen[client.SessionKey] {
-				seen[client.SessionKey] = true
+			sk := client.SessionKey() // conduit-31jg.25
+			if sk != "" && !seen[sk] {
+				seen[sk] = true
 				activeSessions = append(activeSessions, BreadcrumbSession{
-					SessionKey: client.SessionKey,
+					SessionKey: sk,
 					UserID:     client.UserID,
 					ChannelID:  client.ID,
 				})

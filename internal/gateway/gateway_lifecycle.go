@@ -152,6 +152,12 @@ func (g *Gateway) stopAll(shutdownCtx context.Context, server *http.Server) {
 		g.logger.Error("server shutdown error", "error", err)
 	}
 
+	// conduit-31jg.25: Shutdown does not close hijacked WebSocket conns;
+	// drain them explicitly (bounded by shutdownCtx).
+	if g.ws != nil {
+		g.ws.Stop(shutdownCtx)
+	}
+
 	// conduit-31jg.43: drop pending approvals (never run) and let in-flight
 	// approved actions finish while channels can still report the result.
 	if g.approvals != nil {
@@ -174,15 +180,6 @@ func (g *Gateway) stopAll(shutdownCtx context.Context, server *http.Server) {
 	// Stop scheduler.
 	if g.scheduler != nil {
 		g.scheduler.Stop()
-	}
-
-	// Stop WebSocket service (no-op today; see WebSocketService.Stop).
-	// Active-request draining is handled by ShutdownManager before ctx is
-	// cancelled, and per-client goroutines exit on ctx.Done via
-	// handleClientWrite. Call order preserved so any future drain logic
-	// runs before rate limiter shutdown.
-	if g.ws != nil {
-		g.ws.Stop()
 	}
 
 	// Stop rate limiting middleware.

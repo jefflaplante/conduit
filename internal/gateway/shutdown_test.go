@@ -141,11 +141,12 @@ func TestShutdownManager_WritesBreadcrumb(t *testing.T) {
 	dataDir := t.TempDir()
 
 	gw := newTestGatewayForShutdown(t, &config.Config{DataDir: dataDir})
-	gw.ws.Clients["ws-1"] = &Client{
-		ID:         "ws-1",
-		SessionKey: "session-abc",
-		UserID:     "jeff",
+	wsClient := &Client{
+		ID:     "ws-1",
+		UserID: "jeff",
 	}
+	wsClient.SetSessionKey("session-abc")
+	gw.ws.Clients["ws-1"] = wsClient
 
 	sm := NewShutdownManager(logger, gw)
 	done := make(chan struct{})
