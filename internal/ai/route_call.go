@@ -87,10 +87,12 @@ func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, re
 		} else {
 			resp, err = rt.provider.GenerateResponse(ctx, &areq)
 		}
+		latency := time.Since(start).Milliseconds()
+		r.meterCall(rt.name, areq.Model, resp, err, latency) // conduit-31jg.64
 		if err == nil {
 			served = areq
 		}
-		return resp, time.Since(start).Milliseconds(), err
+		return resp, latency, err
 	}
 
 	resp, latencyMs, err := attempt(cur)
@@ -207,15 +209,65 @@ func (s *streamTracker) callback() StreamCallback {
 // hands this wrapper to the tool loop (HandleToolCallFlow), the empty guard
 // and the length auto-continue, so every later provider call is guarded
 // without changes to the tool loop itself. Name() passes through.
+//
+// conduit-31jg.64: it is also the metering point for every call after the
+// first (tool-loop depths, EmptyGuard retries and failover, auto-continues);
+// callWithRecovery meters the first call's attempts. Together they record
+// each provider call to the usage tracker (fuel gauge, TokenWindowTracker)
+// exactly once.
 type contextGuardProvider struct {
 	Provider
 	window int
+	router *Router
+	name   string // route provider name, for metering
 }
 
 func (r *Router) guardedProvider(rt providerRoute) Provider {
-	return &contextGuardProvider{Provider: rt.provider, window: r.contextWindowForRoute(rt)}
+	return &contextGuardProvider{Provider: rt.provider, window: r.contextWindowForRoute(rt), router: r, name: rt.name}
 }
 
 func (g *contextGuardProvider) GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
-	return g.Provider.GenerateResponse(ctx, fitRequestToWindow(req, g.window))
+	start := time.Now()
+	resp, err := g.Provider.GenerateResponse(ctx, fitRequestToWindow(req, g.window))
+	if g.router != nil {
+		model := ""
+		if req != nil {
+			model = req.Model
+		}
+		g.router.meterCall(g.name, model, resp, err, time.Since(start).Milliseconds())
+	}
+	return resp, err
+}
+
+// meterCall records ONE provider call (conduit-31jg.64): an error to the
+// usage tracker, or its tokens (cache included) plus cost. The call's cost
+// is stamped on resp.Usage (CostUSD, Priced/UnpricedCalls) so the turn's
+// Usage.Add sum carries the exact per-call total into the session cost.
+// model "" means the provider's configured default model.
+func (r *Router) meterCall(providerName, model string, resp *GenerateResponse, err error, latencyMs int64) {
+	if model == "" {
+		r.mu.RLock()
+		model = r.providerMeta[providerName].DefaultModel
+		r.mu.RUnlock()
+	}
+	if err != nil {
+		if r.usageTracker != nil {
+			r.usageTracker.RecordError(providerName, model)
+		}
+		return
+	}
+	if resp == nil {
+		return
+	}
+	u := &resp.Usage
+	cost, priced := r.PricingResolver().Cost(providerName, model, *u)
+	u.CostUSD, u.PricedCalls, u.UnpricedCalls = cost, 0, 0
+	if priced {
+		u.PricedCalls = 1
+	} else {
+		u.UnpricedCalls = 1
+	}
+	if r.usageTracker != nil {
+		r.usageTracker.RecordUsage(providerName, model, u.PromptTokens, u.CompletionTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens, latencyMs)
+	}
 }

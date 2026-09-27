@@ -509,12 +509,20 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 				}
 			}
 		}
-		res.RequestCost = ai.CalculateCost(modelOverride, u.PromptTokens, u.CompletionTokens)
+		// conduit-31jg.57: price through the gateway resolver (overrides,
+		// provider-prefixed IDs, cache tokens). An unpriced model is counted
+		// in session_unpriced_requests instead of silently adding $0.
+		var priced bool
+		res.RequestCost, priced = r.ai.TurnCost(providerOverride, modelOverride, *u)
 		prevCost, _ := strconv.ParseFloat(session.Context["session_total_cost"], 64)
 		res.SessionCost = prevCost + res.RequestCost
 		prevCount, _ := strconv.Atoi(session.Context["session_request_count"])
 		batch["session_total_cost"] = fmt.Sprintf("%.6f", res.SessionCost)
 		batch["session_request_count"] = strconv.Itoa(prevCount + 1)
+		if !priced {
+			prevUnpriced, _ := strconv.Atoi(session.Context["session_unpriced_requests"])
+			batch["session_unpriced_requests"] = strconv.Itoa(prevUnpriced + 1)
+		}
 		_ = r.sessions.SetSessionContextBatch(key, batch)
 
 		r.maybeCompact(session, u.Context(), modelUsed)

@@ -100,6 +100,9 @@ func formatStatusResponse(session *sessions.Session, messageCount int, usageTrac
 		sb.WriteString("\nSession Cost\n")
 		sb.WriteString(fmt.Sprintf("Requests: %d\n", count))
 		sb.WriteString(fmt.Sprintf("Cost:     $%.4f\n", cost))
+		if n := unpricedRequests(session); n > 0 {
+			sb.WriteString(fmt.Sprintf("Unpriced: %d requests (model has no price — cost unknown)\n", n))
+		}
 	}
 
 	// Context window usage (embed existing helper's logic)
@@ -147,6 +150,9 @@ func formatCostResponse(session *sessions.Session, usageTracker *ai.UsageTracker
 		sb.WriteString("\nSession Cost\n")
 		sb.WriteString(fmt.Sprintf("  Requests: %d\n", count))
 		sb.WriteString(fmt.Sprintf("  Cost:     $%.4f\n", cost))
+		if n := unpricedRequests(session); n > 0 {
+			sb.WriteString(fmt.Sprintf("  Unpriced: %d requests (model has no price — cost unknown)\n", n))
+		}
 	}
 
 	// Global usage
@@ -196,6 +202,9 @@ func formatCostResponse(session *sessions.Session, usageTracker *ai.UsageTracker
 		}
 
 		sb.WriteString(fmt.Sprintf("  Cost:          $%.4f\n", pr.TotalCost))
+		if pr.UnpricedRequests > 0 {
+			sb.WriteString(fmt.Sprintf("  Unpriced:      %s requests (cost unknown, not included)\n", formatNumber(int(pr.UnpricedRequests))))
+		}
 	}
 
 	// Per-model summary sorted by cost descending
@@ -205,6 +214,7 @@ func formatCostResponse(session *sessions.Session, usageTracker *ai.UsageTracker
 			requests     int64
 			cost         float64
 			cacheHitRate float64
+			unpriced     bool
 		}
 		models := make([]modelEntry, 0, len(snapshot.Models))
 		for _, mr := range snapshot.Models {
@@ -213,6 +223,7 @@ func formatCostResponse(session *sessions.Session, usageTracker *ai.UsageTracker
 				requests:     mr.TotalRequests,
 				cost:         mr.TotalCost,
 				cacheHitRate: mr.CacheHitRate,
+				unpriced:     mr.Unpriced,
 			})
 		}
 		sort.Slice(models, func(i, j int) bool {
@@ -222,6 +233,9 @@ func formatCostResponse(session *sessions.Session, usageTracker *ai.UsageTracker
 		sb.WriteString("\n  Models\n")
 		for _, m := range models {
 			line := fmt.Sprintf("    %-36s %4d reqs  $%.4f", m.name, m.requests, m.cost)
+			if m.unpriced {
+				line = fmt.Sprintf("    %-36s %4d reqs  cost unknown (no price)", m.name, m.requests) // conduit-31jg.57
+			}
 			if m.cacheHitRate > 0 {
 				line += fmt.Sprintf("  cache: %.1f%%", m.cacheHitRate*100)
 			}
@@ -330,4 +344,14 @@ func formatNumber(n int) string {
 		result = append(result, byte(c))
 	}
 	return string(result)
+}
+
+// unpricedRequests returns the session's count of turns on a model with no
+// known price. conduit-31jg.57
+func unpricedRequests(session *sessions.Session) int {
+	if session == nil || session.Context == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(session.Context["session_unpriced_requests"])
+	return n
 }

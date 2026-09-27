@@ -10,6 +10,7 @@ import (
 
 	"conduit/internal/ai"
 	"conduit/internal/brain"
+	"conduit/internal/config"
 	"conduit/internal/sessions"
 )
 
@@ -54,6 +55,10 @@ type SectionParams struct {
 	// Now is the clock for time-dependent sections; nil = time.Now.
 	// conduit-31jg.14: injectable so tests can pin the static/dynamic split.
 	Now func() time.Time
+	// QuietHours, when set, decides the Time Context "quiet hours" hint via
+	// config.AgentHeartbeatConfig.IsQuietTime (configured window and zone).
+	// nil keeps the legacy 23:00-08:00 heuristic. conduit-31jg.60
+	QuietHours *config.AgentHeartbeatConfig
 }
 
 // now returns the current time from the injected clock, if any.
@@ -609,7 +614,7 @@ func (pb *PromptBuilder) buildSituationAwareness(ctx context.Context, params *Se
 	categories := pb.querySituationCategories(ctx)
 
 	// Compute time context (always available, independent of Brain data).
-	timeCtx := computeTimeContextAt(params.UserTimezone, params.now())
+	timeCtx := computeTimeContextAt(params.UserTimezone, params.now(), params.QuietHours)
 
 	// Check if there's any data at all (besides time context).
 	hasData := false
@@ -748,11 +753,15 @@ func renderCategoryTruncated(cat *situationCategory) string {
 // computeTimeContext produces a compact time-awareness line.
 // It complements the Runtime section's timestamp with contextual hints.
 func computeTimeContext(timezone string) string {
-	return computeTimeContextAt(timezone, time.Now())
+	return computeTimeContextAt(timezone, time.Now(), nil)
 }
 
-// computeTimeContextAt is computeTimeContext for a given instant.
-func computeTimeContextAt(timezone string, now time.Time) string {
+// computeTimeContextAt is computeTimeContext for a given instant. quiet, if
+// non-nil, is the configured quiet window (evaluated in its own timezone via
+// config/quiet_hours.go); nil falls back to the 23:00-08:00 heuristic in
+// timezone. conduit-31jg.60
+func computeTimeContextAt(timezone string, now time.Time, quiet *config.AgentHeartbeatConfig) string {
+	instant := now
 	if timezone != "" {
 		if loc, err := time.LoadLocation(timezone); err == nil {
 			now = now.In(loc)
@@ -776,8 +785,14 @@ func computeTimeContextAt(timezone string, now time.Time) string {
 
 	isWeekend := now.Weekday() == time.Saturday || now.Weekday() == time.Sunday
 
-	// Quiet hours heuristic: 23:00-08:00 (matches default config).
-	isQuiet := hour >= 23 || hour < 8
+	// conduit-31jg.60: use the configured quiet window when available;
+	// otherwise the legacy heuristic 23:00-08:00 (the default config).
+	var isQuiet bool
+	if quiet != nil {
+		isQuiet = quiet.IsQuietTime(instant)
+	} else {
+		isQuiet = hour >= 23 || hour < 8
+	}
 
 	var parts []string
 	parts = append(parts, fmt.Sprintf("%s %s", dayOfWeek, period))

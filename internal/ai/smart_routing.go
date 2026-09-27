@@ -228,10 +228,8 @@ func (r *Router) executeWithFallbacks(ctx context.Context, session *sessions.Ses
 		r.handleRateLimit(primary.Model, err)
 	}
 
-	// Record error for the primary model
-	if r.usageTracker != nil {
-		r.usageTracker.RecordError(providerName, primary.Model)
-	}
+	// conduit-31jg.64: the failed provider call was already recorded by the
+	// router's metering hook — recording it again here double-counted.
 
 	// Build fallback chain: try other tiers in order of preference
 	fallbacks := r.buildFallbackChain(primary)
@@ -259,9 +257,7 @@ func (r *Router) executeWithFallbacks(ctx context.Context, session *sessions.Ses
 			r.handleRateLimit(fallback.Model, err)
 		}
 
-		if r.usageTracker != nil {
-			r.usageTracker.RecordError(providerName, fallback.Model)
-		}
+		// conduit-31jg.64: already recorded per call by the metering hook.
 	}
 
 	// All models exhausted
@@ -576,10 +572,8 @@ func (r *Router) executeStreamingWithFallbacks(
 		r.handleRateLimit(primary.Model, err)
 	}
 
-	// Record error for the primary model
-	if r.usageTracker != nil {
-		r.usageTracker.RecordError(providerName, primary.Model)
-	}
+	// conduit-31jg.64: the failed provider call was already recorded by the
+	// router's metering hook — recording it again here double-counted.
 
 	// Build fallback chain
 	fallbacks := r.buildFallbackChain(primary)
@@ -607,9 +601,7 @@ func (r *Router) executeStreamingWithFallbacks(
 			r.handleRateLimit(fallback.Model, err)
 		}
 
-		if r.usageTracker != nil {
-			r.usageTracker.RecordError(providerName, fallback.Model)
-		}
+		// conduit-31jg.64: already recorded per call by the metering hook.
 	}
 
 	// All models exhausted

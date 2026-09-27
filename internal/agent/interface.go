@@ -71,6 +71,9 @@ type AgentConfig struct {
 	PromptScaling  config.PromptScalingConfig `json:"prompt_scaling,omitempty"`
 	Timezone       string                     `json:"timezone,omitempty"`
 	RuntimeChannel string                     `json:"runtime_channel,omitempty"` // Active channel (derived from config)
+	// QuietHours is the configured quiet window (agent_heartbeat) used for
+	// the prompt's "quiet hours" hint; nil = legacy 23:00-08:00. conduit-31jg.60
+	QuietHours *config.AgentHeartbeatConfig `json:"-"`
 }
 
 // SessionStateManager provides utilities for managing session state during agent operations
