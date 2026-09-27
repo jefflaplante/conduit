@@ -33,7 +33,7 @@ func newToolLoopFallbackRouter(t *testing.T, rounds int) (*Router, *MockProvider
 	return r, primary, fallback, obs
 }
 
-var toolLoopQuotaErr = fmt.Errorf(`API error: 400 - {"type":"error","error":{"type":"invalid_request_error","message":"You're out of extra usage."}}`)
+var errToolLoopQuota = fmt.Errorf(`API error: 400 - {"type":"error","error":{"type":"invalid_request_error","message":"You're out of extra usage."}}`)
 
 func TestToolLoopQuotaError_FallsBackAndSticks(t *testing.T) {
 	for _, streaming := range []bool{false, true} {
@@ -43,7 +43,7 @@ func TestToolLoopQuotaError_FallsBackAndSticks(t *testing.T) {
 			tc := []ToolCall{{ID: "t1", Name: "Bash", Args: map[string]interface{}{}}}
 			primary.SetResponses([]MockResponse{
 				{ToolCalls: tc, Usage: Usage{PromptTokens: 10}}, // first call (callWithRecovery)
-				{Error: toolLoopQuotaErr},                       // tool round 1 → quota
+				{Error: errToolLoopQuota},                       // tool round 1 → quota
 				{Content: "WRONG: primary used again after quota"},
 			})
 			fallback.SetResponses([]MockResponse{
@@ -100,7 +100,7 @@ func TestToolLoopQuotaError_NoFallbackRouteSurfaces(t *testing.T) {
 	r.providerMeta["primary"] = meta
 	r.mu.Unlock()
 	tc := []ToolCall{{ID: "t1", Name: "Bash", Args: map[string]interface{}{}}}
-	primary.SetResponses([]MockResponse{{ToolCalls: tc}, {Error: toolLoopQuotaErr}})
+	primary.SetResponses([]MockResponse{{ToolCalls: tc}, {Error: errToolLoopQuota}})
 
 	_, err := r.GenerateResponseWithToolsAndProgress(context.Background(), newFallbackSession(t), "go", "primary", "claude-haiku-4-5-20251001", nil)
 	if err == nil {
@@ -123,7 +123,7 @@ func TestEmptyFailoverGuard_DoesNotChainQuotaFallback(t *testing.T) {
 	fb.FallbackModel = "third/t"
 	r.providerMeta["fallbackprov"] = fb
 	r.mu.Unlock()
-	fallback.SetResponses([]MockResponse{{Error: toolLoopQuotaErr}})
+	fallback.SetResponses([]MockResponse{{Error: errToolLoopQuota}})
 
 	_, p, ok := r.ResolveEmptyFailover("primary")
 	if !ok {
