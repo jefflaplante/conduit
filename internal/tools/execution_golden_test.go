@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -37,8 +38,8 @@ type scriptStep struct {
 }
 
 // scriptedProvider replays a fixed script and records a deep snapshot of
-// every request at call time, plus the request pointer (for the
-// no-retroactive-mutation check).
+// every request at call time, plus the request pointer and the Messages
+// slice header it carried (for the no-retroactive-mutation check).
 type scriptedProvider struct {
 	t      *testing.T
 	mu     sync.Mutex
@@ -46,6 +47,8 @@ type scriptedProvider struct {
 	calls  int
 	snaps  [][]byte
 	ptrs   []*ai.GenerateRequest
+	views  [][]ai.ChatMessage // req.Messages as passed, sharing its backing array
+	vsnaps [][]byte           // json of views at call time
 }
 
 func (p *scriptedProvider) Name() string { return "scripted" }
@@ -59,6 +62,9 @@ func (p *scriptedProvider) GenerateResponse(_ context.Context, req *ai.GenerateR
 	}
 	p.snaps = append(p.snaps, b)
 	p.ptrs = append(p.ptrs, req)
+	vb, _ := json.Marshal(req.Messages)
+	p.views = append(p.views, req.Messages)
+	p.vsnaps = append(p.vsnaps, vb)
 	if p.calls >= len(p.script) {
 		p.t.Fatalf("provider called %d times, script has %d steps", p.calls+1, len(p.script))
 	}
@@ -206,15 +212,14 @@ func runGoldenScenario(t *testing.T, sc goldenScenario) goldenResult {
 	if after, _ := json.Marshal(callerMsgs[:cap(callerMsgs)]); !bytes.Equal(after, callerBefore) {
 		t.Errorf("%s: engine wrote into the caller's message array", sc.name)
 	}
-	// No retroactive mutation: each request pointer, inspected after the
-	// turn, still holds what it held at its last provider call.
-	last := map[*ai.GenerateRequest][]byte{}
-	for i, ptr := range p.ptrs {
-		last[ptr] = p.snaps[i]
-	}
-	for ptr, want := range last {
-		if got, _ := json.Marshal(ptr); !bytes.Equal(got, want) {
-			t.Errorf("%s: a request observed by the provider was mutated after the call:\n got %s\nwant %s", sc.name, got, want)
+	// No retroactive mutation: every message slice the provider was handed
+	// still holds, after the turn, exactly what it held at call time — no
+	// later append (loop or auto-continue) wrote into a slot it covers.
+	// (The request's Messages field itself may be re-sliced afterwards: the
+	// auto-continue helper grows it and rewinds it after a failed call.)
+	for i, view := range p.views {
+		if got, _ := json.Marshal(view); !bytes.Equal(got, p.vsnaps[i]) {
+			t.Errorf("%s: request %d's messages were overwritten after the call:\n got %s\nwant %s", sc.name, i, got, p.vsnaps[i])
 		}
 	}
 
@@ -322,5 +327,32 @@ func TestToolLoop_NoHistoryCopyPerRound(t *testing.T) {
 	}
 	if len(arrays) != 1 {
 		t.Errorf("%d backing arrays across %d rounds, want 1 (history copied per round)", len(arrays), len(p.ptrs))
+	}
+}
+
+// conduit-31jg.51: a truncated reply whose continuation ends in tool calls
+// must not re-add the earlier fragment to history (it is already there as
+// its own assistant turn), and the round's usage is counted exactly once.
+func TestToolLoop_AutoContinueIntoToolCalls_NoDuplicateText(t *testing.T) {
+	engine := newChainTestEngine(t)
+	p := &scriptedProvider{t: t, script: []scriptStep{
+		{resp: textResp(10, "FRAGMENT-ONE ", "length")},
+		{resp: tcResp(20, "then tools", "ok_b")},
+		{resp: textResp(40, "done", "stop")},
+	}}
+	resp, err := engine.HandleToolCallFlow(context.Background(), p, chainReq("go"), tcResp(1, "", "ok_a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := p.ptrs[len(p.ptrs)-1]
+	n := 0
+	for _, m := range last.Messages {
+		n += strings.Count(m.Content, "FRAGMENT-ONE")
+	}
+	if n != 1 {
+		t.Errorf("fragment appears %d times in the next round's history, want 1: %+v", n, last.Messages)
+	}
+	if resp.Usage.PromptTokens != 1+10+20+40 {
+		t.Errorf("turn prompt tokens = %d, want %d (each call once)", resp.Usage.PromptTokens, 71)
 	}
 }

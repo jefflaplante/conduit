@@ -775,7 +775,8 @@ func (e *ExecutionEngine) runToolLoop(ctx context.Context, ts *turnState) (*Conv
 
 // roundTrip sends one round's request: the provider call, the EmptyGuard
 // retry/failover and the length auto-continue. Every billed call's usage is
-// added to tb exactly once.
+// added to tb exactly once (GuardEmptyResponse and ContinueLengthTruncated
+// each return the sum of the calls they made).
 func (e *ExecutionEngine) roundTrip(ctx context.Context, provider ai.Provider, req *ai.GenerateRequest, depth int, tb *turnBudget) (*ai.GenerateResponse, error) {
 	stopThinking := startThinkingIndicator(ctx, depth)
 	rtStart := time.Now()
@@ -787,8 +788,11 @@ func (e *ExecutionEngine) roundTrip(ctx context.Context, provider ai.Provider, r
 
 	// conduit-18vj: raw-empty round trips after tool execution were the proven
 	// dead-turn mechanism (2026-09-03) — retry once, then a visible fallback.
-	resp, err = ai.GuardEmptyResponse(ctx, provider, req, resp, err, fmt.Sprintf("depth%d", depth))
-	tb.usage.Add(resp.Usage) // conduit-31jg.15 (includes guard retries)
+	label := fmt.Sprintf("depth%d", depth)
+	resp, err = ai.GuardEmptyResponse(ctx, provider, req, resp, err, label)
+	if err != nil {
+		return nil, fmt.Errorf("AI response after tool execution failed: %w", err)
+	}
 
 	// conduit-1z6d: per-round-trip instrumentation — dead turns diagnosable
 	// from the journal alone.
@@ -797,50 +801,15 @@ func (e *ExecutionEngine) roundTrip(ctx context.Context, provider ai.Provider, r
 		resp.Usage.PromptTokens, resp.Usage.CompletionTokens,
 		len(resp.Content), len(resp.ToolCalls))
 
-	// bd-1k3o: length-truncation guard. finish_reason=="length" means the model
-	// hit max_tokens mid-generation — the content is a severed fragment, not a
-	// complete answer (2026-09-04 RCA: sub-agent 1beda0f4's deliverable report
-	// was cut off mid-word at 4000 tokens and discarded as "the answer").
-	// Auto-continue: append the fragment as an assistant turn, then a user
-	// "continue" turn, and keep generating. Max 2 continues per chain node;
-	// fragments are concatenated into the final content.
-	const maxAutoContinues = 2
-	var fragments []string
-	for cont := 0; resp.FinishReason == "length" && len(resp.ToolCalls) == 0 && cont < maxAutoContinues; cont++ {
-		log.Printf("[ExecutionEngine] Length-truncated final (max_tokens hit) at depth %d — auto-continue %d/%d (bd-1k3o)",
-			depth, cont+1, maxAutoContinues)
-		fragments = append(fragments, resp.Content)
-		req.Messages = append(req.Messages,
-			ai.ChatMessage{Role: "assistant", Content: resp.Content},
-			ai.ChatMessage{Role: "user", Content: "continue"},
-		)
-		rtContStart := time.Now()
-		contResp, contErr := provider.GenerateResponse(ctx, req)
-		if contErr != nil {
-			// Continuation failed — deliver the fragments we have rather than
-			// failing the whole chain (the truncated text is still progress).
-			log.Printf("[ExecutionEngine] Auto-continue failed at depth %d: %v — delivering truncated content (bd-1k3o)", depth, contErr)
-			break
-		}
-		contResp, err = ai.GuardEmptyResponse(ctx, provider, req, contResp, contErr, fmt.Sprintf("depth%d-continue%d", depth, cont))
-		if err != nil {
-			break
-		}
-		tb.usage.Add(contResp.Usage) // conduit-31jg.15
-		log.Printf("[RoundTrip] phase=post-tools-continue depth=%d continue=%d model=%q duration=%s prompt_tokens=%d completion_tokens=%d content_bytes=%d tool_calls=%d finish_reason=%q",
-			depth, cont+1, req.Model, time.Since(rtContStart).Round(time.Millisecond),
-			contResp.Usage.PromptTokens, contResp.Usage.CompletionTokens,
-			len(contResp.Content), len(contResp.ToolCalls), contResp.FinishReason)
-		resp = contResp
-	}
-	if len(fragments) > 0 {
-		fragments = append(fragments, resp.Content)
-		resp.Content = strings.Join(fragments, "")
-	}
-	if resp.FinishReason == "length" && len(resp.ToolCalls) == 0 {
-		log.Printf("[ExecutionEngine] Final still length-truncated after %d continues at depth %d — delivering with marker (bd-1k3o)", maxAutoContinues, depth)
-		resp.Content += "\n\n_(truncated at max_tokens — ask me to continue if this cuts off)_"
-	}
+	// bd-1k3o / conduit-31jg.51: length-truncation guard, shared with the
+	// router's first round trip. A max_tokens-severed fragment is continued
+	// (at most twice) instead of delivered as the answer; req.Messages grows
+	// by each fragment + "continue" pair. When the continuation ends in tool
+	// calls, Content stays the last fragment only — the earlier ones are
+	// already in req.Messages, which becomes the next round's history. The
+	// helper folds every continuation's usage into resp.Usage.
+	resp = ai.ContinueLengthTruncated(ctx, provider, req, resp, label)
+	tb.usage.Add(resp.Usage) // conduit-31jg.15: this round's calls, exactly once
 	return resp, nil
 }
 

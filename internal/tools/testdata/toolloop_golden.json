@@ -451,7 +451,7 @@
           },
           {
             "role": "assistant",
-            "content": "partial answer continued",
+            "content": "continued",
             "tool_calls": [
               {
                 "id": "tc-6-0",
@@ -572,7 +572,7 @@
           },
           {
             "role": "assistant",
-            "content": "partial answer continued",
+            "content": "continued",
             "tool_calls": [
               {
                 "id": "tc-6-0",
@@ -5782,7 +5782,7 @@
     ]
   },
   "final_continue_error": {
-    "content": "only fragmentonly fragment\n\n_(truncated at max_tokens — ask me to continue if this cuts off)_",
+    "content": "only fragment\n\n_(truncated at max_tokens — ask me to continue if this cuts off)_",
     "usage": {
       "prompt_tokens": 3,
       "completion_tokens": 2,
