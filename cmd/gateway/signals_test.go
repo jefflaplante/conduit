@@ -16,6 +16,13 @@ type fakeShutdown struct {
 	timeouts   []time.Duration
 	onShutdown func()
 	inProgress bool
+	shortens   []time.Duration
+}
+
+func (f *fakeShutdown) ShortenDrain(timeout time.Duration) {
+	f.mu.Lock()
+	f.shortens = append(f.shortens, timeout)
+	f.mu.Unlock()
 }
 
 func (f *fakeShutdown) BeginShutdown(reason string, timeout time.Duration) error {
@@ -81,6 +88,9 @@ func TestSignal_SIGTERMDrainsViaShutdownManager(t *testing.T) {
 		if h.sm.onShutdown != nil {
 			t.Errorf("%v: stop must not re-exec", sig)
 		}
+		if len(h.sm.shortens) != 0 { // conduit-31jg.77
+			t.Errorf("%v: fresh stop must not shorten: %v", sig, h.sm.shortens)
+		}
 		if len(h.watchdogs) != 1 || h.watchdogs[0] != hardExitTimeout {
 			t.Errorf("%v: hard-exit watchdog = %v", sig, h.watchdogs)
 		}
@@ -126,6 +136,10 @@ func TestSignal_TermDuringHUPDrainCancelsReExec(t *testing.T) {
 	}
 	if len(h.watchdogs) != 1 {
 		t.Fatal("watchdog not armed")
+	}
+	// conduit-31jg.77: the 30s HUP drain is capped at the SIGTERM budget.
+	if len(h.sm.shortens) != 1 || h.sm.shortens[0] != signalDrainTimeout {
+		t.Fatalf("ShortenDrain calls = %v, want [%v]", h.sm.shortens, signalDrainTimeout)
 	}
 	// Later SIGHUP is ignored while stopping.
 	h.ctl.handle(syscall.SIGHUP)
