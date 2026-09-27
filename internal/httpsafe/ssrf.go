@@ -78,9 +78,97 @@ var (
 	broadcast   = netip.MustParseAddr("255.255.255.255")
 )
 
+var (
+	nat64WellKnown = netip.MustParsePrefix("64:ff9b::/96")   // RFC 6052
+	nat64LocalUse  = netip.MustParsePrefix("64:ff9b:1::/48") // RFC 8215
+	sixToFour      = netip.MustParsePrefix("2002::/16")      // RFC 3056
+	teredo         = netip.MustParsePrefix("2001::/32")      // RFC 4380
+	v4Compatible   = netip.MustParsePrefix("::/96")          // deprecated ::a.b.c.d
+)
+
+// embeddedIPv4 returns the IPv4 addresses an IPv6 transition address can
+// deliver to (conduit-31jg.70). A NAT64 gateway, 6to4 relay or Teredo relay
+// forwards such a destination to the embedded IPv4, so 64:ff9b::127.0.0.1
+// would otherwise sail past the loopback check.
+//
+//   - 64:ff9b::/96: last 32 bits.
+//   - 64:ff9b:1::/48 (local-use): the operator picks the prefix length, so
+//     every plausible RFC 6052 layout (/48, /56, /64, /96) is decoded and
+//     all candidates are checked (any blocked candidate blocks); see
+//     nat64LocalUseCandidates.
+//   - 2002::/16: bits 16-47.
+//   - 2001::/32 Teredo: client = last 32 bits XOR 0xffffffff, and the server
+//     at bits 32-63.
+//   - ::/96 IPv4-compatible (deprecated): last 32 bits.
+func embeddedIPv4(ip netip.Addr) []netip.Addr {
+	if !ip.Is6() || ip.Is4In6() {
+		return nil
+	}
+	b := ip.As16()
+	v4 := func(a, b2, c, d byte) netip.Addr { return netip.AddrFrom4([4]byte{a, b2, c, d}) }
+	switch {
+	case nat64WellKnown.Contains(ip):
+		return []netip.Addr{v4(b[12], b[13], b[14], b[15])}
+	case nat64LocalUse.Contains(ip):
+		return nat64LocalUseCandidates(b)
+	case sixToFour.Contains(ip):
+		return []netip.Addr{v4(b[2], b[3], b[4], b[5])}
+	case teredo.Contains(ip):
+		return []netip.Addr{
+			v4(b[12]^0xff, b[13]^0xff, b[14]^0xff, b[15]^0xff), // client
+			v4(b[4], b[5], b[6], b[7]),                         // server
+		}
+	case v4Compatible.Contains(ip):
+		if ip.IsUnspecified() || ip.IsLoopback() {
+			return nil // judged as IPv6 below
+		}
+		return []netip.Addr{v4(b[12], b[13], b[14], b[15])}
+	}
+	return nil
+}
+
+// nat64LocalUseCandidates decodes every RFC 6052 layout that could apply to
+// an address in 64:ff9b:1::/48. A /48, /56 or /64 layout is only plausible
+// when the reserved "u" octet (byte 8) and the suffix after the embedded
+// IPv4 are zero; the /96 layout always is. When a shorter layout is
+// plausible the /96 reading is necessarily 0.0.0.0 (the zero suffix) and is
+// dropped so real /48-/64 translations of public hosts are not blocked.
+func nat64LocalUseCandidates(b [16]byte) []netip.Addr {
+	zero := func(bs []byte) bool {
+		for _, c := range bs {
+			if c != 0 {
+				return false
+			}
+		}
+		return true
+	}
+	var out []netip.Addr
+	if b[8] == 0 {
+		if zero(b[11:]) {
+			out = append(out, netip.AddrFrom4([4]byte{b[6], b[7], b[9], b[10]})) // /48
+		}
+		if zero(b[12:]) {
+			out = append(out, netip.AddrFrom4([4]byte{b[7], b[9], b[10], b[11]})) // /56
+		}
+		if zero(b[13:]) {
+			out = append(out, netip.AddrFrom4([4]byte{b[9], b[10], b[11], b[12]})) // /64
+		}
+	}
+	if slash96 := netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]}); len(out) == 0 || !slash96.IsUnspecified() {
+		out = append(out, slash96)
+	}
+	return out
+}
+
 // Check returns nil if connecting to ip:port is permitted.
 func (p Policy) Check(ip netip.Addr, port int) error {
 	ip = ip.Unmap()
+	// conduit-31jg.70: apply the same policy to any embedded IPv4.
+	for _, inner := range embeddedIPv4(ip) {
+		if err := p.Check(inner, port); err != nil {
+			return fmt.Errorf("%w (embedded in %s)", err, ip)
+		}
+	}
 	switch {
 	case !ip.IsValid(),
 		ip.IsUnspecified(),
