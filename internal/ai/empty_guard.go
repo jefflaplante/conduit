@@ -55,6 +55,34 @@ func SetEmptyFailoverRouter(r EmptyFailoverRouter) {
 	emptyFailoverRouter = r
 }
 
+// emptyGuardCallKey marks a ctx as carrying a call the EmptyGuard makes.
+type emptyGuardCallKey struct{}
+
+// withEmptyGuardCall marks ctx for a call made by GuardEmptyResponse (its
+// same-model retry or cross-model failover). Layer ownership
+// (conduit-31jg.79): the EmptyGuard owns the recovery of the calls it makes
+// — its answer to a failed retry is the failover — so contextGuardProvider
+// runs no timeout/quota recovery of its own for a marked call. Without the
+// mark, a timeout in the guard's retry would be retried and handed off to
+// the fallback route by the context guard AND then failed over to the same
+// fallback route by the EmptyGuard.
+func withEmptyGuardCall(ctx context.Context) context.Context {
+	return context.WithValue(ctx, emptyGuardCallKey{}, true)
+}
+
+// isEmptyGuardCall reports whether ctx carries a call the EmptyGuard made.
+func isEmptyGuardCall(ctx context.Context) bool {
+	v, _ := ctx.Value(emptyGuardCallKey{}).(bool)
+	return v
+}
+
+// servingModelReporter is implemented by providers that may send a request
+// to a different model than req.Model (contextGuardProvider after a sticky
+// quota/timeout switch).
+type servingModelReporter interface {
+	servingModel(reqModel string) string
+}
+
 // emptyResponseFallback is the user-visible terminal message delivered when a
 // round trip returns empty even after a retry. Every turn must end with
 // SOMETHING (conduit-18vj guarantee).
@@ -145,7 +173,7 @@ func GuardEmptyResponse(
 		log.Printf("[EmptyGuard] (%s) raw-empty response: 0 content bytes, %d tool calls — retrying once (conduit-18vj)",
 			label, len(resp.ToolCalls))
 		retryStart := time.Now()
-		retryResp, retryErr := provider.GenerateResponse(retryCtx, req)
+		retryResp, retryErr := provider.GenerateResponse(withEmptyGuardCall(retryCtx), req)
 		cancelRetry()
 		log.Printf("[EmptyGuard] (%s) retry completed in %s: empty=%v err=%v",
 			label, time.Since(retryStart).Round(time.Millisecond), IsEmptyModelResponse(retryResp), retryErr)
@@ -225,9 +253,16 @@ func resolveEmptyFailoverRoute(router EmptyFailoverRouter, failedProvider Provid
 		// conduit-15gt: same backend is meaningful failover only when the
 		// model differs. Compare raw and prefix-stripped forms; an empty
 		// fallback model is unverifiable — fail closed.
+		// conduit-31jg.79: compare against the model the failed provider
+		// actually ran — a context guard that switched routes serves its
+		// sticky fallback model, not req.Model.
+		failedModel := req.Model
+		if sm, ok := failedProvider.(servingModelReporter); ok {
+			failedModel = sm.servingModel(req.Model)
+		}
 		strippedFallback := stripProviderPrefix(fallbackModel)
-		strippedReq := stripProviderPrefix(req.Model)
-		if fallbackModel == "" || fallbackModel == req.Model || strippedFallback == strippedReq {
+		strippedReq := stripProviderPrefix(failedModel)
+		if fallbackModel == "" || fallbackModel == failedModel || strippedFallback == strippedReq {
 			log.Printf("[EmptyGuard] (%s) failover resolved to the SAME model %q on the failed provider %q — refusing (conduit-15gt)", label, fallbackModel, failedProvider.Name())
 			return nil
 		}
@@ -246,7 +281,7 @@ func (fo *emptyFailoverRoute) attempt(ctx context.Context, req *GenerateRequest,
 	log.Printf("[EmptyGuard] (%s) failover %q -> %q on provider %q (conduit-1z0g)",
 		label, req.Model, fo.model, fo.provider.Name())
 	start := time.Now()
-	resp, err := fo.provider.GenerateResponse(ctx, &failoverReq)
+	resp, err := fo.provider.GenerateResponse(withEmptyGuardCall(ctx), &failoverReq)
 	log.Printf("[EmptyGuard] (%s) failover completed in %s: empty=%v err=%v (conduit-1z0g)",
 		label, time.Since(start).Round(time.Millisecond), IsEmptyModelResponse(resp), err)
 	return resp, err
