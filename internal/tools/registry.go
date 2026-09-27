@@ -246,7 +246,7 @@ func (r *Registry) registerAllTools() {
 
 	// Vision tools
 	allTools = append(allTools, []types.Tool{
-		vision.NewImageTool(r.services),
+		vision.NewImageToolWithSandbox(r.services, r.sandboxCfg), // conduit-31jg.62
 	}...)
 
 	// NOTE: Optional tools (Datadog, K8s, PagerDuty, MQTT, SSH, UniFi, SRE)

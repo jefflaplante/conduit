@@ -33,11 +33,14 @@ func TestNewImageTool(t *testing.T) {
 	})
 
 	t.Run("with services and WebClient", func(t *testing.T) {
+		// conduit-31jg.62: the shared WebClient is NOT used (no SSRF guard);
+		// only its timeout is inherited by the guarded client.
 		customClient := &http.Client{Timeout: 30 * time.Second}
 		services := &types.ToolServices{WebClient: customClient}
 		tool := NewImageTool(services)
 		require.NotNil(t, tool)
-		assert.Equal(t, customClient, tool.httpClient)
+		assert.NotSame(t, customClient, tool.httpClient)
+		assert.Equal(t, 30*time.Second, tool.httpClient.Timeout)
 	})
 }
 
@@ -127,7 +130,7 @@ func TestImageTool_Execute_FromFile(t *testing.T) {
 	err := os.WriteFile(imagePath, jpegData, 0644)
 	require.NoError(t, err)
 
-	tool := NewImageTool(nil)
+	tool := sandboxedImageTool(tmpDir)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": imagePath,
@@ -151,7 +154,7 @@ func TestImageTool_Execute_FromPNGFile(t *testing.T) {
 	err := os.WriteFile(imagePath, pngData, 0644)
 	require.NoError(t, err)
 
-	tool := NewImageTool(nil)
+	tool := sandboxedImageTool(tmpDir)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": imagePath,
@@ -171,7 +174,7 @@ func TestImageTool_Execute_FromGIFFile(t *testing.T) {
 	err := os.WriteFile(imagePath, gifData, 0644)
 	require.NoError(t, err)
 
-	tool := NewImageTool(nil)
+	tool := sandboxedImageTool(tmpDir)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": imagePath,
@@ -190,7 +193,7 @@ func TestImageTool_Execute_FromWebPFile(t *testing.T) {
 	err := os.WriteFile(imagePath, webpData, 0644)
 	require.NoError(t, err)
 
-	tool := NewImageTool(nil)
+	tool := sandboxedImageTool(tmpDir)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": imagePath,
@@ -201,11 +204,11 @@ func TestImageTool_Execute_FromWebPFile(t *testing.T) {
 }
 
 func TestImageTool_Execute_FileNotFound(t *testing.T) {
-	tool := NewImageTool(nil)
-	tool.workspaceDir = t.TempDir()
+	dir := t.TempDir()
+	tool := sandboxedImageTool(dir)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
-		"image": "/nonexistent/path/to/image.jpg",
+		"image": filepath.Join(dir, "nonexistent", "image.jpg"),
 	})
 	require.NoError(t, err)
 	assert.False(t, result.Success)
@@ -222,7 +225,7 @@ func TestImageTool_Execute_FileTooLarge(t *testing.T) {
 	err := os.WriteFile(imagePath, largeData, 0644)
 	require.NoError(t, err)
 
-	tool := NewImageTool(nil)
+	tool := sandboxedImageTool(tmpDir)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": imagePath,
@@ -241,7 +244,7 @@ func TestImageTool_Execute_CustomMaxSize(t *testing.T) {
 	err := os.WriteFile(imagePath, data, 0644)
 	require.NoError(t, err)
 
-	tool := NewImageTool(nil)
+	tool := sandboxedImageTool(tmpDir)
 
 	// Should fail with 1MB limit
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -357,7 +360,7 @@ func TestImageTool_Execute_FromURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewImageTool(nil)
+	tool := loopbackImageTool()
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": server.URL + "/test.jpg",
@@ -377,7 +380,7 @@ func TestImageTool_Execute_FromURL_PNG(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewImageTool(nil)
+	tool := loopbackImageTool()
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": server.URL + "/test.png",
@@ -396,7 +399,7 @@ func TestImageTool_Execute_FromURL_GIF(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewImageTool(nil)
+	tool := loopbackImageTool()
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": server.URL + "/test.gif",
@@ -415,7 +418,7 @@ func TestImageTool_Execute_FromURL_UnknownContentType(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewImageTool(nil)
+	tool := loopbackImageTool()
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": server.URL + "/test.bin",
@@ -431,7 +434,7 @@ func TestImageTool_Execute_FromURL_HTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewImageTool(nil)
+	tool := loopbackImageTool()
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": server.URL + "/notfound.jpg",
@@ -451,7 +454,7 @@ func TestImageTool_Execute_FromURL_TooLarge(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewImageTool(nil)
+	tool := loopbackImageTool()
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": server.URL + "/large.jpg",
@@ -480,7 +483,7 @@ func TestImageTool_Execute_WithCustomPrompt(t *testing.T) {
 	err := os.WriteFile(imagePath, jpegData, 0644)
 	require.NoError(t, err)
 
-	tool := NewImageTool(nil)
+	tool := sandboxedImageTool(tmpDir)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image":  imagePath,
@@ -500,7 +503,7 @@ func TestImageTool_Execute_WithOptions(t *testing.T) {
 	err := os.WriteFile(imagePath, jpegData, 0644)
 	require.NoError(t, err)
 
-	tool := NewImageTool(nil)
+	tool := sandboxedImageTool(tmpDir)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image":         imagePath,
@@ -529,8 +532,7 @@ func TestImageTool_Execute_RelativePath(t *testing.T) {
 	err = os.WriteFile(imagePath, jpegData, 0644)
 	require.NoError(t, err)
 
-	tool := NewImageTool(nil)
-	tool.workspaceDir = tmpDir
+	tool := sandboxedImageTool(tmpDir)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": "images/test.jpg",
@@ -563,7 +565,7 @@ func TestImageTool_LoadFromFile_UnknownExtension(t *testing.T) {
 	err := os.WriteFile(imagePath, data, 0644)
 	require.NoError(t, err)
 
-	tool := NewImageTool(nil)
+	tool := sandboxedImageTool(tmpDir)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": imagePath,
@@ -684,7 +686,7 @@ func TestImageTool_Execute_ContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewImageTool(nil)
+	tool := loopbackImageTool()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -720,7 +722,7 @@ func TestImageAnalysisResult_Metadata(t *testing.T) {
 	err := os.WriteFile(imagePath, jpegData, 0644)
 	require.NoError(t, err)
 
-	tool := NewImageTool(nil)
+	tool := sandboxedImageTool(tmpDir)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image": imagePath,
