@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	"conduit/internal/sandbox"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
@@ -60,6 +61,32 @@ type SSHTool struct {
 	pool             *Pool             // Connection pool for fan-out execution
 	fanoutExecutor   *FanoutExecutor   // Fan-out executor for group commands
 	inventoryManager *InventoryManager // Ansible inventory manager
+
+	// sandbox confines SCP local paths (upload source, download destination)
+	// to tools.sandbox roots. nil denies all local paths. conduit-31jg.69
+	sandbox *sandbox.Sandbox
+}
+
+// SetSandbox sets the filesystem sandbox that SCP local paths must resolve
+// inside. conduit-31jg.69
+func (t *SSHTool) SetSandbox(sb *sandbox.Sandbox) {
+	t.sandbox = sb
+}
+
+// resolveSCPLocalPath canonicalizes an SCP local path and checks it against
+// the sandbox (symlinks resolved), so the path that was checked is the path
+// that is read or written. Previously scp_upload read any local file the
+// gateway user could (e.g. ~/.ssh/id_ed25519) and ship it to a remote host.
+// conduit-31jg.69
+func (t *SSHTool) resolveSCPLocalPath(localPath string) (string, *types.ToolResult) {
+	resolved, err := t.sandbox.Resolve(localPath)
+	if err != nil {
+		return "", types.NewErrorResult("path_not_allowed",
+			fmt.Sprintf("local_path %q is not allowed: %v", localPath, err)).
+			WithParameter("local_path", localPath).
+			WithSuggestions([]string{"Use a path inside tools.sandbox.workspace_dir or tools.sandbox.allowed_paths"})
+	}
+	return resolved, nil
 }
 
 // NewSSHTool creates a new SSH tool with the given services and configuration
@@ -1352,8 +1379,14 @@ func (t *SSHTool) scpUpload(ctx context.Context, args map[string]interface{}) (*
 		}, nil
 	}
 
+	// conduit-31jg.69: confine the upload source to the sandbox.
+	resolvedLocal, denied := t.resolveSCPLocalPath(localPath)
+	if denied != nil {
+		return denied, nil
+	}
+
 	// Check if local file exists and get its info
-	localInfo, err := os.Stat(localPath)
+	localInfo, err := os.Stat(resolvedLocal)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &types.ToolResult{
@@ -1404,7 +1437,7 @@ func (t *SSHTool) scpUpload(ctx context.Context, args map[string]interface{}) (*
 
 	// Perform the upload
 	startTime := time.Now()
-	if err := scpClient.Upload(localPath, remotePath, 0); err != nil {
+	if err := scpClient.Upload(resolvedLocal, remotePath, 0); err != nil {
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("SCP upload failed: %v", err),
@@ -1472,6 +1505,12 @@ func (t *SSHTool) scpDownload(ctx context.Context, args map[string]interface{}) 
 		}, nil
 	}
 
+	// conduit-31jg.69: confine the download destination to the sandbox.
+	resolvedLocal, denied := t.resolveSCPLocalPath(localPath)
+	if denied != nil {
+		return denied, nil
+	}
+
 	// Classify the operation (download is read-tier)
 	classification := t.securityEngine.ClassifyCommand(fmt.Sprintf("scp download from %s", remotePath))
 	classification.Tier = TierRead // Override to ensure downloads are read-tier
@@ -1490,7 +1529,7 @@ func (t *SSHTool) scpDownload(ctx context.Context, args map[string]interface{}) 
 
 	// Perform the download
 	startTime := time.Now()
-	if err := scpClient.Download(remotePath, localPath); err != nil {
+	if err := scpClient.Download(remotePath, resolvedLocal); err != nil {
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("SCP download failed: %v", err),
@@ -1504,7 +1543,7 @@ func (t *SSHTool) scpDownload(ctx context.Context, args map[string]interface{}) 
 	duration := time.Since(startTime)
 
 	// Get file info after download
-	localInfo, err := os.Stat(localPath)
+	localInfo, err := os.Stat(resolvedLocal)
 	var fileSize int64
 	if err == nil {
 		fileSize = localInfo.Size()

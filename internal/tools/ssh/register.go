@@ -4,6 +4,7 @@ package ssh
 
 import (
 	"conduit/internal/config"
+	"conduit/internal/sandbox"
 	"conduit/internal/tools"
 	"conduit/internal/tools/types"
 )
@@ -13,6 +14,11 @@ func init() {
 		if cfg == nil || !cfg.RemoteSSH.Enabled {
 			return nil, nil
 		}
-		return NewSSHTool(services, &cfg.RemoteSSH)
+		tool, err := NewSSHTool(services, &cfg.RemoteSSH)
+		if err != nil {
+			return nil, err
+		}
+		tool.SetSandbox(sandbox.FromConfig(cfg.Tools.Sandbox)) // conduit-31jg.69
+		return tool, nil
 	})
 }

@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -17,12 +19,76 @@ import (
 const (
 	defaultMaxOutputBytes = 32 * 1024 // 32KB
 	defaultExecTimeout    = 30 * time.Second
+
+	// execLocalGrace is how long past the remote deadline the local stream
+	// stays open so the in-pod watchdog's kill (with its exit status and the
+	// partial output) can arrive before we give up locally. conduit-31jg.69
+	execLocalGrace = 5 * time.Second
+
+	// remoteKilledExitCode is what sh reports for a child killed by SIGKILL.
+	remoteKilledExitCode = 137
 )
+
+// remoteExecWrapper is the sh script every pod exec runs under. Closing the
+// SPDY stream does NOT kill the remote process (conduit-31jg.69), so the
+// deadline is enforced inside the pod:
+//
+//   - $1 is the user command (passed as an argument, never interpolated into
+//     the script, so it needs no extra quoting), $2 the timeout in seconds.
+//   - The command runs in the background, under `setsid` when available so
+//     it leads its own process group and the watchdog can kill the whole
+//     group (pipelines, grandchildren); otherwise only its `sh -c` is killed.
+//   - A watchdog subshell sleeps $2 seconds, then SIGKILLs the group/pid and
+//     prints a marker on stderr. It is a separate process, so it still fires
+//     if the wrapper itself dies when the local side drops the stream. Its
+//     `sleep` holds no stream fds, so after a normal exit the orphaned sleep
+//     cannot keep the exec stream open until the deadline.
+//
+// Limits: needs `sh` (already required) and `sleep` in the image. Without
+// `sleep` the command runs unguarded (plain exec, the pre-conduit-31jg.69
+// behaviour); without `setsid` descendants of the command may survive the
+// kill. Images without `sh` (distroless) cannot exec at all.
+const remoteExecWrapper = `if ! command -v sleep >/dev/null 2>&1; then exec sh -c "$1"; fi
+if command -v setsid >/dev/null 2>&1; then setsid sh -c "$1" & else sh -c "$1" & fi
+pid=$!
+( sleep "$2" </dev/null >/dev/null 2>&1; echo "conduit: command exceeded ${2}s, killing" >&2; kill -9 -"$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null ) >/dev/null &
+wd=$!
+wait "$pid"; rc=$?
+kill "$wd" 2>/dev/null
+exit $rc`
+
+// buildRemoteCommand returns the argv sent to the pod: the wrapper script
+// with the user command and the timeout (whole seconds, rounded up, >= 1) as
+// positional parameters. conduit-31jg.69
+func buildRemoteCommand(command string, timeout time.Duration) []string {
+	secs := int(math.Ceil(timeout.Seconds()))
+	if secs < 1 {
+		secs = 1
+	}
+	return []string{"sh", "-c", remoteExecWrapper, "conduit-exec", command, strconv.Itoa(secs)}
+}
+
+// executorFactory builds the remotecommand.Executor for an exec request. It
+// is a seam so tests can capture the PodExecOptions without an API server.
+type executorFactory func(client *ClusterClient, pod, namespace string, opts *corev1.PodExecOptions) (remotecommand.Executor, error)
+
+// spdyExecutorFactory is the production executorFactory.
+func spdyExecutorFactory(client *ClusterClient, pod, namespace string, opts *corev1.PodExecOptions) (remotecommand.Executor, error) {
+	execURL := client.clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(pod).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(opts, scheme.ParameterCodec).
+		URL()
+	return remotecommand.NewSPDYExecutor(client.restConfig, "POST", execURL)
+}
 
 // PodExecutor handles command execution inside pod containers.
 type PodExecutor struct {
 	maxOutputBytes int
 	defaultTimeout time.Duration
+	newExecutor    executorFactory
 }
 
 // ExecResult holds the output of a pod exec invocation.
@@ -38,6 +104,7 @@ func NewPodExecutor() *PodExecutor {
 	return &PodExecutor{
 		maxOutputBytes: defaultMaxOutputBytes,
 		defaultTimeout: defaultExecTimeout,
+		newExecutor:    spdyExecutorFactory,
 	}
 }
 
@@ -55,28 +122,27 @@ func (pe *PodExecutor) Execute(ctx context.Context, client *ClusterClient, pod, 
 		return nil, fmt.Errorf("resolving container: %w", err)
 	}
 
-	if timeout == 0 {
+	if timeout <= 0 {
 		timeout = pe.defaultTimeout
 	}
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	// The pod-side watchdog enforces `timeout`; the local deadline is a
+	// backstop slightly later so the kill's exit status and partial output
+	// can still arrive. conduit-31jg.69
+	execCtx, cancel := context.WithTimeout(ctx, timeout+execLocalGrace)
 	defer cancel()
 
 	execOpts := &corev1.PodExecOptions{
 		Container: resolvedContainer,
-		Command:   []string{"sh", "-c", command},
+		Command:   buildRemoteCommand(command, timeout),
 		Stdout:    true,
 		Stderr:    true,
 	}
 
-	execURL := client.clientset.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(pod).
-		Namespace(ns).
-		SubResource("exec").
-		VersionedParams(execOpts, scheme.ParameterCodec).
-		URL()
-
-	executor, err := remotecommand.NewSPDYExecutor(client.restConfig, "POST", execURL)
+	newExecutor := pe.newExecutor
+	if newExecutor == nil {
+		newExecutor = spdyExecutorFactory
+	}
+	executor, err := newExecutor(client, pod, ns, execOpts)
 	if err != nil {
 		return nil, fmt.Errorf("creating SPDY executor: %w", err)
 	}
@@ -85,10 +151,12 @@ func (pe *PodExecutor) Execute(ctx context.Context, client *ClusterClient, pod, 
 	limitedStdout := &limitedWriter{buf: &stdout, max: pe.maxOutputBytes}
 	limitedStderr := &limitedWriter{buf: &stderr, max: pe.maxOutputBytes}
 
+	start := time.Now()
 	streamErr := executor.StreamWithContext(execCtx, remotecommand.StreamOptions{
 		Stdout: limitedStdout,
 		Stderr: limitedStderr,
 	})
+	elapsed := time.Since(start)
 
 	result := &ExecResult{
 		Stdout: stdout.String(),
@@ -104,6 +172,10 @@ func (pe *PodExecutor) Execute(ctx context.Context, client *ClusterClient, pod, 
 	if streamErr != nil {
 		if exitErr, ok := streamErr.(interface{ ExitStatus() int }); ok {
 			result.ExitCode = exitErr.ExitStatus()
+			// Killed by the pod-side watchdog at the deadline. conduit-31jg.69
+			if result.ExitCode == remoteKilledExitCode && elapsed >= timeout {
+				result.TimedOut = true
+			}
 			return result, nil
 		}
 		return result, fmt.Errorf("exec stream: %w", streamErr)

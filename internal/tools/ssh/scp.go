@@ -13,6 +13,11 @@ import (
 	"strings"
 )
 
+// maxSCPDownloadBytes caps the size a remote SCP header may announce. The
+// download is buffered in memory (make([]byte, size)), so an unchecked
+// remote-supplied size could OOM the gateway. conduit-31jg.69
+const maxSCPDownloadBytes = 256 << 20
+
 // SCPClient provides SCP file transfer operations over SSH
 type SCPClient struct {
 	sshClient *SSHClient
@@ -173,6 +178,9 @@ func (s *SCPClient) Download(remotePath, localPath string) error {
 	mode, size, filename, err := parseSCPHeader(header)
 	if err != nil {
 		return fmt.Errorf("failed to parse header: %w", err)
+	}
+	if size < 0 || size > maxSCPDownloadBytes {
+		return fmt.Errorf("remote file size %d exceeds download limit of %d bytes", size, maxSCPDownloadBytes)
 	}
 
 	// Send acknowledgment
