@@ -98,8 +98,10 @@ type Gateway struct {
 	// ctx is the gateway-lifecycle context, bound by Start. It is shared with
 	// WebSocketService but also used by sibling goroutines (subagents,
 	// wakeSession, the SPAR reflection deferred-cleanup in handleClientRead)
-	// so it stays on Gateway as the source of truth.
-	ctx context.Context
+	// so it stays on Gateway as the source of truth. Written by Start under
+	// ctxMu; read it through lifecycleCtx() (conduit-31jg.73).
+	ctx   context.Context
+	ctxMu sync.RWMutex
 
 	// Search: FTS5 indexer/searcher/watcher, dedicated search.db with
 	// beads/brain/message indexers, and optional vector/semantic search
@@ -532,6 +534,25 @@ func (g *Gateway) ShutdownManager() *ShutdownManager {
 	return g.shutdownMgr
 }
 
+// setLifecycleCtx stores the gateway-lifecycle context (Start).
+func (g *Gateway) setLifecycleCtx(ctx context.Context) {
+	g.ctxMu.Lock()
+	g.ctx = ctx
+	g.ctxMu.Unlock()
+}
+
+// lifecycleCtx returns the gateway-lifecycle context bound by Start, or
+// context.Background() before Start (conduit-31jg.73: Start used to write
+// g.ctx unlocked while WS/wake goroutines read it).
+func (g *Gateway) lifecycleCtx() context.Context {
+	g.ctxMu.RLock()
+	defer g.ctxMu.RUnlock()
+	if g.ctx == nil {
+		return context.Background()
+	}
+	return g.ctx
+}
+
 // Start starts the gateway server
 func (g *Gateway) Start(ctx context.Context) error {
 	// Wrap the incoming context so ShutdownManager can cancel it independently
@@ -546,7 +567,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// HTTP request contexts (r.Context()) are cancelled when the handler returns,
 	// which is immediate after WebSocket upgrade. WebSocket goroutines need a
 	// context tied to the gateway's lifecycle instead.
-	g.ctx = ctx
+	g.setLifecycleCtx(ctx)
 	g.ws.Start(ctx)
 
 	// Build HTTP mux (diagnostics, WS, debug, channels, vector) and wrap it
@@ -812,7 +833,7 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() {
 		defer g.ws.Untrack()
-		g.handleClientRead(g.ctx, client)
+		g.handleClientRead(g.lifecycleCtx(), client)
 	}()
 }
 
@@ -844,7 +865,7 @@ func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
 		// for substantive sessions. This runs before cleanup so the session data is
 		// still available.
 		if sk := client.SessionKey(); sk != "" {
-			reflCtx, reflCancel := context.WithTimeout(g.ctx, 5*time.Second)
+			reflCtx, reflCancel := context.WithTimeout(g.lifecycleCtx(), 5*time.Second)
 			g.reflectOnSessionEnd(reflCtx, sk)
 			reflCancel()
 		}

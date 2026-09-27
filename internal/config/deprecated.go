@@ -30,4 +30,23 @@ func (c *Config) warnDeprecatedKeys() {
 				"(it belongs to alert-flush.sh and the HEARTBEAT.md prompt). Its directory is still used for "+
 				"deferred.json; remove the key to use the default memory/alerts/ (conduit-31jg.59)")
 	}
+	if unroutedAlertTargets(c.AgentHeartbeat.AlertTargets) {
+		warnDeprecatedOnce("agent_heartbeat.alert_targets",
+			"agent_heartbeat.alert_targets: only the first target's telegram chat_id is used (as the heartbeat "+
+				"job's delivery target); further targets, non-telegram types and severity filters are reserved "+
+				"and do not route alerts (conduit-31jg.73)")
+	}
+}
+
+// unroutedAlertTargets reports whether alert_targets configures anything
+// beyond what the gateway honours today: alert_targets[0] of type telegram
+// with config.chat_id.
+func unroutedAlertTargets(targets []AlertTarget) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	if len(targets) > 1 || targets[0].Type != "telegram" || len(targets[0].Severity) > 0 {
+		return true
+	}
+	return false
 }

@@ -84,6 +84,12 @@ func formatUpdatedAt(t time.Time) string {
 	return t.UTC().Format(updatedAtLayout)
 }
 
+// FormatUpdatedAt renders t in the canonical sessions.updated_at format, for
+// other packages that compare against the column (maintenance cleanup).
+// Binding a time.Time instead compares against the driver's text rendering,
+// which does not sort with the canonical layout.
+func FormatUpdatedAt(t time.Time) string { return formatUpdatedAt(t) }
+
 // nowUpdatedAt returns the current time in the canonical updated_at format.
 func nowUpdatedAt() string { return formatUpdatedAt(time.Now()) }
 

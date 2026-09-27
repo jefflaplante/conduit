@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"conduit/internal/tools/types"
 )
 
 // FanoutExecutor handles parallel command execution across multiple hosts
@@ -77,6 +79,13 @@ func (f *FanoutExecutor) Execute(ctx context.Context, hosts []string, command st
 
 		go func(hostName string) {
 			defer wg.Done()
+			// conduit-31jg.73: a panic on one host must not crash the gateway.
+			defer types.RecoverPanic("SSH fan-out on "+hostName, func(err error) {
+				mu.Lock()
+				result.Results[hostName] = &ExecutionResult{Host: hostName, Command: command, Error: err.Error(), ExitCode: -1}
+				result.Failed = append(result.Failed, hostName)
+				mu.Unlock()
+			})
 
 			// Acquire semaphore slot
 			select {

@@ -20,9 +20,19 @@ const RedactedValue = "[redacted]"
 var secretKeyPattern = regexp.MustCompile(
 	`(api_?key|app_?key|client_?key|secret|password|passwd|passphrase|private_?key|credential|bearer|authorization|(^|_)token$|(^|_)token_)`)
 
+// nonSecretKeyPattern exempts keys that merely mention a secret word but hold
+// something else (conduit-31jg.73): identities/labels (api_key_identity),
+// file-system locations of a secret (secrets_file, token_file,
+// private_key_path, ..._dir), redaction switches (redact_secrets) and
+// per-token prices/ratios (input_per_m_token, chars_per_token). The value of
+// a *_file/_path key is where the secret lives, not the secret itself.
+var nonSecretKeyPattern = regexp.MustCompile(
+	`(_identity|_file|_path|_dir|_per_token|_per_m_token)$|^redact_`)
+
 // IsSecretKey reports whether a config JSON key names a secret value.
 func IsSecretKey(key string) bool {
-	return secretKeyPattern.MatchString(strings.ToLower(key))
+	k := strings.ToLower(key)
+	return secretKeyPattern.MatchString(k) && !nonSecretKeyPattern.MatchString(k)
 }
 
 // Redacted returns a JSON-shaped deep copy of v (maps, slices, strings,

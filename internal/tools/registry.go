@@ -138,13 +138,27 @@ func NewRegistry(cfg config.ToolsConfig) *Registry {
 	// conduit-31jg.6: symlinks are now resolved before the containment check.
 	// Warn about top-level links in a sandbox root that point outside it —
 	// file tools will refuse them until the target is added to allowed_paths.
-	for link, target := range sandbox.FromConfig(cfg.Sandbox).EscapingSymlinks() {
-		log.Printf("[Sandbox] WARNING: %s -> %s resolves outside tools.sandbox roots; Read/Write/Edit/Glob will deny it. Add %q to tools.sandbox.allowed_paths to keep access.", link, target, target)
-	}
+	warnEscapingSymlinks(sandbox.FromConfig(cfg.Sandbox), sandbox.SymlinkScanOptions{}, log.Printf)
 
 	// Don't register tools here - wait for services to be set
 
 	return registry
+}
+
+// warnEscapingSymlinks logs each symlink under the sandbox roots that
+// resolves outside them, and — conduit-31jg.73 — says so when the bounded
+// deep scan stopped early, so a clean (or short) list is not mistaken for a
+// complete one.
+func warnEscapingSymlinks(sb *sandbox.Sandbox, opts sandbox.SymlinkScanOptions, logf func(format string, args ...any)) {
+	found, truncated := sb.ScanEscapingSymlinks(opts)
+	for link, target := range found {
+		logf("[Sandbox] WARNING: %s -> %s resolves outside tools.sandbox roots; Read/Write/Edit/Glob will deny it. Add %q to tools.sandbox.allowed_paths to keep access.", link, target, target)
+	}
+	if truncated {
+		logf("[Sandbox] WARNING: escaping-symlink scan of %v was truncated (entry/time budget hit); "+
+			"the %d link(s) reported may be incomplete. Unreported escaping links are still denied at use.",
+			sb.Roots(), len(found))
+	}
 }
 
 // SetServices sets the service dependencies and registers tools

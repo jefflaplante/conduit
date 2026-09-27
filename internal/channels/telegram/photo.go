@@ -11,8 +11,8 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
-	"conduit/internal/httpsafe"
 	"conduit/internal/protocol"
+	"conduit/internal/redact"
 )
 
 // Supported image MIME types for vision analysis.
@@ -44,7 +44,7 @@ func (a *Adapter) handlePhotoMessage(ctx context.Context, b *bot.Bot, update *mo
 	}
 
 	// Send typing indicator while downloading
-	a.bot.SendChatAction(ctx, &bot.SendChatActionParams{
+	a.getBot().SendChatAction(ctx, &bot.SendChatActionParams{
 		ChatID: chatID,
 		Action: models.ChatActionTyping,
 	})
@@ -57,7 +57,7 @@ func (a *Adapter) handlePhotoMessage(ctx context.Context, b *bot.Bot, update *mo
 	imageData, err := a.downloadPhoto(ctx, &bestPhoto)
 	if err != nil {
 		log.Printf("[Telegram] Failed to download photo: %v", err)
-		a.bot.SendMessage(ctx, &bot.SendMessageParams{
+		a.getBot().SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "Sorry, I couldn't process that photo. Please try again.",
 		})
@@ -121,36 +121,20 @@ func (a *Adapter) handlePhotoMessage(ctx context.Context, b *bot.Bot, update *mo
 // downloadPhoto downloads a photo from Telegram's servers.
 func (a *Adapter) downloadPhoto(ctx context.Context, photo *models.PhotoSize) ([]byte, error) {
 	// Get file info from Telegram
-	file, err := a.bot.GetFile(ctx, &bot.GetFileParams{
+	file, err := a.getBot().GetFile(ctx, &bot.GetFileParams{
 		FileID: photo.FileID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get file info: %w", err)
+		return nil, fmt.Errorf("failed to get file info: %w", redact.Error(err))
 	}
 
 	// Get download URL
-	downloadURL := a.bot.FileDownloadLink(file)
+	downloadURL := a.getBot().FileDownloadLink(file)
 
-	// Download the image file
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	// Download the image file (URL embeds the bot token; errors are scrubbed).
+	data, err := downloadTelegramFile(ctx, a.downloadClient(), downloadURL, "photo")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create download request: %w", err)
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download photo file: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status downloading photo: %d", resp.StatusCode)
-	}
-
-	data, err := httpsafe.ReadLimited(resp.Body, httpsafe.MediaBodyLimit) // conduit-31jg.7
-	if err != nil {
-		return nil, fmt.Errorf("failed to read photo file: %w", err)
+		return nil, err
 	}
 
 	// Validate size (20MB limit — Telegram's max file size)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -12,8 +11,8 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
-	"conduit/internal/httpsafe"
 	"conduit/internal/protocol"
+	"conduit/internal/redact"
 )
 
 // handleVoiceMessage processes incoming Telegram voice messages by transcribing them to text.
@@ -37,7 +36,7 @@ func (a *Adapter) handleVoiceMessage(ctx context.Context, b *bot.Bot, update *mo
 
 	// Check if STT is configured
 	if a.stt == nil {
-		a.bot.SendMessage(ctx, &bot.SendMessageParams{
+		a.getBot().SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "Voice messages are not supported (speech-to-text not configured).",
 		})
@@ -45,7 +44,7 @@ func (a *Adapter) handleVoiceMessage(ctx context.Context, b *bot.Bot, update *mo
 	}
 
 	// Send typing indicator while transcribing
-	a.bot.SendChatAction(ctx, &bot.SendChatActionParams{
+	a.getBot().SendChatAction(ctx, &bot.SendChatActionParams{
 		ChatID: chatID,
 		Action: models.ChatActionTyping,
 	})
@@ -55,7 +54,7 @@ func (a *Adapter) handleVoiceMessage(ctx context.Context, b *bot.Bot, update *mo
 	transcription, err := a.transcribeVoice(ctx, voice)
 	if err != nil {
 		log.Printf("[Telegram] Failed to transcribe voice message: %v", err)
-		a.bot.SendMessage(ctx, &bot.SendMessageParams{
+		a.getBot().SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "Sorry, I couldn't transcribe that voice message. Please try again or send text.",
 		})
@@ -105,36 +104,20 @@ func (a *Adapter) handleVoiceMessage(ctx context.Context, b *bot.Bot, update *mo
 // transcribeVoice downloads a voice message from Telegram and transcribes it using STT.
 func (a *Adapter) transcribeVoice(ctx context.Context, voice *models.Voice) (string, error) {
 	// Get file info from Telegram
-	file, err := a.bot.GetFile(ctx, &bot.GetFileParams{
+	file, err := a.getBot().GetFile(ctx, &bot.GetFileParams{
 		FileID: voice.FileID,
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to get file info: %w", err)
+		return "", fmt.Errorf("failed to get file info: %w", redact.Error(err))
 	}
 
 	// Get download URL
-	downloadURL := a.bot.FileDownloadLink(file)
+	downloadURL := a.getBot().FileDownloadLink(file)
 
-	// Download the audio file
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	// Download the audio file (URL embeds the bot token; errors are scrubbed).
+	audioData, err := downloadTelegramFile(ctx, a.downloadClient(), downloadURL, "voice")
 	if err != nil {
-		return "", fmt.Errorf("failed to create download request: %w", err)
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to download voice file: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status downloading voice file: %d", resp.StatusCode)
-	}
-
-	audioData, err := httpsafe.ReadLimited(resp.Body, httpsafe.MediaBodyLimit) // conduit-31jg.7
-	if err != nil {
-		return "", fmt.Errorf("failed to read voice file: %w", err)
+		return "", err
 	}
 
 	// Determine MIME type (default to audio/ogg for Telegram voice messages)

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"conduit/internal/backup"
-	"conduit/internal/config"
 
 	"github.com/spf13/cobra"
 )
@@ -68,14 +67,15 @@ var backupCreateCmd = &cobra.Command{
 
 // backup restore flags
 var (
-	restoreDryRun     bool
-	restoreForce      bool
-	restoreSkipConfig bool
-	restoreSSHKeys    bool
-	restoreConfigPath string
-	restoreDBPath     string
-	restoreWSPath     string
-	restoreJSONOutput bool
+	restoreDryRun      bool
+	restoreForce       bool
+	restoreSkipConfig  bool
+	restoreSSHKeys     bool
+	restoreConfigPath  string
+	restoreDBPath      string
+	restoreWSPath      string
+	restoreJSONOutput  bool
+	restoreGatewayPort int
 )
 
 var backupRestoreCmd = &cobra.Command{
@@ -95,8 +95,10 @@ var backupRestoreCmd = &cobra.Command{
 			WorkspacePath:  restoreWSPath,
 			Verbose:        verbose,
 			// conduit-31jg.9: refuse to restore under a running gateway.
+			// conduit-31jg.73: --pidfile (global) / --gateway-port point
+			// the check at a non-default gateway.
 			PidfilePath: resolvePidfilePath(),
-			GatewayAddr: restoreGatewayAddr(),
+			GatewayAddr: restoreGatewayAddr(restoreGatewayPort, restoreConfigPath, cfgFile),
 		}
 
 		result, err := backup.RestoreBackup(opts)
@@ -166,6 +168,9 @@ func init() {
 	backupRestoreCmd.Flags().StringVar(&restoreDBPath, "database-path", "", "Override database destination path")
 	backupRestoreCmd.Flags().StringVar(&restoreWSPath, "workspace-path", "", "Override workspace destination path")
 	backupRestoreCmd.Flags().BoolVar(&restoreJSONOutput, "json", false, "Output results in JSON format")
+	backupRestoreCmd.Flags().IntVar(&restoreGatewayPort, "gateway-port", 0,
+		"Port of the running-gateway check (default: \"port\" from --config-path, then --config, else 18789); "+
+			"use the global --pidfile if the gateway writes a non-default pidfile")
 
 	// List subcommand flags
 	backupListCmd.Flags().BoolVar(&listJSONOutput, "json", false, "Output in JSON format")
@@ -193,15 +198,46 @@ func formatSize(b int64) string {
 	}
 }
 
-// restoreGatewayAddr returns the loopback address of the gateway configured
-// by --config (default port 18789) for the restore liveness check.
-// conduit-31jg.9.
-func restoreGatewayAddr() string {
-	port := 18789
-	if _, err := os.Stat(cfgFile); err == nil {
-		if cfg, err := config.Load(cfgFile); err == nil && cfg.Port > 0 {
-			port = cfg.Port
+// restoreGatewayAddr returns the loopback address probed by the restore
+// liveness check (conduit-31jg.9). Port precedence (conduit-31jg.73):
+//  1. --gateway-port (e.g. the gateway was started with --port);
+//  2. "port" in the first readable config among configPaths (the
+//     --config-path restore destination, i.e. the live config, then
+//     --config);
+//  3. the default 18789.
+//
+// The port is read straight from the JSON instead of config.Load, which
+// fails (and used to silently fall back to 18789) on validation errors or
+// unset ${ENV} credentials — common on a box being restored.
+func restoreGatewayAddr(portOverride int, configPaths ...string) string {
+	port := defaultStatusPort
+	if portOverride > 0 {
+		port = portOverride
+	} else {
+		for _, p := range configPaths {
+			if cp, ok := configuredPort(p); ok {
+				port = cp
+				break
+			}
 		}
 	}
 	return fmt.Sprintf("127.0.0.1:%d", port)
+}
+
+// configuredPort reads the top-level "port" from a JSON config file.
+func configuredPort(path string) (int, bool) {
+	if path == "" {
+		return 0, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	var partial struct {
+		Port int `json:"port"`
+	}
+	if err := json.Unmarshal(data, &partial); err != nil || partial.Port <= 0 || partial.Port > 65535 {
+		return 0, false
+	}
+	return partial.Port, true
 }
