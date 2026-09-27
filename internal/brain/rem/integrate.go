@@ -82,8 +82,10 @@ func (r *REMCycle) shouldRunIntegration() bool {
 
 // fetchAllLTMEntries retrieves all long-term memory entries from the database
 func (r *REMCycle) fetchAllLTMEntries(ctx context.Context) ([]brain.Entry, error) {
+	// Peak salience: the >= 0.5 / > 0.7 gates below were calibrated against
+	// the pre-conduit-31jg.53 stored value, which equals base + recencyWeight.
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT key, value, created_at, accessed_at, access_count, salience, source, stale
+		SELECT key, value, created_at, accessed_at, access_count, `+r.peakSalienceSQL()+`, source, stale
 		FROM brain_ltm
 		ORDER BY key
 	`)

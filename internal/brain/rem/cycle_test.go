@@ -28,7 +28,7 @@ func TestCycle_FullRun(t *testing.T) {
 	_, err := rem.db.Exec(`
 		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, "old.key", "value", "test", oldTime, oldTime, 1, 0.05)
+	`, "old.key", "value", "test", oldTime, oldTime, 1, 0.05-0.4) // peak 0.05; column = base (conduit-31jg.53)
 	require.NoError(t, err)
 
 	// Setup config
@@ -114,7 +114,7 @@ func TestCycle_DryRunAll(t *testing.T) {
 	_, err := rem.db.Exec(`
 		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, "old.key", "value", "test", oldTime, oldTime, 1, 0.05)
+	`, "old.key", "value", "test", oldTime, oldTime, 1, 0.05-0.4) // peak 0.05; column = base (conduit-31jg.53)
 	require.NoError(t, err)
 
 	rem.config.PruneAgeDays = 30

@@ -119,10 +119,10 @@ func (b *Brain) clusterNeighbours(seedKeys []string, matchedKeys map[string]bool
 		}
 
 		query := fmt.Sprintf(`
-			SELECT key, value, created_at, accessed_at, access_count, salience, source, stale, warmth
+			SELECT key, value, created_at, accessed_at, access_count, %s, source, stale, warmth
 			FROM brain_ltm
 			WHERE (%s) AND (expires_at IS NULL OR expires_at > strftime('%%Y-%%m-%%d %%H:%%M:%%f', 'now'))
-		`, strings.Join(conditions, " OR "))
+		`, b.EffectiveSalienceSQL(), strings.Join(conditions, " OR ")) // conduit-31jg.53
 
 		rows, err := b.db.Query(query, args...)
 		if err != nil {

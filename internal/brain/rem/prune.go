@@ -83,10 +83,13 @@ func (r *REMCycle) Prune(ctx context.Context, dryRun bool) (*PruneResult, error)
 		evictThreshold := 0.1
 
 		// 1. Find entries to evict based on salience and age
+		// Peak salience keeps the historical 0.1 threshold meaningful
+		// (conduit-31jg.53).
+		peak := r.peakSalienceSQL()
 		query := `
-			SELECT key, value, source, salience
+			SELECT key, value, source, ` + peak + `
 			FROM brain_ltm
-			WHERE salience < ?
+			WHERE ` + peak + ` < ?
 			AND accessed_at < datetime('now', ? || ' days')
 		`
 
@@ -212,7 +215,7 @@ func (r *REMCycle) evictColdLTM(ctx context.Context, dryRun bool) (int, error) {
 	defer tx.Rollback()
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT key, value, COALESCE(source, ''), salience
+		SELECT key, value, COALESCE(source, ''), `+r.peakSalienceSQL()+`
 		FROM brain_ltm
 		WHERE access_count <= 1 AND created_at < ? AND accessed_at < ?
 		ORDER BY salience ASC, accessed_at ASC
@@ -393,7 +396,7 @@ func (r *REMCycle) HubPrune(ctx context.Context, dryRun bool) (hubsPruned, edges
 // Non-path sources like "tool", "user:manual", "llm:generated" are skipped.
 func (r *REMCycle) pruneOrphansOnly(ctx context.Context, result *PruneResult, dryRun bool) (*PruneResult, error) {
 	orphanQuery := `
-		SELECT key, value, source, salience
+		SELECT key, value, source, ` + r.peakSalienceSQL() + `
 		FROM brain_ltm
 		WHERE source != '' AND source IS NOT NULL
 	`

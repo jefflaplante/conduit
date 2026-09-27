@@ -52,7 +52,9 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 		// proceed with a default salience so spreading works even for freshly-
 		// stored entries that haven't had their salience recomputed yet.
 		var srcSalience float64
-		row := b.db.QueryRow(`SELECT salience FROM brain_ltm WHERE key = ?`, srcKey)
+		// conduit-31jg.53: effective salience (the source was just accessed,
+		// so this is base + recencyWeight — the value the column used to hold).
+		row := b.db.QueryRow(`SELECT `+b.EffectiveSalienceSQL()+` FROM brain_ltm WHERE key = ?`, srcKey)
 		if err := row.Scan(&srcSalience); err != nil {
 			srcSalience = 0.5 // sensible default when not found / any error
 		}
