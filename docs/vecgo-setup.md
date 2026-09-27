@@ -37,7 +37,7 @@ Vecgo is Conduit's vector search subsystem, enabling semantic search across work
 | File indexer | `internal/vecgo/indexer.go` | Watches workspace dir, content-hash tracking, incremental re-index |
 | OpenAI embedder | `internal/vecgo/embedding/openai.go` | OpenAI API adapter (`text-embedding-3-small`, 1536 dims) |
 | TF-IDF embedder | `vecgo/embedder/tfidf.go` | Local sparse vectors (needs trained corpus — not recommended) |
-| MemorySearch tool | `core/tools/memory_search.go` | Hybrid FTS5 + vector search exposed as a tool |
+| MemorySearch tool | `internal/tools/core/memory.go` | Hybrid FTS5 + vector search exposed as a tool |
 
 ## Prerequisites
 

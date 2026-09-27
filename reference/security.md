@@ -132,7 +132,7 @@ In `allowed_hosts`, each host must be an IP literal or `localhost`, where `local
 
 ## Human-in-the-Loop Approvals (conduit-31jg.43)
 
-Some tool actions are too risky to let the model perform alone. For these, the `internal/approval` package makes the agent ask the human who started the turn. The only action wired to it so far is **sending email as the owner's account** through the gog/email skill (`account` or `from` set to jeff, owner@example.com or owner-alt@example.com). Reading, searching and listing the owner inbox is unchanged. Sends from the agent's own account (jules) need no approval.
+Some tool actions are too risky to let the model perform alone. For these, the `internal/approval` package makes the agent ask the human who started the turn. The only action wired to it so far is **sending email as the owner's account** through the gog/email skill (`account` or `from` set to one of `skills.gog.owner_aliases`; see CONFIG.md). Reading, searching and listing the owner inbox is unchanged. Sends from the agent's own account (`skills.gog.agent_aliases`) need no approval.
 
 **Interactive turns (Telegram, TUI over SSH, WebSocket chat).** The tool sends nothing. It registers a pending approval and returns "NOT SENT YET — awaiting the owner's approval" to the model. The gateway posts a prompt in the same chat showing the owner identity, recipients, subject and body, with a 6-character code. The human replies `YES <code>` or `NO <code>`. On Telegram they can instead tap the Approve/Deny inline buttons, which send exactly that text. On YES the gateway runs the frozen, approved send and reports the result in the chat. It also adds a `[System note: ...]` to the session so the model learns the outcome on its next turn.
 

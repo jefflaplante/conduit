@@ -105,7 +105,7 @@ export TELEGRAM_BOT_TOKEN=\"your_bot_token\"
 export ANTHROPIC_API_KEY=\"your_api_key\"
 
 # Run with full AI capabilities
-./bin/gateway --config config.telegram.json --verbose
+./bin/conduit --config config.telegram.json --verbose
 ```
 
 ### Example Code
@@ -257,15 +257,7 @@ curl http://localhost:18790/health
 
 ## Performance
 
-### Benchmarks
-
-| Metric | Performance |
-|--------|-------------|
-| **Memory usage** | ~15MB (vs 80MB TypeScript) |
-| **Message latency** | <50ms end-to-end |
-| **Concurrent users** | 1000+ simultaneous chats |
-| **Startup time** | <2 seconds |
-| **API calls/sec** | Limited by Telegram (30/sec) |
+No benchmark for the adapter lives in this repo, so none is quoted here. Throughput is ultimately bounded by Telegram's Bot API rate limits (about 30 messages/second).
 
 ### Optimizations
 
@@ -338,19 +330,6 @@ This will log:
 - Connection status changes
 - Error details
 
-## Comparison: Go vs TypeScript
-
-| Feature | Go Native | TypeScript Process |
-|---------|-----------|-------------------|
-| **Memory** | 15MB | 80MB |
-| **Startup** | 2s | 8s |  
-| **Reliability** | High | Medium |
-| **Maintenance** | Single binary | Node.js + deps |
-| **Performance** | Excellent | Good |
-| **Debugging** | Native Go tools | Node.js debugging |
-
-The native Go implementation is **significantly faster and more reliable** than the TypeScript process approach while maintaining full feature parity.
-
 ## Future Enhancements
 
 ### Planned Features
@@ -361,7 +340,6 @@ The native Go implementation is **significantly faster and more reliable** than 
 - 🔄 **Bot commands** - /start, /help, etc.
 - 🔄 **Webhook auto-setup** - Automatic webhook configuration
 - 🔄 **Message templates** - Rich message formatting
-- 🔄 **User permissions** - Access control and allowlists
 
 ### Contributing
 
@@ -373,4 +351,4 @@ To add features:
 4. Add tests and documentation
 5. Submit pull request
 
-The Telegram adapter demonstrates the power of **native Go channel implementations** - faster, more reliable, and easier to maintain than external processes.
+Access control is provided by the pairing system (`conduit pairing telegram list|approve`).

@@ -654,7 +654,7 @@ The `enabled_tools` values must match the internal tool names exactly:
 | `SessionsSpawn` | core | Spawn sub-agent sessions |
 | `SessionStatus` | core | Get session status and metadata |
 | `Gateway` | core | Gateway operations (status, restart, config, metrics, channels, scheduler) |
-| `WebSearch` | web | Web search via Brave API or Anthropic search |
+| `WebSearch` | web | Web search via the Brave Search API |
 | `WebFetch` | web | Fetch and parse web pages to markdown |
 | `Message` | communication | Send messages to channels (Telegram, etc.) |
 | `Tts` | communication | Text-to-speech generation |
@@ -679,7 +679,6 @@ The `services` map provides tool-specific configuration. Each key is a service n
 |---------|--------|---------|
 | `brave` | `api_key` | WebSearch tool — Brave Search API key |
 | `tts` | `provider`, `voice` | Tts tool — TTS engine and voice selection |
-| `search` | `provider` | WebSearch tool — search provider preference (`"brave"` or `"anthropic"`) |
 
 **UniFi tool** does not use `services` — it reads `UNVR_URL` and `UNVR_API_KEY` environment variables directly.
 
@@ -955,9 +954,9 @@ Integrated SSH server that serves the BubbleTea TUI over SSH via Wish. Clients c
 
 ### SSH setup steps
 
-1. `./bin/gateway ssh-keys init` — generates host key and creates authorized_keys file
-2. `./bin/gateway ssh-keys add ~/.ssh/id_ed25519.pub` — authorize a client public key
-3. Set `ssh.enabled: true` in config and restart, or run `./bin/gateway ssh-server` standalone
+1. `./bin/conduit ssh-keys init` — generates host key and creates authorized_keys file
+2. `./bin/conduit ssh-keys add ~/.ssh/id_ed25519.pub` — authorize a client public key
+3. Set `ssh.enabled: true` in config and restart, or run `./bin/conduit ssh-server` standalone
 
 The SSH server uses a direct in-process client (`gateway/direct_client.go`) instead of WebSocket loopback, so it doesn't consume an API token. However, the standalone `ssh-server` command does require a `--gateway-token` flag for WebSocket connection to the gateway.
 
@@ -1495,7 +1494,7 @@ Add web search and fetch tools with Brave API:
 }
 ```
 
-Requires: `BRAVE_API_KEY` environment variable. WebSearch can also use Anthropic's built-in search as a fallback if no Brave key is configured.
+Requires a Brave Search API key (here via `BRAVE_API_KEY`). Without one, WebSearch returns an error; there is no Anthropic-search fallback.
 
 ### SSH access
 
@@ -1514,8 +1513,8 @@ Enable the integrated SSH server:
 
 Before starting, run:
 ```bash
-./bin/gateway ssh-keys init
-./bin/gateway ssh-keys add ~/.ssh/id_ed25519.pub
+./bin/conduit ssh-keys init
+./bin/conduit ssh-keys add ~/.ssh/id_ed25519.pub
 ```
 
 ### Agent heartbeat with Telegram alerts
@@ -1628,7 +1627,7 @@ The `gog` / `email` skills build `gog gmail ...` commands in Go rather than from
 | `env_files` | `~/ocgo/.ocgo-secrets.env`, `~/.conduit-secrets.env` | Shell env files sourced before each command. The first one that exists wins. Relative paths resolve against `workspace.context_dir` |
 | `cleanup_script` | `scripts/hygiene-junk-sweep.sh` | Script run by the `cleanup` action. Relative paths resolve against `workspace.context_dir` |
 
-Note: Skills integration is currently disabled in the tool registry pending a refactor (`registerAllTools` has the skill adapter registration commented out). The config infrastructure is in place for when it's re-enabled.
+Discovered skills are registered in the tool registry as `skill_<name>` tools (`registerSkillTools`), plus per-action wrappers unless `generate_action_tools` is `false`.
 
 ### Vector/semantic search
 

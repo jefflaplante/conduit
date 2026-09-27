@@ -899,14 +899,14 @@ token-secret source.
 ## Example Configs
 
 The `configs/` directory contains example configurations:
-- `configs/config.example.json` - Full example with comments
+- `configs/examples/config.example.json` - Full example
 - `configs/config.telegram.json` - Telegram-focused
 - `configs/config.tools.json` - Tools-focused
 - `configs/config.skills.json` - Skills-focused
 
 Copy and customize:
 ```bash
-cp configs/config.example.json config.json
+cp configs/examples/config.example.json config.json
 # Edit config.json with your settings
 ```
 

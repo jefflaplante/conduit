@@ -10,20 +10,20 @@ The TUI is a full-featured terminal chat client powered by [BubbleTea](https://g
 
 ```bash
 # 1. Start the gateway (in one terminal)
-./bin/gateway server
+./bin/conduit server
 
 # 2. Create an auth token
-./bin/gateway token create --client-name "tui"
+./bin/conduit token create --client-name "tui"
 # Save the token output
 
 # 3. Launch the TUI (in another terminal)
-./bin/gateway tui --token "conduit_v1_..."
+./bin/conduit tui --token "conduit_v1_..."
 ```
 
 On subsequent runs, the token is saved to `~/.conduit/tui.json` and reused automatically:
 
 ```bash
-./bin/gateway tui
+./bin/conduit tui
 ```
 
 ### Key Bindings
@@ -67,7 +67,7 @@ All commands work the same as in Telegram:
 ### TUI Flags
 
 ```bash
-./bin/gateway tui [flags]
+./bin/conduit tui [flags]
 
 Flags:
   --url string     Gateway WebSocket URL (default "ws://localhost:18789/ws")
@@ -82,13 +82,13 @@ The gateway can serve the TUI over SSH using [Wish](https://github.com/charmbrac
 
 ```bash
 # 1. Initialize SSH key infrastructure
-./bin/gateway ssh-keys init
+./bin/conduit ssh-keys init
 
 # 2. Add your SSH public key
-./bin/gateway ssh-keys add ~/.ssh/id_ed25519.pub
+./bin/conduit ssh-keys add ~/.ssh/id_ed25519.pub
 
 # 3. Create a gateway token for the SSH server
-./bin/gateway token create --client-name "ssh-server"
+./bin/conduit token create --client-name "ssh-server"
 ```
 
 ### Running the SSH Server
@@ -96,7 +96,7 @@ The gateway can serve the TUI over SSH using [Wish](https://github.com/charmbrac
 **Standalone** (separate process from the gateway):
 
 ```bash
-./bin/gateway ssh-server \
+./bin/conduit ssh-server \
   --listen ":2222" \
   --gateway-token "conduit_v1_..."
 ```
@@ -134,16 +134,16 @@ The SSH username becomes your user identity for session scoping. You get the sam
 
 ```bash
 # List authorized keys with fingerprints
-./bin/gateway ssh-keys list
+./bin/conduit ssh-keys list
 
 # Add a key from a file
-./bin/gateway ssh-keys add ~/.ssh/id_ed25519.pub
+./bin/conduit ssh-keys add ~/.ssh/id_ed25519.pub
 
 # Add a key inline
-./bin/gateway ssh-keys add "ssh-ed25519 AAAA... user@host"
+./bin/conduit ssh-keys add "ssh-ed25519 AAAA... user@host"
 
 # Remove a key by fingerprint
-./bin/gateway ssh-keys remove "SHA256:abc123..."
+./bin/conduit ssh-keys remove "SHA256:abc123..."
 ```
 
 The SSH server fails closed: if the authorized_keys file is missing, unreadable, or contains no valid keys, it refuses to start (the `ssh` command exits with an error; the gateway logs an error and continues without SSH) rather than accepting unauthenticated connections. Changes to authorized_keys are picked up on the next login attempt, so adding or removing keys does not require a restart.
@@ -151,7 +151,7 @@ The SSH server fails closed: if the authorized_keys file is missing, unreadable,
 ### SSH Server Flags
 
 ```bash
-./bin/gateway ssh-server [flags]
+./bin/conduit ssh-server [flags]
 
 Flags:
   --listen string            SSH listen address (default ":2222")
