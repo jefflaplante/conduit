@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"conduit/internal/config"
 )
@@ -170,31 +171,106 @@ func Within(root, target string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// EscapingSymlinks lists the direct children of each root that are symlinks
-// resolving outside every root, mapped to their targets. It is used at startup
-// to warn operators whose workspace relies on such links (e.g. a "shared" link
-// to a NAS mount): those paths are now denied until the target itself is added
-// to tools.sandbox.allowed_paths. Only one level is scanned to keep it cheap.
+// Defaults for the startup escaping-symlink scan (conduit-31jg.70). They keep
+// the scan to well under a second on a large workspace or a slow NAS mount.
+const (
+	DefaultSymlinkScanDepth   = 8
+	DefaultSymlinkScanEntries = 20000
+	DefaultSymlinkScanTime    = 2 * time.Second
+)
+
+// SymlinkScanOptions bounds ScanEscapingSymlinks. Zero fields take defaults.
+type SymlinkScanOptions struct {
+	MaxDepth   int           // directory levels below each root (root = 0)
+	MaxEntries int           // total directory entries examined, all roots
+	MaxTime    time.Duration // wall-clock budget
+}
+
+// skipScanDirs are not descended into: large, rarely hold operator links,
+// and would eat the entry budget.
+var skipScanDirs = map[string]bool{".git": true, "node_modules": true}
+
+// EscapingSymlinks lists symlinks under each root, at any depth within the
+// default bounds, that resolve outside every root, mapped to their link
+// targets. It is used at startup to warn operators whose workspace relies on
+// such links (e.g. a "shared" link to a NAS mount): those paths are denied
+// until the target itself is added to tools.sandbox.allowed_paths.
 func (s *Sandbox) EscapingSymlinks() map[string]string {
-	out := map[string]string{}
+	out, _ := s.ScanEscapingSymlinks(SymlinkScanOptions{})
+	return out
+}
+
+// ScanEscapingSymlinks walks each root breadth-first without following
+// symlinks (a link is checked, never descended), stopping at the depth,
+// entry and time bounds. truncated reports that a bound was hit, so the
+// result may be incomplete. conduit-31jg.70: previously only the direct
+// children of each root were examined, so workspace/projects/x -> /etc went
+// unreported.
+func (s *Sandbox) ScanEscapingSymlinks(opts SymlinkScanOptions) (found map[string]string, truncated bool) {
+	found = map[string]string{}
 	if s == nil {
-		return out
+		return found, false
 	}
+	if opts.MaxDepth <= 0 {
+		opts.MaxDepth = DefaultSymlinkScanDepth
+	}
+	if opts.MaxEntries <= 0 {
+		opts.MaxEntries = DefaultSymlinkScanEntries
+	}
+	if opts.MaxTime <= 0 {
+		opts.MaxTime = DefaultSymlinkScanTime
+	}
+	deadline := time.Now().Add(opts.MaxTime)
+
+	type dir struct {
+		path  string
+		depth int
+	}
+	visited := map[string]bool{}
+	queue := make([]dir, 0, len(s.roots))
 	for _, root := range s.roots {
-		entries, err := os.ReadDir(root)
+		queue = append(queue, dir{path: root})
+	}
+	entries := 0
+
+	for len(queue) > 0 {
+		d := queue[0]
+		queue = queue[1:]
+		if visited[d.path] {
+			continue // overlapping roots (e.g. workspace inside an allowed path)
+		}
+		visited[d.path] = true
+		if time.Now().After(deadline) {
+			return found, true
+		}
+
+		list, err := os.ReadDir(d.path)
 		if err != nil {
 			continue
 		}
-		for _, e := range entries {
-			if e.Type()&os.ModeSymlink == 0 {
-				continue
+		for _, e := range list {
+			if entries >= opts.MaxEntries {
+				return found, true
 			}
-			p := filepath.Join(root, e.Name())
-			if !s.Allowed(p) {
-				target, _ := os.Readlink(p)
-				out[p] = target
+			entries++
+			p := filepath.Join(d.path, e.Name())
+			switch {
+			case e.Type()&os.ModeSymlink != 0:
+				if !s.Allowed(p) {
+					target, _ := os.Readlink(p)
+					found[p] = target
+				}
+			case e.IsDir():
+				if skipScanDirs[e.Name()] {
+					continue
+				}
+				if d.depth+1 > opts.MaxDepth {
+					truncated = true
+					continue
+				}
+				queue = append(queue, dir{path: p, depth: d.depth + 1})
 			}
 		}
 	}
-	return out
+	return found, truncated
 }

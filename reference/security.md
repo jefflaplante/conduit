@@ -152,6 +152,10 @@ Guarantees:
 
 **Reusing it for other risky tools** (for example conduit-w3l7 runbook gates, or SSH/K8s actions that currently return "requires approval"): build an `approval.Action` with a Kind, Title, display Fields, loggable Audit fields and a `Fingerprint`. Then call `Manager.Request(ctx, action, execFn)` from the tool and return a pending result. `execFn` runs only after a bound human approves. Interactive entry points attach the origin with `approval.WithInteractiveOrigin`. New non-interactive entry points should call `approval.WithNonInteractive(ctx, "<source>")`, although an unmarked context already fails closed.
 
+## MCP Endpoint Auth (conduit-31jg.8)
+
+The claude-code MCP bridge (`127.0.0.1:18790`) exposes Bash/Write/Message, so it requires `Authorization: Bearer <token>`. The token is a dedicated 0600 secret (`{data_dir}/auth/mcp_token`), compared in constant time; the SDK's DNS-rebinding and cross-origin protections remain enabled. `mcp.require_auth` unset = warn-only transition (unauthenticated requests served and logged, wrong tokens rejected); set it to `true` once clients send the header. MCP tool calls go through the ExecutionEngine (timeout, truncation, reflection, panic recovery) and are non-interactive for approvals, so owner-account email sends fail closed. Details: [docs/claude-code-provider.md](../docs/claude-code-provider.md#authentication).
+
 ## Security Architecture
 
 ### Authentication Flow

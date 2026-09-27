@@ -39,6 +39,35 @@ func (r *Router) contextWindowForRoute(rt providerRoute) int {
 	return ContextWindowForModel(model)
 }
 
+// routeModel returns the model a route actually runs: its explicit model,
+// else the provider's configured default.
+func (r *Router) routeModel(rt providerRoute) string {
+	if rt.model != "" {
+		return rt.model
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.providerMeta[rt.name].DefaultModel
+}
+
+// distinctFallbackRoute returns rt's configured fallback route, or nil when
+// none resolves or it would send the same model to the same provider
+// (z-ai's fallback_model "z-ai/glm-5.3" while already on glm-5.3 — a
+// "handoff" to the same backend and model is just a third attempt).
+// conduit-1w48.
+func (r *Router) distinctFallbackRoute(rt providerRoute) *providerRoute {
+	fbModel, fbProvider, ok := r.resolveFallbackRoute(rt.name)
+	if !ok {
+		return nil
+	}
+	fb := providerRoute{name: fbProvider.Name(), provider: fbProvider, model: fbModel}
+	if fb.name == rt.name &&
+		strings.EqualFold(stripProviderPrefix(r.routeModel(fb)), stripProviderPrefix(r.routeModel(rt))) {
+		return nil
+	}
+	return &fb
+}
+
 // recoveryOpts tunes callWithRecovery for a call site.
 type recoveryOpts struct {
 	// phase tags journal lines ("generate", "tool loop", "streaming").
@@ -58,6 +87,11 @@ type recoveryOpts struct {
 //  2. bd-6tb/bd-27ud: quota error → the fallback model on ITS OWN provider;
 //  3. bd-13p: transient timeout → retry once on the route that timed out
 //     (the fallback route if step 2 ran — conduit-31jg.18(a));
+//     conduit-1w48: if that retry also times out and step 2 did not run,
+//     hand off ONCE to the route's fallback (when it is a different
+//     route). Under a deadline the retry leaves the fallback
+//     recoveryFailoverReserve, or is skipped when it cannot
+//     (deadline_budget.go);
 //  4. conduit-31jg.46: streaming overload/rate-limit error AFTER text
 //     reached the client (providers only retry before first emission) →
 //     one muted retry on the same route.
@@ -68,7 +102,7 @@ type recoveryOpts struct {
 func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, req *GenerateRequest, opts recoveryOpts) (*GenerateResponse, providerRoute, int64, error) {
 	cur := primary
 	var served GenerateRequest
-	attempt := func(rt providerRoute) (*GenerateResponse, int64, error) {
+	attempt := func(ctx context.Context, rt providerRoute) (*GenerateResponse, int64, error) {
 		areq := *req
 		areq.Model = rt.model
 		trimRequestToFitContext(&areq, r.contextWindowForRoute(rt))
@@ -95,15 +129,19 @@ func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, re
 		return resp, latency, err
 	}
 
-	resp, latencyMs, err := attempt(cur)
+	resp, latencyMs, err := attempt(ctx, cur)
 
-	if err != nil && IsQuotaError(err) && !(opts.quotaFallbackNeedsModel && primary.model == "") {
+	fallbackAllowed := !(opts.quotaFallbackNeedsModel && primary.model == "")
+	handedOff := false // at most ONE move to the fallback route per call (conduit-1w48)
+
+	if err != nil && IsQuotaError(err) && fallbackAllowed {
 		if fbModel, fbProvider, ok := r.resolveFallbackRoute(primary.name); ok {
 			fb := providerRoute{name: fbProvider.Name(), provider: fbProvider, model: fbModel}
 			log.Printf("[Router] (%s) quota error on %q model=%q, retrying with fallback model %q on provider %q (bd-27ud)",
 				opts.phase, primary.name, primary.model, fb.model, fb.name)
 			cur = fb
-			resp, latencyMs, err = attempt(cur)
+			handedOff = true
+			resp, latencyMs, err = attempt(ctx, cur)
 			if err == nil {
 				log.Printf("[Router] (%s) fallback retry succeeded (bd-27ud): %q -> %q", opts.phase, primary.model, fb.model)
 			} else {
@@ -113,13 +151,50 @@ func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, re
 	}
 
 	if err != nil && IsTransientTimeoutError(err) && ctx.Err() == nil {
-		// conduit-31jg.18(a): retry the PAIR that timed out.
-		log.Printf("[Router] (%s) transient timeout on provider %q model=%q, retrying once (bd-13p)", opts.phase, cur.name, cur.model)
-		resp, latencyMs, err = attempt(cur)
-		if err == nil {
-			log.Printf("[Router] (%s) timeout retry succeeded (bd-13p)", opts.phase)
+		// conduit-1w48: a route whose timeout retry is exhausted hands off
+		// to its fallback route — once, and only when that is a genuinely
+		// different route and the quota step has not already moved there.
+		var timeoutFB *providerRoute
+		if fallbackAllowed && !handedOff {
+			timeoutFB = r.distinctFallbackRoute(cur)
+		}
+		// conduit-10ip/1w48: under a deadline the same-route retry leaves
+		// the fallback a reserved slice, or is skipped when it cannot.
+		reserve := time.Duration(0)
+		if _, hasDeadline := ctx.Deadline(); hasDeadline && timeoutFB != nil {
+			reserve = recoveryFailoverReserve
+		}
+		retryCtx, cancelRetry, retryOK := retryBudget(ctx, reserve)
+		if retryOK {
+			// conduit-31jg.18(a): retry the PAIR that timed out.
+			log.Printf("[Router] (%s) transient timeout on provider %q model=%q, retrying once (bd-13p)", opts.phase, cur.name, cur.model)
+			resp, latencyMs, err = attempt(retryCtx, cur)
+			if err == nil {
+				log.Printf("[Router] (%s) timeout retry succeeded (bd-13p)", opts.phase)
+			} else {
+				log.Printf("[Router] (%s) timeout retry failed: %v (bd-13p)", opts.phase, err)
+			}
 		} else {
-			log.Printf("[Router] (%s) timeout retry failed: %v (bd-13p)", opts.phase, err)
+			left, _ := timeLeft(ctx)
+			log.Printf("[Router] (%s) transient timeout on provider %q model=%q with %s left — skipping same-route retry (conduit-1w48)",
+				opts.phase, cur.name, cur.model, left.Round(time.Millisecond))
+		}
+		cancelRetry()
+
+		if err != nil && IsTransientTimeoutError(err) && timeoutFB != nil {
+			if hasAttemptBudget(ctx) {
+				log.Printf("[Router] (%s) timeout retries exhausted on provider %q model=%q, handing off to fallback model %q on provider %q (conduit-1w48)",
+					opts.phase, cur.name, cur.model, timeoutFB.model, timeoutFB.name)
+				cur = *timeoutFB
+				resp, latencyMs, err = attempt(ctx, cur)
+				if err == nil {
+					log.Printf("[Router] (%s) timeout fallback succeeded (conduit-1w48)", opts.phase)
+				} else {
+					log.Printf("[Router] (%s) timeout fallback failed: %v (conduit-1w48)", opts.phase, err)
+				}
+			} else {
+				log.Printf("[Router] (%s) no deadline budget left for the timeout fallback to %q (conduit-1w48)", opts.phase, timeoutFB.name)
+			}
 		}
 	}
 
@@ -130,7 +205,7 @@ func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, re
 	if err != nil && opts.stream != nil && opts.stream.emitted() && IsRetryableOverloadError(err) && ctx.Err() == nil {
 		log.Printf("[Router] (%s) overload after %d streamed bytes on provider %q model=%q — one muted retry (conduit-31jg.46)",
 			opts.phase, opts.stream.emittedBytes(), cur.name, cur.model)
-		resp, latencyMs, err = attempt(cur)
+		resp, latencyMs, err = attempt(ctx, cur)
 	}
 
 	if err == nil {
@@ -215,28 +290,102 @@ func (s *streamTracker) callback() StreamCallback {
 // callWithRecovery meters the first call's attempts. Together they record
 // each provider call to the usage tracker (fuel gauge, TokenWindowTracker)
 // exactly once.
+//
+// conduit-31jg.68(2): it is also the quota-fallback point for those calls.
+// Only the first call had the bd-27ud fallback (callWithRecovery), so a
+// quota error in tool round N killed the turn. On a quota error the guard
+// retries the call on the route's fallback (own provider, own model, own
+// window) under the same ctx — turn lease and deadline unchanged — and
+// stays on that route for the rest of the turn, so later rounds don't burn
+// a failed call on the exhausted provider first. Each attempt is metered
+// once. Guards built for the EmptyGuard failover never fall back again.
 type contextGuardProvider struct {
 	Provider
 	window int
 	router *Router
 	name   string // route provider name, for metering
+
+	// quotaFallback enables the conduit-31jg.68 fallback.
+	quotaFallback bool
+	mu            sync.Mutex
+	switched      *providerRoute // sticky fallback route after a quota error
+	switchedWin   int
 }
 
 func (r *Router) guardedProvider(rt providerRoute) Provider {
+	return &contextGuardProvider{Provider: rt.provider, window: r.contextWindowForRoute(rt), router: r, name: rt.name, quotaFallback: true}
+}
+
+// failoverGuardedProvider is guardedProvider without the quota fallback, for
+// a call that already IS the failover (EmptyGuard, conduit-1z0g): it must
+// not chain to a third route (conduit-31jg.68).
+func (r *Router) failoverGuardedProvider(rt providerRoute) Provider {
 	return &contextGuardProvider{Provider: rt.provider, window: r.contextWindowForRoute(rt), router: r, name: rt.name}
 }
 
-func (g *contextGuardProvider) GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+// Name reports the provider currently serving the guard's calls — the
+// fallback's once a quota error switched routes, so the EmptyGuard asks
+// about the backend that actually failed.
+func (g *contextGuardProvider) Name() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.switched != nil {
+		return g.switched.name
+	}
+	return g.Provider.Name()
+}
+
+func (g *contextGuardProvider) call(ctx context.Context, name string, p Provider, window int, req *GenerateRequest) (*GenerateResponse, error) {
 	start := time.Now()
-	resp, err := g.Provider.GenerateResponse(ctx, fitRequestToWindow(req, g.window))
+	resp, err := p.GenerateResponse(ctx, fitRequestToWindow(req, window))
 	if g.router != nil {
 		model := ""
 		if req != nil {
 			model = req.Model
 		}
-		g.router.meterCall(g.name, model, resp, err, time.Since(start).Milliseconds())
+		g.router.meterCall(name, model, resp, err, time.Since(start).Milliseconds())
 	}
 	return resp, err
+}
+
+// onRoute returns a copy of req carrying rt's model.
+func onRoute(req *GenerateRequest, rt *providerRoute) *GenerateRequest {
+	out := *req
+	out.Model = rt.model
+	return &out
+}
+
+func (g *contextGuardProvider) GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+	g.mu.Lock()
+	sw, swWin := g.switched, g.switchedWin
+	g.mu.Unlock()
+	if sw != nil {
+		return g.call(ctx, sw.name, sw.provider, swWin, onRoute(req, sw))
+	}
+
+	resp, err := g.call(ctx, g.name, g.Provider, g.window, req)
+	// Same gate as the tool path in callWithRecovery: fall back only when
+	// the request names a model (quotaFallbackNeedsModel).
+	if err == nil || !g.quotaFallback || g.router == nil || req == nil || req.Model == "" ||
+		!IsQuotaError(err) || ctx.Err() != nil {
+		return resp, err
+	}
+	fb := g.router.distinctFallbackRoute(providerRoute{name: g.name, provider: g.Provider, model: req.Model})
+	if fb == nil {
+		return resp, err
+	}
+	fbWin := g.router.contextWindowForRoute(*fb)
+	log.Printf("[Router] (tool loop) quota error on %q model=%q, switching to fallback model %q on provider %q for the rest of the turn (conduit-31jg.68)",
+		g.name, req.Model, fb.model, fb.name)
+	fbResp, fbErr := g.call(ctx, fb.name, fb.provider, fbWin, onRoute(req, fb))
+	if fbErr != nil {
+		log.Printf("[Router] (tool loop) quota fallback failed: %v (conduit-31jg.68)", fbErr)
+		return fbResp, fbErr
+	}
+	g.mu.Lock()
+	g.switched, g.switchedWin = fb, fbWin
+	g.mu.Unlock()
+	return fbResp, nil
 }
 
 // meterCall records ONE provider call (conduit-31jg.64): an error to the

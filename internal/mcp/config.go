@@ -14,9 +14,16 @@ type mcpFileContent struct {
 
 // mcpServerEntry represents a single MCP server entry.
 type mcpServerEntry struct {
-	Type string `json:"type"`
-	URL  string `json:"url"`
+	Type    string            `json:"type"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
+
+// AuthHeaderValue is the Authorization header written into .mcp.json when MCP
+// auth is on (conduit-31jg.8). Claude Code expands ${VAR:-default} in headers;
+// the empty default keeps the config parseable when the variable is unset
+// (the server then sees an unauthenticated request instead of a config error).
+const AuthHeaderValue = "Bearer ${" + TokenEnvVar + ":-}"
 
 // MCPConfigManager manages the .mcp.json file lifecycle.
 // It writes a "conduit" entry during Setup and restores the previous state
@@ -27,7 +34,12 @@ type MCPConfigManager struct {
 	port       int
 	created    bool   // true if we created the file (vs merging into existing)
 	backup     []byte // backup of pre-existing file contents
+	authHeader bool   // conduit-31jg.8: write the Authorization header
 }
+
+// SetAuthHeader makes Setup write the Authorization header referencing
+// ${CONDUIT_MCP_TOKEN} (conduit-31jg.8).
+func (m *MCPConfigManager) SetAuthHeader(on bool) { m.authHeader = on }
 
 // NewMCPConfigManager creates a config manager for the given working directory
 // and MCP server port.
@@ -61,6 +73,13 @@ func (m *MCPConfigManager) Setup() error {
 		Type: "http",
 		URL:  fmt.Sprintf("http://127.0.0.1:%d/mcp", m.port),
 	}
+	if m.authHeader {
+		conduitEntry.Headers = map[string]string{"Authorization": AuthHeaderValue}
+	}
+	conduitRaw, err := json.Marshal(conduitEntry)
+	if err != nil {
+		return fmt.Errorf("failed to marshal conduit entry: %w", err)
+	}
 
 	existing, err := os.ReadFile(configPath)
 	if err == nil {
@@ -68,16 +87,30 @@ func (m *MCPConfigManager) Setup() error {
 		m.backup = existing
 		m.created = false
 
-		var content mcpFileContent
-		if err := json.Unmarshal(existing, &content); err != nil {
+		// conduit-31jg.8: merge via raw JSON so other servers' fields
+		// (command, args, env, headers) and other top-level keys survive;
+		// the typed struct used to drop everything but type/url.
+		var top map[string]json.RawMessage
+		if err := json.Unmarshal(existing, &top); err != nil {
 			return fmt.Errorf("failed to parse existing .mcp.json: %w", err)
 		}
-		if content.MCPServers == nil {
-			content.MCPServers = make(map[string]mcpServerEntry)
+		if top == nil {
+			top = make(map[string]json.RawMessage)
 		}
-		content.MCPServers["conduit"] = conduitEntry
+		servers := make(map[string]json.RawMessage)
+		if raw, ok := top["mcpServers"]; ok && len(raw) > 0 && string(raw) != "null" {
+			if err := json.Unmarshal(raw, &servers); err != nil {
+				return fmt.Errorf("failed to parse mcpServers in existing .mcp.json: %w", err)
+			}
+		}
+		servers["conduit"] = conduitRaw
+		serversRaw, err := json.Marshal(servers)
+		if err != nil {
+			return fmt.Errorf("failed to marshal mcpServers: %w", err)
+		}
+		top["mcpServers"] = serversRaw
 
-		return m.writeConfig(configPath, &content)
+		return m.writeConfig(configPath, top)
 	}
 
 	if !os.IsNotExist(err) {
@@ -88,10 +121,8 @@ func (m *MCPConfigManager) Setup() error {
 	m.created = true
 	m.backup = nil
 
-	content := &mcpFileContent{
-		MCPServers: map[string]mcpServerEntry{
-			"conduit": conduitEntry,
-		},
+	content := map[string]interface{}{
+		"mcpServers": map[string]json.RawMessage{"conduit": conduitRaw},
 	}
 
 	return m.writeConfig(configPath, content)
@@ -125,7 +156,7 @@ func (m *MCPConfigManager) Cleanup() error {
 }
 
 // writeConfig marshals the content with indentation and writes it to path.
-func (m *MCPConfigManager) writeConfig(path string, content *mcpFileContent) error {
+func (m *MCPConfigManager) writeConfig(path string, content interface{}) error {
 	data, err := json.MarshalIndent(content, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal .mcp.json: %w", err)

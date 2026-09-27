@@ -84,27 +84,22 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 
 - cmd/gateway/ — Entry point and CLI command definitions (main.go, backup.go, maintenance.go, ssh.go, ssh_keys.go, tui.go, tools.go, pairing.go)
 - internal/gateway/ — Core gateway orchestration, WebSocket handling, HTTP endpoints, context usage tracking, direct client for TUI, heartbeat integration. Includes ContextBudget (context_budget.go), FuelGauge (fuel_gauge.go), VisionAnalyzer adapter (vision_adapter.go)
-- internal/ai/ — AI provider routing, conversation management, tool execution loops, streaming
+- internal/ai/ — AI provider routing, conversation management, tool execution loops, streaming, pricing (PricingResolver in pricing.go)
 - internal/agent/ — Agent personality system: interface definition, Conduit agent implementation, prompt builder with section-based prompt construction
-- internal/models/ — Anthropic API request/response models and request builder
+- internal/models/ — Anthropic API request/response models
 - internal/tools/ — Tool registry (registry.go ~34KB), execution engine with parallel support, plus top-level tool files:
   - aliases.go — Anthropic tool alias resolution (unversioned name → versioned name) with env override
   - anthropic.go — Anthropic versioned tool name constants (web_search, web_fetch)
   - unifi.go — UniFi Network/Protect API tool
-  - web_search.go — Web search tool implementation at registry level
   - execution.go, execution_adapter.go — Tool execution engine and adapter
-  - planning_execution.go — Planning-to-execution bridge
   - Tool subdirectories:
     - core/ — Context management, file editing, gateway control, memory search, session management, brain (tiered cognitive memory)
-    - web/ — Web search (Brave/Anthropic), web fetch with HTML parsing
+    - web/ — Web search (Brave), web fetch with HTML parsing
     - communication/ — Message sending to channels, TTS
     - scheduling/ — Cron job tool (includes heartbeat cron integration)
     - vision/ — Image analysis
-    - planning/ — Planning engine with dependency resolution, optimization, caching, metrics
-    - schema/ — Dynamic schema enhancement and parameter discovery
-    - validation/ — Parameter validation
+    - schema/ — Static schema hints plus channel/workspace parameter discovery
     - mqtt/ — MQTT tool with action dispatch (status, topics, recent, history, publish)
-    - errors/ — Tool error types
 - internal/tools/types/ — Single source of truth for tool-related types and service interfaces (Tool, ToolServices, GatewayService, ChannelSender, SearchService, MQTTService, BrainService, BrainFTSSearcher, VisionAnalyzer)
 - internal/channels/ — Channel adapter interface + manager; subdirectories:
   - telegram/ — Native Telegram adapter with pairing system (pairing storage, CLI, photo support)
@@ -117,13 +112,12 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/database/ — SQLite migration system (8 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search, messages_fts sync triggers, token hash versioning, ingest DLQ, alert history)
 - internal/fts/ — FTS5 full-text search: document chunking, indexing, and search queries (Porter stemming, unicode61 tokenizer)
 - internal/searchdb/ — Dedicated search.db with FTS5 indexes (document chunks, beads, messages, brain LTM). Includes BeadsIndexer, BrainIndexer, MessageSyncer
-- internal/search/ — Web search routing: Brave API, Anthropic search, result caching, strategy selection
 - internal/auth/ — Token auth (128-bit entropy, Base58, SHA256 hash storage), OAuth support, CLI token management
 - internal/backup/ — Backup/restore system: create tar.gz archives of database, config, workspace, SSH keys, skills; restore with dry-run support; list/inspect archives
 - internal/middleware/ — HTTP auth, WebSocket auth, rate limiting. RequestID middleware (request_id.go) injects a `request_id` into every request context; slog-based structured logging uses it for correlation throughout auth and rate-limit handlers.
 - internal/ratelimit/ — Sliding window rate limiter implementation
 - internal/monitoring/ — Gateway metrics, event tracking, metric aggregation, heartbeat metrics. TokenWindowTracker (token_usage.go) records API token usage in rolling hour/day windows.
-- internal/heartbeat/ — HEARTBEAT.md task execution, alert queue with priority routing, severity-based delivery, result processing, task types. AlertAuditor (audit.go) persists alert history to the alert_history table.
+- internal/heartbeat/ — HEARTBEAT.md task execution, result processing, task types, quiet-hours deferral (deferred.go, SharedAlertQueue-backed deferred.json). All delivery goes through DeliveryRegistry (delivery.go: CircuitBreaker + AlertAuditor → alert_history) with a ChannelSenderDeliverer (delivery_channel.go) and bounded background retries per alert_retry_policy (delivery_dispatch.go).
 - internal/skills/ — Skill discovery from SKILL.md files, loading, validation, tool adaptation, manager
 - internal/maintenance/ — Database cleanup and maintenance scheduling
 - internal/scheduler/ — Cron job scheduling with interfaces

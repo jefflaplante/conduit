@@ -7,12 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 )
 
 // SharedAlertQueue provides thread-safe, file-backed alert queue operations
-// It implements the core queue functionality with proper file locking and error recovery
+// (in-process mutex, atomic temp+rename writes, corrupt-file recovery).
 type SharedAlertQueue struct {
 	filePath string
 	mutex    sync.RWMutex
@@ -23,25 +22,6 @@ func NewSharedAlertQueue(filePath string) *SharedAlertQueue {
 	return &SharedAlertQueue{
 		filePath: filePath,
 	}
-}
-
-// lockFile acquires an exclusive lock on the file for write operations
-func (q *SharedAlertQueue) lockFile(file *os.File) error {
-	// Use syscall.Flock for advisory locking
-	err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
-	if err != nil {
-		return fmt.Errorf("failed to acquire exclusive lock on %s: %w", q.filePath, err)
-	}
-	return nil
-}
-
-// unlockFile releases the file lock
-func (q *SharedAlertQueue) unlockFile(file *os.File) error {
-	err := syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-	if err != nil {
-		return fmt.Errorf("failed to release lock on %s: %w", q.filePath, err)
-	}
-	return nil
 }
 
 // ensureDirectoryExists creates the directory path if it doesn't exist

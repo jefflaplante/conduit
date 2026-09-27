@@ -116,9 +116,9 @@ run_test "heartbeat_queue_comprehensive" \
     "go test ./internal/heartbeat -run TestAlertQueueSeverityRouting -v" \
     "Comprehensive alert queue severity routing tests"
 
-run_test "heartbeat_routing_tests" \
-    "go test ./internal/heartbeat -run TestAlertSeverityRouter -v" \
-    "Alert routing logic and quiet hours tests"
+run_test "heartbeat_delivery_tests" \
+    "go test ./internal/heartbeat -run 'TestDelivery|TestDeferred' -v" \
+    "Alert delivery (registry, breaker, retries) and quiet-hours deferral tests"
 
 run_test "heartbeat_task_tests" \
     "go test ./internal/heartbeat -run TestTaskInterpreter -v" \

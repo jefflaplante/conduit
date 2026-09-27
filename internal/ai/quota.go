@@ -120,7 +120,7 @@ var contextOverflowPhrases = []string{
 // "out of extra usage" (bd-8dy: 514 occurrences, zero 401s). Auth failures
 // (401/403) must propagate so callers see credential problems instead of
 // silently falling back to another provider — see
-// TestGenerateResponseSmart_NoFallbackOnAuthError for the contract.
+// the 401 cases in TestIsQuotaError for the contract.
 //
 // conduit-31jg.18(c): classification is by parsed status code and error
 // type/code, not substrings of the whole message:

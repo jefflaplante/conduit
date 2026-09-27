@@ -549,16 +549,18 @@ func (s *Store) GetMessages(sessionKey string, limit int) ([]Message, error) {
 
 	// Use subquery to get most recent N messages, then order chronologically.
 	// Without this, LIMIT + ASC gives oldest messages, not newest.
+	// conduit-31jg.50: rowid breaks timestamp ties in insertion order (ids
+	// are random UUIDs). VACUUM may renumber rowids but keeps their order.
 	query := fmt.Sprintf(`
 		SELECT id, session_key, role, content, timestamp, metadata
 		FROM (
-			SELECT id, session_key, role, content, timestamp, metadata
+			SELECT rowid AS rid, id, session_key, role, content, timestamp, metadata
 			FROM messages
 			WHERE session_key = ?
-			ORDER BY timestamp DESC
+			ORDER BY timestamp DESC, rowid DESC
 			LIMIT %d
 		) sub
-		ORDER BY timestamp ASC
+		ORDER BY timestamp ASC, rid ASC
 	`, limit)
 
 	rows, err := s.db.Query(query, sessionKey)
@@ -1129,16 +1131,20 @@ func (s *Store) buildFTSQuery(query string) string {
 	return ftsquery.Build(query)
 }
 
+// likeEscaper makes %, _ and the escape char literal in a LIKE ... ESCAPE '\'
+// pattern. conduit-31jg.73.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
 // searchMessagesLIKE is a fallback search using LIKE when FTS5 is unavailable.
 func (s *Store) searchMessagesLIKE(query string, limit int) ([]SearchMessagesResult, error) {
 	rows, err := s.db.Query(`
 		SELECT m.id, m.session_key, m.role, m.content, m.timestamp, m.metadata, s.key
 		FROM messages m
 		JOIN sessions s ON m.session_key = s.key
-		WHERE LOWER(m.content) LIKE LOWER(?)
-		ORDER BY m.timestamp DESC
+		WHERE LOWER(m.content) LIKE LOWER(?) ESCAPE '\'
+		ORDER BY m.timestamp DESC, m.rowid DESC
 		LIMIT ?
-	`, "%"+query+"%", limit)
+	`, "%"+likeEscaper.Replace(query)+"%", limit)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to search messages: %w", err)

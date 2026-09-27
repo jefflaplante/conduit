@@ -1,50 +1,37 @@
 # Agent Heartbeat System
 
-The agent heartbeat system executes periodic tasks defined in HEARTBEAT.md and processes alerts from a shared queue. This enables automated monitoring, alerting, and scheduled AI-driven tasks.
+The agent heartbeat system runs the tasks defined in HEARTBEAT.md on a schedule, using the agent (with its tools) to check alerts, system status and reports, and delivers whatever the agent reports to a channel. This enables automated monitoring, alerting, and scheduled AI-driven tasks.
 
 ## Overview
 
 ```
-                                    ┌─────────────────────────┐
-                                    │     External Systems    │
-                                    │  (scripts, cron, other  │
-                                    │   agents, monitors)     │
-                                    └───────────┬─────────────┘
-                                                │
-                                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Conduit Gateway                             │
-│                                                                     │
-│  ┌─────────────────┐      ┌─────────────────────────────────────┐  │
-│  │  HEARTBEAT.md   │      │  alert_queue_path                   │  │
-│  │                 │      │  memory/alerts/pending.json         │  │
-│  │  - Check alerts │      │                                     │  │
-│  │  - System status│      │  [{"severity": "critical", ...}]    │  │
-│  │  - Reports      │      └─────────────────┬───────────────────┘  │
-│  └────────┬────────┘                        │                      │
-│           │                                 │                      │
-│           └─────────────┬───────────────────┘                      │
-│                         ▼                                          │
-│              ┌─────────────────────┐                               │
-│              │   Agent Heartbeat   │                               │
-│              │   Loop (every N min)│                               │
-│              └──────────┬──────────┘                               │
-│                         │                                          │
-│           ┌─────────────┼─────────────┐                            │
-│           ▼             ▼             ▼                            │
-│     ┌──────────┐  ┌──────────┐  ┌──────────┐                       │
-│     │ Critical │  │ Warning  │  │   Info   │                       │
-│     │ (always) │  │ (quiet   │  │ (quiet   │                       │
-│     │          │  │  aware)  │  │  aware)  │                       │
-│     └────┬─────┘  └────┬─────┘  └────┬─────┘                       │
-│          │             │             │                             │
-└──────────┼─────────────┼─────────────┼─────────────────────────────┘
-           │             │             │
-           ▼             ▼             ▼
-      ┌─────────┐   ┌─────────┐   ┌─────────┐
-      │Telegram │   │Telegram │   │ Briefing│
-      │  (now)  │   │(if awake│   │ (later) │
-      └─────────┘   └─────────┘   └─────────┘
+  External systems (scripts, cron, monitors)
+          | append alerts
+          v
+  memory/alerts/pending.json  <-- read/cleared by the agent (HEARTBEAT.md
+                                   prompt) and alert-flush.sh, not by
+                                   gateway code
++---------------------------------------------------------------------+
+|                         Conduit Gateway                             |
+|                                                                     |
+|   HEARTBEAT.md --> Agent Heartbeat job (every N min) --> AI turn    |
+|                                                            |        |
+|                         parsed result (OK / actions) <-----+        |
+|                                  |                                  |
+|        +-------------------------+----------------------+           |
+|        v                         v                      v           |
+|  critical / high          quiet-aware, outside    quiet-aware,      |
+|  (always now)             quiet hours (now)       quiet hours       |
+|        |                         |                      |           |
+|        |                         |          memory/alerts/deferred  |
+|        |                         |          .json, flushed on the   |
+|        |                         |          first cycle after quiet |
+|        v                         v                      v           |
+|   DeliveryRegistry: circuit breaker, alert_history audit, retries   |
+|        |                                                            |
+|        v                                                            |
+|   ChannelSender (SanitizeOutgoingText) --> Telegram / other channel |
++---------------------------------------------------------------------+
 ```
 
 ## Two Heartbeat Systems
@@ -54,7 +41,7 @@ Conduit has two separate heartbeat systems:
 | System | Config Key | Purpose | Documentation |
 |--------|------------|---------|---------------|
 | Diagnostic Heartbeat | `heartbeat` | Gateway health metrics, session monitoring, system stats | [heartbeat-system.md](heartbeat-system.md) |
-| **Agent Heartbeat** | `agent_heartbeat` | HEARTBEAT.md task execution, alert queue processing | This document |
+| **Agent Heartbeat** | `agent_heartbeat` | HEARTBEAT.md task execution and alert delivery | This document |
 
 This document covers the **Agent Heartbeat** system.
 
@@ -71,7 +58,6 @@ This document covers the **Agent Heartbeat** system.
       "start_time": "22:00",
       "end_time": "07:00"
     },
-    "alert_queue_path": "memory/alerts/pending.json",
     "heartbeat_task_path": "HEARTBEAT.md",
     "enabled_task_types": ["alerts", "checks", "reports", "maintenance"],
     "alert_targets": [
@@ -105,11 +91,11 @@ This document covers the **Agent Heartbeat** system.
 | `quiet_enabled` | bool | `true` | Enable quiet hours |
 | `quiet_hours.start_time` | string | `"22:00"` | Quiet period start (24h format) |
 | `quiet_hours.end_time` | string | `"08:00"` | Quiet period end (24h format) |
-| `alert_queue_path` | string | `"memory/alerts/pending.json"` | Path to shared alert queue (relative to workspace) |
+| `alert_queue_path` | string | unset | **Deprecated** (warns at load). The gateway no longer processes this file; if set, only its directory is used to place `deferred.json` |
 | `heartbeat_task_path` | string | `"HEARTBEAT.md"` | Path to task definitions (relative to workspace) |
 | `enabled_task_types` | array | `["alerts", "checks", "reports"]` | Which task types to execute |
-| `alert_targets` | array | `[]` | Where to deliver alerts |
-| `alert_retry_policy` | object | see below | Retry behavior for failed deliveries |
+| `alert_targets` | array | `[]` | Validated but not currently used for routing (see below) |
+| `alert_retry_policy` | object | see below | Background retries for failed deliveries |
 | `log_level` | string | `"info"` | Logging verbosity |
 | `verbose_logging` | bool | `false` | Extra debug output |
 
@@ -117,13 +103,15 @@ This document covers the **Agent Heartbeat** system.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_retries` | int | `3` | Maximum delivery attempts (0-10) |
-| `retry_interval` | duration | `5m` | Wait between retries (nanoseconds) |
-| `backoff_factor` | float | `2.0` | Exponential backoff multiplier |
+| `max_retries` | int | `3` | Retries after a failed live delivery (0-10) |
+| `retry_interval` | duration | `5m` | Wait before the first retry (nanoseconds) |
+| `backoff_factor` | float | `2.0` | Multiplier applied to the wait after each retry |
+
+See [Delivery](#delivery) for how retries interact with the circuit breaker.
 
 ### Alert Targets
 
-Each target specifies where alerts of certain severities should be delivered:
+Alert targets are parsed and validated, but the gateway does not currently route by them: heartbeat messages go to the heartbeat job's target (`telegram:<chat_id>`, or an action's own target). The format is kept for compatibility:
 
 ```json
 {
@@ -143,123 +131,35 @@ Each target specifies where alerts of certain severities should be delivered:
 | `config` | object | Type-specific configuration |
 | `severity` | array | Which severities to route here: `critical`, `warning`, `info` |
 
-## Shared Alert Queue
+## Alert Queue File (pending.json)
 
-The alert queue is a JSON file that external systems can write to. The agent heartbeat reads and processes these alerts on each cycle.
+`memory/alerts/pending.json` (relative to `workspace.context_dir`) is a hand-off file for external systems. **Gateway code does not read or modify it.** The agent reads it during a heartbeat turn because HEARTBEAT.md tells it to (see the example below), and `alert-flush.sh` clears it after delivery. Its format (a JSON array of alert objects) is defined by those two consumers, so external writers should follow them.
 
-### Queue Location
-
-The queue path is relative to `workspace.context_dir`:
-
-```
-workspace.context_dir = /home/user/conduit/workspace
-alert_queue_path = memory/alerts/pending.json
-
-Full path: /home/user/conduit/workspace/memory/alerts/pending.json
-```
-
-### Queue Format
-
-```json
-{
-  "alerts": [
-    {
-      "id": "alert-1710123456",
-      "severity": "critical",
-      "title": "Database connection failed",
-      "message": "PostgreSQL connection timed out after 30s",
-      "source": "db-monitor",
-      "status": "pending",
-      "created_at": "2026-03-11T10:30:00Z",
-      "retry_count": 0
-    }
-  ],
-  "last_sync": "2026-03-11T10:35:00Z",
-  "version": 42
-}
-```
-
-### Alert Fields
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | Yes | Unique identifier |
-| `severity` | string | Yes | `critical`, `warning`, or `info` |
-| `title` | string | Yes | Short summary |
-| `message` | string | Yes | Detailed description |
-| `source` | string | Yes | Origin system/script |
-| `status` | string | Yes | `pending`, `sent`, `failed`, `expired` |
-| `created_at` | string | Yes | ISO 8601 timestamp |
-| `retry_count` | int | No | Delivery attempts (default 0) |
-| `metadata` | object | No | Additional key-value data |
+The gateway-owned `memory/alerts/deferred.json` (quiet-hours deferral, see below) is a separate file. Never write to it from scripts.
 
 ### Writing Alerts from External Systems
 
-Any process can add alerts by writing to the queue file:
-
-**Python example:**
-```python
-import json
-import time
-from pathlib import Path
-from datetime import datetime
-
-queue_path = Path("/home/user/conduit/workspace/memory/alerts/pending.json")
-
-# Load existing queue or create empty one
-if queue_path.exists():
-    queue = json.loads(queue_path.read_text())
-else:
-    queue = {"alerts": [], "version": 0}
-
-# Add new alert
-queue["alerts"].append({
-    "id": f"alert-{int(time.time())}",
-    "severity": "warning",
-    "title": "Disk space low",
-    "message": "Server XYZ has only 10% disk space remaining",
-    "source": "disk-monitor",
-    "status": "pending",
-    "created_at": datetime.utcnow().isoformat() + "Z"
-})
-
-queue["version"] += 1
-queue_path.write_text(json.dumps(queue, indent=2))
-```
-
-**Bash example:**
 ```bash
 #!/bin/bash
 QUEUE="/home/user/conduit/workspace/memory/alerts/pending.json"
-ALERT_ID="alert-$(date +%s)"
-TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-# Use jq to append alert
-jq --arg id "$ALERT_ID" \
-   --arg ts "$TIMESTAMP" \
-   '.alerts += [{
-     "id": $id,
-     "severity": "critical",
-     "title": "Service down",
-     "message": "nginx is not responding",
-     "source": "health-check",
-     "status": "pending",
-     "created_at": $ts
-   }] | .version += 1' "$QUEUE" > "${QUEUE}.tmp" && mv "${QUEUE}.tmp" "$QUEUE"
+[ -s "$QUEUE" ] || echo '[]' > "$QUEUE"
+jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+   '. += [{"severity": "critical", "title": "Service down",
+           "message": "nginx is not responding", "source": "health-check",
+           "created_at": $ts}]' "$QUEUE" > "${QUEUE}.tmp" && mv "${QUEUE}.tmp" "$QUEUE"
 ```
 
-### Queue Safety Features
+## Delivery
 
-The shared queue implementation provides:
+Every heartbeat message (actions, errors, deferred flushes) goes through the gateway's `DeliveryRegistry` using a channel deliverer that wraps the normal channel sender (conduit-31jg.59):
 
-| Feature | Description |
-|---------|-------------|
-| **Thread-safe** | Mutex locking for concurrent access |
-| **File locking** | `flock()` for multi-process safety |
-| **Atomic writes** | Write to `.tmp`, then rename |
-| **Auto-recovery** | Handles corrupted JSON gracefully |
-| **Deduplication** | Prevents duplicate alerts |
-| **Expiration** | Old alerts are cleaned up |
+| Feature | Behavior |
+|---------|----------|
+| **Sanitized output** | `SanitizeOutgoingText` strips reply tags, `MEDIA:` lines and trailing silent tokens; `HEARTBEAT_OK` / `NO_REPLY` responses are not sent at all |
+| **Circuit breaker** | Per destination (`telegram:<chat_id>`): 3 consecutive failures open it for 5 minutes; sends while open are skipped (and audited), not retried |
+| **Audit trail** | Every attempt (success, failure, breaker skip) is written to the `alert_history` table |
+| **Retries** | A failed live send is retried in the background per `alert_retry_policy` (for example 3 retries at 30s, 60s, 120s). Retries never block the heartbeat loop, stop early on success or an open breaker, are capped at 32 pending, and are cancelled on shutdown |
+| **Deferred flush** | Not retried in the background: a failed deferred action stays in `deferred.json` and is retried on the next cycle (up to 5 attempts) |
 
 ## HEARTBEAT.md Format
 
@@ -298,7 +198,7 @@ At 8:00 AM PT, compile and deliver:
 
 | Type | Description | Quiet Hours |
 |------|-------------|-------------|
-| `alerts` | Process the shared alert queue | Critical ignores quiet hours |
+| `alerts` | Have the agent check the alert queue file | Critical ignores quiet hours |
 | `checks` | System health monitoring | Respects quiet hours |
 | `reports` | Scheduled summaries/briefings | Respects quiet hours |
 | `maintenance` | Cleanup and optimization tasks | Respects quiet hours |
@@ -328,13 +228,13 @@ When no action is needed, the AI responds with `HEARTBEAT_OK`. This is detected 
 
 Quiet hours prevent non-critical alerts from disturbing you during sleep/off hours.
 
-### Behavior by Severity
+### Behavior by Action
 
-| Severity | During Quiet Hours | Outside Quiet Hours |
-|----------|-------------------|---------------------|
-| `critical` | Delivered immediately | Delivered immediately |
-| `warning` | Queued until quiet hours end | Delivered immediately |
-| `info` | Queued until quiet hours end | Delivered immediately |
+| Action | During Quiet Hours | Outside Quiet Hours |
+|--------|-------------------|---------------------|
+| Alert, or critical/high priority | Delivered immediately | Delivered immediately |
+| Quiet-aware (normal/low priority) | Deferred to `deferred.json` until quiet hours end | Delivered immediately |
+| Other | Delivered immediately | Delivered immediately |
 
 ### Evaluation Rules
 
@@ -349,12 +249,12 @@ Quiet hours prevent non-critical alerts from disturbing you during sleep/off hou
 ### Deferred Delivery
 
 Quiet-aware heartbeat actions (non-critical, non-high-priority actions whose text marks them as
-quiet-aware) that come up during quiet hours are written to `deferred.json` in the same directory
-as `alert_queue_path` (default `memory/alerts/deferred.json`). At the start of every heartbeat cycle
+quiet-aware) that come up during quiet hours are written to `memory/alerts/deferred.json` (or next
+to the deprecated `alert_queue_path`, if set). At the start of every heartbeat cycle
 outside quiet hours, the gateway delivers the queued entries, so delivery lands on the first cycle
 after quiet hours end (at most `interval_minutes` late). The queue is on disk, so it survives restarts.
 A failed delivery stays queued for up to 5 attempts. Entries expire after 72 hours.
-`deferred.json` is owned by the gateway. External scripts should keep writing to `alert_queue_path`.
+`deferred.json` is owned by the gateway. External scripts should keep writing to `pending.json`.
 
 ### Spanning Midnight
 
@@ -395,29 +295,30 @@ Common timezone values:
 
 ### Verbose Logging
 
-Enable `verbose_logging: true` for detailed output:
+Enable `verbose_logging: true` for detailed output. Delivery logs look like:
 ```
-[AgentHeartbeat] Starting cycle at 2026-03-11T10:00:00-08:00
-[AgentHeartbeat] Loading alert queue from memory/alerts/pending.json
-[AgentHeartbeat] Found 2 pending alerts (1 critical, 1 warning)
-[AgentHeartbeat] Quiet hours active: false
-[AgentHeartbeat] Routing critical alert to telegram_primary
-[AgentHeartbeat] Delivered alert-123 successfully
-[AgentHeartbeat] Routing warning alert to telegram_primary
-[AgentHeartbeat] Delivered alert-124 successfully
-[AgentHeartbeat] Cycle complete: 2 alerts processed, 0 failures
+[HeartbeatIntegration] Executing heartbeat job: agent_heartbeat_main
+[HeartbeatIntegration] Heartbeat completed: status=alert, actions=1
+[HeartbeatIntegration] Delivery retry 1/3 to telegram:123456789 failed: ...
+[HeartbeatIntegration] Circuit open for telegram:123456789; abandoning retries after 2 attempt(s)
+```
+
+Delivery history is queryable in the `alert_history` table:
+```sql
+SELECT created_at, alert_type, severity, action_taken, action_result
+FROM alert_history ORDER BY created_at DESC LIMIT 20;
 ```
 
 ## Common Use Cases
 
 ### External Monitoring Integration
 
-Use the alert queue as a bridge between monitoring systems and Conduit:
+Use the alert queue file as a bridge between monitoring systems and Conduit (the agent reads it on each heartbeat):
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│ Prometheus  │────▶│ alertmanager│────▶│ alert_queue │
-│   Alerts    │     │  webhook    │     │   .json     │
+│ Prometheus  │────▶│ alertmanager│────▶│ pending.json│
+│   Alerts    │     │  webhook    │     │             │
 └─────────────┘     └─────────────┘     └─────────────┘
                                                │
                                                ▼
@@ -437,24 +338,14 @@ Have cron jobs write to the alert queue:
   /opt/scripts/queue-alert.sh "Backup check failed" "critical"
 ```
 
-### Multi-Agent Communication
-
-Multiple Conduit instances can share an alert queue for coordination:
-
-```
-Agent A (server1) ──┐
-                    ├──▶ shared alert queue ──▶ Agent B (notification hub)
-Agent C (server2) ──┘
-```
-
 ## Troubleshooting
 
 ### Alerts Not Delivering
 
 1. Check `agent_heartbeat.enabled` is `true`
-2. Verify `alert_targets` has at least one target
-3. Check target `severity` array includes the alert's severity
-4. Verify quiet hours aren't blocking (check timezone)
+2. Check the heartbeat job's target (`telegram:<chat_id>`) and that the channel is connected
+3. Look at `alert_history` for failures or `circuit_breaker_open` rows
+4. Verify quiet hours aren't deferring it (check timezone and `deferred.json`)
 5. Check `log_level: "debug"` for detailed output
 
 ### Queue File Issues
@@ -462,7 +353,7 @@ Agent C (server2) ──┘
 1. Ensure directory exists: `mkdir -p workspace/memory/alerts`
 2. Check file permissions (readable/writable by gateway process)
 3. Verify JSON is valid: `jq . memory/alerts/pending.json`
-4. Check for `.tmp` files (indicates interrupted writes)
+4. The gateway never edits `pending.json`; if alerts are not cleared, check the HEARTBEAT.md prompt and `alert-flush.sh`
 
 ### Tasks Not Executing
 

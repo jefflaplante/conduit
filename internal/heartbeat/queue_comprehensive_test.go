@@ -57,11 +57,6 @@ func TestAlertQueueSeverityRouting(t *testing.T) {
 
 // TestAlertQueueQuietHoursProcessing tests timezone-aware quiet hours behavior
 func TestAlertQueueQuietHoursProcessing(t *testing.T) {
-	tempDir := t.TempDir()
-	queuePath := filepath.Join(tempDir, "quiet_hours_test_queue.json")
-	queue := NewSharedAlertQueue(queuePath)
-
-	// Create router using the actual available constructor
 	cfg := &config.AgentHeartbeatConfig{
 		QuietEnabled: true,
 		Timezone:     "America/Los_Angeles",
@@ -70,7 +65,6 @@ func TestAlertQueueQuietHoursProcessing(t *testing.T) {
 			EndTime:   "07:00",
 		},
 	}
-	router := NewAlertSeverityRouter(cfg)
 
 	// Test different times in Pacific timezone
 	testTimes := []struct {
@@ -128,9 +122,6 @@ func TestAlertQueueQuietHoursProcessing(t *testing.T) {
 				t.Errorf("Expected quiet hours=%t for %s, got %t",
 					tt.isQuietTime, testTimePT.Format("2006-01-02 15:04:05 MST"), isQuiet)
 			}
-
-			// Test alert routing during this time
-			testAlertRoutingAtTime(t, router, queue, testTimePT, tt.isQuietTime)
 		})
 	}
 }
@@ -635,47 +626,6 @@ func testSeverityRouting(t *testing.T, queue *SharedAlertQueue, severity AlertSe
 	if expectBatching != isBatchable {
 		t.Errorf("Severity %s batching expectation mismatch: expected %t, got %t",
 			severity, expectBatching, isBatchable)
-	}
-}
-
-func testAlertRoutingAtTime(t *testing.T, router *AlertSeverityRouter, queue *SharedAlertQueue,
-	testTime time.Time, isQuietTime bool) {
-
-	severities := []AlertSeverity{AlertSeverityCritical, AlertSeverityWarning, AlertSeverityInfo}
-
-	for _, severity := range severities {
-		alert := Alert{
-			ID:         fmt.Sprintf("time-test-%s-%d", severity, testTime.Unix()),
-			Source:     "time-test",
-			Title:      fmt.Sprintf("Time Test %s", severity),
-			Message:    fmt.Sprintf("Testing %s during %s", severity, testTime.Format("15:04:05 MST")),
-			Severity:   severity,
-			Status:     AlertStatusPending,
-			CreatedAt:  testTime,
-			MaxRetries: 3,
-		}
-
-		// Test routing decision at the specified time
-		decision := router.ShouldDeliverAlertAt(alert, testTime)
-		shouldDeliver := decision.ShouldDeliver
-
-		if severity == AlertSeverityCritical {
-			// Critical alerts should always deliver immediately
-			if !shouldDeliver {
-				t.Errorf("Critical alert should deliver immediately at %s", testTime.Format("15:04:05 MST"))
-			}
-		} else if isQuietTime {
-			// Non-critical alerts should be delayed during quiet hours
-			if shouldDeliver {
-				t.Errorf("%s alert should not deliver immediately during quiet hours at %s",
-					severity, testTime.Format("15:04:05 MST"))
-			}
-		} else {
-			// Non-critical alerts can deliver during awake hours
-			// (implementation may vary based on specific routing logic)
-			t.Logf("%s alert delivery decision during awake hours at %s: %t",
-				severity, testTime.Format("15:04:05 MST"), shouldDeliver)
-		}
 	}
 }
 

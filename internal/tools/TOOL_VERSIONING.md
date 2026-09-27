@@ -156,27 +156,6 @@ if IsAnthropicTool(toolName) {
 
 ## Migration Guide
 
-### For Planning Module (Future Work)
-⚠️ **Note**: The planning module contains hardcoded tool references that should be updated in a future ticket to avoid import cycles.
-
-Current hardcoded references in `internal/tools/planning/cache.go`:
-- Line 334: `case "web_search", "web_fetch"`
-- Line 545: `if toolName != "web_search"`
-- Line 566: `if toolName != "web_search"`
-- Line 590: `if toolName != "web_fetch"`
-
-**Future approach** (requires refactoring to avoid circular imports):
-```go
-// Create a shared constants package to break the circular dependency
-// internal/constants/anthropic.go
-package constants
-
-const (
-    WebSearchTool = "web_search_20250305"
-    WebFetchTool  = "web_fetch_20250305"
-)
-```
-
 ### For New Code
 Use the aliasing system for any new tool implementations:
 ```go

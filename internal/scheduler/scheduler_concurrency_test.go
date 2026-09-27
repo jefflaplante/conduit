@@ -193,8 +193,14 @@ func TestNormalizeSchedule_TimezonePrefix(t *testing.T) {
 	if _, err := normalizeSchedule("CRON_TZ=Not/AZone 0 8 * * *", JobTypeGo); err == nil {
 		t.Fatal("expected error for unknown zone")
 	}
-	if _, err := normalizeSchedule("CRON_TZ=UTC 0 8 * * *", JobTypeSystem); err == nil {
-		t.Fatal("system crontab lines cannot carry a per-line TZ prefix")
+	// conduit-31jg.74: system jobs accept CRON_TZ when the crontab guard
+	// can express it, and reject it otherwise.
+	withDaemonZone(t, time.UTC)
+	if got, err := normalizeSchedule("CRON_TZ=America/Los_Angeles 10 8 * * 1-5", JobTypeSystem); err != nil || got != "CRON_TZ=America/Los_Angeles 10 8 * * 1-5" {
+		t.Fatalf("system CRON_TZ: got %q, %v", got, err)
+	}
+	if _, err := normalizeSchedule("CRON_TZ=America/Los_Angeles 0 20 * * 1", JobTypeSystem); err == nil {
+		t.Fatal("Mon 20:00 Pacific is Tue in UTC: must be rejected for vixie cron")
 	}
 
 	s := New(t.TempDir(), nil) // server-local default

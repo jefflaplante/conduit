@@ -1,10 +1,8 @@
 package tui
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +23,10 @@ const (
 	DefaultCommandTimeout = 5 * time.Minute
 	// MaxOutputLines is the maximum number of lines to show before truncation
 	MaxOutputLines = 100
+	// MaxOutputBytes bounds the output retained per command (head + tail)
+	// so `yes` or a huge cat cannot grow the TUI's memory without limit.
+	// conduit-31jg.69
+	MaxOutputBytes = 256 * 1024
 	// JobCleanupAge is how long to keep completed jobs before cleanup
 	JobCleanupAge = 10 * time.Minute
 )
@@ -61,7 +63,7 @@ type BackgroundJob struct {
 	Status     JobStatus
 	StartTime  time.Time
 	EndTime    time.Time
-	Output     strings.Builder
+	Output     *procutil.CappedBuffer // bounded, concurrency-safe (conduit-31jg.69)
 	Error      error
 	cancel     context.CancelFunc
 	mu         sync.Mutex
@@ -92,6 +94,7 @@ func (jm *JobManager) AddJob(cmd string, cancel context.CancelFunc) *BackgroundJ
 		Command:    cmd,
 		Status:     JobRunning,
 		StartTime:  time.Now(),
+		Output:     procutil.NewCappedBuffer(MaxOutputBytes),
 		cancel:     cancel,
 		outputDone: make(chan struct{}),
 	}
@@ -481,107 +484,60 @@ func executeShellCmdWithDir(sessionKey, cmdLine, workDir string) tea.Cmd {
 // executeShellCmdWithTimeout returns a tea.Cmd that executes a shell command with a specific timeout
 func executeShellCmdWithTimeout(sessionKey, cmdLine, workDir string, timeout time.Duration) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
+		return runShellCommand(sessionKey, cmdLine, workDir, nil, timeout)
+	}
+}
 
-		cmd := exec.CommandContext(ctx, "sh", "-c", cmdLine)
-		cmd.Dir = workDir
-		procutil.ConfigureGroupKill(cmd, 0, 0) // conduit-31jg.20: kill the whole group on timeout/cancel
+// runShellCommand runs cmdLine under `sh -c` and returns its result message.
+//
+// conduit-31jg.69: stdout and stderr go straight into one bounded
+// procutil.CappedBuffer via cmd.Stdout/cmd.Stderr instead of StdoutPipe +
+// line readers. The old code waited for its readers before cmd.Wait, so a
+// background child still holding the pipe after a normal exit (`sleep 60 &`)
+// blocked forever and WaitDelay never applied; it also buffered without
+// limit and raced two goroutines on one strings.Builder. Now exec's own copy
+// goroutines are bounded by WaitDelay (set by ConfigureGroupKill), and an
+// ErrWaitDelay-only result counts as success.
+func runShellCommand(sessionKey, cmdLine, workDir string, env []string, timeout time.Duration) ShellResultMsg {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
-		// Create pipes for stdout and stderr
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			return ShellResultMsg{
-				SessionKey: sessionKey,
-				Output:     "",
-				Err:        err,
-			}
-		}
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			return ShellResultMsg{
-				SessionKey: sessionKey,
-				Output:     "",
-				Err:        err,
-			}
-		}
+	cmd := exec.CommandContext(ctx, "sh", "-c", cmdLine)
+	cmd.Dir = workDir
+	if env != nil {
+		cmd.Env = env
+	}
+	procutil.ConfigureGroupKill(cmd, 0, 0) // conduit-31jg.20: kill the whole group on timeout/cancel
 
-		if err := cmd.Start(); err != nil {
-			return ShellResultMsg{
-				SessionKey: sessionKey,
-				Output:     "",
-				Err:        err,
-			}
-		}
+	output := procutil.NewCappedBuffer(MaxOutputBytes)
+	cmd.Stdout = output
+	cmd.Stderr = output
 
-		// Collect output from both streams
-		var output strings.Builder
-		var wg sync.WaitGroup
-		wg.Add(2)
+	err := cmd.Run()
+	if procutil.IsWaitDelayOnly(err) {
+		err = nil // exited cleanly; a background child kept the pipe open
+	}
 
-		// Reader for stdout
-		go func() {
-			defer wg.Done()
-			reader := bufio.NewReader(stdout)
-			for {
-				line, err := reader.ReadString('\n')
-				if line != "" {
-					output.WriteString(line)
-				}
-				if err != nil {
-					if err != io.EOF {
-						output.WriteString(fmt.Sprintf("\n[stdout read error: %v]", err))
-					}
-					break
-				}
-			}
-		}()
-
-		// Reader for stderr
-		go func() {
-			defer wg.Done()
-			reader := bufio.NewReader(stderr)
-			for {
-				line, err := reader.ReadString('\n')
-				if line != "" {
-					output.WriteString(line)
-				}
-				if err != nil {
-					if err != io.EOF {
-						output.WriteString(fmt.Sprintf("\n[stderr read error: %v]", err))
-					}
-					break
-				}
-			}
-		}()
-
-		// Wait for readers to finish
-		wg.Wait()
-
-		// Wait for command to complete
-		err = cmd.Wait()
-
-		// Check if we timed out
-		if ctx.Err() == context.DeadlineExceeded {
-			return ShellResultMsg{
-				SessionKey: sessionKey,
-				Output:     output.String() + fmt.Sprintf("\n[command timed out after %s]", timeout),
-				Err:        ctx.Err(),
-			}
-		}
-
-		// Truncate output if needed
-		finalOutput := output.String()
-		truncated, remaining := TruncateOutput(finalOutput, MaxOutputLines)
-		if remaining > 0 {
-			finalOutput = truncated
-		}
-
+	// Check if we timed out
+	if ctx.Err() == context.DeadlineExceeded {
 		return ShellResultMsg{
 			SessionKey: sessionKey,
-			Output:     finalOutput,
-			Err:        err,
+			Output:     output.String() + fmt.Sprintf("\n[command timed out after %s]", timeout),
+			Err:        ctx.Err(),
 		}
+	}
+
+	// Truncate output if needed
+	finalOutput := output.String()
+	truncated, remaining := TruncateOutput(finalOutput, MaxOutputLines)
+	if remaining > 0 {
+		finalOutput = truncated
+	}
+
+	return ShellResultMsg{
+		SessionKey: sessionKey,
+		Output:     finalOutput,
+		Err:        err,
 	}
 }
 
@@ -597,72 +553,24 @@ func executeBackgroundCmd(sessionKey, cmdLine, workDir string, jobs *JobManager)
 			cmd.Dir = workDir
 			procutil.ConfigureGroupKill(cmd, 0, 0) // conduit-31jg.20: kill the whole group on timeout/cancel
 
-			// Create pipes for output
-			stdout, err := cmd.StdoutPipe()
-			if err != nil {
-				job.mu.Lock()
-				job.Output.WriteString(fmt.Sprintf("Error creating stdout pipe: %v\n", err))
-				job.mu.Unlock()
-				jobs.MarkComplete(job.ID, JobFailed, err)
-				return
-			}
-			stderr, err := cmd.StderrPipe()
-			if err != nil {
-				job.mu.Lock()
-				job.Output.WriteString(fmt.Sprintf("Error creating stderr pipe: %v\n", err))
-				job.mu.Unlock()
-				jobs.MarkComplete(job.ID, JobFailed, err)
-				return
-			}
+			// conduit-31jg.69: bounded output, and Wait (bounded by
+			// WaitDelay) instead of readers that a lingering grandchild
+			// could block forever.
+			cmd.Stdout = job.Output
+			cmd.Stderr = job.Output
 
 			if err := cmd.Start(); err != nil {
-				job.mu.Lock()
-				job.Output.WriteString(fmt.Sprintf("Error starting command: %v\n", err))
-				job.mu.Unlock()
+				fmt.Fprintf(job.Output, "Error starting command: %v\n", err)
+				close(job.outputDone)
 				jobs.MarkComplete(job.ID, JobFailed, err)
 				return
 			}
 
-			// Collect output
-			var wg sync.WaitGroup
-			wg.Add(2)
-
-			go func() {
-				defer wg.Done()
-				reader := bufio.NewReader(stdout)
-				for {
-					line, err := reader.ReadString('\n')
-					if line != "" {
-						job.mu.Lock()
-						job.Output.WriteString(line)
-						job.mu.Unlock()
-					}
-					if err != nil {
-						break
-					}
-				}
-			}()
-
-			go func() {
-				defer wg.Done()
-				reader := bufio.NewReader(stderr)
-				for {
-					line, err := reader.ReadString('\n')
-					if line != "" {
-						job.mu.Lock()
-						job.Output.WriteString(line)
-						job.mu.Unlock()
-					}
-					if err != nil {
-						break
-					}
-				}
-			}()
-
-			wg.Wait()
+			err := cmd.Wait()
 			close(job.outputDone)
-
-			err = cmd.Wait()
+			if procutil.IsWaitDelayOnly(err) {
+				err = nil
+			}
 			if ctx.Err() == context.Canceled {
 				jobs.MarkComplete(job.ID, JobCancelled, nil)
 			} else if err != nil {
@@ -689,8 +597,8 @@ func watchBackgroundJobs(sessionKey string, jobs *JobManager) tea.Cmd {
 			if job == nil {
 				return nil
 			}
-			job.mu.Lock()
 			output := job.Output.String()
+			job.mu.Lock()
 			status := job.Status
 			err := job.Error
 			job.mu.Unlock()
@@ -882,112 +790,10 @@ func (s ShellState) HandleUnsetCommand(varName string) (ShellState, string) {
 // executeShellCmdWithEnv returns a tea.Cmd that executes a shell command with custom environment
 func executeShellCmdWithEnv(sessionKey, cmdLine, workDir string, envVars map[string]string) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultCommandTimeout)
-		defer cancel()
-
-		cmd := exec.CommandContext(ctx, "sh", "-c", cmdLine)
-		cmd.Dir = workDir
-		procutil.ConfigureGroupKill(cmd, 0, 0) // conduit-31jg.20: kill the whole group on timeout/cancel
-
-		// Set environment variables
-		cmd.Env = os.Environ()
+		env := os.Environ()
 		for k, v := range envVars {
-			cmd.Env = append(cmd.Env, k+"="+v)
+			env = append(env, k+"="+v)
 		}
-
-		// Create pipes for stdout and stderr
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			return ShellResultMsg{
-				SessionKey: sessionKey,
-				Output:     "",
-				Err:        err,
-			}
-		}
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			return ShellResultMsg{
-				SessionKey: sessionKey,
-				Output:     "",
-				Err:        err,
-			}
-		}
-
-		if err := cmd.Start(); err != nil {
-			return ShellResultMsg{
-				SessionKey: sessionKey,
-				Output:     "",
-				Err:        err,
-			}
-		}
-
-		// Collect output from both streams
-		var output strings.Builder
-		var wg sync.WaitGroup
-		wg.Add(2)
-
-		// Reader for stdout
-		go func() {
-			defer wg.Done()
-			reader := bufio.NewReader(stdout)
-			for {
-				line, err := reader.ReadString('\n')
-				if line != "" {
-					output.WriteString(line)
-				}
-				if err != nil {
-					if err != io.EOF {
-						output.WriteString(fmt.Sprintf("\n[stdout read error: %v]", err))
-					}
-					break
-				}
-			}
-		}()
-
-		// Reader for stderr
-		go func() {
-			defer wg.Done()
-			reader := bufio.NewReader(stderr)
-			for {
-				line, err := reader.ReadString('\n')
-				if line != "" {
-					output.WriteString(line)
-				}
-				if err != nil {
-					if err != io.EOF {
-						output.WriteString(fmt.Sprintf("\n[stderr read error: %v]", err))
-					}
-					break
-				}
-			}
-		}()
-
-		// Wait for readers to finish
-		wg.Wait()
-
-		// Wait for command to complete
-		err = cmd.Wait()
-
-		// Check if we timed out
-		if ctx.Err() == context.DeadlineExceeded {
-			return ShellResultMsg{
-				SessionKey: sessionKey,
-				Output:     output.String() + fmt.Sprintf("\n[command timed out after %s]", DefaultCommandTimeout),
-				Err:        ctx.Err(),
-			}
-		}
-
-		// Truncate output if needed
-		finalOutput := output.String()
-		truncated, remaining := TruncateOutput(finalOutput, MaxOutputLines)
-		if remaining > 0 {
-			finalOutput = truncated
-		}
-
-		return ShellResultMsg{
-			SessionKey: sessionKey,
-			Output:     finalOutput,
-			Err:        err,
-		}
+		return runShellCommand(sessionKey, cmdLine, workDir, env, DefaultCommandTimeout)
 	}
 }

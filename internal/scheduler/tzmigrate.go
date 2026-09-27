@@ -65,6 +65,7 @@ type TZJobResult struct {
 	Action      TZAction
 	Reason      string   // why skipped/refused
 	Flags       []string // things the owner should double-check
+	Command     string   // system jobs: crontab command (conduit-31jg.74)
 }
 
 // TZMigrateOptions configures a migration.
@@ -74,6 +75,11 @@ type TZMigrateOptions struct {
 	// Now is the reference instant: the From->To offset in effect at Now
 	// defines "today's wall-clock time" for recurring jobs. Zero = time.Now().
 	Now time.Time
+	// IncludeSystem also converts system (crontab) jobs (conduit-31jg.74).
+	// The host's vixie cron ignores CRON_TZ, so the scheduler writes such a
+	// schedule as a zone-guarded crontab line (crontab_tz.go); From must be
+	// the cron daemon's zone. Jobs the guard cannot express are refused.
+	IncludeSystem bool
 }
 
 func (o TZMigrateOptions) now() time.Time {
@@ -437,6 +443,14 @@ func nameClockFlag(name string, s cron.Schedule, now time.Time, loc *time.Locati
 	return ""
 }
 
+// systemHourInterval reports whether a 5-field schedule's hour field is a
+// "*/N" step (conduit-31jg.74).
+func systemHourInterval(schedule string) bool {
+	_, rest := splitTZPrefix(schedule)
+	f := strings.Fields(rest)
+	return len(f) == 5 && strings.HasPrefix(f[1], "*/")
+}
+
 // PlanTZMigration computes the per-job migration for a cron_jobs.json body.
 func PlanTZMigration(data []byte, opts TZMigrateOptions) ([]TZJobResult, error) {
 	if opts.From == nil || opts.To == nil {
@@ -453,14 +467,17 @@ func PlanTZMigration(data []byte, opts TZMigrateOptions) ([]TZJobResult, error) 
 			Index: i, ID: j.ID, Name: j.Name, Type: j.Type, Enabled: j.Enabled, OneShot: j.OneShot,
 			OldSchedule: j.Schedule, NewSchedule: j.Schedule,
 		}
+		if j.Type == JobTypeSystem {
+			r.Command = j.Command
+		}
 		if !j.Enabled {
 			r.Flags = append(r.Flags, "disabled")
 		}
 		if j.OneShot {
 			r.Flags = append(r.Flags, "oneshot")
 		}
-		if j.Type != JobTypeGo {
-			r.Action, r.Reason = TZSkip, "system crontab job (runs in the cron daemon's zone; out of scope)"
+		if j.Type != JobTypeGo && !(opts.IncludeSystem && j.Type == JobTypeSystem) {
+			r.Action, r.Reason = TZSkip, "system crontab job (runs in the cron daemon's zone; pass --include-system to convert)"
 			if s, err := ParseJobSchedule(j.Schedule, j.Type); err == nil {
 				if f := nameClockFlag(j.Name, s, now.In(opts.From), opts.To); f != "" {
 					r.Flags = append(r.Flags, f)
@@ -470,6 +487,11 @@ func PlanTZMigration(data []byte, opts TZMigrateOptions) ([]TZJobResult, error) 
 			continue
 		}
 		newExpr, flags, err := ConvertScheduleTZ(j.Schedule, opts)
+		if j.Type == JobTypeSystem && err == nil && systemHourInterval(j.Schedule) {
+			// conduit-31jg.74: "5 */2 * * *" is an interval, not a wall-clock
+			// time; converting it would fire every UTC hour behind a guard.
+			err = errSkip{"hour field is a '*/N' interval: zone-independent in intent"}
+		}
 		var skip errSkip
 		switch {
 		case errors.As(err, &skip):
@@ -479,6 +501,14 @@ func PlanTZMigration(data []byte, opts TZMigrateOptions) ([]TZJobResult, error) 
 		default:
 			r.Action, r.NewSchedule = TZConvert, newExpr
 			r.Flags = append(r.Flags, flags...)
+			if j.Type == JobTypeSystem {
+				// conduit-31jg.74: must be expressible as a guarded crontab line.
+				if rr, err := renderCrontabSchedule(newExpr, opts.From, now); err != nil {
+					r.Action, r.NewSchedule, r.Reason = TZRefuse, j.Schedule, err.Error()
+				} else if len(rr.GuardHours) > 0 {
+					r.Flags = append(r.Flags, "crontab: "+rr.Fields+" + "+rr.Zone+" hour guard")
+				}
+			}
 		}
 		if s, err := ParseJobSchedule(r.NewSchedule, j.Type); err == nil {
 			if f := nameClockFlag(j.Name, s, now.In(opts.From), opts.To); f != "" {

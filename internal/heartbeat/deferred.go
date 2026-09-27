@@ -150,7 +150,9 @@ func (g *GatewayIntegration) FlushDeferred(ctx context.Context) (int, error) {
 			continue
 		}
 		job := &scheduler.Job{ID: a.Component, Target: action.Target}
-		if err := g.executeAction(ctx, action, job); err != nil {
+		// deliverOnce: the durable queue is the retry mechanism here
+		// (conduit-31jg.59); background retries would risk duplicates.
+		if err := g.executeAction(ctx, action, job, deliverOnce); err != nil {
 			log.Printf("[HeartbeatIntegration] Deferred action %s delivery failed: %v", a.ID, err)
 			_ = q.UpdateAlert(a.ID, func(x *Alert) {
 				x.RecordFailedAttempt(err.Error(), g.clock())

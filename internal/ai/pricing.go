@@ -39,11 +39,15 @@ const (
 // "claude-sonnet-4-6-20260101" hits "claude-sonnet-4-6", and
 // "claude-opus-4-6" is NOT priced as "claude-opus-4").
 //
-// conduit-31jg.57: Claude prices refreshed 2026-09-27 from Anthropic's
-// published first-party API pricing (claude-api reference, models table
-// cached 2026-06-24; cache economics from its prompt-caching page).
-// "claude-opus-4" (Opus 4 / 4.1, $15/$75), "claude-sonnet-4" (Sonnet 4 /
-// 4.5) and the claude-3 entries were not re-verified and are kept as-is.
+// conduit-31jg.76: every Anthropic entry re-verified 2026-09-27 against
+// Anthropic's published first-party pricing
+// (https://platform.claude.com/docs/en/about-claude/pricing: model table and
+// prompt-caching multipliers), every OpenAI entry against OpenAI's published
+// Standard-tier pricing (https://developers.openai.com/api/docs/pricing).
+// Where a shorter prefix would misprice a model with a different price
+// (opus-4 vs opus-4-5, gpt-4o vs gpt-4o-mini, gpt-3.5-turbo vs -1106) the
+// model has its own entry. Entries marked "// unverified" are retired models
+// absent from both pages; they keep their historical prices.
 var DefaultPricingMatrix = map[string]ModelPricing{
 	// Anthropic — current
 	"claude-fable-5-1":  {InputPerMToken: 10.0, OutputPerMToken: 50.0, CacheReadPerMToken: 0.25},
@@ -58,20 +62,32 @@ var DefaultPricingMatrix = map[string]ModelPricing{
 	"claude-sonnet-5":   {InputPerMToken: 2.0, OutputPerMToken: 10.0},
 	"claude-sonnet-4-6": {InputPerMToken: 3.0, OutputPerMToken: 15.0},
 	"claude-haiku-4-5":  {InputPerMToken: 1.0, OutputPerMToken: 5.0},
-	// Anthropic — legacy (not re-verified, conduit-31jg.57)
-	"claude-opus-4":     {InputPerMToken: 15.0, OutputPerMToken: 75.0},
-	"claude-sonnet-4":   {InputPerMToken: 3.0, OutputPerMToken: 15.0},
-	"claude-haiku-4":    {InputPerMToken: 0.80, OutputPerMToken: 4.0},
-	"claude-3-5-sonnet": {InputPerMToken: 3.0, OutputPerMToken: 15.0},
-	"claude-3-5-haiku":  {InputPerMToken: 0.80, OutputPerMToken: 4.0},
-	"claude-3-opus":     {InputPerMToken: 15.0, OutputPerMToken: 75.0},
-	"claude-3-sonnet":   {InputPerMToken: 3.0, OutputPerMToken: 15.0},
-	"claude-3-haiku":    {InputPerMToken: 0.25, OutputPerMToken: 1.25},
-	// OpenAI (legacy entries, unchanged)
-	"gpt-4o":        {InputPerMToken: 2.50, OutputPerMToken: 10.0},
-	"gpt-4-turbo":   {InputPerMToken: 10.0, OutputPerMToken: 30.0},
-	"gpt-4":         {InputPerMToken: 30.0, OutputPerMToken: 60.0},
-	"gpt-3.5-turbo": {InputPerMToken: 0.50, OutputPerMToken: 1.50},
+	// Anthropic — legacy / deprecated, still on the pricing page
+	// (conduit-31jg.76). Opus 4.5 is $5/$25 and must not fall through to
+	// the "claude-opus-4" ($15/$75) prefix.
+	"claude-opus-4-5":   {InputPerMToken: 5.0, OutputPerMToken: 25.0},
+	"claude-opus-4-1":   {InputPerMToken: 15.0, OutputPerMToken: 75.0}, // retired on the Claude API
+	"claude-opus-4":     {InputPerMToken: 15.0, OutputPerMToken: 75.0}, // Opus 4 (-0 / -20250514); retired on the Claude API
+	"claude-sonnet-4-5": {InputPerMToken: 3.0, OutputPerMToken: 15.0},
+	"claude-sonnet-4":   {InputPerMToken: 3.0, OutputPerMToken: 15.0}, // Sonnet 4 (-0 / -20250514); retired on the Claude API
+	"claude-3-5-haiku":  {InputPerMToken: 0.80, OutputPerMToken: 4.0}, // Haiku 3.5; retired on the Claude API
+	// There is no Claude Haiku 4 model (Haiku 4.5 has its own entry), so
+	// there is deliberately no "claude-haiku-4" key. conduit-31jg.76
+	//
+	// Anthropic — retired, absent from the pricing page: historical prices.
+	"claude-3-5-sonnet": {InputPerMToken: 3.0, OutputPerMToken: 15.0},  // unverified (retired 2025-10-28)
+	"claude-3-opus":     {InputPerMToken: 15.0, OutputPerMToken: 75.0}, // unverified (retired 2026-01-05)
+	"claude-3-sonnet":   {InputPerMToken: 3.0, OutputPerMToken: 15.0},  // unverified (retired 2025-07-21)
+	"claude-3-haiku":    {InputPerMToken: 0.25, OutputPerMToken: 1.25}, // unverified (deprecated, retires 2026-04-19)
+	// OpenAI — Standard tier (conduit-31jg.76). Cached input is billed at
+	// the listed rate; OpenAI has no cache-write premium.
+	"gpt-4o":             {InputPerMToken: 2.50, OutputPerMToken: 10.0, CacheReadPerMToken: 1.25, CacheWritePerMToken: 2.50},
+	"gpt-4o-2024-05-13":  {InputPerMToken: 5.0, OutputPerMToken: 15.0},
+	"gpt-4o-mini":        {InputPerMToken: 0.15, OutputPerMToken: 0.60, CacheReadPerMToken: 0.075, CacheWritePerMToken: 0.15},
+	"gpt-4-turbo":        {InputPerMToken: 10.0, OutputPerMToken: 30.0}, // gpt-4-turbo-2024-04-09
+	"gpt-4":              {InputPerMToken: 30.0, OutputPerMToken: 60.0}, // gpt-4-0613
+	"gpt-3.5-turbo":      {InputPerMToken: 0.50, OutputPerMToken: 1.50}, // gpt-3.5-turbo-0125
+	"gpt-3.5-turbo-1106": {InputPerMToken: 1.0, OutputPerMToken: 2.0},
 }
 
 // Cost prices one usage record. writeMult is the cache-write premium used
@@ -184,8 +200,8 @@ func lookupPricing(overrides map[string]ModelPricing, candidates []string) (Mode
 // conduit-31jg.57: salvaged from the smart-routing dead code. It no longer
 // depends on SmartRoutingConfig: the gateway builds ONE resolver from
 // AIConfig at init (NewPricingResolverFromConfig) and every cost path —
-// the per-call metering hook, UsageTracker, TurnRunner session cost, and
-// the package-level CalculateCost — prices through it.
+// the per-call metering hook, UsageTracker and TurnRunner session cost —
+// prices through it.
 type PricingResolver struct {
 	overrides map[string]ModelPricing // lower-cased keys
 	// writeMult is the cache-write premium (1.25x for the 5-minute TTL, 2x
@@ -327,9 +343,9 @@ func (pr *PricingResolver) CalculateCost(model string, inputTokens, outputTokens
 	return c
 }
 
-// defaultResolver backs the package-level CalculateCost so legacy call
-// sites (smart-routing cost optimizer) price with the same overrides. The
-// gateway installs its resolver at init. conduit-31jg.57
+// defaultResolver is the package-level resolver used when no explicit one
+// is wired (UsageTracker, Router before init). The gateway installs its
+// resolver at init. conduit-31jg.57
 var defaultResolver atomic.Pointer[PricingResolver]
 
 // SetDefaultPricingResolver installs pr as the package-level resolver (nil
@@ -345,9 +361,3 @@ func DefaultPricingResolver() *PricingResolver {
 }
 
 var builtinResolver = NewPricingResolver(nil)
-
-// CalculateCost returns the estimated cost for a given model and token usage
-// via the package-level resolver.
-func CalculateCost(model string, inputTokens, outputTokens int) float64 {
-	return DefaultPricingResolver().CalculateCost(model, inputTokens, outputTokens)
-}

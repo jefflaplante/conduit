@@ -311,7 +311,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 	// conduit-31jg.57: the router built ONE pricing resolver from cfg.AI
 	// (ai.pricing_overrides + deprecated smart_routing alias + built-ins);
-	// make it the package default so legacy CalculateCost callers agree.
+	// make it the package default so resolver-less paths agree.
 	ai.SetDefaultPricingResolver(aiRouter.PricingResolver())
 	if n := len(aiRouter.PricingResolver().OverrideModels()); n > 0 {
 		logger.Info("pricing overrides loaded", "models", n)
@@ -326,7 +326,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	logger.Debug("tool execution engine wired up")
 
 	// Initialize MCP server and session mapper if a claude-code provider is configured.
-	mcpServer, mcpConfigMgr := setupMCPForClaudeCode(cfg, aiRouter, toolsRegistry, sessionStore, logger)
+	mcpServer, mcpConfigMgr := setupMCPForClaudeCode(cfg, aiRouter, toolsRegistry, executionEngine, sessionStore, logger)
 
 	// Initialize summary manager for AI-powered workspace summarization
 	// (small-context models). Attaches to agentSystem when enabled.
@@ -476,6 +476,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// an AlertAuditor backed by the same DB so every delivery attempt is
 	// persisted to the alert_history table (migration #8).
 	gw.monitoring.WireDeliveryRegistry(sessionStore.DB())
+	// conduit-31jg.59: route heartbeat delivery through that registry
+	// (ChannelSenderDeliverer wrapping gw) for breaker + audit + retries.
+	hbIntegration.SetDeliveryRegistry(gw.monitoring.DeliveryRegistry)
 	logger.Info("alert auditor wired to delivery registry")
 
 	// NOTE: initializeAgentHeartbeat is called AFTER scheduler.Start() in the Run() method

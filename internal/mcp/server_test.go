@@ -197,7 +197,7 @@ func TestAdaptToolResult(t *testing.T) {
 			Success: true,
 			Content: "hello world",
 		}
-		mcpResult := AdaptToolResult(result)
+		mcpResult := AdaptToolResult(result, false)
 		assert.False(t, mcpResult.IsError)
 		require.Len(t, mcpResult.Content, 1)
 		tc, ok := mcpResult.Content[0].(*sdkmcp.TextContent)
@@ -210,7 +210,7 @@ func TestAdaptToolResult(t *testing.T) {
 			Success: false,
 			Error:   "something went wrong",
 		}
-		mcpResult := AdaptToolResult(result)
+		mcpResult := AdaptToolResult(result, false)
 		assert.True(t, mcpResult.IsError)
 		require.Len(t, mcpResult.Content, 1)
 		tc, ok := mcpResult.Content[0].(*sdkmcp.TextContent)
@@ -225,7 +225,7 @@ func TestAdaptToolResult(t *testing.T) {
 			Error:   "Command execution failed: exit status 1",
 			Content: "./foo.go:12:2: undefined: bar",
 		}
-		mcpResult := AdaptToolResult(result)
+		mcpResult := AdaptToolResult(result, false)
 		assert.True(t, mcpResult.IsError)
 		require.Len(t, mcpResult.Content, 1)
 		tc, ok := mcpResult.Content[0].(*sdkmcp.TextContent)
@@ -236,13 +236,13 @@ func TestAdaptToolResult(t *testing.T) {
 	})
 
 	t.Run("error equal to content not duplicated", func(t *testing.T) {
-		mcpResult := AdaptToolResult(&types.ToolResult{Success: false, Error: "boom", Content: "boom"})
+		mcpResult := AdaptToolResult(&types.ToolResult{Success: false, Error: "boom", Content: "boom"}, false)
 		tc := mcpResult.Content[0].(*sdkmcp.TextContent)
 		assert.Equal(t, "boom", tc.Text)
 	})
 
 	t.Run("nil result", func(t *testing.T) {
-		mcpResult := AdaptToolResult(nil)
+		mcpResult := AdaptToolResult(nil, false)
 		assert.True(t, mcpResult.IsError)
 	})
 }
