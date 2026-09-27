@@ -20,6 +20,9 @@ func (u *Usage) Add(o Usage) {
 	u.TotalTokens += total
 	u.CacheCreationInputTokens += o.CacheCreationInputTokens
 	u.CacheReadInputTokens += o.CacheReadInputTokens
+	u.CostUSD += o.CostUSD // conduit-31jg.64
+	u.PricedCalls += o.PricedCalls
+	u.UnpricedCalls += o.UnpricedCalls
 	if c := o.Context(); c > 0 {
 		u.ContextTokens = c
 	}

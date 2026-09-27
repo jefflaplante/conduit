@@ -467,6 +467,10 @@ type AIConfig struct {
 	// higher cap; the finish_reason parser now makes "length" truncation
 	// recoverable, but avoiding it outright is cheaper than continuing.
 	MaxTokens int `json:"max_tokens,omitempty"`
+	// PricingOverrides maps model IDs (bare "glm-5.3" or provider-prefixed
+	// "openrouter/deepseek/deepseek-v4.1-flash") to per-MTok prices; they win
+	// over the built-in matrix. conduit-31jg.57 (was silently ignored).
+	PricingOverrides map[string]PricingOverride `json:"pricing_overrides,omitempty"`
 }
 
 // PromptCachingConfig holds configuration for Anthropic prompt caching.
@@ -527,16 +531,22 @@ func DefaultCompactionConfig() CompactionConfig {
 // SmartRoutingConfig holds configuration for intelligent model routing.
 // Phase 1: Usage tracking foundation. Future phases add routing strategies.
 type SmartRoutingConfig struct {
-	Enabled          bool                       `json:"enabled"`
-	TrackUsage       bool                       `json:"track_usage"`
-	CostBudgetDaily  float64                    `json:"cost_budget_daily,omitempty"`
+	Enabled         bool    `json:"enabled"`
+	TrackUsage      bool    `json:"track_usage"`
+	CostBudgetDaily float64 `json:"cost_budget_daily,omitempty"`
+	// Deprecated: use ai.pricing_overrides. Still honored — merged into
+	// AIConfig.PricingOverrides with a warning (conduit-31jg.57).
 	PricingOverrides map[string]PricingOverride `json:"pricing_overrides,omitempty"`
 }
 
-// PricingOverride allows overriding default pricing for a model.
+// PricingOverride allows overriding default pricing for a model (USD per
+// million tokens). The cache fields are optional: 0 derives them from the
+// input price (reads 0.1x, writes 1.25x / 2x by TTL). conduit-31jg.57
 type PricingOverride struct {
-	InputPerMToken  float64 `json:"input_per_m_token"`
-	OutputPerMToken float64 `json:"output_per_m_token"`
+	InputPerMToken      float64 `json:"input_per_m_token"`
+	OutputPerMToken     float64 `json:"output_per_m_token"`
+	CacheReadPerMToken  float64 `json:"cache_read_per_m_token,omitempty"`
+	CacheWritePerMToken float64 `json:"cache_write_per_m_token,omitempty"`
 }
 
 // DefaultModelAliases returns the built-in model alias map. This is the single
@@ -1048,6 +1058,10 @@ func Load(path string) (*Config, error) {
 	if err := cfg.expandEnvVars(); err != nil {
 		return nil, fmt.Errorf("failed to expand environment variables: %w", err)
 	}
+
+	// conduit-31jg.57: fold the deprecated smart_routing.pricing_overrides
+	// alias into ai.pricing_overrides.
+	cfg.AI.normalizePricingOverrides()
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
