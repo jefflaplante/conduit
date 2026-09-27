@@ -329,7 +329,10 @@ func storeBriefingInBrain(cfg *config.Config, b *briefing.Briefing) {
 	// Brain. It doesn't carry the gateway's max_ltm_entries, so it must not
 	// trim the shared table; the gateway enforces the cap on its next LTM
 	// write. This command only ever upserts one fixed key.
-	brainSvc, err := brain.New(brainDBPath, brain.WithMaxLTMEntries(0))
+	// conduit-31jg.53: brainCLIOptions carries the configured recency weight so
+	// brain migration 9 (if this is the first open after an upgrade) matches
+	// the gateway.
+	brainSvc, err := brain.New(brainDBPath, append(brainCLIOptions(cfg), brain.WithMaxLTMEntries(0))...)
 	if err != nil {
 		log.Printf("briefing: failed to open brain for briefing store: %v", err)
 		return

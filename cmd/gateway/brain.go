@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"conduit/internal/brain"
+	"conduit/internal/config"
 
 	"github.com/spf13/cobra"
 )
@@ -40,7 +41,8 @@ The output file contains:
 - nodes: Array of graph nodes with key, value, source, salience, warmth, access_count, created_at
 - edges: Array of relationships between nodes with key_a, key_b, relationship, confidence, last_traversed_at
 
-This is read-only and does not modify brain state.`,
+The export itself is read-only; opening the database applies any pending
+brain schema/data migrations, as the gateway would.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Use the gateway's data directory if dbPath is not specified
 			if dbPath == "" {
@@ -56,8 +58,14 @@ This is read-only and does not modify brain state.`,
 				outputPath = filepath.Join(filepath.Dir(dbPath), "brain-export.json")
 			}
 
-			// Initialize brain
-			b, err := brain.New(dbPath)
+			// Initialize brain. Opening the DB runs pending brain
+			// migrations; carry the configured recency weight when a config
+			// is loadable so migration 9 matches the gateway (conduit-31jg.53).
+			var cfg *config.Config
+			if c, cfgErr := config.Load(cfgFile); cfgErr == nil {
+				cfg = c
+			}
+			b, err := brain.New(dbPath, brainCLIOptions(cfg)...)
 			if err != nil {
 				return fmt.Errorf("failed to initialize brain at %s: %w", dbPath, err)
 			}
@@ -93,4 +101,22 @@ This is read-only and does not modify brain state.`,
 	cmd.Flags().StringVar(&dbPath, "db", "", "Brain database path (default: ~/.conduit/brain.db)")
 
 	return cmd
+}
+
+// brainCLIOptions returns the brain options a short-lived CLI Brain must
+// share with the gateway so that opening the shared brain.db from the CLI
+// cannot diverge from the gateway's configuration. Brain migration 9
+// (conduit-31jg.53) converts stored salience to base salience by
+// subtracting the configured recency weight; if a CLI command is the first
+// to open the database after an upgrade, it must subtract the same weight
+// the gateway would. cfg may be nil (no config available): defaults apply.
+func brainCLIOptions(cfg *config.Config) []brain.Option {
+	if cfg == nil {
+		return nil
+	}
+	var opts []brain.Option
+	if cfg.Brain.RecencyWeight > 0 {
+		opts = append(opts, brain.WithRecencyWeight(cfg.Brain.RecencyWeight))
+	}
+	return opts
 }
