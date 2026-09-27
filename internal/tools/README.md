@@ -10,7 +10,7 @@ The tools are organized into logical packages:
 internal/tools/
 ├── registry.go           # Enhanced tool registry with service injection
 ├── core/                 # Core system tools
-│   ├── memory.go         # memory_search, memory_get
+│   ├── memory.go         # memory_search
 │   ├── sessions.go       # session management tools
 │   └── gateway.go        # gateway operations
 ├── web/                  # Web integration tools
@@ -43,23 +43,6 @@ Semantic search across memory files (MEMORY.md and memory/*.md).
   "query": "project deadlines",
   "maxResults": 5,
   "minScore": 0.5
-}
-```
-
-#### `memory_get`
-Retrieve specific content from memory files by path and line range.
-
-**Parameters:**
-- `path` (string, required): Path to memory file (MEMORY.md or memory/*.md)
-- `from` (integer): Starting line number (default: 1)
-- `lines` (integer): Number of lines to retrieve (0 = all, default: 0)
-
-**Example:**
-```json
-{
-  "path": "memory/2024-01-15.md",
-  "from": 10,
-  "lines": 5
 }
 ```
 
@@ -282,7 +265,7 @@ Enable tools in your `config.json`:
   "tools": {
     "enabled_tools": [
       "read_file", "write_file", "exec", "list_files",
-      "memory_search", "memory_get",
+      "memory_search",
       "sessions_list", "sessions_send", "sessions_spawn", "session_status", 
       "web_search", "web_fetch",
       "message", "tts",

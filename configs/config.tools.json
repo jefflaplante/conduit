@@ -24,7 +24,6 @@
       "exec",
       "list_files",
       "memory_search",
-      "memory_get",
       "sessions_list",
       "sessions_send",
       "sessions_spawn",
