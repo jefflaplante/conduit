@@ -34,7 +34,7 @@ go test -v ./internal/tools/...
 
 ## Architecture
 
-Go 1.24.2 (toolchain 1.24.13), single binary gateway. Pure Go SQLite via modernc.org/sqlite (no CGO). CLI via Cobra (cmd/gateway/main.go). Default port 18789.
+Go 1.25 (`go 1.25.0` in go.mod, no toolchain line), single binary gateway. Pure Go SQLite via modernc.org/sqlite (no CGO). CLI via Cobra (cmd/gateway/main.go). Default port 18789.
 
 ### Core Flow
 
@@ -63,7 +63,7 @@ Incoming messages flow: Channel Adapter → Channel Manager → Gateway → AI R
 
 ### Dependency Injection Pattern
 
-Tools cannot import gateway directly (circular dependency). Instead, types.ToolServices struct in internal/tools/types/types.go aggregates service interfaces (SessionStore, ConfigMgr, WebClient, SkillsManager, ChannelSender, Gateway, Searcher, Brain, BrainFTS, SchemaBuilder, Vision). The gateway creates services, then calls registry.SetServices() after construction.
+Tools cannot import gateway directly (circular dependency). Instead, types.ToolServices struct in internal/tools/types/types.go aggregates service interfaces (SessionStore, ConfigMgr, WebClient, SkillsManager, ChannelSender, Gateway, Searcher, VectorSearch, VectorIndexer, MQTTService, Brain, BrainFTS, REMCycle, Reflection, Vision, SchemaBuilder, DebugLog). The gateway creates services, then calls registry.SetServices() after construction.
 
 ## CLI Commands
 
@@ -75,42 +75,62 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - `pairing` — Telegram user pairing management
 - `tools` — Tool discovery (list, describe, schema, examples)
 - `tui` — Launch the BubbleTea terminal UI client
-- `ssh` — Start the SSH server
+- `ssh-server` — Start the standalone SSH server for TUI access
 - `ssh-keys` — SSH key management (list, add, remove, init)
+- `auth` — OAuth authentication for AI providers (login, status, logout, refresh)
 - `maintenance` — Database maintenance (run, run-task, status, config)
 - `backup` — Backup/restore gateway data (create, restore, list)
+- `brain` — Brain LTM graph operations (export)
+- `briefing` — Generate and manage session briefings (generate, show, list)
+- `chain` — Manage and execute saved tool chains (list, show, create, run, delete, validate)
+- `cron` — Scheduler job maintenance for cron_jobs.json (migrate-tz)
+- `loadtest` — Load test against the AI provider using a mock backend
+- `metrics` — Start the metrics dashboard HTTP server
+- `restart` / `stop` / `status` — Signal or check a running Conduit process (signals, not HTTP)
 
 ## Package Layout
 
-- cmd/gateway/ — Entry point and CLI command definitions (main.go, backup.go, maintenance.go, ssh.go, ssh_keys.go, tui.go, tools.go, pairing.go)
+- cmd/gateway/ — Entry point and CLI command definitions (main.go, auth.go, backup.go, brain.go, briefing.go, chain.go, cron.go, loadtest.go, maintenance.go, metrics.go, pairing.go, process.go, signals.go, ssh.go, ssh_keys.go, tools.go, tui.go). Build-tagged optional_*.go files blank-import the optional tools (with_datadog, with_k8s, with_pagerduty, with_sre, with_mqtt, with_ssh, with_unifi).
+- cmd/recall-events-converter/ — One-off converter for brain recall-events logs
 - internal/gateway/ — Core gateway orchestration, WebSocket handling, HTTP endpoints, context usage tracking, direct client for TUI, heartbeat integration. Includes ContextBudget (context_budget.go), FuelGauge (fuel_gauge.go), VisionAnalyzer adapter (vision_adapter.go)
 - internal/ai/ — AI provider routing, conversation management, tool execution loops, streaming, pricing (PricingResolver in pricing.go)
 - internal/agent/ — Agent personality system: interface definition, Conduit agent implementation, prompt builder with section-based prompt construction
-- internal/models/ — Anthropic API request/response models
-- internal/tools/ — Tool registry (registry.go ~34KB), execution engine with parallel support, plus top-level tool files:
+- internal/models/ — Anthropic API models: typed Messages API request/response structs (messages.go) and the request builder (anthropic.go)
+- internal/tools/ — Tool registry (registry.go ~31KB), execution engine with parallel support, plus top-level tool files:
   - aliases.go — Anthropic tool alias resolution (unversioned name → versioned name) with env override
   - anthropic.go — Anthropic versioned tool name constants (web_search, web_fetch)
-  - unifi.go — UniFi Network/Protect API tool
-  - execution.go, execution_adapter.go — Tool execution engine and adapter
+  - execution.go, execution_single.go, execution_adapter.go — Tool execution engine and adapter. HandleToolCallFlow is a for-loop over rounds with an explicit turnState (runToolLoop/roundTrip/advance); golden trace in testdata/toolloop_golden.json
+  - chain_state.go, failure_tracker.go, pattern_tracker.go, watchdog.go — Per-turn chain state, failure/pattern tracking, stall watchdog
+  - exec.go (Bash), fileops.go (Read/Write/Glob), google_workspace.go — Top-level tool implementations
   - Tool subdirectories:
-    - core/ — Context management, file editing, gateway control, memory search, session management, brain (tiered cognitive memory)
+    - core/ — Context management, file editing, find, facts, gateway control, memory search, session management, chain, debug log, brain (tiered cognitive memory)
     - web/ — Web search (Brave), web fetch with HTML parsing
-    - communication/ — Message sending to channels, TTS
+    - communication/ — Message sending to channels, status updates, TTS
     - scheduling/ — Cron job tool (includes heartbeat cron integration)
     - vision/ — Image analysis
     - schema/ — Static schema hints plus channel/workspace parameter discovery
-    - mqtt/ — MQTT tool with action dispatch (status, topics, recent, history, publish)
+    - args/ — Shared argument parsing helpers for tool implementations
+    - debuglog/ — In-memory ring buffer backing the DebugLog tool
+    - mqtt/ — MQTT tool with action dispatch (status, topics, recent, history, publish) (build tag with_mqtt)
+    - datadog/ — Datadog metrics/logs/APM/monitors tool (with_datadog)
+    - k8s/ — Kubernetes management tool with security controls (with_k8s)
+    - pagerduty/ — PagerDuty incident/on-call tool (with_pagerduty)
+    - sre/ — SRE incident correlation engine across tools (with_sre)
+    - ssh/ — SSH remote execution tool: pool, fanout, inventory, SCP, tunnels, audit (with_ssh)
+    - unifi/ — UniFi Network/Protect API tool (with_unifi)
+    - Optional-tool packages have register.go / register_stub.go pairs selected by build tag.
 - internal/tools/types/ — Single source of truth for tool-related types and service interfaces (Tool, ToolServices, GatewayService, ChannelSender, SearchService, MQTTService, BrainService, BrainFTSSearcher, VisionAnalyzer)
 - internal/channels/ — Channel adapter interface + manager; subdirectories:
   - telegram/ — Native Telegram adapter with pairing system (pairing storage, CLI, photo support)
   - tui/ — TUI channel adapter with factory for in-process BubbleTea connections
 - internal/sessions/ — SQLite session store with state tracking
 - internal/mqtt/ — MQTT event ingest: paho client wrapper, per-topic ring buffers, service with background pruning, adapter to tool-layer interface
-- internal/brain/ — Tiered cognitive memory: LTM (SQLite-persisted), working memory (in-process per-user), scratchpad (LIFO stack). Salience-scored entries with configurable weights. Sub-agent WM sharing via parent context.
+- internal/brain/ — Tiered cognitive memory: LTM (SQLite-persisted brain.db), working memory (in-process per-user), scratchpad (LIFO stack). Salience-scored entries with configurable weights: brain_ltm stores base salience and recency is computed at query time (salience.go). Recall-events log with rotation (recall_events.go). Own migration system (migrations.go, brain_migrations table, 9 migrations; runs in brain.New after options are applied). rem/ implements the nightly REM cycle (triage, consolidate, integrate, prune, reflect). Sub-agent WM sharing via parent context.
 - internal/reflection/ — SPAR Reflect subsystem: per-tool outcome capture (ReflectionMiddleware), session metrics (SessionReflector), farewell detection (FarewellDetector), ReflectionStore (brain_reflections table). See reference/spar.md.
 - internal/config/ — JSON config loading with ${ENV_VAR} expansion. Config struct includes: port, database, AI, agent, workspace, skills, tools, channels, debug, rate limiting, heartbeat, agent heartbeat, SSH, MQTT, brain. `Config.Validate()` (validate.go) is called by `config.Load()` and checks port range, AI credentials, channels, workspace, rate-limit sanity, and tool constraints; credential checks are intentionally soft (warn, not fatal) to allow partial configs.
-- internal/database/ — SQLite migration system (8 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search, messages_fts sync triggers, token hash versioning, ingest DLQ, alert history)
+- internal/database/ — Gateway DB (gateway.db) SQLite migration system (8 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search, messages_fts sync triggers, token hash versioning, ingest DLQ, alert history). The brain DB has its own separate migrations in internal/brain.
 - internal/fts/ — FTS5 full-text search: document chunking, indexing, and search queries (Porter stemming, unicode61 tokenizer)
+- internal/ftsquery/ — Turns free-text user queries into safe FTS5 MATCH expressions
 - internal/searchdb/ — Dedicated search.db with FTS5 indexes (document chunks, beads, messages, brain LTM). Includes BeadsIndexer, BrainIndexer, MessageSyncer
 - internal/auth/ — Token auth (128-bit entropy, Base58, SHA256 hash storage), OAuth support, CLI token management
 - internal/backup/ — Backup/restore system: create tar.gz archives of database, config, workspace, SSH keys, skills; restore with dry-run support; list/inspect archives
@@ -124,8 +144,23 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/ssh/ — SSH server via Wish with key management (server.go, keys.go)
 - internal/tui/ — BubbleTea terminal UI: chat view, sidebar, tab bar, status bar, tool activity display, Lipgloss styling, client interface
 - internal/version/ — Version info injected via ldflags at build time
-- pkg/protocol/ — Message type definitions (messages.go) shared across packages
-- pkg/tokens/ — Token generation (generator.go) and formatting (format.go) utilities
+- internal/protocol/ — Message type definitions (messages.go) shared across packages
+- internal/tokens/ — Token generation (generator.go) and formatting (format.go) utilities
+- internal/approval/ — Generic human-in-the-loop approval primitive (manager, request origin)
+- internal/briefing/ — Session briefing generation (used by the `briefing` CLI; stored in brain LTM)
+- internal/chain/ — Saved multi-tool chain definitions (variables, steps) behind the `chain` CLI and Chain tool
+- internal/constants/ — Shared constant values
+- internal/datadir/ — Single source of truth for data-directory paths (env overrides)
+- internal/httpsafe/ — Outbound-HTTP safety helpers: bounded body reads, SSRF checks
+- internal/logging/ — slog-based structured logging with request-context fields; stderr goes through redact.NewWriter
+- internal/mcp/ — MCP server exposing Conduit's tools to external MCP clients (bearer auth, calls via the ExecutionEngine)
+- internal/procutil/ — Process-execution helpers shared by the Bash tool and others (process groups, platform splits)
+- internal/redact/ — Scrubs credentials (e.g. Telegram bot tokens) from strings, errors and log output; NewWriter wraps stderr
+- internal/sandbox/ — Single file-path containment check shared by file tools
+- internal/stt/ — Speech-to-text (Transcriber interface, Whisper backend)
+- internal/vecgo/ — Optional VecGo vector/semantic search service and indexer (module replaced from ./vecgo)
+- internal/workspace/ — Workspace context loading and caching (core files, daily memory, beads, security, summaries)
+- internal/testing/loadtest/ — Load-test harness behind the `loadtest` CLI
 
 ## Config Files
 
@@ -142,7 +177,9 @@ Config struct covers: port, database path, AI providers (Anthropic with OAuth or
 
 ## Database
 
-SQLite with WAL mode, 5s busy timeout, NORMAL synchronous, foreign keys enabled, 10000 page cache. Connection pool: max 4 open, 2 idle, no lifetime expiry. Eight migrations:
+SQLite with WAL mode, 5s busy timeout, NORMAL synchronous, foreign keys enabled, 10000 page cache. Connection pool: max 4 open, 2 idle, no lifetime expiry. There are two independent migration systems.
+
+Gateway DB (internal/database, `schema_migrations`), eight migrations:
 
 1. Sessions and messages tables
 2. Auth tokens table (+ schema_migrations table)
@@ -152,6 +189,8 @@ SQLite with WAL mode, 5s busy timeout, NORMAL synchronous, foreign keys enabled,
 6. Token hash version column (SHA256 v1 → HMAC-SHA256 v2)
 7. Ingest dead-letter queue (ingest_dlq) for dropped messages
 8. Alert history table (alert_history) for SRE audit trail
+
+Brain DB (internal/brain/migrations.go, `brain_migrations`), nine migrations: 1 brain_ltm; 2 REM support (source_hash, brain_archive, brain_relationships); 3 staleness + source indexes; 4 SPAR brain_reflections; 5 expires_at TTL; 6 warmth; 7 edge last_traversed_at; 8 edge access_count; 9 data migration converting stored salience to base salience by subtracting the configured `recency_weight` (conduit-31jg.53). Because migration 9 depends on configuration, brain migrations run in `brain.New()` after options are applied, and every opener of brain.db (gateway, `briefing`, `brain export`) must pass the configured recency weight.
 
 ## Test Patterns
 
@@ -242,7 +281,7 @@ func (t *BrainTool) SelfTest(ctx context.Context, opts *SelfTestOptions) *SelfTe
 
 ### Tools with SelfTest
 
-All ~30 tools implement SelfTest: BashTool, ReadFileTool, WriteFileTool, GlobTool, EditTool, FindTool, FactsTool, MemorySearchTool, BrainTool, GatewayTool, ContextTool, ChainTool, DebugLogTool, SessionsListTool, SessionsSendTool, SessionsSpawnTool, SessionStatusTool, MessageTool, StatusUpdateTool, TtsTool, CronTool, WebFetchTool, WebSearchTool, ImageTool, MQTTTool, DatadogTool, PagerDutyTool, K8sTool, SSHTool, SRETool, UniFiTool, GoogleWorkspaceTool.
+All ~30 tools implement SelfTest: ExecTool (Bash), ReadFileTool, WriteFileTool, ListFilesTool (Glob), EditTool, FindTool, FactsTool, MemorySearchTool, BrainTool, GatewayTool, ContextTool, ChainTool, DebugLogTool, SessionsListTool, SessionsSendTool, SessionsSpawnTool, SessionStatusTool, MessageTool, StatusUpdateTool, TTSTool, CronTool, WebFetchTool, WebSearchTool, ImageTool, MQTTTool, DatadogTool, PagerDutyTool, K8sTool, SSHTool, SRETool, UniFiTool, GoogleWorkspaceTool.
 
 ## Agent Gotchas
 
