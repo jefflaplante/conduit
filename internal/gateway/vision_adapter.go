@@ -70,9 +70,9 @@ func selectVisionProvider(router *ai.Router) string {
 }
 
 // AnalyzeImage implements types.VisionAnalyzer. It builds a single-turn user
-// message with an image attachment + prompt and calls the default provider
-// directly (bypassing session history, system prompts, and tools — this is a
-// one-shot analysis, not a conversation turn).
+// message with an image attachment + prompt and sends it to the selected
+// vision provider as a metered side call (bypassing session history, system
+// prompts, and tools — this is a one-shot analysis, not a conversation turn).
 func (a *visionAdapter) AnalyzeImage(ctx context.Context, image []byte, mediaType string, prompt string) (string, error) {
 	if a == nil || a.router == nil {
 		return "", fmt.Errorf("vision: AI router not available")
@@ -90,8 +90,7 @@ func (a *visionAdapter) AnalyzeImage(ctx context.Context, image []byte, mediaTyp
 		prompt = "Describe what you see in this image."
 	}
 
-	provider, ok := a.router.GetProvider(a.providerName)
-	if !ok || provider == nil {
+	if p, ok := a.router.GetProvider(a.providerName); !ok || p == nil {
 		return "", fmt.Errorf("vision: provider %q not available", a.providerName)
 	}
 
@@ -112,7 +111,12 @@ func (a *visionAdapter) AnalyzeImage(ctx context.Context, image []byte, mediaTyp
 		MaxTokens: 1024,
 	}
 
-	resp, err := provider.GenerateResponse(ctx, req)
+	// conduit-31jg.75: metered side call — recorded once to the usage
+	// tracker (fuel gauge) and priced on the provider + model that served
+	// it (req.Model "" = that provider's configured default), cache tokens
+	// included. Inside a turn the ctx carries the turn's SideCallLedger, so
+	// the cost is added to the turn's request cost and session_total_cost.
+	resp, err := a.router.GenerateSideCall(ctx, a.providerName, req)
 	if err != nil {
 		return "", fmt.Errorf("vision: provider call failed: %w", err)
 	}

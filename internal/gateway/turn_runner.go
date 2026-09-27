@@ -440,6 +440,9 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 	if req.Decorate != nil {
 		ctx = req.Decorate(ctx)
 	}
+	// conduit-31jg.75: tool side calls (Image tool vision analysis) made
+	// under this ctx are metered into this ledger and added to the turn cost.
+	ctx, sideCalls := ai.WithSideCallLedger(ctx)
 
 	modelOverride := session.Context["model"]
 	providerOverride := session.Context["provider"]
@@ -514,6 +517,12 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 		// in session_unpriced_requests instead of silently adding $0.
 		var priced bool
 		res.RequestCost, priced = r.ai.TurnCost(providerOverride, modelOverride, *u)
+		// conduit-31jg.75: plus side calls made by tools during the turn,
+		// each already priced on its own provider + model by meterCall.
+		if sc := sideCalls.Usage(); sc.PricedCalls+sc.UnpricedCalls > 0 {
+			res.RequestCost += sc.CostUSD
+			priced = priced && sc.UnpricedCalls == 0
+		}
 		prevCost, _ := strconv.ParseFloat(session.Context["session_total_cost"], 64)
 		res.SessionCost = prevCost + res.RequestCost
 		prevCount, _ := strconv.Atoi(session.Context["session_request_count"])
