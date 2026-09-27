@@ -172,26 +172,63 @@ func NewPromptBuilder(
 
 // Build constructs the complete system prompt
 func (pb *PromptBuilder) Build(ctx context.Context, session *sessions.Session, isOAuth bool) ([]ai.SystemBlock, error) {
-	// Work on a local copy of sectionParams to avoid mutating shared state.
-	// This makes Build safe to call concurrently with different sessions.
-	localParams := *pb.sectionParams
-	localParams.Session = session
-
-	// Determine if minimal mode
-	isMinimal := false // Could be set based on config
-	localParams.IsMinimal = isMinimal
-
 	// conduit-31jg.14: two blocks. The static block is byte-stable between
 	// turns and carries the provider cache breakpoint; the dynamic block
 	// (timestamp, wake context, situation awareness) follows it, outside the
 	// cached prefix. Providers without block support join them with "\n\n".
-	static, dynamic := pb.buildPromptPartsWithParams(ctx, session, isOAuth, &localParams)
+	return pb.buildSplit(ctx, session, isOAuth).blocks(), nil
+}
 
-	blocks := []ai.SystemBlock{{Type: "text", Text: static}}
-	if dynamic != "" {
-		blocks = append(blocks, ai.SystemBlock{Type: "text", Text: dynamic, Dynamic: true})
+// promptSplit is a built prompt divided into its byte-stable static part and
+// its per-turn dynamic part. dynamicSections names the dynamic sections the
+// budget pass included, so the agent-level prompt cache can keep the static
+// text and re-render only those sections each turn (conduit-31jg.65).
+type promptSplit struct {
+	static          string
+	dynamic         string
+	dynamicSections []string
+}
+
+func (p promptSplit) blocks() []ai.SystemBlock {
+	blocks := []ai.SystemBlock{{Type: "text", Text: p.static}}
+	if p.dynamic != "" {
+		blocks = append(blocks, ai.SystemBlock{Type: "text", Text: p.dynamic, Dynamic: true})
 	}
-	return blocks, nil
+	return blocks
+}
+
+// buildSplit builds the full prompt (static + dynamic) for a session. It
+// works on a local copy of sectionParams, so it is safe to call concurrently
+// with different sessions.
+func (pb *PromptBuilder) buildSplit(ctx context.Context, session *sessions.Session, isOAuth bool) promptSplit {
+	localParams := *pb.sectionParams
+	localParams.Session = session
+	localParams.IsMinimal = false
+	return pb.buildSplitWithParams(ctx, session, isOAuth, &localParams)
+}
+
+// BuildDynamic renders only the named dynamic sections (time, wake context,
+// situation awareness) — the per-turn block that follows a cached static
+// block. Static sections are not built. conduit-31jg.65.
+func (pb *PromptBuilder) BuildDynamic(ctx context.Context, session *sessions.Session, isOAuth bool, sectionNames []string) string {
+	if len(sectionNames) == 0 {
+		return ""
+	}
+	want := make(map[string]bool, len(sectionNames))
+	for _, n := range sectionNames {
+		want[n] = true
+	}
+	localParams := *pb.sectionParams
+	localParams.Session = session
+	localParams.IsMinimal = false
+	isCron := session != nil && strings.HasPrefix(session.Key, CronSessionKeyPrefix)
+	var dyn []promptSection
+	for _, sec := range pb.buildSectionListWithParams(ctx, session, isOAuth, isCron, &localParams) {
+		if sec.dynamic && want[sec.name] {
+			dyn = append(dyn, sec)
+		}
+	}
+	return joinSectionsWithCache(dyn, nil)
 }
 
 // SetClock overrides the time source used by time-dependent sections (tests).
@@ -216,6 +253,13 @@ func (pb *PromptBuilder) buildFullPromptWithParams(ctx context.Context, session 
 // buildPromptPartsWithParams builds the prompt split into its byte-stable
 // static part and its per-turn dynamic part (conduit-31jg.14).
 func (pb *PromptBuilder) buildPromptPartsWithParams(ctx context.Context, session *sessions.Session, isOAuth bool, params *SectionParams) (string, string) {
+	p := pb.buildSplitWithParams(ctx, session, isOAuth, params)
+	return p.static, p.dynamic
+}
+
+// buildSplitWithParams builds the prompt split and records which dynamic
+// sections were included (conduit-31jg.65).
+func (pb *PromptBuilder) buildSplitWithParams(ctx context.Context, session *sessions.Session, isOAuth bool, params *SectionParams) promptSplit {
 	isCron := session != nil && strings.HasPrefix(session.Key, CronSessionKeyPrefix)
 
 	// Build the priority-tagged section list using the provided params.
@@ -236,7 +280,7 @@ func (pb *PromptBuilder) buildPromptPartsWithParams(ctx context.Context, session
 
 	// Short circuit: large-context models get everything.
 	if contextWindow >= largeCtxThreshold {
-		return joinSectionPartsWithCache(allSections, nil)
+		return newPromptSplit(allSections, nil)
 	}
 
 	// Get budget parameters from config
@@ -281,7 +325,18 @@ func (pb *PromptBuilder) buildPromptPartsWithParams(ctx context.Context, session
 			dropped, budgetChars, contextWindow)
 	}
 
-	return joinSectionPartsWithCache(allSections, included, dropped...)
+	return newPromptSplit(allSections, included, dropped...)
+}
+
+func newPromptSplit(sections []promptSection, included []bool, dropped ...string) promptSplit {
+	static, dynamic := joinSectionPartsWithCache(sections, included, dropped...)
+	p := promptSplit{static: static, dynamic: dynamic}
+	for i := range sections {
+		if sections[i].dynamic && (included == nil || included[i]) {
+			p.dynamicSections = append(p.dynamicSections, sections[i].name)
+		}
+	}
+	return p
 }
 
 // BuildDebug constructs the system prompt and returns detailed debug info about each section.
