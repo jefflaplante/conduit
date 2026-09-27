@@ -251,7 +251,7 @@ func TestClient_SessionKeyConcurrentAccess(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for j := 0; j < 20; j++ {
-			sm.writeBreadcrumb()
+			sm.writeBreadcrumb(nil)
 			_ = c.SessionKey()
 		}
 	}()

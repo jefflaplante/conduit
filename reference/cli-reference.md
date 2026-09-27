@@ -253,6 +253,8 @@ conduit stop      # graceful shutdown (SIGTERM)
 conduit status    # report whether Conduit is running
 ```
 
+A graceful restart drains in-flight work for up to 30s (SIGTERM: 15s; a SIGTERM during a SIGHUP drain shortens it), waiting for running turns and scheduler jobs. Tool calls started during the drain are capped to the remaining budget and told to wrap up. Turns still running at the deadline are cancelled; after the restart, the owner is told on the turn's channel which request was cut off (or it is resumed automatically with `restart_resume: "auto"`). See [Restart Resume](configuration.md#restart-resume).
+
 ### auth
 
 Manage OAuth authentication for AI providers.

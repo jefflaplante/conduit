@@ -506,6 +506,36 @@ func WakeSource(ctx context.Context) string {
 	return ""
 }
 
+// WakeSourceRestartResume tags the wake that auto-resumes a turn interrupted
+// by a gateway restart (conduit-31jg.88, restart_resume: "auto").
+const WakeSourceRestartResume = "restart_resume"
+
+type ctxKeyDrainDeadline struct{}
+
+// WithDrainDeadline attaches fn, which reports the end of the gateway's
+// shutdown drain once one has begun (ok=false while running normally). The
+// TurnRunner sets it on every turn so tools can see a drain that starts
+// mid-turn without importing the gateway (conduit-31jg.88).
+func WithDrainDeadline(ctx context.Context, fn func() (time.Time, bool)) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyDrainDeadline{}, fn)
+}
+
+// DrainDeadline reports the shutdown drain deadline, if the gateway is
+// draining. ok is false when not draining or when ctx carries no drain hook.
+func DrainDeadline(ctx context.Context) (time.Time, bool) {
+	if ctx == nil {
+		return time.Time{}, false
+	}
+	fn, ok := ctx.Value(ctxKeyDrainDeadline{}).(func() (time.Time, bool))
+	if !ok || fn == nil {
+		return time.Time{}, false
+	}
+	return fn()
+}
+
 // ToolResult represents the result of a tool execution
 type ToolResult struct {
 	Success      bool                   `json:"success"`

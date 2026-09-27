@@ -2,59 +2,12 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 )
-
-// processRestartBreadcrumb reads the restart breadcrumb written by the previous
-// gateway instance (if any) and injects a resume message into each session
-// recorded in the breadcrumb. The breadcrumb file is removed after processing.
-func (g *Gateway) processRestartBreadcrumb() {
-	dataDir := g.config.DataDir
-	if dataDir == "" {
-		dataDir = "."
-	}
-
-	path := filepath.Join(dataDir, ".conduit-restart.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-
-	var breadcrumb RestartBreadcrumb
-	if err := json.Unmarshal(data, &breadcrumb); err != nil {
-		g.logger.Warn("failed to parse restart breadcrumb", "error", err, "path", path)
-		os.Remove(path)
-		return
-	}
-
-	resumed := 0
-	for _, s := range breadcrumb.ActiveSessions {
-		session, err := g.sessions.GetSession(s.SessionKey)
-		if err != nil || session == nil {
-			g.logger.Debug("skipping stale session from breadcrumb", "session", s.SessionKey)
-			continue
-		}
-
-		msg := fmt.Sprintf("Gateway restarted successfully at %s. Reason: %s. Previous sessions have been restored — you may continue where you left off.",
-			breadcrumb.Timestamp.Format(time.RFC3339), breadcrumb.Reason)
-
-		if _, err := g.sessions.AddMessage(s.SessionKey, "assistant", msg, nil); err != nil {
-			g.logger.Warn("failed to inject restart resume message", "session", s.SessionKey, "error", err)
-			continue
-		}
-		resumed++
-	}
-
-	os.Remove(path)
-	g.logger.Info("processed restart breadcrumb", "sessions_resumed", resumed, "reason", breadcrumb.Reason)
-}
 
 type ShutdownState int32
 
@@ -78,21 +31,6 @@ func (s ShutdownState) String() string {
 	default:
 		return "unknown"
 	}
-}
-
-// RestartBreadcrumb captures session state so the LLM can resume post-restart.
-type RestartBreadcrumb struct {
-	ActiveSessions []BreadcrumbSession `json:"active_sessions"`
-	TriggerAction  string              `json:"trigger_action,omitempty"`
-	Reason         string              `json:"reason"`
-	Timestamp      time.Time           `json:"timestamp"`
-}
-
-type BreadcrumbSession struct {
-	SessionKey string `json:"session_key"`
-	UserID     string `json:"user_id"`
-	LastMsgID  string `json:"last_message_id,omitempty"`
-	ChannelID  string `json:"channel_id,omitempty"`
 }
 
 // ShutdownManager orchestrates graceful shutdown in phases:
@@ -191,6 +129,11 @@ func (sm *ShutdownManager) BeginShutdown(reason string, timeout time.Duration) e
 	if timeout > 0 {
 		sm.drainTimeout = timeout
 	}
+	// conduit-31jg.88: fix the deadline now so DrainDeadline (tool-call
+	// caps) sees it from the moment the state flips to draining.
+	if sm.drainDeadline.IsZero() {
+		sm.drainDeadline = time.Now().Add(sm.drainTimeout)
+	}
 	sm.mu.Unlock()
 
 	sm.logger.Info("graceful shutdown initiated",
@@ -206,11 +149,13 @@ func (sm *ShutdownManager) runShutdownSequence() {
 	// Phase 1: Notify connected clients
 	sm.notifyClients()
 
-	// Phase 2: Write breadcrumb for LLM session resumption
-	sm.writeBreadcrumb()
+	// Phase 2: Drain — wait for in-flight requests to finish
+	turns := sm.drainActiveRequests()
 
-	// Phase 3: Drain — wait for in-flight requests to finish
-	sm.drainActiveRequests()
+	// Phase 3: Write the restart breadcrumb once the drain has resolved, so
+	// each turn's outcome is known (conduit-31jg.88; it used to be written
+	// before the drain and listed only WebSocket clients).
+	sm.writeBreadcrumb(turns)
 
 	// Phase 4: Transition to terminate
 	sm.state.Store(int32(StateTerminate))
@@ -301,6 +246,21 @@ func (sm *ShutdownManager) drainScheduler() drainableScheduler {
 	return ds
 }
 
+// DrainDeadline reports the end of the drain phase once a shutdown has
+// begun (ok=false while running). It is read by tool calls through the
+// TurnRunner (types.DrainDeadline) to cap their timeout. conduit-31jg.88
+func (sm *ShutdownManager) DrainDeadline() (time.Time, bool) {
+	if !sm.IsDraining() {
+		return time.Time{}, false
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.drainDeadline.IsZero() {
+		return time.Time{}, false
+	}
+	return sm.drainDeadline, true
+}
+
 // ShortenDrain caps an in-progress drain so it ends no later than timeout
 // from now (never extends it). A SIGTERM arriving during a 30s SIGHUP drain
 // uses it to stay inside systemd's TimeoutStopSec (conduit-31jg.77).
@@ -320,14 +280,18 @@ func (sm *ShutdownManager) ShortenDrain(timeout time.Duration) {
 // because only turns were counted). New scheduler runs are blocked for the
 // whole drain. When the budget expires, remaining turns are force-cancelled
 // and remaining jobs are cancelled and recorded as interrupted by shutdown.
-func (sm *ShutdownManager) drainActiveRequests() {
+//
+// It returns the TurnRunner's drain report (conduit-31jg.88): taken once
+// everything drained, or at the deadline BEFORE anything is cancelled, so a
+// turn still running is recorded force_cancelled and a queued one dropped.
+func (sm *ShutdownManager) drainActiveRequests() []TurnSnapshot {
 	gw := sm.gateway
 	sched := sm.drainScheduler()
 	if sched != nil {
 		sched.BeginDrain()
 	}
 	if (gw == nil || gw.ws == nil) && sched == nil {
-		return
+		return nil
 	}
 
 	sm.mu.Lock()
@@ -346,7 +310,7 @@ func (sm *ShutdownManager) drainActiveRequests() {
 		active, jobs := sm.inFlight(sched)
 		if active == 0 && len(jobs) == 0 {
 			sm.logger.Info("all active requests and scheduler jobs drained")
-			return
+			return sm.turnReport()
 		}
 
 		sm.mu.Lock()
@@ -358,6 +322,7 @@ func (sm *ShutdownManager) drainActiveRequests() {
 				"remaining_jobs", jobs,
 				"timeout", sm.drainTimeout,
 			)
+			report := sm.turnReport() // before cancelling: conduit-31jg.88
 			// conduit-31jg.66: interrupt scheduler jobs FIRST. Their turns
 			// are also in ActiveRequests; cancelling those before the
 			// scheduler context would let a job finish with a plain
@@ -377,7 +342,7 @@ func (sm *ShutdownManager) drainActiveRequests() {
 				}
 				gw.ws.ActiveRequestsMu.RUnlock()
 			}
-			return
+			return report
 		}
 
 		<-ticker.C
@@ -414,57 +379,12 @@ func (sm *ShutdownManager) inFlight(sched drainableScheduler) (requests int, job
 	return requests, jobs
 }
 
-func (sm *ShutdownManager) writeBreadcrumb() {
+// turnReport is the TurnRunner's drain report, nil without a runner.
+// Called without ActiveRequestsMu held (runner lock order).
+func (sm *ShutdownManager) turnReport() []TurnSnapshot {
 	gw := sm.gateway
-	if gw.config == nil {
-		return
+	if gw == nil || gw.ws == nil {
+		return nil
 	}
-
-	dataDir := gw.config.DataDir
-	if dataDir == "" {
-		dataDir = "."
-	}
-
-	var activeSessions []BreadcrumbSession
-	if gw.ws != nil {
-		gw.ws.ClientMu.RLock()
-		seen := make(map[string]bool)
-		for _, client := range gw.ws.Clients {
-			sk := client.SessionKey() // conduit-31jg.25
-			if sk != "" && !seen[sk] {
-				seen[sk] = true
-				activeSessions = append(activeSessions, BreadcrumbSession{
-					SessionKey: sk,
-					UserID:     client.UserID,
-					ChannelID:  client.ID,
-				})
-			}
-		}
-		gw.ws.ClientMu.RUnlock()
-	}
-
-	sm.mu.Lock()
-	trigger := sm.triggerAction
-	sm.mu.Unlock()
-
-	breadcrumb := RestartBreadcrumb{
-		ActiveSessions: activeSessions,
-		TriggerAction:  trigger,
-		Reason:         sm.reason,
-		Timestamp:      time.Now(),
-	}
-
-	data, err := json.MarshalIndent(breadcrumb, "", "  ")
-	if err != nil {
-		sm.logger.Error("failed to marshal restart breadcrumb", "error", err)
-		return
-	}
-
-	path := filepath.Join(dataDir, ".conduit-restart.json")
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		sm.logger.Error("failed to write restart breadcrumb", "error", err, "path", path)
-		return
-	}
-
-	sm.logger.Info("restart breadcrumb written", "path", path, "sessions", len(activeSessions))
+	return gw.turns().DrainReport()
 }

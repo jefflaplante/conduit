@@ -48,6 +48,34 @@ type Config struct {
 	Reflection     *reflection.ReflectionConfig `json:"reflection,omitempty"`
 	STT            STTConfig                    `json:"stt,omitempty"`
 	MCP            MCPConfig                    `json:"mcp,omitempty"` // conduit-31jg.8
+	// RestartResume selects what happens after a restart to interactive
+	// turns the shutdown drain cut off: "notice" (default), "auto" or "off".
+	// See RestartResumeMode. conduit-31jg.88
+	RestartResume string `json:"restart_resume,omitempty"`
+}
+
+// restart_resume values (conduit-31jg.88).
+const (
+	// RestartResumeNotice tells the owner on the turn's channel and in the
+	// transcript that the request was cut off (default).
+	RestartResumeNotice = "notice"
+	// RestartResumeAuto also wakes the session to continue the turn.
+	RestartResumeAuto = "auto"
+	// RestartResumeOff disables per-turn notices.
+	RestartResumeOff = "off"
+)
+
+// RestartResumeMode returns the normalized restart_resume value; empty or
+// unknown values mean RestartResumeNotice.
+func (c *Config) RestartResumeMode() string {
+	if c == nil {
+		return RestartResumeNotice
+	}
+	switch v := strings.ToLower(strings.TrimSpace(c.RestartResume)); v {
+	case RestartResumeAuto, RestartResumeOff:
+		return v
+	}
+	return RestartResumeNotice
 }
 
 // AuthTokenConfig holds configuration for the token authentication system

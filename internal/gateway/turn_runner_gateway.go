@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"time"
 
 	"conduit/internal/monitoring"
 	"conduit/internal/sessions"
@@ -28,9 +29,21 @@ func (g *Gateway) turns() *TurnRunner {
 				return g.monitoring.MetricsCollector
 			},
 			g.logger)
-		g.turnRunner.draining = func() bool { return g.shutdownMgr != nil && g.shutdownMgr.IsDraining() }
+		g.turnRunner.draining = g.isDraining
+		// conduit-31jg.88: tools cap their timeout to the drain budget.
+		g.turnRunner.drainDeadline = func() (time.Time, bool) {
+			if g.shutdownMgr == nil {
+				return time.Time{}, false
+			}
+			return g.shutdownMgr.DrainDeadline()
+		}
 	})
 	return g.turnRunner
+}
+
+// isDraining reports whether a graceful shutdown drain has begun.
+func (g *Gateway) isDraining() bool {
+	return g.shutdownMgr != nil && g.shutdownMgr.IsDraining()
 }
 
 // gatewayTurnHooks exposes the gateway's SPAR reflection wiring to the runner.

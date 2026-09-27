@@ -198,6 +198,16 @@ func (c *Config) ValidateSemantic() error {
 	validateWorkspacePaths(&me, c.Workspace)
 	validateRateLimiting(&me, c.RateLimiting)
 	validateToolsList(&me, c.Tools)
+	validateRestartResume(&me, c.RestartResume)
 
 	return me.toError()
+}
+
+// validateRestartResume rejects an unknown restart_resume value (conduit-31jg.88).
+func validateRestartResume(me *multiError, v string) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", RestartResumeNotice, RestartResumeAuto, RestartResumeOff:
+		return
+	}
+	me.add("restart_resume must be %q, %q or %q (got %q)", RestartResumeNotice, RestartResumeAuto, RestartResumeOff, v)
 }

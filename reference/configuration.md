@@ -159,6 +159,23 @@ Configuration is loaded from JSON files with support for:
 | `port` | int | 18789 | HTTP/WebSocket server port |
 | `database` | string | "./gateway.db" | SQLite database path |
 | `allowed_origins` | string[] | `[]` | WebSocket allowed origins. Empty = localhost only. |
+| `restart_resume` | string | `"notice"` | What to do after a restart about interactive turns the shutdown drain cut off: `"notice"`, `"auto"` or `"off"`. See [Restart Resume](#restart-resume). |
+
+### Restart Resume
+
+A graceful restart (`conduit restart` / SIGHUP, 30s drain; SIGTERM, 15s) waits for in-flight turns, then writes `{data_dir}/.conduit-restart.json` (mode 0600, atomic) listing every TurnRunner turn the drain saw — Telegram/channel, WebSocket, TUI, session wakes, sub-agents, cron/heartbeat — with its outcome: `completed` (finished within the budget), `force_cancelled` (still running at the deadline) or `dropped` (queued behind the drain). The next process consumes (deletes) the file before acting on it, so a crash loop never repeats a notice.
+
+For interrupted **interactive** turns (Telegram/channel, WebSocket, TUI), `restart_resume` selects:
+
+| Value | Behavior |
+|-------|----------|
+| `notice` (default) | One notice per session on its channel — e.g. `⚠️ I was restarted while working on: "<first line>". Reply "continue" to resume, or resend.` (dropped: `⚠️ I restarted before I got to: "<first line>". Please resend it.`) — plus the same text as an assistant note in the transcript. The channel notice is sent only when a channel adapter can deliver it (Telegram); WebSocket/TUI clients see the transcript note when they reconnect. |
+| `auto` | As `notice`, and a force-cancelled turn is continued by a session wake with the system note "The previous turn was interrupted by a gateway restart; continue where you left off", keeping the turn's interactive origin (approval prompts go to the same channel). Dropped turns were never stored, so they still ask for a resend. |
+| `off` | No per-turn notices or transcript notes. |
+
+Cron and heartbeat jobs get no notice (an interrupted heartbeat re-runs by itself). Sub-agents get no notice either: the parent session receives the sub-agent's "interrupted by gateway restart" failure through the usual sub-agent failure path. WebSocket sessions connected at shutdown still get the generic "Gateway restarted successfully" transcript note. Breadcrumbs written by older versions (no `version`/`turns`) are still read.
+
+While the drain runs, every new tool call's timeout is capped to the remaining drain budget minus 3s (at least 1s), and its result carries a `[System: the gateway is restarting; wrap up now ...]` hint so the model replies instead of starting long work. Tool calls are never refused.
 
 ### Allowed Origins (WebSocket Security)
 
