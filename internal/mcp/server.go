@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"conduit/internal/tools/types"
@@ -17,18 +18,34 @@ import (
 // Server wraps the MCP protocol server and exposes Conduit's tools
 // to external MCP clients such as Claude Code.
 type Server struct {
-	registry   types.ToolRegistry
-	port       int
+	registry  types.ToolRegistry
+	port      int
+	mcpServer *sdkmcp.Server
+
+	// conduit-31jg.78: runCtx is the parent of every HTTP request context
+	// (http.Server.BaseContext) and of every tool call. Stop cancels it so
+	// long-lived streams (the standalone SSE GET, hanging POSTs) and in-flight
+	// tool calls end instead of holding http.Server.Shutdown open.
+	runCtx    context.Context
+	runCancel context.CancelFunc
+
+	mu         sync.Mutex
 	httpServer *http.Server
-	mcpServer  *sdkmcp.Server
 }
+
+// stopGrace bounds how long Stop waits for sessions and connections to
+// drain before force-closing them (conduit-31jg.78).
+const stopGrace = 500 * time.Millisecond
 
 // NewServer creates a new MCP server that will expose tools from the registry.
 // The server binds to localhost only on the given port.
 func NewServer(registry types.ToolRegistry, port int) *Server {
+	runCtx, runCancel := context.WithCancel(context.Background())
 	s := &Server{
-		registry: registry,
-		port:     port,
+		registry:  registry,
+		port:      port,
+		runCtx:    runCtx,
+		runCancel: runCancel,
 	}
 
 	// Create the MCP protocol server.
@@ -61,6 +78,12 @@ func (s *Server) RegisterTools() {
 func (s *Server) makeToolHandler(toolName string) sdkmcp.ToolHandler {
 	return func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
 		log.Printf("[mcp] tool call: %s", toolName)
+
+		// conduit-31jg.78: tie the call to the server lifetime so Stop
+		// cancels it even if the SDK's handler ctx outlives the request.
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		defer context.AfterFunc(s.runCtx, cancel)()
 
 		// Parse arguments from the raw JSON.
 		args := make(map[string]interface{})
@@ -113,9 +136,13 @@ func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", handler)
 
-	s.httpServer = &http.Server{
+	runCtx := s.runCtx
+	hs := &http.Server{
 		Addr:    addr,
 		Handler: mux,
+		// conduit-31jg.78: request contexts derive from runCtx so Stop can
+		// release hanging SSE/long-poll handlers by cancelling it.
+		BaseContext: func(net.Listener) context.Context { return runCtx },
 	}
 
 	// Verify we can listen on the port before returning.
@@ -124,10 +151,14 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("mcp server: failed to listen on %s: %w", addr, err)
 	}
 
+	s.mu.Lock()
+	s.httpServer = hs
+	s.mu.Unlock()
+
 	log.Printf("[mcp] server starting on %s", addr)
 
 	go func() {
-		if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := hs.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Printf("[mcp] server error: %v", err)
 		}
 	}()
@@ -135,22 +166,67 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down the MCP server with a 5-second timeout.
+// Stop shuts down the MCP server. conduit-31jg.78: connected clients hold a
+// standalone SSE stream (and possibly tool calls) open indefinitely, so a
+// plain http.Server.Shutdown always ran into its 5s timeout. Stop now cancels
+// the server context (ending hanging handlers and in-flight tool calls),
+// closes every MCP session, gives connections stopGrace to drain and then
+// force-closes whatever is left. A forced close with live clients is
+// expected and is not reported as an error.
 func (s *Server) Stop(ctx context.Context) error {
-	if s.httpServer == nil {
+	s.mu.Lock()
+	hs := s.httpServer
+	s.httpServer = nil
+	s.mu.Unlock()
+	if hs == nil {
 		return nil
 	}
 
 	log.Printf("[mcp] server stopping")
+	start := time.Now()
 
-	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	s.runCancel()
+	sessions := s.closeSessions(ctx)
+
+	graceCtx, cancel := context.WithTimeout(ctx, stopGrace)
 	defer cancel()
-
-	err := s.httpServer.Shutdown(shutdownCtx)
-	if err != nil {
-		log.Printf("[mcp] server shutdown error: %v", err)
-	} else {
-		log.Printf("[mcp] server stopped")
+	if err := hs.Shutdown(graceCtx); err != nil {
+		if cerr := hs.Close(); cerr != nil {
+			log.Printf("[mcp] server close error: %v", cerr)
+			return cerr
+		}
+		log.Printf("[mcp] server stopped in %s (%d session(s) closed; lingering connections force-closed)",
+			time.Since(start).Round(time.Millisecond), sessions)
+		return nil
 	}
-	return err
+	log.Printf("[mcp] server stopped in %s (%d session(s) closed)", time.Since(start).Round(time.Millisecond), sessions)
+	return nil
+}
+
+// closeSessions closes all live MCP sessions concurrently. ServerSession.Close
+// waits for in-flight requests (already cancelled via runCtx); the wait is
+// bounded by stopGrace so a tool that ignores cancellation cannot stall
+// shutdown (conduit-31jg.78).
+func (s *Server) closeSessions(ctx context.Context) int {
+	var wg sync.WaitGroup
+	n := 0
+	for ss := range s.mcpServer.Sessions() {
+		n++
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = ss.Close()
+		}()
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	t := time.NewTimer(stopGrace)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		log.Printf("[mcp] session close still pending after %s; continuing shutdown", stopGrace)
+	case <-ctx.Done():
+	}
+	return n
 }
