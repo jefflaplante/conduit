@@ -312,34 +312,6 @@ func (a Alert) GetSuppressionKey() string {
 	return fmt.Sprintf("%s:%s", a.GetDeduplicationKey(), a.Severity)
 }
 
-// AlertProcessor interface defines how alerts should be processed and delivered
-type AlertProcessor interface {
-	// ProcessAlert processes a single alert (validation, routing, delivery)
-	ProcessAlert(alert Alert) error
-
-	// ShouldProcessAlert determines if an alert should be processed based on current conditions
-	ShouldProcessAlert(alert Alert) (bool, string) // bool: should process, string: reason if not
-
-	// GetTargetsForAlert returns the list of targets that should receive this alert
-	GetTargetsForAlert(alert Alert) []string
-
-	// DeliverAlert delivers an alert to a specific target
-	DeliverAlert(alert Alert, target string) error
-
-	// SuppressAlert marks an alert as suppressed
-	SuppressAlert(alert Alert, reason string) error
-}
-
-// AlertDeliveryResult represents the result of attempting to deliver an alert
-type AlertDeliveryResult struct {
-	Alert     Alert         `json:"alert"`
-	Target    string        `json:"target"`
-	Success   bool          `json:"success"`
-	Error     string        `json:"error,omitempty"`
-	Timestamp time.Time     `json:"timestamp"`
-	Duration  time.Duration `json:"duration"`
-}
-
 // AlertQueue represents a queue of alerts to be processed
 type AlertQueue struct {
 	Alerts   []Alert   `json:"alerts"`

@@ -3,7 +3,7 @@ package config
 import "time"
 
 // conduit-31jg.33: this file is the single quiet-hours implementation. All
-// callers (heartbeat GatewayIntegration, AlertSeverityRouter) go through these
+// callers (heartbeat GatewayIntegration) go through these
 // methods so the decision always uses the configured timezone and wall-clock
 // arithmetic. The previous IsQuietTime used startOfDay.Add(duration), which is
 // off by an hour on DST transition days, and excluded the start boundary.

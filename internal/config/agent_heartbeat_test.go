@@ -83,13 +83,14 @@ func TestAgentHeartbeatConfigValidation(t *testing.T) {
 			errMsg:  "invalid timezone",
 		},
 		{
-			name: "empty alert queue path",
+			// alert_queue_path is deprecated and optional (conduit-31jg.59).
+			name: "empty alert queue path is allowed",
 			config: AgentHeartbeatConfig{
-				Enabled:         true,
-				IntervalMinutes: 5,
+				Enabled:          true,
+				IntervalMinutes:  5,
+				AlertRetryPolicy: AlertRetryPolicy{MaxRetries: 3, BackoffFactor: 2},
 			},
-			wantErr: true,
-			errMsg:  "alert queue path cannot be empty",
+			wantErr: false,
 		},
 		{
 			name: "invalid log level",

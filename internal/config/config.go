@@ -1062,6 +1062,7 @@ func Load(path string) (*Config, error) {
 	// conduit-31jg.57: fold the deprecated smart_routing.pricing_overrides
 	// alias into ai.pricing_overrides.
 	cfg.AI.normalizePricingOverrides()
+	cfg.warnDeprecatedKeys()
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
