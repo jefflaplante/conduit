@@ -224,7 +224,8 @@ Dedicated search database for FTS5 indices and beads issue indexing. Separated f
 | `default_provider` | string | `"anthropic"` | Which provider name to use for requests |
 | `providers` | array | see below | List of configured providers |
 | `model_aliases` | object | see below | Map of alias names to full model identifiers |
-| `smart_routing` | object | see below | Intelligent model routing configuration |
+| `pricing_overrides` | object | `{}` | Per-model pricing overrides (USD per million tokens) |
+| `smart_routing` | object | — | **Deprecated**, ignored except its `pricing_overrides` alias (see below) |
 
 ### Model aliases
 
@@ -241,30 +242,22 @@ Dedicated search database for FTS5 indices and beads issue indexing. Separated f
 
 Aliases let you reference models by short names. The defaults above are built-in; config values override them.
 
-### Smart routing
+### Pricing overrides
 
 ```json
 {
-  "smart_routing": {
-    "enabled": true,
-    "track_usage": true,
-    "cost_budget_daily": 10.00,
+  "ai": {
     "pricing_overrides": {
-      "claude-sonnet-4-6": {
-        "input_per_m_token": 3.00,
-        "output_per_m_token": 15.00
-      }
+      "glm-5.3": {"input_per_m_token": 1.40, "output_per_m_token": 4.40},
+      "openrouter/deepseek/deepseek-v4.1-flash": {"input_per_m_token": 0.30, "output_per_m_token": 1.20}
     }
   }
 }
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable smart routing |
-| `track_usage` | bool | `false` | Track token usage and costs |
-| `cost_budget_daily` | float | `0` | Daily cost budget in USD (0 = unlimited) |
-| `pricing_overrides` | object | `{}` | Override default model pricing |
+Keys are bare model IDs or provider-prefixed IDs; values are USD per million tokens and win over the built-in pricing matrix. Optional `cache_read_per_m_token` / `cache_write_per_m_token` default to 0.1x / 1.25x (2x with extended TTL) of the input price.
+
+**Deprecated: `ai.smart_routing`.** Smart routing was removed (conduit-2avx); it had never been wired, so it was a no-op. The block is still accepted and logs a one-time warning at load. `enabled`, `track_usage` and `cost_budget_daily` are ignored; `smart_routing.pricing_overrides` is still merged into `ai.pricing_overrides` (which wins on conflicts). Move overrides to `ai.pricing_overrides` and delete the block.
 
 ### Provider fields
 
@@ -821,7 +814,6 @@ Agent heartbeat — periodic task processing loop. Every N minutes, the agent re
       "start_time": "23:00",
       "end_time": "08:00"
     },
-    "alert_queue_path": "memory/alerts/pending.json",
     "heartbeat_task_path": "HEARTBEAT.md",
     "enabled_task_types": ["alerts", "checks", "reports"],
     "alert_targets": [],
@@ -854,17 +846,19 @@ Agent heartbeat — periodic task processing loop. Every N minutes, the agent re
 | `quiet_hours.start_time` | string | `"23:00"` | Quiet period start (HH:MM in configured timezone) |
 | `quiet_hours.end_time` | string | `"08:00"` | Quiet period end (HH:MM in configured timezone) |
 
-During quiet hours, only `"critical"` severity alerts are delivered. `"warning"` and `"info"` alerts are held in the queue until quiet hours end. Quiet hours can span midnight (e.g., 23:00 to 08:00).
+During quiet hours, critical/high-priority heartbeat actions are still delivered immediately. Actions marked quiet-aware are persisted to `memory/alerts/deferred.json` and delivered on the first heartbeat cycle after quiet hours end. Quiet hours can span midnight (e.g., 23:00 to 08:00).
 
 ### Alert system
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `alert_queue_path` | string | `"memory/alerts/pending.json"` | Path to alert queue file (relative to `workspace.context_dir`) |
-| `alert_targets` | array | `[]` | Where to deliver alerts |
-| `alert_retry_policy.max_retries` | int | `3` | Max delivery attempts per alert. Range: 0–10 |
-| `alert_retry_policy.retry_interval` | duration (ns) | `300000000000` (5m) | Wait between retries |
-| `alert_retry_policy.backoff_factor` | float | `2.0` | Exponential backoff multiplier. Range: 1.0–5.0 |
+| `alert_queue_path` | string | unset | **Deprecated** (warns at load). The gateway no longer processes this queue; `pending.json` belongs to `alert-flush.sh` and the HEARTBEAT.md prompt. If set, only its directory is used to place `deferred.json`. |
+| `alert_targets` | array | `[]` | Validated but not currently used for routing: heartbeat messages go to the heartbeat job's target (`telegram:<chat_id>`) |
+| `alert_retry_policy.max_retries` | int | `3` | Background retries after a failed live heartbeat delivery. Range: 0–10 |
+| `alert_retry_policy.retry_interval` | duration (ns) | `300000000000` (5m) | Wait before the first retry |
+| `alert_retry_policy.backoff_factor` | float | `2.0` | Multiplier applied to the wait after each retry. Range: 1.0–5.0 |
+
+Heartbeat delivery goes through the gateway's channel sender (output sanitized) via a delivery registry: each destination has a circuit breaker (3 consecutive failures open it for 5 minutes, and skipped sends are not retried), and every attempt is recorded in the `alert_history` table. Retries run in the background and never block the heartbeat loop. Deferred (quiet-hours) actions are not retried in the background; they stay queued in `deferred.json` and are retried on the next cycle.
 
 ### Alert target fields
 
@@ -1536,7 +1530,6 @@ Enable the agent task loop with alert delivery to Telegram:
     "timezone": "America/New_York",
     "quiet_enabled": true,
     "quiet_hours": { "start_time": "22:00", "end_time": "07:00" },
-    "alert_queue_path": "memory/alerts/pending.json",
     "heartbeat_task_path": "HEARTBEAT.md",
     "enabled_task_types": ["alerts", "checks", "reports"],
     "alert_targets": [

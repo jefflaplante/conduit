@@ -211,41 +211,22 @@ Model aliases (for `/model` command):
 - `opus` - claude-opus-4-6
 - `glm` - z-ai/glm-4-flash (requires [z.ai setup](z-ai.md))
 
-### Smart Routing
-
-Automatic model selection based on task complexity. When enabled, Conduit analyzes each request and routes to the most appropriate model tier.
+### Pricing Overrides
 
 ```json
 {
   "ai": {
-    "smart_routing": {
-      "enabled": true,
-      "track_usage": true,
-      "cost_budget_daily": 10.0,
-      "pricing_overrides": {
-        "claude-opus-4-6": {
-          "input_per_m_token": 15.0,
-          "output_per_m_token": 75.0
-        }
-      }
+    "pricing_overrides": {
+      "glm-5.3": {"input_per_m_token": 1.40, "output_per_m_token": 4.40},
+      "openrouter/deepseek/deepseek-v4.1-flash": {"input_per_m_token": 0.30, "output_per_m_token": 1.20}
     }
   }
 }
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable smart routing |
-| `track_usage` | bool | `false` | Track usage metrics |
-| `cost_budget_daily` | float | `0` | Daily cost budget (0 = unlimited) |
-| `pricing_overrides` | map | `{}` | Override default model pricing |
+Keys are bare model IDs or provider-prefixed IDs; values are USD per million tokens and win over the built-in pricing matrix. Optional `cache_read_per_m_token` / `cache_write_per_m_token` default to 0.1x / 1.25x (2x with extended TTL) of the input price.
 
-**Model Tiers:**
-- **Haiku** — Simple queries, greetings, straightforward tasks
-- **Sonnet** — Standard complexity, 2-3 tool calls, moderate reasoning
-- **Opus** — Complex multi-step tasks, 5+ tool calls, deep analysis
-
-Use `/smartroute` command to toggle per-session or check status.
+**Deprecated: `ai.smart_routing`.** Smart routing was removed (conduit-2avx); it had never been wired, so it was a no-op. The block is still accepted and logs a one-time warning at load. `enabled`, `track_usage` and `cost_budget_daily` are ignored; `smart_routing.pricing_overrides` is still merged into `ai.pricing_overrides` (which wins on conflicts). Move overrides to `ai.pricing_overrides` and delete the block.
 
 ### Context Compaction
 
@@ -468,7 +449,6 @@ Agent heartbeat for automated tasks. See [agent-heartbeat.md](agent-heartbeat.md
       "start_time": "22:00",
       "end_time": "07:00"
     },
-    "alert_queue_path": "memory/alerts/pending.json",
     "heartbeat_task_path": "HEARTBEAT.md",
     "enabled_task_types": ["alerts", "checks", "reports", "maintenance"],
     "alert_targets": [
@@ -487,6 +467,8 @@ Agent heartbeat for automated tasks. See [agent-heartbeat.md](agent-heartbeat.md
   }
 }
 ```
+
+`alert_queue_path` is deprecated (still accepted, warns at load; see [agent-heartbeat.md](agent-heartbeat.md)). `alert_retry_policy` drives background retries of failed heartbeat deliveries.
 
 ### Skills
 

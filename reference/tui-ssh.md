@@ -52,9 +52,6 @@ All commands work the same as in Telegram:
 | `/model <alias>` | Switch model (haiku, sonnet, opus, default) |
 | `/provider` | View/switch AI provider |
 | `/context` | Show context window usage |
-| `/smartroute` | Show smart routing status |
-| `/smartroute on\|off` | Enable/disable smart routing for this session |
-| `/smartroute budget <amount>` | Set session cost budget |
 | `/compact` | Manually trigger context compaction |
 | `/stop` | Cancel the current AI operation |
 | `/quit` | Exit the TUI |
