@@ -74,7 +74,6 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **Gateway Architecture** — Channel manager with unified lifecycle management
 - **Session Management** — SQLite-based persistent session storage
 - **AI Provider Routing** — Anthropic and OpenAI with automatic fallback
-- **Smart Routing** — Automatic model selection based on task complexity (haiku/sonnet/opus)
 - **Context Compaction** — Automatic summarization of long sessions to free context space
 - **Tool Registry** — 34 built-in tools (24 core + 10 optional) with sandbox execution
 - **Tool SelfTest** — All built-in tools expose a `SelfTest` capability, allowing the gateway to programmatically verify tool health at startup or on demand
@@ -91,7 +90,7 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **[SPAR Reflect](reference/spar.md)** — Cross-session learning loop. Tool outcomes are captured automatically on every execution, session summaries are written on idle/farewell/context budget, and the nightly REM Reflect phase clusters patterns (e.g., "WebFetch fails frequently") and feeds them back into the agent's Situation Awareness prompt section
 - **FTS5 Full-Text Search** — SQLite-based document, message, and brain LTM search
 - **[Vecgo (Semantic Search)](reference/vecgo.md)** — Hybrid vector+keyword search via MemorySearch. **Batteries-included**: auto-detects Ollama at localhost and enables semantic embeddings with zero config. Searches like "power setup" find "Acme 10kW" even without exact keyword match. Supports Ollama (local) and OpenAI embedders. Results merged with FTS5 via Reciprocal Rank Fusion
-- **Web Search** — Hybrid Anthropic native + Brave API fallback
+- **Web Search** — Brave Search API via the WebSearch tool
 
 ### Communication & Vision
 - **Telegram Photo Vision** — Send photos to the Telegram bot for LLM image analysis (JPEG, PNG, GIF, WebP up to 20MB)
@@ -102,7 +101,7 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 ### Automation
 - **Chain Workflows** — Multi-tool sequences with dependencies and variables
 - **Cron Scheduling** — Recurring task execution
-- **[Agent Heartbeat](reference/agent-heartbeat.md)** — Automated HEARTBEAT.md task processing with shared alert queue
+- **[Agent Heartbeat](reference/agent-heartbeat.md)** — Automated HEARTBEAT.md task processing with quiet-hours deferral and audited, circuit-broken alert delivery
 - **Skills System** — Extensible AI capabilities via SKILL.md files
 
 ### IoT & Home Automation
@@ -218,7 +217,7 @@ Use `/model <alias>` to switch models. The provider auto-resolves based on the m
 | [Kubernetes](reference/kubernetes.md) | Multi-cluster K8s tool with security tiers |
 | [MQTT Integration](reference/mqtt.md) | MQTT event ingest for IoT/home automation |
 | [Advanced Features](reference/advanced-features.md) | SearchDB, prompt caching, and context compaction |
-| [Internal Subsystems](reference/internals.md) | Learning, orchestration, NLI, plugins, briefing (experimental) |
+| [Internal Subsystems](reference/internals.md) | Briefing (session summarization) |
 | [Security](reference/security.md) | Security considerations |
 
 ### Guides

@@ -459,7 +459,7 @@ type AIConfig struct {
 	Providers            []ProviderConfig    `json:"providers"`
 	ModelAliases         map[string]string   `json:"model_aliases,omitempty"`
 	SubagentDefaultModel string              `json:"subagent_default_model,omitempty"` // Default model for sub-agents spawned without an explicit model (overrides gateway default when set)
-	SmartRouting         *SmartRoutingConfig `json:"smart_routing,omitempty"`
+	SmartRouting         *SmartRoutingConfig `json:"smart_routing,omitempty"`          // Deprecated: ignored except pricing_overrides (conduit-2avx)
 	Compaction           *CompactionConfig   `json:"compaction,omitempty"`
 	PromptCaching        PromptCachingConfig `json:"prompt_caching,omitempty"`
 	// MaxTokens caps generated output per LLM round trip (bd-1k3o). 0 = default 4000.
@@ -528,8 +528,13 @@ func DefaultCompactionConfig() CompactionConfig {
 	}
 }
 
-// SmartRoutingConfig holds configuration for intelligent model routing.
-// Phase 1: Usage tracking foundation. Future phases add routing strategies.
+// SmartRoutingConfig is the deprecated ai.smart_routing block.
+//
+// Deprecated: smart routing was removed (conduit-2avx); it had never been
+// wired, so it was a no-op. The block is still parsed so existing configs
+// load (with a one-time warning) and round-trip through Save unchanged.
+// Enabled, TrackUsage and CostBudgetDaily are ignored; usage is always
+// tracked, and the budget hard-stop is tracked in conduit-23aw.
 type SmartRoutingConfig struct {
 	Enabled         bool    `json:"enabled"`
 	TrackUsage      bool    `json:"track_usage"`
@@ -1062,6 +1067,7 @@ func Load(path string) (*Config, error) {
 	// conduit-31jg.57: fold the deprecated smart_routing.pricing_overrides
 	// alias into ai.pricing_overrides.
 	cfg.AI.normalizePricingOverrides()
+	cfg.warnDeprecatedKeys()
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {

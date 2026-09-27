@@ -95,7 +95,7 @@ This uses all defaults: `claude` on `$PATH`, MCP on port 18790, 25 max turns, 5-
 
 ### Alongside Other Providers
 
-The claude-code provider can coexist with direct API providers. Use smart routing or explicit provider selection:
+The claude-code provider can coexist with direct API providers. Select it explicitly per session (`/provider`, `/model`) or as the default provider:
 
 ```json
 {

@@ -21,7 +21,12 @@ type AgentHeartbeatConfig struct {
 	QuietEnabled bool             `json:"quiet_enabled"`
 
 	// Alert processing settings
-	AlertQueuePath   string           `json:"alert_queue_path"`
+	//
+	// Deprecated: AlertQueuePath (pending.json) is owned by alert-flush.sh and
+	// the HEARTBEAT.md prompt; the gateway no longer processes it
+	// (conduit-31jg.59). Still accepted, with a load-time warning; when set,
+	// only its directory is used, to place the deferred.json queue.
+	AlertQueuePath   string           `json:"alert_queue_path,omitempty"`
 	AlertTargets     []AlertTarget    `json:"alert_targets"`
 	AlertRetryPolicy AlertRetryPolicy `json:"alert_retry_policy"`
 
@@ -81,11 +86,6 @@ func (a AgentHeartbeatConfig) Validate() error {
 		if err := a.QuietHours.Validate(); err != nil {
 			return fmt.Errorf("invalid quiet hours configuration: %w", err)
 		}
-	}
-
-	// Validate alert queue path
-	if a.AlertQueuePath == "" {
-		return fmt.Errorf("alert queue path cannot be empty")
 	}
 
 	// Validate alert targets
@@ -236,8 +236,7 @@ func DefaultAgentHeartbeatConfig() AgentHeartbeatConfig {
 			EndTime:   "08:00", // 8:00 AM PT
 		},
 
-		AlertQueuePath: "memory/alerts/pending.json",
-		AlertTargets:   []AlertTarget{},
+		AlertTargets: []AlertTarget{},
 		AlertRetryPolicy: AlertRetryPolicy{
 			MaxRetries:    3,
 			RetryInterval: 5 * time.Minute,

@@ -216,14 +216,14 @@ config := heartbeat.ExecutorConfig{
 
 ### Quiet Hours Integration
 
-The framework integrates with existing `AlertSeverityRouter` patterns:
+Quiet hours come from `agent_heartbeat` (timezone + `quiet_hours` window) via
+`config.AgentHeartbeatConfig.IsQuietTime` (`internal/config/quiet_hours.go`):
 
 ```go
-// Actions are categorized by quiet hours awareness
-immediate, delayed := processor.FilterActionsByQuietHours(actions, isQuietHours)
-
-// Critical/high priority actions are always immediate
-// Other actions respect quiet hours if marked as quiet_aware
+// Critical/high priority actions are always immediate. Other actions marked
+// quiet_aware are persisted to memory/alerts/deferred.json during quiet hours
+// and delivered by FlushDeferred on the first heartbeat after they end.
+immediate, delayed := g.categorizeActions(actions)
 ```
 
 ## Error Handling
@@ -333,11 +333,17 @@ func IsHeartbeatJob(job *scheduler.Job) bool {
 }
 ```
 
-### Alert Processing
+### Alert Delivery (conduit-31jg.59)
 ```go
-// Leverages existing AlertSeverityRouter
-// Respects Pacific timezone quiet hours (22:00-08:00)
-// Integrates with SharedAlertQueue
+// Every heartbeat message goes through DeliveryRegistry.DeliverAlert using a
+// ChannelSenderDeliverer that wraps the gateway ChannelSender:
+//   - SanitizeOutgoingText is applied before sending
+//   - per-destination CircuitBreaker (3 failures -> 5 min open)
+//   - every attempt is written to alert_history via AlertAuditor
+//   - failed live sends retry in the background per alert_retry_policy
+//     (bounded; stops on success, open breaker, or shutdown)
+//   - deferred-queue flushes are not retried in the background; the durable
+//     deferred.json queue retries them on the next cycle
 ```
 
 ### Session Management
@@ -349,8 +355,8 @@ session, err := sessionsStore.GetOrCreateSession("heartbeat", sessionKey)
 
 ### Channel Delivery
 ```go
-// Uses existing channel manager for message delivery
-err := channelSender.SendMessage(ctx, channelID, userID, content)
+// ChannelSenderDeliverer ultimately calls the gateway channel manager:
+err := channelSender.SendMessage(ctx, channelID, userID, content, nil)
 ```
 
 This framework provides a robust, testable, and maintainable solution for executing HEARTBEAT.md tasks while leveraging all existing Conduit Gateway infrastructure.

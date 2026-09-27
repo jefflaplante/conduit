@@ -122,9 +122,6 @@ type TurnRequest struct {
 	Origin               *approval.Origin
 	NonInteractiveSource string
 
-	// SmartRouting routes a streaming turn through GenerateResponseSmartStreaming
-	// when the session has no explicit model.
-	SmartRouting bool
 	// SanitizeStored stores the reply after channels.SanitizeOutgoingText
 	// (WS/TUI); channel adapters store the raw reply (reply tags intact).
 	SanitizeStored bool
@@ -448,20 +445,7 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 	var conv ai.ConversationResponse
 	var err error
 	if onDelta := sink.Begin(ctx); onDelta != nil {
-		if req.SmartRouting && modelOverride == "" {
-			var rr *ai.SmartRoutingResult
-			conv, rr, err = r.ai.GenerateResponseSmartStreaming(ctx, session, messageForAI, providerOverride, onDelta)
-			if rr != nil {
-				_ = r.sessions.SetSessionContextBatch(key, map[string]string{
-					"smart_routing_model":      rr.SelectedModel,
-					"smart_routing_reason":     rr.SelectionReason,
-					"smart_routing_complexity": strconv.Itoa(rr.Complexity.Score),
-				})
-				modelOverride = rr.SelectedModel
-			}
-		} else {
-			conv, err = r.ai.GenerateResponseStreaming(ctx, session, messageForAI, providerOverride, modelOverride, onDelta)
-		}
+		conv, err = r.ai.GenerateResponseStreaming(ctx, session, messageForAI, providerOverride, modelOverride, onDelta)
 	}
 	if conv == nil && err == nil {
 		conv, err = r.ai.GenerateResponseWithToolsAndProgress(ctx, session, messageForAI, providerOverride, modelOverride, sink.Progress)

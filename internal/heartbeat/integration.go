@@ -32,6 +32,11 @@ type GatewayIntegration struct {
 	hbCfg        *config.AgentHeartbeatConfig
 	deferred     *SharedAlertQueue
 	now          func() time.Time // test hook; nil means time.Now
+
+	// conduit-31jg.59: all delivery goes through a DeliveryRegistry
+	// (circuit breaker + alert_history audit). Guarded by deferMu.
+	delivery *DeliveryRegistry
+	retries  retryState
 }
 
 // BrainWriter is an optional callback interface for writing heartbeat alerts into
@@ -72,6 +77,12 @@ func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, a
 	}
 	executor := NewJobExecutor(workspaceDir, sessionsStore, config)
 
+	// Default registry (no auditor) so delivery always has breaker
+	// semantics; the gateway swaps in its audited registry via
+	// SetDeliveryRegistry.
+	delivery := NewDeliveryRegistry()
+	delivery.Register(NewChannelSenderDeliverer(channelSender))
+
 	return &GatewayIntegration{
 		executor:         executor,
 		aiRouter:         aiRouter,
@@ -80,6 +91,8 @@ func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, a
 		metricsCollector: metricsCollector,
 		workspaceDir:     workspaceDir,
 		deferred:         NewSharedAlertQueue(deferredQueuePath(workspaceDir, "")),
+		delivery:         delivery,
+		retries:          retryState{stop: make(chan struct{})},
 	}
 }
 
@@ -294,7 +307,7 @@ func (g *GatewayIntegration) executeActions(ctx context.Context, actions []Heart
 
 	// Execute immediate actions first
 	for _, action := range immediate {
-		if err := g.executeAction(ctx, action, job); err != nil {
+		if err := g.executeAction(ctx, action, job, deliverWithRetry); err != nil {
 			log.Printf("[HeartbeatIntegration] Failed to execute immediate action: %v", err)
 			// Continue with other actions even if one fails
 		}
@@ -304,7 +317,7 @@ func (g *GatewayIntegration) executeActions(ctx context.Context, actions []Heart
 	// hours they are persisted and delivered by FlushDeferred (conduit-31jg.33).
 	for i, action := range delayed {
 		if g.shouldExecuteDelayedAction(action) {
-			if err := g.executeAction(ctx, action, job); err != nil {
+			if err := g.executeAction(ctx, action, job, deliverWithRetry); err != nil {
 				log.Printf("[HeartbeatIntegration] Failed to execute delayed action: %v", err)
 			}
 			continue
@@ -319,20 +332,21 @@ func (g *GatewayIntegration) executeActions(ctx context.Context, actions []Heart
 	return nil
 }
 
-// executeAction executes a single heartbeat action
-func (g *GatewayIntegration) executeAction(ctx context.Context, action HeartbeatAction, job *scheduler.Job) error {
+// executeAction executes a single heartbeat action. mode controls whether a
+// failed delivery is retried in the background (conduit-31jg.59).
+func (g *GatewayIntegration) executeAction(ctx context.Context, action HeartbeatAction, job *scheduler.Job, mode deliveryMode) error {
 	switch action.Type {
 	case ActionTypeAlert:
-		return g.sendAlert(ctx, action, job)
+		return g.sendAlert(ctx, action, job, mode)
 
 	case ActionTypeNotification:
-		return g.sendNotification(ctx, action, job)
+		return g.sendNotification(ctx, action, job, mode)
 
 	case ActionTypeDelivery:
-		return g.sendDelivery(ctx, action, job)
+		return g.sendDelivery(ctx, action, job, mode)
 
 	case ActionTypeCommand:
-		return g.executeCommand(ctx, action, job)
+		return g.executeCommand(ctx, action, job, mode)
 
 	default:
 		return fmt.Errorf("unknown action type: %s", action.Type)
@@ -340,7 +354,7 @@ func (g *GatewayIntegration) executeAction(ctx context.Context, action Heartbeat
 }
 
 // sendAlert sends an alert message
-func (g *GatewayIntegration) sendAlert(ctx context.Context, action HeartbeatAction, job *scheduler.Job) error {
+func (g *GatewayIntegration) sendAlert(ctx context.Context, action HeartbeatAction, job *scheduler.Job, mode deliveryMode) error {
 	target := g.resolveTarget(action.Target, job.Target)
 
 	// Format alert message with appropriate urgency indicators
@@ -355,11 +369,11 @@ func (g *GatewayIntegration) sendAlert(ctx context.Context, action HeartbeatActi
 	}
 
 	message := fmt.Sprintf("%s: %s", prefix, action.Content)
-	return g.sendToTarget(ctx, target, message)
+	return g.deliverToTarget(ctx, target, message, actionAlertMeta(action, job.ID), mode)
 }
 
 // sendNotification sends a regular notification
-func (g *GatewayIntegration) sendNotification(ctx context.Context, action HeartbeatAction, job *scheduler.Job) error {
+func (g *GatewayIntegration) sendNotification(ctx context.Context, action HeartbeatAction, job *scheduler.Job, mode deliveryMode) error {
 	target := g.resolveTarget(action.Target, job.Target)
 
 	// Add notification emoji based on priority
@@ -374,17 +388,17 @@ func (g *GatewayIntegration) sendNotification(ctx context.Context, action Heartb
 	}
 
 	message := fmt.Sprintf("%s %s", prefix, action.Content)
-	return g.sendToTarget(ctx, target, message)
+	return g.deliverToTarget(ctx, target, message, actionAlertMeta(action, job.ID), mode)
 }
 
 // sendDelivery sends a delivery message (similar to notification but may respect quiet hours)
-func (g *GatewayIntegration) sendDelivery(ctx context.Context, action HeartbeatAction, job *scheduler.Job) error {
+func (g *GatewayIntegration) sendDelivery(ctx context.Context, action HeartbeatAction, job *scheduler.Job, mode deliveryMode) error {
 	target := g.resolveTarget(action.Target, job.Target)
-	return g.sendToTarget(ctx, target, action.Content)
+	return g.deliverToTarget(ctx, target, action.Content, actionAlertMeta(action, job.ID), mode)
 }
 
 // executeCommand executes a system command action
-func (g *GatewayIntegration) executeCommand(ctx context.Context, action HeartbeatAction, job *scheduler.Job) error {
+func (g *GatewayIntegration) executeCommand(ctx context.Context, action HeartbeatAction, job *scheduler.Job, mode deliveryMode) error {
 	// For safety, we'll log the command but not execute it directly
 	// In a production system, you might want to have a whitelist of allowed commands
 	log.Printf("[HeartbeatIntegration] Command action detected: %s", action.Content)
@@ -401,7 +415,7 @@ func (g *GatewayIntegration) executeCommand(ctx context.Context, action Heartbea
 	// Send a notification about the command that was requested
 	target := g.resolveTarget(action.Target, job.Target)
 	message := fmt.Sprintf("🔧 Maintenance action: %s", action.Content)
-	return g.sendToTarget(ctx, target, message)
+	return g.deliverToTarget(ctx, target, message, actionAlertMeta(action, job.ID), mode)
 }
 
 // categorizeActions splits actions into immediate and delayed based on priority and quiet hours
@@ -449,35 +463,25 @@ func (g *GatewayIntegration) resolveTarget(actionTarget, jobTarget string) strin
 	return "telegram"
 }
 
-// sendToTarget sends a message to the specified target
+// sendToTarget sends a status message (errors, verbose OK) to the target.
 func (g *GatewayIntegration) sendToTarget(ctx context.Context, target, message string) error {
+	return g.deliverToTarget(ctx, target, message, defaultAlertMeta, deliverWithRetry)
+}
+
+// deliverToTarget sends a message to target ("telegram:chatid" or a bare
+// chat id) through the DeliveryRegistry (conduit-31jg.59).
+func (g *GatewayIntegration) deliverToTarget(ctx context.Context, target, message string, meta alertMeta, mode deliveryMode) error {
 	// Suppress silent response tokens from being delivered to channels
 	if channels.IsSilentResponse(message) {
 		log.Printf("[HeartbeatIntegration] Silent token suppressed, not delivering to %s", target)
 		return nil
 	}
 
-	// Sanitize internal markers before sending
+	// Sanitize internal markers before sending (the deliverer sanitizes
+	// again, so nothing routed through the registry can skip it).
 	message = channels.SanitizeOutgoingText(message)
 
-	if g.channelSender == nil {
-		log.Printf("[HeartbeatIntegration] No channel sender configured, would send: %s", message)
-		return nil
-	}
-
-	// Parse target format: "telegram:chatid" or just "chatid"
-	parts := strings.SplitN(target, ":", 2)
-	var channelID, userID string
-
-	if len(parts) == 2 {
-		channelID = parts[0]
-		userID = parts[1]
-	} else {
-		channelID = "telegram" // Default to Telegram
-		userID = target
-	}
-
-	return g.channelSender.SendMessage(ctx, channelID, userID, message, nil)
+	return g.dispatch(ctx, target, message, meta, mode)
 }
 
 // shouldSendOKStatus determines if HEARTBEAT_OK status should be sent to target

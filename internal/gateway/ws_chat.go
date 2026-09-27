@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
 	"time"
 
@@ -116,14 +115,6 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		requestID = fmt.Sprintf("req_%d", time.Now().UnixNano())
 	}
 
-	// Check if smart routing should be used
-	smartRoutingEnabled := g.config != nil && g.config.AI.SmartRouting != nil && g.config.AI.SmartRouting.Enabled
-	if sessionSmartOverride := session.Context["smart_routing_enabled"]; sessionSmartOverride == "false" {
-		smartRoutingEnabled = false
-	} else if sessionSmartOverride == "true" {
-		smartRoutingEnabled = true
-	}
-
 	// conduit-31jg.35: the shared TurnRunner owns the turn lock, transcript
 	// persistence (inside the lock, conduit-31jg.22), /stop registration
 	// (conduit-31jg.23), SPAR reflection, cost and compaction.
@@ -136,7 +127,6 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 			Source: "websocket", ChannelID: session.ChannelID, UserID: userID,
 			SessionKey: session.Key, Notify: notify,
 		},
-		SmartRouting:   smartRoutingEnabled,
 		SanitizeStored: true,
 	}, &wsTurnSink{g: g, client: client, sessionKey: session.Key, requestID: requestID})
 }
@@ -352,7 +342,6 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			"/cost - Show detailed cost breakdown\n" +
 			"/compact - Compact context by summarizing older messages\n" +
 			"/stop - Stop current operation\n" +
-			"/smartroute [on|off|status|budget <amount>] - Smart routing controls\n" +
 			"/quit - Exit TUI"
 		sendResponse(help)
 
@@ -518,87 +507,6 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 		// conduit-31jg.23: running turn + queued turns (TurnRunner.Stop).
 		resp, _ := stopResponse(g.turns().Stop(sessionKey))
 		sendResponse(resp)
-
-	case text == "/smartroute" || strings.HasPrefix(text, "/smartroute "):
-		if sessionKey == "" {
-			sendResponse("No active session.")
-			return
-		}
-
-		session, err := g.sessions.GetSession(sessionKey)
-		if err != nil {
-			sendResponse("Could not retrieve session.")
-			return
-		}
-
-		parts := strings.Fields(text)
-		subcommand := ""
-		if len(parts) > 1 {
-			subcommand = strings.ToLower(parts[1])
-		}
-
-		switch subcommand {
-		case "", "status":
-			enabled := "off (global)"
-			if g.config.AI.SmartRouting != nil && g.config.AI.SmartRouting.Enabled {
-				enabled = "on (global)"
-			}
-			if override := session.Context["smart_routing_enabled"]; override != "" {
-				if override == "true" {
-					enabled = "on (session)"
-				} else {
-					enabled = "off (session)"
-				}
-			}
-
-			model := session.Context["smart_routing_model"]
-			reason := session.Context["smart_routing_reason"]
-			complexity := session.Context["smart_routing_complexity"]
-			cost := session.Context["session_total_cost"]
-
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("Smart Routing: %s\n", enabled))
-			if model != "" {
-				sb.WriteString(fmt.Sprintf("Last model: %s\n", model))
-			}
-			if complexity != "" {
-				sb.WriteString(fmt.Sprintf("Complexity score: %s\n", complexity))
-			}
-			if reason != "" {
-				sb.WriteString(fmt.Sprintf("Selection reason: %s\n", reason))
-			}
-			if cost != "" {
-				sb.WriteString(fmt.Sprintf("Session cost: $%s\n", cost))
-			}
-			if g.config.AI.SmartRouting != nil && g.config.AI.SmartRouting.CostBudgetDaily > 0 {
-				sb.WriteString(fmt.Sprintf("Daily budget: $%.2f\n", g.config.AI.SmartRouting.CostBudgetDaily))
-			}
-			sendResponse(sb.String())
-
-		case "on":
-			_ = g.sessions.SetSessionContext(sessionKey, "smart_routing_enabled", "true")
-			sendResponse("Smart routing enabled for this session.")
-
-		case "off":
-			_ = g.sessions.SetSessionContext(sessionKey, "smart_routing_enabled", "false")
-			sendResponse("Smart routing disabled for this session. Using default model.")
-
-		case "budget":
-			if len(parts) < 3 {
-				sendResponse("Usage: /smartroute budget <amount>")
-				return
-			}
-			amount := parts[2]
-			if _, err := strconv.ParseFloat(amount, 64); err != nil {
-				sendResponse(fmt.Sprintf("Invalid budget amount: %s", amount))
-				return
-			}
-			_ = g.sessions.SetSessionContext(sessionKey, "smart_routing_budget", amount)
-			sendResponse(fmt.Sprintf("Session budget set to $%s.", amount))
-
-		default:
-			sendResponse("Usage: /smartroute [on|off|status|budget <amount>]")
-		}
 
 	case text == "/compact" || strings.HasPrefix(text, "/compact "):
 		if sessionKey == "" {
