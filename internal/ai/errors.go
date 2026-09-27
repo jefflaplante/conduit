@@ -50,9 +50,6 @@ func ClassifyError(err error) AIErrorCategory {
 	if ce, ok := err.(*CategorizedError); ok {
 		return ce.Category
 	}
-	if _, ok := err.(*RateLimitError); ok {
-		return CategoryRateLimit
-	}
 
 	msg := strings.ToLower(err.Error())
 

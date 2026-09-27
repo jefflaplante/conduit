@@ -62,4 +62,5 @@ func TestLoad_DeprecatedKeysWarnOnce(t *testing.T) {
 
 var deprecatedWarningsUnderTest = []string{
 	"agent_heartbeat.alert_queue_path is deprecated", // conduit-31jg.59
+	"ai.smart_routing is deprecated",                 // conduit-2avx
 }

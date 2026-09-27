@@ -49,12 +49,7 @@ type Router struct {
 	historyConfig   *config.HistoryConfig // Token-aware history retrieval config
 	historyCuts     historyCutCache       // per-session history cut, for a stable cached prefix (conduit-31jg.63)
 
-	// Smart routing components
-	modelSelector      ModelSelector
-	complexityAnalyzer *ComplexityAnalyzer
-	smartRoutingCfg    *config.SmartRoutingConfig
-	contextEngine      ContextEngine
-	pricingResolver    *PricingResolver
+	pricingResolver *PricingResolver // conduit-31jg.57
 
 	// Per-session turn serialization: prevents concurrent LLM turns on the
 	// same session (e.g., a normal user message and an inter-session wake
@@ -115,9 +110,8 @@ type turnLeaseKey struct{}
 //
 // It blocks until the lock is free or ctx is done, so a queued turn cancelled
 // by /stop stops waiting (conduit-31jg.23). The returned context carries a
-// lease: GenerateResponseWithTools*/GenerateResponseStreaming (and the smart
-// routing wrappers over them) called with it, or with a context derived from
-// it, run UNLOCKED for that session instead of deadlocking on the lock the
+// lease: GenerateResponseWithTools*/GenerateResponseStreaming called with
+// it, or with a context derived from it, run UNLOCKED for that session instead of deadlocking on the lock the
 // caller already holds. release is idempotent; after it, the lease no longer
 // bypasses the lock, so goroutines that outlive the turn lock normally.
 func (r *Router) AcquireTurn(ctx context.Context, sessionKey string) (context.Context, func(), error) {
@@ -435,28 +429,6 @@ func (r *Router) GetUsageTracker() *UsageTracker {
 	return r.usageTracker
 }
 
-// SetModelSelector sets the model selector for smart routing.
-func (r *Router) SetModelSelector(selector ModelSelector) {
-	r.modelSelector = selector
-}
-
-// SetComplexityAnalyzer sets the complexity analyzer for smart routing.
-func (r *Router) SetComplexityAnalyzer(analyzer *ComplexityAnalyzer) {
-	r.complexityAnalyzer = analyzer
-}
-
-// SetSmartRoutingConfig sets the smart routing configuration.
-func (r *Router) SetSmartRoutingConfig(cfg *config.SmartRoutingConfig) {
-	r.smartRoutingCfg = cfg
-}
-
-// SetContextEngine sets the context engine for context-aware model selection.
-// When set, smart routing will query historical context to inform model selection.
-// This is optional — smart routing works identically without a context engine.
-func (r *Router) SetContextEngine(engine ContextEngine) {
-	r.contextEngine = engine
-}
-
 // SetPricingResolver sets the pricing resolver for dynamic model pricing and
 // hands it to the router's usage tracker (conduit-31jg.57).
 func (r *Router) SetPricingResolver(pr *PricingResolver) {
@@ -513,11 +485,6 @@ func (r *Router) TurnCost(provider, model string, u Usage) (cost float64, priced
 	}
 	provider, model = r.effectiveRoute(provider, model)
 	return r.PricingResolver().Cost(provider, model, u)
-}
-
-// IsSmartRoutingEnabled returns true if smart routing is configured and enabled.
-func (r *Router) IsSmartRoutingEnabled() bool {
-	return r.smartRoutingCfg != nil && r.smartRoutingCfg.Enabled && r.modelSelector != nil
 }
 
 // initializeProviders sets up AI providers

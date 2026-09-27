@@ -128,11 +128,6 @@ func TestClassifyError(t *testing.T) {
 			expected: CategoryUnknown,
 		},
 		{
-			name:     "RateLimitError type",
-			err:      &RateLimitError{StatusCode: 429, RetryAfterMs: 60000, Message: "rate limited"},
-			expected: CategoryRateLimit,
-		},
-		{
 			name:     "CategorizedError authentication",
 			err:      &CategorizedError{Category: CategoryAuthentication, Msg: "auth failed"},
 			expected: CategoryAuthentication,

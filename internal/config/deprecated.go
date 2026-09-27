@@ -19,6 +19,11 @@ func warnDeprecatedOnce(key, msg string) {
 // warnDeprecatedKeys logs a one-time warning for each deprecated key present
 // in the loaded config. It never fails the load.
 func (c *Config) warnDeprecatedKeys() {
+	if c.AI.SmartRouting != nil {
+		warnDeprecatedOnce("ai.smart_routing",
+			"ai.smart_routing is deprecated and ignored: smart routing was removed (it was never wired, so "+
+				"behaviour is unchanged). Remove the block; move any pricing_overrides to ai.pricing_overrides (conduit-2avx)")
+	}
 	if c.AgentHeartbeat.AlertQueuePath != "" {
 		warnDeprecatedOnce("agent_heartbeat.alert_queue_path",
 			"agent_heartbeat.alert_queue_path is deprecated: the gateway no longer processes that queue "+

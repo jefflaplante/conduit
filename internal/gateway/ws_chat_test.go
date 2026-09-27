@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"conduit/internal/config"
 	"conduit/internal/protocol"
 )
 
@@ -304,73 +303,6 @@ func TestHandleWebSocketCommandFromChat_Model_UnknownShort(t *testing.T) {
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "Unknown model") {
 		t.Errorf("expected 'Unknown model', got %q", r)
-	}
-}
-
-func TestHandleWebSocketCommandFromChat_SmartRoute_Status(t *testing.T) {
-	gw, store, _ := newTestGatewayWithRouter(t)
-	gw.config.AI.SmartRouting = &config.SmartRoutingConfig{Enabled: true, CostBudgetDaily: 5}
-	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
-	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/smartroute")
-	out := drainClientMessage(t, c)
-	r, _ := out["response"].(string)
-	if !strings.Contains(r, "Smart Routing") {
-		t.Errorf("expected 'Smart Routing', got %q", r)
-	}
-}
-
-func TestHandleWebSocketCommandFromChat_SmartRoute_OnOff(t *testing.T) {
-	gw, store, _ := newTestGatewayWithRouter(t)
-	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
-	c := newTestWSClient("c1")
-
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/smartroute on")
-	drainClientMessage(t, c)
-	refreshed, _ := store.GetSession(sess.Key)
-	if refreshed.Context["smart_routing_enabled"] != "true" {
-		t.Error("expected smart_routing_enabled=true")
-	}
-
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/smartroute off")
-	drainClientMessage(t, c)
-	refreshed, _ = store.GetSession(sess.Key)
-	if refreshed.Context["smart_routing_enabled"] != "false" {
-		t.Error("expected smart_routing_enabled=false")
-	}
-}
-
-func TestHandleWebSocketCommandFromChat_SmartRoute_Budget(t *testing.T) {
-	gw, store, _ := newTestGatewayWithRouter(t)
-	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
-	c := newTestWSClient("c1")
-
-	// Missing amount
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/smartroute budget")
-	drainClientMessage(t, c)
-
-	// Invalid
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/smartroute budget abc")
-	drainClientMessage(t, c)
-
-	// Valid
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/smartroute budget 3.25")
-	drainClientMessage(t, c)
-	refreshed, _ := store.GetSession(sess.Key)
-	if refreshed.Context["smart_routing_budget"] != "3.25" {
-		t.Errorf("expected budget=3.25, got %q", refreshed.Context["smart_routing_budget"])
-	}
-}
-
-func TestHandleWebSocketCommandFromChat_SmartRoute_Unknown(t *testing.T) {
-	gw, store, _ := newTestGatewayWithRouter(t)
-	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
-	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/smartroute bogus")
-	out := drainClientMessage(t, c)
-	r, _ := out["response"].(string)
-	if !strings.Contains(r, "Usage:") {
-		t.Errorf("expected Usage help, got %q", r)
 	}
 }
 
