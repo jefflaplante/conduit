@@ -2,6 +2,7 @@ package heartbeat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -20,6 +21,10 @@ type Deliverer interface {
 	// Returns an error if delivery fails.
 	Deliver(ctx context.Context, alert Alert, target config.AlertTarget) error
 }
+
+// ErrCircuitOpen is returned (wrapped) by DeliverAlert when the target's
+// circuit breaker is open and the attempt was skipped.
+var ErrCircuitOpen = errors.New("circuit breaker open")
 
 // DeliveryRegistry manages deliverer instances and routes alerts to the appropriate deliverer.
 type DeliveryRegistry struct {
@@ -83,7 +88,7 @@ func (r *DeliveryRegistry) Types() []string {
 func (r *DeliveryRegistry) DeliverAlert(ctx context.Context, alert Alert, target config.AlertTarget) error {
 	// Check circuit breaker before attempting delivery
 	if r.breaker.IsOpen(target.Name) {
-		err := fmt.Errorf("circuit breaker open for target %s: delivery suspended", target.Name)
+		err := fmt.Errorf("%w for target %s: delivery suspended", ErrCircuitOpen, target.Name)
 		r.auditDelivery(ctx, alert, target, "circuit_breaker_open", err)
 		return err
 	}

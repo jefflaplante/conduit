@@ -476,6 +476,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// an AlertAuditor backed by the same DB so every delivery attempt is
 	// persisted to the alert_history table (migration #8).
 	gw.monitoring.WireDeliveryRegistry(sessionStore.DB())
+	// conduit-31jg.59: route heartbeat delivery through that registry
+	// (ChannelSenderDeliverer wrapping gw) for breaker + audit + retries.
+	hbIntegration.SetDeliveryRegistry(gw.monitoring.DeliveryRegistry)
 	logger.Info("alert auditor wired to delivery registry")
 
 	// NOTE: initializeAgentHeartbeat is called AFTER scheduler.Start() in the Run() method

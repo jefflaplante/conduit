@@ -131,9 +131,12 @@ func (m *MonitoringService) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully halts the heartbeat service. Safe to call when
-// HeartbeatService is nil (no-op).
+// Stop gracefully halts the heartbeat service and cancels pending heartbeat
+// delivery retries (conduit-31jg.59). Safe to call when either is nil.
 func (m *MonitoringService) Stop() error {
+	if c, ok := m.HeartbeatIntegration.(interface{ Close() error }); ok {
+		_ = c.Close()
+	}
 	if m.HeartbeatService != nil {
 		return m.HeartbeatService.Stop()
 	}

@@ -62,3 +62,25 @@ func (n *nopDeliverer) Type() string { return "nop" }
 func (n *nopDeliverer) Deliver(_ context.Context, _ heartbeat.Alert, _ config.AlertTarget) error {
 	return nil
 }
+
+// TestHeartbeatDeliveryWiring verifies the conduit-31jg.59 wiring: the
+// heartbeat integration registers a ChannelSenderDeliverer on the gateway's
+// audited registry, so live heartbeat sends land in alert_history.
+func TestHeartbeatDeliveryWiring(t *testing.T) {
+	gw, store := newTestGatewayWithSessions(t)
+	gw.monitoring.WireDeliveryRegistry(store.DB())
+
+	hb := heartbeat.NewGatewayIntegration(t.TempDir(), nil, nil, nil, &nopSender{}, nil, "", 0)
+	t.Cleanup(func() { _ = hb.Close() })
+	hb.SetDeliveryRegistry(gw.monitoring.DeliveryRegistry)
+
+	if _, ok := gw.monitoring.DeliveryRegistry.Get(heartbeat.ChannelDelivererType); !ok {
+		t.Fatalf("channel deliverer not registered; types=%v", gw.monitoring.DeliveryRegistry.Types())
+	}
+}
+
+type nopSender struct{}
+
+func (nopSender) SendMessage(context.Context, string, string, string, map[string]string) error {
+	return nil
+}
