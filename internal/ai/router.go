@@ -294,6 +294,13 @@ type Usage struct {
 	// by Add (see Usage.Context). The fields above are whole-turn sums.
 	// conduit-31jg.15
 	ContextTokens int `json:"context_tokens,omitempty"`
+	// CostUSD is the priced cost of the provider calls folded into this
+	// usage; PricedCalls/UnpricedCalls count them (an unpriced call — model
+	// with no known price — contributes 0 to CostUSD). Set per call by the
+	// router's metering hook and summed by Add. conduit-31jg.64
+	CostUSD       float64 `json:"cost_usd,omitempty"`
+	PricedCalls   int     `json:"priced_calls,omitempty"`
+	UnpricedCalls int     `json:"unpriced_calls,omitempty"`
 }
 
 // DefaultContextWindow is the fallback context window size in tokens.
@@ -497,6 +504,12 @@ func (r *Router) effectiveRoute(provider, model string) (string, string) {
 // priced=false means the model has no known price: the cost is unknown (the
 // returned 0 must not be read as free). conduit-31jg.57
 func (r *Router) TurnCost(provider, model string, u Usage) (cost float64, priced bool) {
+	// conduit-31jg.64: a metered turn carries the exact sum of its calls'
+	// costs, each priced on the (provider, model) that served it (failover
+	// and fallback routes included).
+	if u.PricedCalls+u.UnpricedCalls > 0 {
+		return u.CostUSD, u.UnpricedCalls == 0
+	}
 	provider, model = r.effectiveRoute(provider, model)
 	return r.PricingResolver().Cost(provider, model, u)
 }
@@ -803,20 +816,17 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 	// conduit-31jg.18: (provider, model) travel together through the
 	// quota-fallback and timeout retries; each attempt is trimmed to its
 	// route's window (callWithRecovery).
-	response, served, latencyMs, err := r.callWithRecovery(ctx,
+	response, served, _, err := r.callWithRecovery(ctx,
 		providerRoute{name: providerName, provider: provider, model: req.Model},
 		req, recoveryOpts{phase: "generate"})
+	// conduit-31jg.64: every provider call (each recovery attempt here, and
+	// every later call through the guarded provider) is recorded to the
+	// usage tracker exactly once by the metering hook (route_call.go).
 	if err != nil {
-		if r.usageTracker != nil {
-			r.usageTracker.RecordError(served.name, served.model)
-		}
 		return nil, err
 	}
 	providerName = served.name
 	provider = r.guardedProvider(served) // conduit-31jg.18(b): later calls re-trim
-	if r.usageTracker != nil {
-		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, latencyMs)
-	}
 
 	// conduit-31jg.11: length-truncated reply → auto-continue (bd-1k3o parity).
 	response = ContinueLengthTruncated(ctx, provider, req, response, "generate")
@@ -947,9 +957,7 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 		providerRoute{name: providerName, provider: provider, model: req.Model},
 		req, recoveryOpts{phase: "tool loop", quotaFallbackNeedsModel: true})
 	if err != nil {
-		if r.usageTracker != nil {
-			r.usageTracker.RecordError(served.name, served.model)
-		}
+		// conduit-31jg.64: failed attempts were recorded by the metering hook.
 		chainErr = fmt.Errorf("AI provider error: %w", err)
 		return nil, chainErr
 	}
@@ -959,9 +967,8 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 	// is re-trimmed to that route's window (conduit-31jg.18(b)).
 	providerName = served.name
 	provider = r.guardedProvider(served)
-	if r.usageTracker != nil {
-		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, latencyMs)
-	}
+	// conduit-31jg.64: usage for this and every later call of the turn is
+	// recorded per call by the metering hook, not here.
 
 	// conduit-18vj: a raw-empty response (no content AND no tool calls) must
 	// never complete a turn silently — retry once, then deliver a visible
@@ -1187,16 +1194,12 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	// conduit-31jg.18: recovery attempts carry (provider, model) as a pair,
 	// and the stream tracker mutes retry deltas once text has reached the
 	// client, so a replayed generation never duplicates streamed text.
-	streamStart := time.Now()
 	response, served, _, err := r.callWithRecovery(ctx,
 		providerRoute{name: providerName, provider: streamingProvider, model: req.Model},
 		req, recoveryOpts{phase: "streaming", quotaFallbackNeedsModel: true, stream: newStreamTracker(onDelta)})
 	if err != nil {
-		// conduit-31jg.12: streaming never reported to the usage tracker
-		// (non-streaming paths do). Latency spans retries here.
-		if r.usageTracker != nil {
-			r.usageTracker.RecordError(served.name, served.model)
-		}
+		// conduit-31jg.64: each failed attempt was recorded by the metering
+		// hook (conduit-31jg.12 streaming parity preserved there).
 		chainErr = err
 		return nil, chainErr
 	}
@@ -1204,9 +1207,6 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	// the response (bd-27ud), re-trimming every later round (conduit-31jg.18(b)).
 	providerName = served.name
 	provider = r.guardedProvider(served)
-	if r.usageTracker != nil && response != nil {
-		r.usageTracker.RecordUsage(providerName, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens, time.Since(streamStart).Milliseconds())
-	}
 
 	// conduit-14qr: the streaming path never went through the empty guard —
 	// only the non-streaming chain call sites wrap GuardEmptyResponse — so
