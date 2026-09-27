@@ -470,6 +470,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 		hbIntegration.SetBrainWriter(newHeartbeatBrainWriter(gw.brainService))
 		logger.Info("heartbeat Brain writer enabled for sense.alerts.* namespace")
 	}
+	// conduit-31jg.66: heartbeat turns run on the shared TurnRunner.
+	hbIntegration.SetAIExecutor(newTurnAIExecutor(gw))
 	gw.monitoring.WireHeartbeatIntegration(hbIntegration)
 
 	// Wire alert auditor (conduit-1rp3): create a DeliveryRegistry and attach

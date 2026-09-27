@@ -45,6 +45,12 @@ import (
 // Token usage is recorded by the router (bd-27hs) from resp.Usage once per
 // turn; the runner does not keep its own accumulator.
 //
+// Entry points (conduit-31jg.35, .66): Telegram/channel ingress, WebSocket
+// chat and /goodbye, the in-process TUI client, session wakes, the HTTP test
+// endpoint, sub-agents, and scheduler jobs (cron prompts and the heartbeat).
+// Scheduler turns set TurnRequest.ScheduledJob; see its doc for how they
+// interact with the shutdown drain.
+//
 // /stop semantics (see Stop): the running turn is cancelled AND every turn
 // queued behind it for that session is dropped. Dropped turns never ran:
 // their user message is not persisted and their sink only sees Finish with
@@ -63,6 +69,9 @@ type TurnRunner struct {
 
 	mu     sync.Mutex
 	queued map[string][]*queuedTurn
+	// scheduled maps the session key of each RUNNING scheduler-owned turn
+	// to its job ID (conduit-31jg.66). Guarded by mu.
+	scheduled map[string]string
 }
 
 // turnCompactor is the slice of *ai.CompactionEngine the runner uses.
@@ -128,6 +137,21 @@ type TurnRequest struct {
 
 	// Decorate adds path-specific values to the turn context (e.g. wake source).
 	Decorate func(context.Context) context.Context
+
+	// ScheduledJob names the scheduler job that owns this turn (cron prompt,
+	// heartbeat; conduit-31jg.66). The turn is registered in ActiveRequests
+	// like any other (visible to /stop and status), but:
+	//   - the shutdown drain already counts it through the scheduler's
+	//     running flag (conduit-31jg.77), so it does not count it again;
+	//   - it may start while the gateway drains: the scheduler stopped
+	//     starting new jobs, and a job already running is waited for within
+	//     the drain budget and then interrupted by the scheduler, which
+	//     records it as interrupted (heartbeat re-runs after restart).
+	ScheduledJob string
+
+	// SkipReflection disables SPAR farewell / context-budget prompt
+	// injection for this turn (the /goodbye turn already is the reflection).
+	SkipReflection bool
 }
 
 // TurnResult is what the runner hands to TurnSink.Finish.
@@ -154,6 +178,10 @@ type TurnResult struct {
 	// Dropped: cancelled while queued; the turn never ran and its user
 	// message was not persisted.
 	Dropped bool
+
+	// UserMessageID is the transcript row of this turn's user message
+	// ("" when the turn was dropped or the message could not be stored).
+	UserMessageID string
 }
 
 // Delivered reports whether the result carries a reply for the user.
@@ -201,7 +229,22 @@ func NewTurnRunner(store *sessions.Store, router *ai.Router, compactor turnCompa
 		metrics:   metrics,
 		logger:    logger,
 		queued:    make(map[string][]*queuedTurn),
+		scheduled: make(map[string]string),
 	}
+}
+
+// scheduledTurnKeys returns a snapshot of the running scheduler-owned turns
+// (session key → job ID). The shutdown drain uses it to avoid counting
+// those turns twice (conduit-31jg.66). Callers must not hold the
+// ActiveRequests lock (lock order: r.mu before active.mu).
+func (r *TurnRunner) scheduledTurnKeys() map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]string, len(r.scheduled))
+	for k, v := range r.scheduled {
+		out[k] = v
+	}
+	return out
 }
 
 // Busy reports whether sessionKey has a running or queued turn.
@@ -314,9 +357,11 @@ func (r *TurnRunner) Run(ctx context.Context, req TurnRequest, sink TurnSink) *T
 		lockErr = reqCtx.Err()
 		release()
 	}
-	if lockErr == nil && r.draining != nil && r.draining() {
+	if lockErr == nil && req.ScheduledJob == "" && r.draining != nil && r.draining() {
 		// The shutdown drain cancels running turns via ActiveRequests; a
 		// turn that was queued behind one must not start a fresh turn.
+		// Scheduler turns are exempt: the scheduler owns their drain
+		// (see TurnRequest.ScheduledJob).
 		lockErr = errTurnDraining
 		release()
 	}
@@ -326,6 +371,9 @@ func (r *TurnRunner) Run(ctx context.Context, req TurnRequest, sink TurnSink) *T
 		r.active.get()[key] = cancel
 		running = len(r.active.get())
 		r.active.mu.Unlock()
+		if req.ScheduledJob != "" {
+			r.scheduled[key] = req.ScheduledJob
+		}
 	}
 	r.mu.Unlock()
 	if lockErr != nil {
@@ -338,10 +386,13 @@ func (r *TurnRunner) Run(ctx context.Context, req TurnRequest, sink TurnSink) *T
 	var afterUnlock func()
 	func() {
 		defer func() {
+			r.mu.Lock()
+			delete(r.scheduled, key)
 			r.active.mu.Lock()
 			delete(r.active.get(), key)
 			n := len(r.active.get())
 			r.active.mu.Unlock()
+			r.mu.Unlock()
 			r.updateActiveMetric(n)
 			release()
 		}()
@@ -366,6 +417,17 @@ type resultRecorder struct {
 func (rr *resultRecorder) Finish(ctx context.Context, res *TurnResult) {
 	rr.res = res
 	rr.TurnSink.Finish(ctx, res)
+}
+
+// userMsgStamp records the turn's user message ID on every result.
+type userMsgStamp struct {
+	TurnSink
+	id string
+}
+
+func (u *userMsgStamp) Finish(ctx context.Context, res *TurnResult) {
+	res.UserMessageID = u.id
+	u.TurnSink.Finish(ctx, res)
 }
 
 // runLocked is the body of a turn; the caller holds the session turn lock.
@@ -396,11 +458,12 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 		userMsgID = m.ID
 	}
 	ctx = ai.WithCurrentUserMessageID(ctx, userMsgID)
+	sink = &userMsgStamp{TurnSink: sink, id: userMsgID}
 
 	// 5a. SPAR reflection injection (interactive turns only).
 	messageForAI := req.Text
 	isFarewell, isBudgetReflect := false, false
-	if req.Origin != nil && r.hooks != nil {
+	if req.Origin != nil && r.hooks != nil && !req.SkipReflection {
 		if r.hooks.IsFarewell(req.Text) {
 			isFarewell = true
 			if p := r.hooks.ReflectionPrompt(); p != "" {

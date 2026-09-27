@@ -377,9 +377,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Command response
 	case CommandResponseMsg:
-		s, _ := m.resolveTab(msg.RequestID, msg.SessionKey)
+		s, tabIdx := m.resolveTab(msg.RequestID, msg.SessionKey)
 		if s != nil {
 			s.Chat.AddMessage("system", msg.Response)
+		}
+		// conduit-31jg.66: the message is queued behind a running turn; show
+		// that in the tab state until its StreamStart arrives.
+		if msg.Command == QueuedNoticeCommand && s != nil && !s.Chat.Streaming {
+			s.State = "queued"
+			if tabIdx == m.tabBar.ActiveIdx {
+				m.sidebar.SessionState = s.State
+				m.statusBar.SessionState = s.State
+			}
 		}
 		if msg.Command == "/model" && msg.Model != "" {
 			m.sidebar.Model = msg.Model

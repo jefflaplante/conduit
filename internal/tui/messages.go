@@ -53,6 +53,13 @@ type ToolEventMsg struct {
 	protocol.ToolEvent
 }
 
+// QueuedNoticeCommand is the CommandResponse command the gateway uses to say
+// a chat message is queued behind the session's running turn
+// (conduit-31jg.66). The TUI shows the notice and marks the tab "queued"
+// until the turn's StreamStart arrives; older TUIs show it as a plain
+// system line.
+const QueuedNoticeCommand = "queued"
+
 // CommandResponseMsg delivers the result of a slash command
 type CommandResponseMsg struct {
 	SessionKey string

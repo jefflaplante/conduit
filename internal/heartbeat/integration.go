@@ -37,6 +37,11 @@ type GatewayIntegration struct {
 	// (circuit breaker + alert_history audit). Guarded by deferMu.
 	delivery *DeliveryRegistry
 	retries  retryState
+
+	// aiExecutor, when set, runs the heartbeat prompt (the gateway installs
+	// one backed by its TurnRunner, conduit-31jg.66); nil calls aiRouter
+	// directly.
+	aiExecutor AIExecutor
 }
 
 // BrainWriter is an optional callback interface for writing heartbeat alerts into
@@ -103,6 +108,14 @@ func (g *GatewayIntegration) SetBrainWriter(bw BrainWriter) {
 	g.brainWriter = bw
 }
 
+// SetAIExecutor overrides how the heartbeat prompt is executed. The gateway
+// uses it to run heartbeat turns on its shared TurnRunner (transcript in the
+// turn lock, ActiveRequests registration, usage/cost; conduit-31jg.66).
+// Call before the scheduler starts.
+func (g *GatewayIntegration) SetAIExecutor(e AIExecutor) {
+	g.aiExecutor = e
+}
+
 // ExecuteHeartbeat executes a heartbeat job - this is called by the gateway's executeScheduledJob
 func (g *GatewayIntegration) ExecuteHeartbeat(ctx context.Context, job *scheduler.Job) error {
 	log.Printf("[HeartbeatIntegration] Executing heartbeat job: %s", job.ID)
@@ -116,8 +129,11 @@ func (g *GatewayIntegration) ExecuteHeartbeat(ctx context.Context, job *schedule
 	}
 
 	// Create AI executor adapter
-	aiExecutor := &gatewayAIExecutor{
+	var aiExecutor AIExecutor = &gatewayAIExecutor{
 		aiRouter: g.aiRouter,
+	}
+	if g.aiExecutor != nil {
+		aiExecutor = g.aiExecutor
 	}
 
 	// Execute the heartbeat
