@@ -116,6 +116,11 @@ type ShutdownManager struct {
 	gatewayStopped chan struct{}
 	stopWait       time.Duration
 	done           chan struct{}
+
+	// conduit-31jg.77: absolute end of the drain phase (guarded by mu; set
+	// when the drain starts, lowered by ShortenDrain) and its poll interval.
+	drainDeadline time.Time
+	drainPoll     time.Duration
 }
 
 func NewShutdownManager(logger *slog.Logger, gw *Gateway) *ShutdownManager {
@@ -279,41 +284,115 @@ func (sm *ShutdownManager) notifyClients() {
 	}
 }
 
+// drainableScheduler is the part of *scheduler.Scheduler the drain needs
+// (conduit-31jg.77). Asserted at runtime so scheduler.SchedulerInterface
+// (and its test mocks) stay unchanged.
+type drainableScheduler interface {
+	BeginDrain()
+	RunningJobs() []string
+	InterruptRunning() int
+}
+
+func (sm *ShutdownManager) drainScheduler() drainableScheduler {
+	if sm.gateway == nil || sm.gateway.scheduler == nil {
+		return nil
+	}
+	ds, _ := sm.gateway.scheduler.(drainableScheduler)
+	return ds
+}
+
+// ShortenDrain caps an in-progress drain so it ends no later than timeout
+// from now (never extends it). A SIGTERM arriving during a 30s SIGHUP drain
+// uses it to stay inside systemd's TimeoutStopSec (conduit-31jg.77).
+func (sm *ShutdownManager) ShortenDrain(timeout time.Duration) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	limit := time.Now().Add(timeout)
+	if sm.drainDeadline.IsZero() || limit.Before(sm.drainDeadline) {
+		sm.drainDeadline = limit
+		sm.logger.Info("drain deadline shortened", "remaining", timeout)
+	}
+}
+
+// drainActiveRequests waits, within one shared drain budget, for in-flight
+// interactive turns (ws.ActiveRequests) AND in-flight scheduler jobs
+// (conduit-31jg.77: agent_heartbeat_main was cancelled 24s into its chain
+// because only turns were counted). New scheduler runs are blocked for the
+// whole drain. When the budget expires, remaining turns are force-cancelled
+// and remaining jobs are cancelled and recorded as interrupted by shutdown.
 func (sm *ShutdownManager) drainActiveRequests() {
 	gw := sm.gateway
-	if gw.ws == nil {
+	sched := sm.drainScheduler()
+	if sched != nil {
+		sched.BeginDrain()
+	}
+	if (gw == nil || gw.ws == nil) && sched == nil {
 		return
 	}
-	deadline := time.After(sm.drainTimeout)
-	ticker := time.NewTicker(500 * time.Millisecond)
+
+	sm.mu.Lock()
+	if sm.drainDeadline.IsZero() {
+		sm.drainDeadline = time.Now().Add(sm.drainTimeout)
+	}
+	poll := sm.drainPoll
+	sm.mu.Unlock()
+	if poll <= 0 {
+		poll = 500 * time.Millisecond
+	}
+	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 
-	for {
+	activeRequests := func() int {
+		if gw == nil || gw.ws == nil {
+			return 0
+		}
 		gw.ws.ActiveRequestsMu.RLock()
-		active := len(gw.ws.ActiveRequests)
-		gw.ws.ActiveRequestsMu.RUnlock()
+		defer gw.ws.ActiveRequestsMu.RUnlock()
+		return len(gw.ws.ActiveRequests)
+	}
+	runningJobs := func() []string {
+		if sched == nil {
+			return nil
+		}
+		return sched.RunningJobs()
+	}
 
-		if active == 0 {
-			sm.logger.Info("all active requests drained")
+	for {
+		active := activeRequests()
+		jobs := runningJobs()
+		if active == 0 && len(jobs) == 0 {
+			sm.logger.Info("all active requests and scheduler jobs drained")
 			return
 		}
 
-		select {
-		case <-deadline:
-			sm.logger.Warn("drain timeout exceeded, force-cancelling active requests",
-				"remaining", active,
+		sm.mu.Lock()
+		deadline := sm.drainDeadline
+		sm.mu.Unlock()
+		if !time.Now().Before(deadline) {
+			sm.logger.Warn("drain timeout exceeded, force-cancelling in-flight work",
+				"remaining_requests", active,
+				"remaining_jobs", jobs,
 				"timeout", sm.drainTimeout,
 			)
-			gw.ws.ActiveRequestsMu.RLock()
-			for sessionKey, cancelFn := range gw.ws.ActiveRequests {
-				sm.logger.Warn("force-cancelling request", "session", sessionKey)
-				cancelFn()
+			if gw != nil && gw.ws != nil {
+				gw.ws.ActiveRequestsMu.RLock()
+				for sessionKey, cancelFn := range gw.ws.ActiveRequests {
+					sm.logger.Warn("force-cancelling request", "session", sessionKey)
+					cancelFn()
+				}
+				gw.ws.ActiveRequestsMu.RUnlock()
 			}
-			gw.ws.ActiveRequestsMu.RUnlock()
+			if sched != nil && len(jobs) > 0 {
+				for _, id := range jobs {
+					sm.logger.Warn("cancelling scheduler job: interrupted by shutdown", "job_id", id)
+				}
+				sched.InterruptRunning()
+			}
 			return
-		case <-ticker.C:
-			sm.logger.Debug("waiting for active requests to drain", "remaining", active)
 		}
+
+		<-ticker.C
+		sm.logger.Debug("waiting for in-flight work to drain", "requests", active, "jobs", jobs)
 	}
 }
 

@@ -63,7 +63,7 @@ type Scheduler struct {
 	executor        JobExecutor
 	mu              sync.RWMutex
 	ctx             context.Context
-	cancel          context.CancelFunc
+	cancel          context.CancelCauseFunc
 	crontagMarker   string    // Marker to identify our entries in system crontab
 	jobsLoaded      bool      // True after successful loadJobs; prevents saveJobs from wiping unloaded data
 	lastContentHash [32]byte  // SHA-256 of last known jobs file content
@@ -88,6 +88,18 @@ type Scheduler struct {
 	// so neither cron ticks nor RunNow start a second concurrent run.
 	location *time.Location
 	running  map[string]bool
+
+	// conduit-31jg.77: drain support (see drain.go); cancel is now a
+	// CancelCauseFunc so shutdown can cancel with ErrInterruptedByShutdown.
+	// draining (guarded by mu)
+	// blocks new runs; runChanged is closed and replaced whenever a run ends
+	// so WaitIdle can block without polling.
+	draining    bool
+	runChanged  chan struct{}
+	rerunPolicy RerunPolicy
+	rerunDelay  time.Duration
+	rerunTimers []*time.Timer
+	stopRunWait time.Duration
 }
 
 // ErrJobRunning is returned by RunNow when the job is already executing.
@@ -109,7 +121,7 @@ func WithLocation(loc *time.Location) Option {
 
 // New creates a new scheduler
 func New(workspaceDir string, executor JobExecutor, opts ...Option) *Scheduler {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 
 	s := &Scheduler{
 		jobs:          make(map[string]*Job),
@@ -121,6 +133,10 @@ func New(workspaceDir string, executor JobExecutor, opts ...Option) *Scheduler {
 		watchInterval: 30 * time.Second,
 		location:      time.Local,
 		running:       make(map[string]bool),
+		runChanged:    make(chan struct{}),
+		rerunPolicy:   DefaultRerunPolicy,
+		rerunDelay:    defaultRerunDelay,
+		stopRunWait:   defaultStopRunWait,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -223,6 +239,10 @@ func (s *Scheduler) Start() error {
 	// Start the cron scheduler
 	s.cron.Start()
 
+	// conduit-31jg.77: re-run (once) opted-in jobs the previous process
+	// interrupted at shutdown.
+	s.scheduleInterruptedReruns()
+
 	// Start file watcher for hot-reload. wg.Add must happen before the go
 	// statement so Stop() cannot race past Wait() before the goroutine
 	// registers itself.
@@ -239,10 +259,33 @@ func (s *Scheduler) Start() error {
 // runner, and waits synchronously for the watchJobsFile goroutine to exit so
 // callers may safely re-initialise the scheduler immediately after Stop()
 // returns without colliding with an in-flight file-read.
+//
+// conduit-31jg.77: Stop drains first (no new runs), cancels in-flight runs
+// with ErrInterruptedByShutdown so they are recorded as interrupted, and
+// waits at most stopRunWait for them (cron-started and RunNow alike) instead
+// of blocking forever on a job that ignores cancellation. The graceful wait
+// for running jobs happens earlier, in the gateway's drain phase.
 func (s *Scheduler) Stop() {
-	s.cancel()
-	ctx := s.cron.Stop()
-	<-ctx.Done()
+	s.BeginDrain()
+	s.mu.Lock()
+	for _, t := range s.rerunTimers {
+		t.Stop()
+	}
+	s.rerunTimers = nil
+	s.mu.Unlock()
+
+	s.cancel(ErrInterruptedByShutdown)
+	cronDone := s.cron.Stop()
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), s.stopRunWait)
+	defer cancel()
+	select {
+	case <-cronDone.Done():
+	case <-waitCtx.Done():
+	}
+	if err := s.WaitIdle(waitCtx); err != nil {
+		log.Printf("[Scheduler] Stop: jobs still running after %s, abandoning: %v", s.stopRunWait, s.RunningJobs())
+	}
 	s.wg.Wait()
 	log.Printf("[Scheduler] Stopped")
 }
@@ -470,6 +513,9 @@ func (s *Scheduler) beginRun(jobID string) (*Job, error) {
 	if !exists {
 		return nil, fmt.Errorf("job %s not found", jobID)
 	}
+	if s.draining { // conduit-31jg.77: no new runs once shutdown drain began
+		return nil, ErrDraining
+	}
 	if s.running[jobID] {
 		return nil, ErrJobRunning
 	}
@@ -487,6 +533,8 @@ func (s *Scheduler) executeJob(jobID string) {
 	if err != nil {
 		if errors.Is(err, ErrJobRunning) {
 			log.Printf("[Scheduler] Skipping job %s: previous run still in progress", jobID)
+		} else if errors.Is(err, ErrDraining) {
+			log.Printf("[Scheduler] Skipping job %s: scheduler draining for shutdown", jobID)
 		}
 		return
 	}
@@ -497,6 +545,7 @@ func (s *Scheduler) executeJob(jobID string) {
 // on the live job (if it still exists).
 func (s *Scheduler) runSnapshot(snap *Job) {
 	log.Printf("[Scheduler] Executing job: %s (%s)", snap.ID, snap.Name)
+	started := time.Now()
 
 	var err error
 	if snap.Type == JobTypeGo {
@@ -511,10 +560,19 @@ func (s *Scheduler) runSnapshot(snap *Job) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.running, snap.ID)
+	s.notifyRunChangedLocked() // conduit-31jg.77: wake WaitIdle
 
-	if err != nil {
+	// conduit-31jg.77: a run that failed after the scheduler context was
+	// cancelled (drain budget expired / Stop) was interrupted by shutdown,
+	// not a genuine job failure; make that visible.
+	interrupted := err != nil && s.ctx.Err() != nil
+	elapsed := time.Since(started).Round(time.Second)
+	switch {
+	case interrupted:
+		log.Printf("[Scheduler] Job %s interrupted by shutdown after %s: %v", snap.ID, elapsed, err)
+	case err != nil:
 		log.Printf("[Scheduler] Job %s failed: %v", snap.ID, err)
-	} else {
+	default:
 		log.Printf("[Scheduler] Job %s completed", snap.ID)
 	}
 
@@ -522,14 +580,22 @@ func (s *Scheduler) runSnapshot(snap *Job) {
 	if !exists {
 		return // removed while running
 	}
-	if err != nil {
+	switch {
+	case interrupted:
+		job.LastError = fmt.Sprintf(interruptedErrorFmt, elapsed, err)
+		if job.Metadata == nil {
+			job.Metadata = make(map[string]interface{})
+		}
+		job.Metadata[MetaInterruptedAt] = time.Now().UTC().Format(time.RFC3339)
+	case err != nil:
 		job.LastError = err.Error()
-	} else {
+	default:
 		job.LastError = ""
 	}
 
-	// Handle one-shot jobs
-	if job.OneShot {
+	// Handle one-shot jobs. conduit-31jg.77: an interrupted one-shot that is
+	// opted into re-run is kept so the next Start can run it.
+	if job.OneShot && !(interrupted && s.rerunPolicy(job)) {
 		if job.Type == JobTypeGo && job.entryID != 0 {
 			s.cron.Remove(job.entryID)
 		}
