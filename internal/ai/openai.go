@@ -30,6 +30,12 @@ var defaultOpenAIRetryPolicy = retryPolicy{
 	minAttemptBudget: 10 * time.Second,
 }
 
+// providerResponseBodyLimit caps non-streaming success bodies decoded by the
+// OpenAI-compatible and Anthropic providers (conduit-31jg.70): the decoders
+// read resp.Body unbounded. 32 MiB (httpsafe.APIBodyLimit) is far above
+// any real completion. A var so tests can shrink it.
+var providerResponseBodyLimit = httpsafe.APIBodyLimit
+
 // isRetryableStatus returns true for HTTP status codes that warrant a retry.
 func isRetryableStatus(code int) bool {
 	return code == http.StatusTooManyRequests || // 429
@@ -239,7 +245,7 @@ func (o *OpenAIProvider) GenerateResponse(ctx context.Context, req *GenerateRequ
 	defer resp.Body.Close()
 
 	var openaiResp map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&openaiResp); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, providerResponseBodyLimit)).Decode(&openaiResp); err != nil { // conduit-31jg.70
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
