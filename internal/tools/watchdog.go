@@ -56,7 +56,7 @@ var turnHardCap = TurnHardCap
 // turnMaxExtensions is a var so tests can shrink the extension budget.
 var turnMaxExtensions = TurnMaxExtensions
 
-// turnBudget carries the per-chain extension state through recursion.
+// turnBudget carries the per-chain extension state across the tool loop's rounds.
 type turnBudget struct {
 	extensions      int       // consumed extensions
 	lastProgress    time.Time // last round with >=1 successful tool result

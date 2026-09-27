@@ -16,7 +16,7 @@ import (
 // tool failing three times injected "Multiple failures detected" into
 // unrelated users' turns, and circular-pattern detection interleaved calls
 // from different sessions. chainState is created once per top-level
-// HandleToolCallFlow call, travels through the recursion on the turnBudget,
+// HandleToolCallFlow call, lives on the turnBudget for the whole tool loop,
 // and reaches executeSingle via the context. Nothing in it outlives the turn.
 //
 // Cross-session learning (SPAR, conduit-17wz / conduit-2ngi) is preserved by
@@ -34,8 +34,8 @@ type PivotHook func(ctx context.Context, toolName string, failCount int, lastErr
 type CircularHook func(ctx context.Context, pattern string, signatureHash string)
 
 // loopGuidanceMarker prefixes the ephemeral user-role guidance message
-// (pivot + think-step). Shared by the injection and strip sites so they
-// cannot drift apart (same pattern as progressReminderMarker).
+// (pivot + think-step + progress reminder). The loop drops the message by
+// position before the next round (turnState.advance, conduit-31jg.37).
 const loopGuidanceMarker = "[Tool-loop guidance] "
 
 type chainStateKey struct{}
@@ -157,33 +157,4 @@ func (cs *chainState) takeGuidance(lead ...string) string {
 		return ""
 	}
 	return loopGuidanceMarker + strings.Join(parts, "\n\n")
-}
-
-// isEphemeralInjection reports whether m is a per-round-trip injection that
-// must not be carried into the next depth: the conduit-8ba7 progress reminder
-// (system role) or the conduit-31jg.13 loop guidance (user role).
-func isEphemeralInjection(m ai.ChatMessage) bool {
-	if m.Role == "system" && strings.Contains(m.Content, progressReminderMarker) {
-		return true
-	}
-	if m.Role == "user" && strings.HasPrefix(m.Content, loopGuidanceMarker) {
-		return true
-	}
-	return false
-}
-
-// stripEphemeral returns a copy of req without ephemeral injections. The
-// original request is never mutated (its pointer may already be recorded by
-// mocks/telemetry).
-func stripEphemeral(req *ai.GenerateRequest) *ai.GenerateRequest {
-	stripped := make([]ai.ChatMessage, 0, len(req.Messages))
-	for _, m := range req.Messages {
-		if isEphemeralInjection(m) {
-			continue
-		}
-		stripped = append(stripped, m)
-	}
-	next := *req
-	next.Messages = stripped
-	return &next
 }

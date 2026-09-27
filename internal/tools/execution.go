@@ -586,7 +586,67 @@ func (r *Registry) workspacePathBase() string {
 	return r.sandboxCfg.WorkspaceDir
 }
 
-// HandleToolCallFlow manages the complete tool calling conversation flow
+// turnState is the tool loop's per-turn state (conduit-31jg.37). One is built
+// per HandleToolCallFlow call and advanced round by round; nothing in it
+// outlives the turn. Before this bead every round was a recursive call that
+// re-copied the whole history.
+type turnState struct {
+	provider ai.Provider
+	// model, tools and maxTokens are copied into every round's request (the
+	// loop never forwards any other GenerateRequest field).
+	model     string
+	tools     []ai.Tool
+	maxTokens int
+
+	// history is the turn's one conversation slice, appended to in place.
+	// Every request gets a capacity-capped view of it (history[:n:n]), so
+	// neither the loop's later appends nor anyone appending to a request's
+	// Messages can write into a slot an earlier request still shows.
+	history []ai.ChatMessage
+	// resp is the reply whose tool calls the current round executes.
+	resp       *ai.GenerateResponse
+	depth      int
+	chainStart time.Time
+	budget     *turnBudget // trackers (budget.chain), usage, extensions, refocus one-shot
+}
+
+// request builds the round's provider request over the current history.
+func (ts *turnState) request() *ai.GenerateRequest {
+	n := len(ts.history)
+	return &ai.GenerateRequest{
+		Messages:  ts.history[:n:n],
+		Model:     ts.model,
+		Tools:     ts.tools,
+		MaxTokens: ts.maxTokens,
+	}
+}
+
+// advance carries the round's request history into the next round and makes
+// resp the reply to execute. guidanceAt is the index of this round's
+// ephemeral guidance message (-1 when none): it existed for this round trip
+// only and is dropped (conduit-8ba7, conduit-31jg.13). The request itself is
+// never modified: its pointer may already be recorded by mocks/telemetry.
+func (ts *turnState) advance(req *ai.GenerateRequest, guidanceAt int, resp *ai.GenerateResponse) {
+	msgs := req.Messages
+	switch {
+	case guidanceAt >= 0:
+		// The capped prefix makes append copy, so the guidance slot the
+		// provider saw is never overwritten.
+		ts.history = append(msgs[:guidanceAt:guidanceAt], msgs[guidanceAt+1:]...)
+	case len(msgs) != len(ts.history):
+		// Auto-continue appended to req.Messages (a fresh array). Cap it:
+		// a view the provider saw may extend past its current length.
+		ts.history = msgs[:len(msgs):len(msgs)]
+	default:
+		// Same contents as ts.history; keep its spare capacity.
+	}
+	ts.resp = resp
+	ts.depth++
+}
+
+// HandleToolCallFlow runs the tool loop for one turn: execute the reply's
+// tool calls, send the results back, and repeat until the model answers
+// without tool calls, the chain hits maxChains, or the turn window closes.
 func (e *ExecutionEngine) HandleToolCallFlow(
 	ctx context.Context,
 	provider ai.Provider,
@@ -597,16 +657,239 @@ func (e *ExecutionEngine) HandleToolCallFlow(
 	for i, tc := range initialResp.ToolCalls {
 		log.Printf("[ExecutionEngine] Tool call %d: %s", i, tc.Name)
 	}
-	// conduit-31jg.13: fresh trackers per turn (not per depth), carried on the
-	// turn budget through the recursion and on ctx into executeSingle.
+	// conduit-31jg.13: fresh trackers per turn, on the turn budget and on
+	// ctx into executeSingle.
 	tb := newTurnBudget(time.Now())
 	tb.chain = e.newChainState(ctx)
 	// conduit-31jg.15: the router's first round trip (with its own guard
 	// retries / auto-continues folded in) opens the turn's usage.
-	if initialResp != nil {
-		tb.usage.Add(initialResp.Usage)
+	tb.usage.Add(initialResp.Usage)
+
+	// The caller's slice is copied once, with room to grow, so appends
+	// never write into the caller's backing array.
+	history := make([]ai.ChatMessage, len(initialReq.Messages), len(initialReq.Messages)+16)
+	copy(history, initialReq.Messages)
+	ts := &turnState{
+		provider:   provider,
+		model:      initialReq.Model,
+		tools:      initialReq.Tools,
+		maxTokens:  initialReq.MaxTokens,
+		history:    history,
+		resp:       initialResp,
+		chainStart: time.Now(),
+		budget:     tb,
 	}
-	return e.handleToolCallFlowRecursive(withChainState(ctx, tb.chain), provider, initialReq, initialResp, 0, time.Now(), tb)
+	return e.runToolLoop(withChainState(ctx, tb.chain), ts)
+}
+
+// runToolLoop executes rounds until the chain ends. conduit-31jg.37.
+func (e *ExecutionEngine) runToolLoop(ctx context.Context, ts *turnState) (*ConversationResponse, error) {
+	tb := ts.budget
+	for {
+		depth := ts.depth
+
+		// conduit-1z6d + adaptive extension: enforce the turn window.
+		// Productive coding chains get bounded extensions (each announced);
+		// everything else stops with a user-visible timeout — never a silent
+		// end.
+		if stop := e.checkTurnWindow(ctx, ts.chainStart, tb, depth); stop != nil {
+			if stop.Usage == nil {
+				stop.Usage = tb.usageSnapshot() // conduit-31jg.15
+			}
+			return stop, nil
+		}
+
+		// Prevent infinite tool chains
+		if depth >= e.maxChains {
+			return e.chainLimitResponse(ts), nil
+		}
+
+		refocusMessage := e.refocusMessage(ts)
+
+		// This round: the reply's tool calls, then their results.
+		ts.history = append(ts.history, ai.ChatMessage{
+			Role:      "assistant",
+			Content:   ts.resp.Content,
+			ToolCalls: ts.resp.ToolCalls,
+		})
+		toolResults, err := e.ExecuteToolCalls(ctx, ts.resp.ToolCalls)
+		if err != nil {
+			return nil, fmt.Errorf("tool execution failed: %w", err)
+		}
+
+		// Turn budget: record this round's activity for extension eligibility.
+		anySuccess := false
+		for _, r := range toolResults {
+			if r != nil && r.Error == nil && r.Result != nil && r.Result.Success {
+				anySuccess = true
+				break
+			}
+		}
+		tb.markRound(ts.resp.ToolCalls, anySuccess, time.Now())
+
+		for _, result := range toolResults {
+			ts.history = append(ts.history, ai.ChatMessage{
+				Role:       "tool",
+				Content:    e.formatToolResultForAI(result),
+				ToolCallID: result.ToolCall.ID,
+				// conduit-31jg.45: tell the model the call failed (tool_result.is_error).
+				IsError: result.Error != nil || (result.Result != nil && !result.Result.Success),
+			})
+		}
+
+		// conduit-31jg.13: failure-pivot and circular-pattern guidance, once
+		// per trigger, from this turn's trackers only. Sent as a USER-role
+		// message after the tool results — not system-role — so providers
+		// that hoist system messages (anthropic.go, openai.go) don't rewrite
+		// the system prefix and bust the prompt cache. The Anthropic
+		// converter puts it in the same user message as the tool_results,
+		// after them (conduit-31jg.45). conduit-31jg.14: the one-per-chain
+		// conduit-8ba7 progress reminder rides in this same message. It is
+		// dropped again before the next round (turnState.advance).
+		guidanceAt := -1
+		if guidance := tb.chain.takeGuidance(refocusMessage); guidance != "" {
+			log.Printf("[ExecutionEngine] Injecting tool-loop guidance at depth %d (conduit-31jg.13)", depth)
+			guidanceAt = len(ts.history)
+			ts.history = append(ts.history, ai.ChatMessage{Role: "user", Content: guidance})
+		}
+
+		req := ts.request()
+		resp, err := e.roundTrip(ctx, ts.provider, req, depth, tb)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(resp.ToolCalls) == 0 {
+			// conduit-31jg.15: usage is the whole turn, not the last two calls.
+			return &ConversationResponse{
+				Content:     resp.Content,
+				Usage:       tb.usageSnapshot(),
+				Steps:       2 + depth, // Initial + final + any chained steps
+				ToolResults: toolResults,
+				ChainDepth:  depth,
+			}, nil
+		}
+		ts.advance(req, guidanceAt, resp)
+	}
+}
+
+// roundTrip sends one round's request: the provider call, the EmptyGuard
+// retry/failover and the length auto-continue. Every billed call's usage is
+// added to tb exactly once.
+func (e *ExecutionEngine) roundTrip(ctx context.Context, provider ai.Provider, req *ai.GenerateRequest, depth int, tb *turnBudget) (*ai.GenerateResponse, error) {
+	stopThinking := startThinkingIndicator(ctx, depth)
+	rtStart := time.Now()
+	resp, err := provider.GenerateResponse(ctx, req)
+	stopThinking()
+	if err != nil {
+		return nil, fmt.Errorf("AI response after tool execution failed: %w", err)
+	}
+
+	// conduit-18vj: raw-empty round trips after tool execution were the proven
+	// dead-turn mechanism (2026-09-03) — retry once, then a visible fallback.
+	resp, err = ai.GuardEmptyResponse(ctx, provider, req, resp, err, fmt.Sprintf("depth%d", depth))
+	tb.usage.Add(resp.Usage) // conduit-31jg.15 (includes guard retries)
+
+	// conduit-1z6d: per-round-trip instrumentation — dead turns diagnosable
+	// from the journal alone.
+	log.Printf("[RoundTrip] phase=post-tools depth=%d model=%q duration=%s prompt_tokens=%d completion_tokens=%d content_bytes=%d tool_calls=%d",
+		depth, req.Model, time.Since(rtStart).Round(time.Millisecond),
+		resp.Usage.PromptTokens, resp.Usage.CompletionTokens,
+		len(resp.Content), len(resp.ToolCalls))
+
+	// bd-1k3o: length-truncation guard. finish_reason=="length" means the model
+	// hit max_tokens mid-generation — the content is a severed fragment, not a
+	// complete answer (2026-09-04 RCA: sub-agent 1beda0f4's deliverable report
+	// was cut off mid-word at 4000 tokens and discarded as "the answer").
+	// Auto-continue: append the fragment as an assistant turn, then a user
+	// "continue" turn, and keep generating. Max 2 continues per chain node;
+	// fragments are concatenated into the final content.
+	const maxAutoContinues = 2
+	var fragments []string
+	for cont := 0; resp.FinishReason == "length" && len(resp.ToolCalls) == 0 && cont < maxAutoContinues; cont++ {
+		log.Printf("[ExecutionEngine] Length-truncated final (max_tokens hit) at depth %d — auto-continue %d/%d (bd-1k3o)",
+			depth, cont+1, maxAutoContinues)
+		fragments = append(fragments, resp.Content)
+		req.Messages = append(req.Messages,
+			ai.ChatMessage{Role: "assistant", Content: resp.Content},
+			ai.ChatMessage{Role: "user", Content: "continue"},
+		)
+		rtContStart := time.Now()
+		contResp, contErr := provider.GenerateResponse(ctx, req)
+		if contErr != nil {
+			// Continuation failed — deliver the fragments we have rather than
+			// failing the whole chain (the truncated text is still progress).
+			log.Printf("[ExecutionEngine] Auto-continue failed at depth %d: %v — delivering truncated content (bd-1k3o)", depth, contErr)
+			break
+		}
+		contResp, err = ai.GuardEmptyResponse(ctx, provider, req, contResp, contErr, fmt.Sprintf("depth%d-continue%d", depth, cont))
+		if err != nil {
+			break
+		}
+		tb.usage.Add(contResp.Usage) // conduit-31jg.15
+		log.Printf("[RoundTrip] phase=post-tools-continue depth=%d continue=%d model=%q duration=%s prompt_tokens=%d completion_tokens=%d content_bytes=%d tool_calls=%d finish_reason=%q",
+			depth, cont+1, req.Model, time.Since(rtContStart).Round(time.Millisecond),
+			contResp.Usage.PromptTokens, contResp.Usage.CompletionTokens,
+			len(contResp.Content), len(contResp.ToolCalls), contResp.FinishReason)
+		resp = contResp
+	}
+	if len(fragments) > 0 {
+		fragments = append(fragments, resp.Content)
+		resp.Content = strings.Join(fragments, "")
+	}
+	if resp.FinishReason == "length" && len(resp.ToolCalls) == 0 {
+		log.Printf("[ExecutionEngine] Final still length-truncated after %d continues at depth %d — delivering with marker (bd-1k3o)", maxAutoContinues, depth)
+		resp.Content += "\n\n_(truncated at max_tokens — ask me to continue if this cuts off)_"
+	}
+	return resp, nil
+}
+
+// chainLimitResponse is the reply when the chain reaches maxChains.
+func (e *ExecutionEngine) chainLimitResponse(ts *turnState) *ConversationResponse {
+	depth := ts.depth
+	log.Printf("Tool chain depth limit reached: %d/%d", depth, e.maxChains)
+	limitMessage := fmt.Sprintf(
+		"%s\n\n**Tool chain limit reached (%d steps).** "+
+			"I've completed %d tool operations but reached the maximum allowed chain length. "+
+			"This prevents runaway tool usage while still allowing complex workflows. "+
+			"If you need to continue, you can:\n"+
+			"- Ask me to pick up where I left off with a more focused approach\n"+
+			"- Break the task into smaller steps\n"+
+			"- Increase the `max_tool_chains` setting in config.json if this limit is too restrictive",
+		ts.resp.Content, e.maxChains, depth,
+	)
+	return &ConversationResponse{
+		Content:    limitMessage,
+		Usage:      ts.budget.usageSnapshot(), // conduit-31jg.15
+		Steps:      depth + 1,
+		ChainDepth: depth,
+	}
+}
+
+// refocusDepthThreshold is the depth of the one mid-chain progress reminder.
+const refocusDepthThreshold = 20
+
+// refocusMessage returns the conduit-8ba7 mid-chain progress reminder for
+// this round, or "". The old every-10-depth verbatim goal reminder is gone;
+// deep chains get exactly one progress-aware user-role guidance message at
+// the first depth >= 20, and depth milestones 30/40/50 emit chain_depth
+// telemetry (log only, no injection).
+func (e *ExecutionEngine) refocusMessage(ts *turnState) string {
+	depth, tb := ts.depth, ts.budget
+	var msg string
+	if depth >= refocusDepthThreshold && !tb.injected {
+		if originalGoal := e.extractOriginalGoal(ts.history); originalGoal != "" {
+			msg = fmt.Sprintf("%s%d of max %d. Original request: %s",
+				progressReminderMarker, depth, e.maxChains, originalGoal)
+			tb.injected = true
+			log.Printf("[ExecutionEngine] operation=refocus_inject depth=%d max=%d goal=%q (conduit-8ba7)", depth, e.maxChains, originalGoal)
+		}
+	}
+	switch depth {
+	case 30, 40, 50:
+		log.Printf("[ExecutionEngine] operation=chain_depth milestone=%d max=%d (conduit-8ba7)", depth, e.maxChains)
+	}
+	return msg
 }
 
 // maybeSendExtensionNotice delivers the extension announcement via the
@@ -645,233 +928,6 @@ func (e *ExecutionEngine) checkTurnWindow(ctx context.Context, chainStart time.T
 		}
 	}
 	return nil
-}
-
-// handleToolCallFlowRecursive handles tool chaining with depth limits
-func (e *ExecutionEngine) handleToolCallFlowRecursive(
-	ctx context.Context,
-	provider ai.Provider,
-	initialReq *ai.GenerateRequest,
-	initialResp *ai.GenerateResponse,
-	depth int,
-	chainStart time.Time,
-	tb *turnBudget,
-) (*ConversationResponse, error) {
-	// conduit-1z6d + adaptive extension: enforce the turn window. Productive
-	// coding chains get bounded extensions (each announced); everything else
-	// stops with a user-visible timeout — never a silent end.
-	if stop := e.checkTurnWindow(ctx, chainStart, tb, depth); stop != nil {
-		if stop.Usage == nil {
-			stop.Usage = tb.usageSnapshot() // conduit-31jg.15
-		}
-		return stop, nil
-	}
-
-	// Prevent infinite tool chains
-	if depth >= e.maxChains {
-		log.Printf("Tool chain depth limit reached: %d/%d", depth, e.maxChains)
-
-		// Create helpful message for the LLM about hitting the limit
-		limitMessage := fmt.Sprintf(
-			"%s\n\n**Tool chain limit reached (%d steps).** "+
-				"I've completed %d tool operations but reached the maximum allowed chain length. "+
-				"This prevents runaway tool usage while still allowing complex workflows. "+
-				"If you need to continue, you can:\n"+
-				"- Ask me to pick up where I left off with a more focused approach\n"+
-				"- Break the task into smaller steps\n"+
-				"- Increase the `max_tool_chains` setting in config.json if this limit is too restrictive",
-			initialResp.Content, e.maxChains, depth,
-		)
-
-		return &ConversationResponse{
-			Content:    limitMessage,
-			Usage:      tb.usageSnapshot(), // conduit-31jg.15
-			Steps:      depth + 1,
-			ChainDepth: depth,
-		}, nil
-	}
-
-	// conduit-8ba7: mid-chain progress reminder. The old every-10-depth
-	// verbatim goal reminder is gone; deep chains instead get exactly one
-	// progress-aware user-role guidance message at the first depth >= 20, and depth
-	// milestones 30/40/50 emit chain_depth telemetry (log only, no injection).
-	const refocusDepthThreshold = 20
-	var refocusMessage string
-	if depth >= refocusDepthThreshold && !tb.injected {
-		originalGoal := e.extractOriginalGoal(initialReq.Messages)
-		if originalGoal != "" {
-			refocusMessage = fmt.Sprintf(
-				"%s%d of max %d. Original request: %s",
-				progressReminderMarker, depth, e.maxChains, originalGoal,
-			)
-			tb.injected = true
-			log.Printf("[ExecutionEngine] operation=refocus_inject depth=%d max=%d goal=%q (conduit-8ba7)", depth, e.maxChains, originalGoal)
-		}
-	}
-	for _, milestone := range []int{30, 40, 50} {
-		if depth == milestone {
-			log.Printf("[ExecutionEngine] operation=chain_depth milestone=%d max=%d (conduit-8ba7)", milestone, e.maxChains)
-		}
-	}
-
-	// Start conversation history with initial request/response.
-	// Use an explicit copy to avoid mutating the caller's slice when spare capacity exists.
-	msgs := make([]ai.ChatMessage, len(initialReq.Messages))
-	copy(msgs, initialReq.Messages)
-	conversationHistory := append(msgs, ai.ChatMessage{
-		Role:      "assistant",
-		Content:   initialResp.Content,
-		ToolCalls: initialResp.ToolCalls,
-	})
-
-	// Execute tools
-	toolResults, err := e.ExecuteToolCalls(ctx, initialResp.ToolCalls)
-	if err != nil {
-		return nil, fmt.Errorf("tool execution failed: %w", err)
-	}
-
-	// Turn budget: record this round's activity for extension eligibility.
-	anySuccess := false
-	for _, r := range toolResults {
-		if r != nil && r.Error == nil && r.Result != nil && r.Result.Success {
-			anySuccess = true
-			break
-		}
-	}
-	tb.markRound(initialResp.ToolCalls, anySuccess, time.Now())
-
-	// Add tool results to conversation
-	for _, result := range toolResults {
-		// Format tool result for AI consumption
-		content := e.formatToolResultForAI(result)
-
-		conversationHistory = append(conversationHistory, ai.ChatMessage{
-			Role:       "tool",
-			Content:    content,
-			ToolCallID: result.ToolCall.ID,
-			// conduit-31jg.45: tell the model the call failed (tool_result.is_error).
-			IsError: result.Error != nil || (result.Result != nil && !result.Result.Success),
-		})
-	}
-
-	// conduit-31jg.13: failure-pivot and circular-pattern guidance, once per
-	// trigger, from this turn's trackers only. Sent as a USER-role message
-	// after the tool results — not system-role — so providers that hoist
-	// system messages (anthropic.go, openai.go) don't rewrite the system
-	// prefix and bust the prompt cache. The Anthropic converter puts it in
-	// the same user message as the tool_results, after them (conduit-31jg.45),
-	// satisfying the "tool_result blocks first" rule.
-	// Stripped before recursing (stripEphemeral).
-	// conduit-31jg.14: the one-per-chain conduit-8ba7 progress reminder rides
-	// in this same user-role message; as a system message it was hoisted
-	// into the system blocks and busted the cached prefix.
-	if guidance := tb.chain.takeGuidance(refocusMessage); guidance != "" {
-		log.Printf("[ExecutionEngine] Injecting tool-loop guidance at depth %d (conduit-31jg.13)", depth)
-		conversationHistory = append(conversationHistory, ai.ChatMessage{
-			Role:    "user",
-			Content: guidance,
-		})
-	}
-
-	// Get final AI response with tool results
-	finalReq := &ai.GenerateRequest{
-		Messages:  conversationHistory,
-		Model:     initialReq.Model,
-		Tools:     initialReq.Tools,
-		MaxTokens: initialReq.MaxTokens,
-	}
-
-	stopThinking := startThinkingIndicator(ctx, depth)
-	rtStart := time.Now()
-	finalResp, err := provider.GenerateResponse(ctx, finalReq)
-	stopThinking()
-	if err != nil {
-		return nil, fmt.Errorf("AI response after tool execution failed: %w", err)
-	}
-
-	// conduit-18vj: raw-empty round trips after tool execution were the proven
-	// dead-turn mechanism (2026-09-03) — retry once, then a visible fallback.
-	finalResp, err = ai.GuardEmptyResponse(ctx, provider, finalReq, finalResp, err, fmt.Sprintf("depth%d", depth))
-	tb.usage.Add(finalResp.Usage) // conduit-31jg.15 (includes guard retries)
-
-	// conduit-1z6d: per-round-trip instrumentation — dead turns diagnosable
-	// from the journal alone.
-	log.Printf("[RoundTrip] phase=post-tools depth=%d model=%q duration=%s prompt_tokens=%d completion_tokens=%d content_bytes=%d tool_calls=%d",
-		depth, finalReq.Model, time.Since(rtStart).Round(time.Millisecond),
-		finalResp.Usage.PromptTokens, finalResp.Usage.CompletionTokens,
-		len(finalResp.Content), len(finalResp.ToolCalls))
-
-	// bd-1k3o: length-truncation guard. finish_reason=="length" means the model
-	// hit max_tokens mid-generation — the content is a severed fragment, not a
-	// complete answer (2026-09-04 RCA: sub-agent 1beda0f4's deliverable report
-	// was cut off mid-word at 4000 tokens and discarded as "the answer").
-	// Auto-continue: append the fragment as an assistant turn, then a user
-	// "continue" turn, and keep generating. Max 2 continues per chain node;
-	// fragments are concatenated into the final content.
-	const maxAutoContinues = 2
-	var fragments []string
-	for cont := 0; finalResp.FinishReason == "length" && len(finalResp.ToolCalls) == 0 && cont < maxAutoContinues; cont++ {
-		log.Printf("[ExecutionEngine] Length-truncated final (max_tokens hit) at depth %d — auto-continue %d/%d (bd-1k3o)",
-			depth, cont+1, maxAutoContinues)
-		fragments = append(fragments, finalResp.Content)
-		finalReq.Messages = append(finalReq.Messages,
-			ai.ChatMessage{Role: "assistant", Content: finalResp.Content},
-			ai.ChatMessage{Role: "user", Content: "continue"},
-		)
-		rtContStart := time.Now()
-		contResp, contErr := provider.GenerateResponse(ctx, finalReq)
-		if contErr != nil {
-			// Continuation failed — deliver the fragments we have rather than
-			// failing the whole chain (the truncated text is still progress).
-			log.Printf("[ExecutionEngine] Auto-continue failed at depth %d: %v — delivering truncated content (bd-1k3o)", depth, contErr)
-			break
-		}
-		contResp, err = ai.GuardEmptyResponse(ctx, provider, finalReq, contResp, contErr, fmt.Sprintf("depth%d-continue%d", depth, cont))
-		if err != nil {
-			break
-		}
-		tb.usage.Add(contResp.Usage) // conduit-31jg.15
-		log.Printf("[RoundTrip] phase=post-tools-continue depth=%d continue=%d model=%q duration=%s prompt_tokens=%d completion_tokens=%d content_bytes=%d tool_calls=%d finish_reason=%q",
-			depth, cont+1, finalReq.Model, time.Since(rtContStart).Round(time.Millisecond),
-			contResp.Usage.PromptTokens, contResp.Usage.CompletionTokens,
-			len(contResp.Content), len(contResp.ToolCalls), contResp.FinishReason)
-		finalResp = contResp
-	}
-	if len(fragments) > 0 {
-		fragments = append(fragments, finalResp.Content)
-		finalResp.Content = strings.Join(fragments, "")
-	}
-	if finalResp.FinishReason == "length" && len(finalResp.ToolCalls) == 0 {
-		log.Printf("[ExecutionEngine] Final still length-truncated after %d continues at depth %d — delivering with marker (bd-1k3o)", maxAutoContinues, depth)
-		finalResp.Content += "\n\n_(truncated at max_tokens — ask me to continue if this cuts off)_"
-	}
-
-	// Check for additional tool calls (tool chaining)
-	if len(finalResp.ToolCalls) > 0 {
-		// conduit-8ba7 ephemerality: the progress reminder exists for THIS
-		// round trip only. finalReq becomes the next depth's initialReq, so
-		// build a stripped copy for recursion — never mutate finalReq in
-		// place (its pointer was already recorded by mocks/telemetry, and
-		// in-place edits would rewrite already-observed history).
-		// conduit-31jg.13: pivot/think-step guidance is stripped the same
-		// way. Circular detection now runs right after this depth's tools
-		// execute (takeGuidance above), so the think-step lands after the
-		// results that closed the loop rather than being appended here and
-		// re-carried into every deeper request.
-		finalReq = stripEphemeral(finalReq)
-		// Recursive tool calling with depth tracking
-		return e.handleToolCallFlowRecursive(ctx, provider, finalReq, finalResp, depth+1, chainStart, tb)
-	}
-
-	// No more tool calls - return final response
-	// conduit-31jg.15: usage is the whole turn, not the last two calls.
-	return &ConversationResponse{
-		Content:     finalResp.Content,
-		Usage:       tb.usageSnapshot(),
-		Steps:       2 + depth, // Initial + final + any recursive steps
-		ToolResults: toolResults,
-		ChainDepth:  depth,
-	}, nil
 }
 
 // formatToolResultForAI formats tool results for AI consumption
@@ -1196,6 +1252,5 @@ func (mm *MetricsMiddleware) GetMetrics() map[string]interface{} {
 }
 
 // progressReminderMarker is the stable prefix of the conduit-8ba7 mid-chain
-// progress reminder. Kept as a shared const so the injection site and the
-// strip-before-recursion site can never drift apart (ephemerality guarantee).
+// progress reminder (tests match on it).
 const progressReminderMarker = "Turn progress: depth "
