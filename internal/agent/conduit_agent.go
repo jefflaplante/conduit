@@ -42,6 +42,9 @@ type ConduitAgentWithIntegration struct {
 	modelAliases     map[string]string
 	promptBuilder    *PromptBuilder
 	brainService     BrainLister
+	// quietHours drives the "quiet hours" hint in the Time Context line;
+	// nil keeps the legacy 23:00-08:00 heuristic. conduit-31jg.60
+	quietHours *config.AgentHeartbeatConfig
 
 	// System prompt cache: keyed by "sessionKey:model:isOAuth"
 	promptCache    sync.Map
@@ -71,6 +74,7 @@ func NewConduitAgentWithIntegration(
 		promptScaling:    &cfg.PromptScaling,
 		timezone:         cfg.Timezone,
 		runtimeChannel:   cfg.RuntimeChannel,
+		quietHours:       cfg.QuietHours,
 		tools:            tools,
 		workspaceContext: workspaceContext,
 		summaryManager:   summaryManager,
@@ -80,32 +84,15 @@ func NewConduitAgentWithIntegration(
 		promptCacheTTL:   DefaultPromptCacheTTL,
 	}
 
-	agent.promptBuilder = NewPromptBuilder(
-		agent.name,
-		agent.personality,
-		agent.email,
-		agent.identity,
-		agent.capabilities,
-		agent.tools,
-		agent.workspaceContext,
-		agent.summaryManager,
-		agent.skillsManager,
-		agent.modelAliases,
-		agent.promptScaling,
-		agent.timezone,
-		agent.runtimeChannel,
-		agent.brainService,
-	)
+	agent.promptBuilder = agent.newPromptBuilder()
 
 	return agent
 }
 
-// SetTools updates the agent's tool definitions (used after deferred initialization)
-func (a *ConduitAgentWithIntegration) SetTools(tools []ai.Tool) {
-	a.mu.Lock()
-	a.tools = tools
-	// Rebuild prompt builder with new tools
-	a.promptBuilder = NewPromptBuilder(
+// newPromptBuilder builds a PromptBuilder from the agent's current fields.
+// Callers hold a.mu where they would have for the fields themselves.
+func (a *ConduitAgentWithIntegration) newPromptBuilder() *PromptBuilder {
+	pb := NewPromptBuilder(
 		a.name,
 		a.personality,
 		a.email,
@@ -121,6 +108,16 @@ func (a *ConduitAgentWithIntegration) SetTools(tools []ai.Tool) {
 		a.runtimeChannel,
 		a.brainService,
 	)
+	pb.sectionParams.QuietHours = a.quietHours // conduit-31jg.60
+	return pb
+}
+
+// SetTools updates the agent's tool definitions (used after deferred initialization)
+func (a *ConduitAgentWithIntegration) SetTools(tools []ai.Tool) {
+	a.mu.Lock()
+	a.tools = tools
+	// Rebuild prompt builder with new tools
+	a.promptBuilder = a.newPromptBuilder()
 	a.mu.Unlock()
 	// Invalidate prompt cache since tools affect prompt content
 	a.InvalidatePromptCache()
@@ -465,24 +462,10 @@ func (a *ConduitAgentWithIntegration) UpdateConfiguration(cfg AgentConfig) error
 	a.promptScaling = &cfg.PromptScaling
 	a.timezone = cfg.Timezone
 	a.runtimeChannel = cfg.RuntimeChannel
+	a.quietHours = cfg.QuietHours
 
 	// Rebuild prompt builder with new configuration
-	a.promptBuilder = NewPromptBuilder(
-		a.name,
-		a.personality,
-		a.email,
-		a.identity,
-		a.capabilities,
-		a.tools,
-		a.workspaceContext,
-		a.summaryManager,
-		a.skillsManager,
-		a.modelAliases,
-		a.promptScaling,
-		a.timezone,
-		a.runtimeChannel,
-		a.brainService,
-	)
+	a.promptBuilder = a.newPromptBuilder()
 	a.mu.Unlock()
 
 	// Invalidate prompt cache since configuration affects prompt content
@@ -496,22 +479,7 @@ func (a *ConduitAgentWithIntegration) UpdateTools(tools []ai.Tool) error {
 	a.tools = tools
 
 	// Rebuild prompt builder with new tools
-	a.promptBuilder = NewPromptBuilder(
-		a.name,
-		a.personality,
-		a.email,
-		a.identity,
-		a.capabilities,
-		a.tools,
-		a.workspaceContext,
-		a.summaryManager,
-		a.skillsManager,
-		a.modelAliases,
-		a.promptScaling,
-		a.timezone,
-		a.runtimeChannel,
-		a.brainService,
-	)
+	a.promptBuilder = a.newPromptBuilder()
 
 	// Invalidate prompt cache since tools affect prompt content
 	a.InvalidatePromptCache()
@@ -560,22 +528,7 @@ func (a *ConduitAgentWithIntegration) SetSummaryManager(sm *workspace.SummaryMan
 	a.summaryManager = sm
 
 	// Rebuild prompt builder with summary manager
-	a.promptBuilder = NewPromptBuilder(
-		a.name,
-		a.personality,
-		a.email,
-		a.identity,
-		a.capabilities,
-		a.tools,
-		a.workspaceContext,
-		a.summaryManager,
-		a.skillsManager,
-		a.modelAliases,
-		a.promptScaling,
-		a.timezone,
-		a.runtimeChannel,
-		a.brainService,
-	)
+	a.promptBuilder = a.newPromptBuilder()
 	a.mu.Unlock()
 
 	// Invalidate prompt cache since summarization affects prompt content
@@ -599,22 +552,7 @@ func (a *ConduitAgentWithIntegration) SetBrainService(bs BrainLister) {
 	a.brainService = bs
 
 	// Rebuild prompt builder with brain service
-	a.promptBuilder = NewPromptBuilder(
-		a.name,
-		a.personality,
-		a.email,
-		a.identity,
-		a.capabilities,
-		a.tools,
-		a.workspaceContext,
-		a.summaryManager,
-		a.skillsManager,
-		a.modelAliases,
-		a.promptScaling,
-		a.timezone,
-		a.runtimeChannel,
-		a.brainService,
-	)
+	a.promptBuilder = a.newPromptBuilder()
 	a.mu.Unlock()
 
 	// Invalidate prompt cache since brain data affects prompt content

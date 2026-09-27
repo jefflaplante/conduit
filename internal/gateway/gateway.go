@@ -251,6 +251,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		PromptScaling:  cfg.Agent.PromptScaling,
 		Timezone:       cfg.Timezone,
 		RuntimeChannel: deriveRuntimeChannel(cfg.Channels),
+		QuietHours:     promptQuietHours(cfg), // conduit-31jg.60
 	}
 
 	// Use the integrated agent system (tools will be set after gateway is created)
@@ -450,6 +451,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// cron_jobs.json expressions were written for the server zone (UTC);
 	// scheduler.WithLocation(cfg.GetLocation()) would shift them. Per-job
 	// "CRON_TZ=<zone> " prefixes are supported for opt-in migration.
+	// conduit-31jg.60: `conduit cron migrate-tz` rewrites jobs to carry
+	// CRON_TZ=<configured zone>; migrated jobs ignore this default.
 	gw.scheduler = scheduler.New(workspaceDir, gw.executeScheduledJob)
 
 	// Initialize heartbeat integration
@@ -1109,4 +1112,15 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 			SessionKey: session.Key, Notify: notify,
 		},
 	}, newChannelTurnSink(g, msg, session))
+}
+
+// promptQuietHours returns the agent_heartbeat quiet window for the prompt's
+// Time Context hint, inheriting the top-level timezone when the heartbeat
+// block has none. conduit-31jg.60
+func promptQuietHours(cfg *config.Config) *config.AgentHeartbeatConfig {
+	hb := cfg.AgentHeartbeat
+	if hb.Timezone == "" {
+		hb.Timezone = cfg.Timezone
+	}
+	return &hb
 }
