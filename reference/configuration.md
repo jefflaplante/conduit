@@ -823,6 +823,24 @@ Datadog API integration for metrics, logs, and monitors.
 | `site` | string | `"datadoghq.com"` | Datadog site (e.g., `us5.datadoghq.com`, `datadoghq.eu`) |
 | `rate_limit_rps` | float | `5.0` | Requests per second limit |
 
+### MCP Server Auth
+
+Bearer-token policy for the MCP endpoint the claude-code provider exposes on `127.0.0.1:<claude_code.mcp_port>` (conduit-31jg.8). See [docs/claude-code-provider.md](../docs/claude-code-provider.md#authentication) for client setup.
+
+```json
+{
+  "mcp": {
+    "require_auth": true,
+    "token_file": "~/.conduit/auth/mcp_token"
+  }
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `require_auth` | unset = warn | unset: serve unauthenticated requests but log them, reject wrong tokens (transition mode, becomes enforce in a future release); `true`: 401 without a valid token; `false`: no auth |
+| `token_file` | `{data_dir}/auth/mcp_token` | 0600 token file, generated on first start. Exported to the gateway's environment as `CONDUIT_MCP_TOKEN` |
+
 ### Debug
 
 ```json

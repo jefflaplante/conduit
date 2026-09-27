@@ -47,6 +47,7 @@ type Config struct {
 	Brain          BrainConfig                  `json:"brain,omitempty"`
 	Reflection     *reflection.ReflectionConfig `json:"reflection,omitempty"`
 	STT            STTConfig                    `json:"stt,omitempty"`
+	MCP            MCPConfig                    `json:"mcp,omitempty"` // conduit-31jg.8
 }
 
 // AuthTokenConfig holds configuration for the token authentication system

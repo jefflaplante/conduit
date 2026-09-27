@@ -326,7 +326,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	logger.Debug("tool execution engine wired up")
 
 	// Initialize MCP server and session mapper if a claude-code provider is configured.
-	mcpServer, mcpConfigMgr := setupMCPForClaudeCode(cfg, aiRouter, toolsRegistry, sessionStore, logger)
+	mcpServer, mcpConfigMgr := setupMCPForClaudeCode(cfg, aiRouter, toolsRegistry, executionEngine, sessionStore, logger)
 
 	// Initialize summary manager for AI-powered workspace summarization
 	// (small-context models). Attaches to agentSystem when enabled.

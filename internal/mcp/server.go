@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"conduit/internal/approval"
 	"conduit/internal/tools/types"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -31,7 +32,37 @@ type Server struct {
 
 	mu         sync.Mutex
 	httpServer *http.Server
+
+	// conduit-31jg.8
+	executor  ToolExecutor
+	authMode  AuthMode
+	authToken string
 }
+
+// ToolExecutor runs one tool call through the agent's execution pipeline
+// (per-call timeout, panic recovery, truncation, reflection) and returns the
+// model-facing text. Satisfied by *tools.ExecutionEngine. conduit-31jg.8.
+type ToolExecutor interface {
+	ExecuteForModel(ctx context.Context, name string, args map[string]interface{}) (content string, isError bool)
+}
+
+// Option configures a Server.
+type Option func(*Server)
+
+// WithExecutor routes tool calls through the execution engine instead of
+// calling the registry directly (conduit-31jg.8).
+func WithExecutor(e ToolExecutor) Option { return func(s *Server) { s.executor = e } }
+
+// WithAuth sets the bearer-token policy and the expected token
+// (conduit-31jg.8). Without it the server does no authentication.
+func WithAuth(mode AuthMode, token string) Option {
+	return func(s *Server) { s.authMode, s.authToken = mode, token }
+}
+
+// approvalSource labels MCP tool calls for the approval gate: an MCP caller is
+// not a live human on a promptable channel, so owner-account actions that need
+// approval fail closed (conduit-31jg.8).
+const approvalSource = "mcp"
 
 // stopGrace bounds how long Stop waits for sessions and connections to
 // drain before force-closing them (conduit-31jg.78).
@@ -39,13 +70,16 @@ const stopGrace = 500 * time.Millisecond
 
 // NewServer creates a new MCP server that will expose tools from the registry.
 // The server binds to localhost only on the given port.
-func NewServer(registry types.ToolRegistry, port int) *Server {
+func NewServer(registry types.ToolRegistry, port int, opts ...Option) *Server {
 	runCtx, runCancel := context.WithCancel(context.Background())
 	s := &Server{
 		registry:  registry,
 		port:      port,
 		runCtx:    runCtx,
 		runCancel: runCancel,
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 
 	// Create the MCP protocol server.
@@ -99,12 +133,26 @@ func (s *Server) makeToolHandler(toolName string) sdkmcp.ToolHandler {
 			}
 		}
 
-		// Execute the tool via the registry.
+		// conduit-31jg.8: never interactive — approval-gated actions (owner
+		// email sends) fail closed instead of prompting a Telegram human.
+		ctx = approval.WithNonInteractive(ctx, approvalSource)
+
+		// conduit-31jg.8: same single-call pipeline as the agent loop.
+		if s.executor != nil {
+			content, isError := s.executor.ExecuteForModel(ctx, toolName, args)
+			return &sdkmcp.CallToolResult{
+				IsError: isError,
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: content}},
+			}, nil
+		}
+
+		// Fallback (no engine wired, e.g. tests): call the registry directly.
+		includeData := s.includeData(toolName)
 		toolResult, err := s.registry.ExecuteTool(ctx, toolName, args)
 		if err != nil && toolResult != nil && !toolResult.Success {
 			// conduit-31jg.47: the registry now keeps output returned with an
 			// error; AdaptToolResult renders error + output.
-			return AdaptToolResult(toolResult), nil
+			return AdaptToolResult(toolResult, includeData), nil
 		}
 		if err != nil {
 			result := &sdkmcp.CallToolResult{
@@ -116,8 +164,15 @@ func (s *Server) makeToolHandler(toolName string) sdkmcp.ToolHandler {
 			return result, nil
 		}
 
-		return AdaptToolResult(toolResult), nil
+		return AdaptToolResult(toolResult, includeData), nil
 	}
+}
+
+// includeData reports whether the tool opted into Data rendering
+// (Registry.IncludeDataInModelOutput, conduit-31jg.39).
+func (s *Server) includeData(toolName string) bool {
+	p, ok := s.registry.(interface{ IncludeDataInModelOutput(name string) bool })
+	return ok && p.IncludeDataInModelOutput(toolName)
 }
 
 // Start begins serving MCP requests on 127.0.0.1:<port>.
@@ -133,8 +188,10 @@ func (s *Server) Start(ctx context.Context) error {
 		},
 	)
 
+	// conduit-31jg.8: bearer auth wraps the SDK handler, whose default DNS
+	// rebinding (localhost Host) and cross-origin protections stay enabled.
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", handler)
+	mux.Handle("/mcp", newBearerAuth(s.authMode, s.authToken, handler))
 
 	runCtx := s.runCtx
 	hs := &http.Server{
@@ -155,7 +212,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.httpServer = hs
 	s.mu.Unlock()
 
-	log.Printf("[mcp] server starting on %s", addr)
+	log.Printf("[mcp] server starting on %s (auth: %s)", addr, s.authMode)
 
 	go func() {
 		if err := hs.Serve(ln); err != nil && err != http.ErrServerClosed {

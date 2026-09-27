@@ -20,7 +20,7 @@ User → Channel (WebSocket/TUI/Telegram)
 
 The claude-code provider spawns `claude -p` (print/non-interactive mode) for each user message, parses the structured JSON output, and delivers the response through Conduit's normal channel pipeline. Streaming is supported end-to-end via `--output-format stream-json`.
 
-A companion MCP server runs on localhost, exposing Conduit's unique tools (Brain, MQTT, scheduling, web search, etc.) to Claude Code. Claude Code discovers these tools via a `.mcp.json` file written to the configured working directory. Tool calls from Claude Code route back through Conduit's ToolRegistry, preserving the execution engine middleware.
+A companion MCP server runs on localhost, exposing Conduit's unique tools (Brain, MQTT, scheduling, web search, etc.) to Claude Code. Claude Code discovers these tools via a `.mcp.json` file written to the configured working directory. Tool calls from Claude Code run through Conduit's ExecutionEngine single-call pipeline (per-call timeout, panic recovery, result truncation, reflection capture), exactly like the agent's own tool calls. The endpoint requires a bearer token (see [Authentication](#authentication)).
 
 ### Session Continuity
 
@@ -140,9 +140,60 @@ The claude-code provider can coexist with direct API providers. Use smart routin
 When a claude-code provider is configured, Conduit automatically starts an MCP server on `127.0.0.1:<mcp_port>`. This server:
 
 - Exposes Conduit tools to Claude Code via the [Model Context Protocol](https://modelcontextprotocol.io/)
-- Binds to localhost only (not accessible from the network)
-- Uses HTTP-based MCP (StreamableHTTP, stateless mode)
+- Binds to localhost only (not accessible from the network); the SDK's DNS-rebinding (Host) and cross-origin protections stay on
+- Uses HTTP-based MCP (StreamableHTTP, stateful sessions)
+- Requires `Authorization: Bearer <token>` (see [Authentication](#authentication))
+- Runs every tool call through the ExecutionEngine: per-call timeout (60s, longer when a Bash `timeout` asks for it), panic recovery, smart truncation to `tools.max_tool_result_chars`, `Structured data` for tools that opt in, and SPAR reflection capture (conduit-31jg.8)
+- Treats every call as **non-interactive** for human approvals (`approval.WithNonInteractive(ctx, "mcp")`): owner-account email sends fail closed with `NOT SENT ... (origin: mcp)`
 - Writes a `.mcp.json` file to `working_dir` so Claude Code auto-discovers it
+- On shutdown, cancels in-flight calls and hanging SSE streams, closes all sessions and force-closes lingering connections after 500ms, so a restart no longer waits 5s (conduit-31jg.78)
+
+### Authentication
+
+conduit-31jg.8. The token is a dedicated secret in `{data_dir}/auth/mcp_token` (default data dir `~/.conduit`; override with `mcp.token_file`), 64 hex chars, mode 0600, generated on first start and stable across restarts. It is compared in constant time (SHA-256 + `subtle.ConstantTimeCompare`). A separate secret is used instead of a gateway auth token because those are stored only as HMAC hashes (the gateway could not give the plaintext to its own `claude -p` child) and because this credential grants code execution (Bash/Write), so it is kept apart from WebSocket client tokens.
+
+The gateway exports the token as `CONDUIT_MCP_TOKEN` in its own environment, so the claude-code provider's `claude -p` subprocess inherits it, and the `.mcp.json` it writes references `${CONDUIT_MCP_TOKEN:-}`.
+
+`mcp.require_auth` (top-level `mcp` block):
+
+| Value | Mode | Behavior |
+|-------|------|----------|
+| unset (default) | `warn` | Requests without a token are served and logged (at most once a minute); a wrong token gets 401. Transition mode for one release; the default becomes `enforce` afterwards. |
+| `true` | `enforce` | Requests without a valid token get 401 (`WWW-Authenticate: Bearer realm="conduit-mcp"`). If the token file is unusable (e.g. group/world-readable), the MCP server does not start. |
+| `false` | `disabled` | No auth (logged as a warning at startup). Not recommended. |
+
+```json
+{
+  "mcp": {
+    "require_auth": true,
+    "token_file": "~/.conduit/auth/mcp_token"
+  }
+}
+```
+
+**Client configuration** (any Claude Code session outside `working_dir`, e.g. a repo `.mcp.json` or `~/.claude.json`):
+
+```json
+{
+  "mcpServers": {
+    "conduit": {
+      "type": "http",
+      "url": "http://127.0.0.1:18790/mcp",
+      "headers": { "Authorization": "Bearer ${CONDUIT_MCP_TOKEN}" }
+    }
+  }
+}
+```
+
+and export the variable in the shell that launches Claude Code (e.g. `~/.bashrc`):
+
+```bash
+export CONDUIT_MCP_TOKEN="$(cat ~/.conduit/auth/mcp_token)"
+```
+
+Claude Code expands `${VAR}` and `${VAR:-default}` in `headers`. With plain `${VAR}` and the variable unset, Claude Code reports the server config as invalid (missing environment variable); `${CONDUIT_MCP_TOKEN:-}` sends an empty bearer instead, which the gateway treats as "no token" (served in warn mode, 401 in enforce mode).
+
+**Rotation:** delete the token file and restart the gateway (a new token is generated), then re-export `CONDUIT_MCP_TOKEN` and restart Claude Code sessions. A stale token is rejected with 401 in every mode.
 
 ### Exposed Tools
 
@@ -171,13 +222,16 @@ When `working_dir` is set, Conduit writes a `.mcp.json` file on startup:
   "mcpServers": {
     "conduit": {
       "type": "http",
-      "url": "http://127.0.0.1:18790"
+      "url": "http://127.0.0.1:18790/mcp",
+      "headers": { "Authorization": "Bearer ${CONDUIT_MCP_TOKEN:-}" }
     }
   }
 }
 ```
 
-If a `.mcp.json` already exists (e.g., with other MCP servers), Conduit merges the `conduit` entry without disturbing existing entries. On shutdown, Conduit restores the original file (or deletes it if Conduit created it).
+The `headers` entry is omitted when `mcp.require_auth` is `false`. The literal token is never written to this file.
+
+If a `.mcp.json` already exists (e.g., with other MCP servers), Conduit merges the `conduit` entry without disturbing existing entries (all of their fields are preserved). On shutdown, Conduit restores the original file (or deletes it if Conduit created it).
 
 ### Without working_dir
 
@@ -196,14 +250,16 @@ level=INFO msg="claude-code provider configured" mcp_port=18790 working_dir=/pat
 
 ```
 level=INFO msg="MCP server started"
+[mcp] server starting on 127.0.0.1:18790 (auth: warn)
 ```
 
-Verify it's listening:
+Verify auth (expect `401` without a token in enforce mode, and a non-401 with it):
 ```bash
-curl -s http://127.0.0.1:18790/mcp
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:18790/mcp
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Bearer $(cat ~/.conduit/auth/mcp_token)" http://127.0.0.1:18790/mcp
 ```
 
-The server should respond (even to an empty request) rather than refusing the connection.
+In warn mode, `[mcp] WARNING: served unauthenticated MCP request ...` lines identify clients that still need the header.
 
 ### Check .mcp.json
 
