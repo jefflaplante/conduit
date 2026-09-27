@@ -738,7 +738,7 @@ func (r *Router) ResolveEmptyFailover(failedProvider string) (string, Provider, 
 	}
 	// conduit-31jg.18(b): the failover call carries the full tool-loop
 	// history too — trim it to the failover route's window.
-	return model, r.guardedProvider(providerRoute{name: p.Name(), provider: p, model: model}), true
+	return model, r.failoverGuardedProvider(providerRoute{name: p.Name(), provider: p, model: model}), true // conduit-31jg.68: no chained fallback
 }
 
 func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session, userMessage string, providerName string) (*GenerateResponse, error) {

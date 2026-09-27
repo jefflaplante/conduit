@@ -15,6 +15,7 @@ import (
 
 	"conduit/internal/auth/oauthflow"
 	"conduit/internal/config"
+	"conduit/internal/httpsafe"
 )
 
 // AnthropicProvider implements the Anthropic API
@@ -290,7 +291,7 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 	defer resp.Body.Close()
 
 	var anthropicResp map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&anthropicResp); err != nil {
+	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, providerResponseBodyLimit)).Decode(&anthropicResp); err != nil { // conduit-31jg.70
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
