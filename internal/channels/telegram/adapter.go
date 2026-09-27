@@ -22,6 +22,7 @@ import (
 	"conduit/internal/approval"
 	"conduit/internal/channels"
 	"conduit/internal/protocol"
+	"conduit/internal/redact"
 	"conduit/internal/stt"
 )
 
@@ -85,6 +86,10 @@ type Adapter struct {
 	// (after bot.Start/StartWebhook return, i.e. no more handleUpdate calls
 	// from the poller). Stop waits on it. conduit-31jg.26.
 	runDone chan struct{}
+
+	// fileClient overrides the HTTP client used for photo/voice downloads
+	// (tests); nil uses a redacting client with fileDownloadTimeout.
+	fileClient bot.HttpClient
 }
 
 // stopWaitTimeout bounds how long Stop waits for the poller goroutine.
@@ -130,6 +135,9 @@ func (f *Factory) CreateAdapter(config channels.ChannelConfig) (channels.Channel
 	// Parse Telegram-specific config
 	if token, ok := config.Config["bot_token"].(string); ok {
 		telegramConfig.BotToken = token
+		// conduit-31jg.83: scrub the literal token from all log output and
+		// redacted errors, whatever shape it appears in.
+		redact.RegisterSecret(token)
 	} else {
 		return nil, fmt.Errorf("bot_token is required for Telegram adapter")
 	}
@@ -191,15 +199,19 @@ func (a *Adapter) Start(ctx context.Context) error {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
 
-	a.ctx, a.cancel = context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(ctx)
+	a.ctx, a.cancel = runCtx, cancel
 	a.status = channels.StatusInitializing
 	a.statusMsg = "Starting Telegram bot"
 	a.startTime = time.Now()
 
-	// Create bot options
-	opts := []bot.Option{
+	// Create bot options. conduit-31jg.83: botLoggingOptions replaces the
+	// library's raw log.Printf error/debug handlers and scrubs the token out
+	// of request errors; WithDefaultHandler also replaces its log.Printf
+	// update dump.
+	opts := append([]bot.Option{
 		bot.WithDefaultHandler(a.handleUpdate),
-	}
+	}, botLoggingOptions()...)
 
 	if a.config.Debug {
 		opts = append(opts, bot.WithDebug())
@@ -208,6 +220,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 	// Create bot instance
 	telegramBot, err := bot.New(a.config.BotToken, opts...)
 	if err != nil {
+		err = redact.Error(err)
 		a.status = channels.StatusError
 		a.statusMsg = fmt.Sprintf("Failed to create bot: %v", err)
 		return fmt.Errorf("failed to create Telegram bot: %w", err)
@@ -218,7 +231,10 @@ func (a *Adapter) Start(ctx context.Context) error {
 	// Register slash commands with Telegram
 	a.registerCommands(ctx)
 
-	// Start bot in background
+	// Start bot in background. The goroutine uses the locals captured here,
+	// never a.bot/a.ctx: a concurrent Stop+Start (Manager.RestartAdapter)
+	// rewrites those fields under a.mutex (conduit-31jg.73).
+	webhookMode := a.config.WebhookMode
 	runDone := make(chan struct{})
 	a.runDone = runDone
 	go func() {
@@ -237,14 +253,14 @@ func (a *Adapter) Start(ctx context.Context) error {
 
 		log.Printf("[Telegram] Bot started: %s", a.Name())
 
-		if a.config.WebhookMode {
+		if webhookMode {
 			// Webhook mode (for production)
 			log.Printf("[Telegram] Starting webhook mode")
-			a.bot.StartWebhook(a.ctx)
+			telegramBot.StartWebhook(runCtx)
 		} else {
 			// Polling mode (for development)
 			log.Printf("[Telegram] Starting polling mode...")
-			a.bot.Start(a.ctx)
+			telegramBot.Start(runCtx)
 			log.Printf("[Telegram] Polling mode started")
 		}
 	}()
