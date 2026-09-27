@@ -1,0 +1,15 @@
+{
+  "resp": {
+    "content": "ok",
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 3,
+      "total_tokens": 3
+    },
+    "finish_reason": "stop",
+    "stop_reason": "end_turn"
+  },
+  "deltas": [
+    "ok"
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "non_streaming": {
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "\u003clen=3600 sha256=8ba976c8bd451b6e prefix=\"history filler history filler history fi\"\u003e",
+          "role": "user"
+        },
+        {
+          "content": "",
+          "role": "assistant"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "system": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "\u003clen=20000 sha256=319ba78b7b3533b8 prefix=\"static instructions static instructions \"\u003e",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "streaming": {
+    "headers": {
+      "Accept": "text/event-stream",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "\u003clen=3600 sha256=8ba976c8bd451b6e prefix=\"history filler history filler history fi\"\u003e",
+          "role": "user"
+        },
+        {
+          "content": "",
+          "role": "assistant"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "stream": true,
+      "system": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "\u003clen=20000 sha256=319ba78b7b3533b8 prefix=\"static instructions static instructions \"\u003e",
+          "type": "text"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "resp": {
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "",
+        "name": "",
+        "arguments": {}
+      },
+      {
+        "id": "t6",
+        "name": "Read",
+        "arguments": {
+          "ok": true
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 1,
+      "completion_tokens": 1,
+      "total_tokens": 2
+    },
+    "finish_reason": "tool_calls",
+    "stop_reason": "tool_use"
+  }
+}

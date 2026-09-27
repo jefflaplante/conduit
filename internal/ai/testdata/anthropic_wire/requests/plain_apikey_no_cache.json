@@ -1,0 +1,43 @@
+{
+  "non_streaming": {
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 256,
+      "messages": [
+        {
+          "content": "hi \u003cb\u003e\u0026\u003c/b\u003e",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "system": "You are helpful."
+    }
+  },
+  "streaming": {
+    "headers": {
+      "Accept": "text/event-stream",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 256,
+      "messages": [
+        {
+          "content": "hi \u003cb\u003e\u0026\u003c/b\u003e",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "stream": true,
+      "system": "You are helpful."
+    }
+  }
+}

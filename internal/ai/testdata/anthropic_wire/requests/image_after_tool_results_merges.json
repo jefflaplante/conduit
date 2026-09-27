@@ -1,0 +1,111 @@
+{
+  "non_streaming": {
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "look",
+          "role": "user"
+        },
+        {
+          "content": [
+            {
+              "id": "t1",
+              "input": {
+                "path": "p.png"
+              },
+              "name": "Read",
+              "type": "tool_use"
+            }
+          ],
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "content": "image loaded",
+              "tool_use_id": "t1",
+              "type": "tool_result"
+            },
+            {
+              "source": {
+                "data": "iVBORw0KGgoBAgM=",
+                "media_type": "image/png",
+                "type": "base64"
+              },
+              "type": "image"
+            },
+            {
+              "text": "here it is",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6"
+    }
+  },
+  "streaming": {
+    "headers": {
+      "Accept": "text/event-stream",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "look",
+          "role": "user"
+        },
+        {
+          "content": [
+            {
+              "id": "t1",
+              "input": {
+                "path": "p.png"
+              },
+              "name": "Read",
+              "type": "tool_use"
+            }
+          ],
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "content": "image loaded",
+              "tool_use_id": "t1",
+              "type": "tool_result"
+            },
+            {
+              "source": {
+                "data": "iVBORw0KGgoBAgM=",
+                "media_type": "image/png",
+                "type": "base64"
+              },
+              "type": "image"
+            },
+            {
+              "text": "here it is",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "stream": true
+    }
+  }
+}

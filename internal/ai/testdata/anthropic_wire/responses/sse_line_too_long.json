@@ -1,0 +1,12 @@
+{
+  "resp": {
+    "content": "cut",
+    "usage": {
+      "prompt_tokens": 2,
+      "completion_tokens": 0,
+      "total_tokens": 2
+    },
+    "partial": true
+  },
+  "err": "error reading stream: bufio.Scanner: token too long"
+}

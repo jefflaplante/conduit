@@ -1,0 +1,12 @@
+{
+  "resp": {
+    "content": "",
+    "usage": {
+      "prompt_tokens": 1,
+      "completion_tokens": 1,
+      "total_tokens": 2
+    },
+    "finish_reason": "length",
+    "stop_reason": "model_context_window_exceeded"
+  }
+}

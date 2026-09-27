@@ -1,0 +1,30 @@
+{
+  "resp": {
+    "content": "Let me check.",
+    "tool_calls": [
+      {
+        "id": "toolu_1",
+        "name": "Bash",
+        "arguments": {
+          "command": "ls"
+        }
+      },
+      {
+        "id": "toolu_2",
+        "name": "Glob",
+        "arguments": {}
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 20,
+      "completion_tokens": 30,
+      "total_tokens": 50
+    },
+    "finish_reason": "tool_calls",
+    "stop_reason": "tool_use"
+  },
+  "deltas": [
+    "Let me check."
+  ],
+  "done_calls": 1
+}

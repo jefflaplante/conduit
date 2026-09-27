@@ -1,0 +1,4 @@
+{
+  "resp": null,
+  "err": "failed to decode response: json: cannot unmarshal array into Go value of type map[string]interface {}"
+}
