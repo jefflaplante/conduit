@@ -145,6 +145,11 @@ func (t *FindTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer types.RecoverPanic("Find document search", func(err error) {
+				mu.Lock()
+				searchErrors = append(searchErrors, err.Error())
+				mu.Unlock()
+			})
 			docs, err := t.services.Searcher.SearchDocuments(ctx, query, limit)
 			mu.Lock()
 			defer mu.Unlock()
@@ -170,6 +175,11 @@ func (t *FindTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer types.RecoverPanic("Find message search", func(err error) {
+				mu.Lock()
+				searchErrors = append(searchErrors, err.Error())
+				mu.Unlock()
+			})
 			msgs, err := t.services.Searcher.SearchMessages(ctx, query, limit)
 			mu.Lock()
 			defer mu.Unlock()
@@ -195,6 +205,11 @@ func (t *FindTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer types.RecoverPanic("Find beads search", func(err error) {
+				mu.Lock()
+				searchErrors = append(searchErrors, err.Error())
+				mu.Unlock()
+			})
 			beads, err := t.services.Searcher.SearchBeads(ctx, query, limit, status)
 			mu.Lock()
 			defer mu.Unlock()

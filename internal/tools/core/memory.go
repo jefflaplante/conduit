@@ -282,10 +282,12 @@ func (t *MemorySearchTool) searchMemoryFilesHybrid(ctx context.Context, query st
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		defer types.RecoverPanic("MemorySearch FTS5 search", func(err error) { ftsErr = err })
 		ftsResults, ftsErr = t.searchMemoryFilesFTS(ctx, query)
 	}()
 	go func() {
 		defer wg.Done()
+		defer types.RecoverPanic("MemorySearch vector search", func(err error) { vectorErr = err })
 		vectorResults, vectorErr = t.searchMemoryFilesVectorRaw(ctx, query, fetchSize)
 	}()
 	wg.Wait()
