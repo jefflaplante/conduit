@@ -84,6 +84,57 @@ func TestBuildFullPrompt_LargeContext(t *testing.T) {
 	}
 }
 
+func TestBuildToolingSection_NamesOnly(t *testing.T) {
+	pb := newTestPromptBuilder()
+	section := pb.buildToolingSection()
+
+	// Every non-skill tool must be listed by name...
+	for _, name := range []string{"Read", "Write", "Bash", "MemorySearch", "Message", "Gateway"} {
+		if !strings.Contains(section, name) {
+			t.Errorf("tool %q missing from Tooling section:\n%s", name, section)
+		}
+	}
+	// ...but its full description must NOT be restated (it already lives in the
+	// tools array sent with every LLM call — restating it is pure duplication).
+	for _, desc := range []string{"Read a file", "Run a command", "Send a message", "Gateway control"} {
+		if strings.Contains(section, desc) {
+			t.Errorf("description %q restated in Tooling section:\n%s", desc, section)
+		}
+	}
+	// Policy lines stay.
+	for _, want := range []string{"case-sensitive", "TOOLS.md", "SessionsSpawn"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("policy line %q missing from Tooling section:\n%s", want, section)
+		}
+	}
+}
+
+func TestBuildToolingSection_SkillToolsCompressed(t *testing.T) {
+	tools := append(newTestPromptBuilder().tools, ai.Tool{
+		Name:        "skill_solar",
+		Description: "Generate daily solar reports for Jeff's Acme 10kW system. Primary data from lux CLI (direct inverter Modbus), fallback to Home Assistant. Use for solar status checks, daily report cron, or any solar/energy question.",
+	})
+	pb := NewPromptBuilder(
+		"conduit", "helpful assistant",
+		config.AgentEmail{},
+		IdentityConfig{APIKeyIdentity: "You are Conduit."},
+		AgentCapabilities{SkillsIntegration: false},
+		tools,
+		nil, nil, nil, nil, nil, "", "", nil,
+	)
+	section := pb.buildToolingSection()
+
+	if !strings.Contains(section, "skill_*: 1 skill-derived") {
+		t.Errorf("skill tools should compress to one summary line:\n%s", section)
+	}
+	if strings.Contains(section, "Acme 10kW") {
+		t.Errorf("skill tool description leaked into Tooling section:\n%s", section)
+	}
+	if !strings.Contains(section, "Bash") {
+		t.Errorf("built-in tools still listed alongside skill summary:\n%s", section)
+	}
+}
+
 func TestBuildFullPrompt_SmallContext(t *testing.T) {
 	pb := newTestPromptBuilder()
 	session := sessionWithModel("mistral")

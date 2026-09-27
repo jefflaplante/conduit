@@ -658,13 +658,17 @@ func (pb *PromptBuilder) buildToolingSection() string {
 	builder.WriteString("Tool availability (filtered by policy):\n")
 	builder.WriteString("Tool names are case-sensitive. Call tools exactly as listed.\n")
 
+	toolNames := make([]string, 0, len(pb.tools))
 	skillTools := 0
 	for _, tool := range pb.tools {
 		if strings.HasPrefix(tool.Name, "skill_") {
 			skillTools++
 			continue
 		}
-		builder.WriteString(fmt.Sprintf("- %s: %s\n", tool.Name, tool.Description))
+		toolNames = append(toolNames, tool.Name)
+	}
+	if len(toolNames) > 0 {
+		builder.WriteString(fmt.Sprintf("Tools: %s\n", strings.Join(toolNames, ", ")))
 	}
 	if skillTools > 0 {
 		builder.WriteString(fmt.Sprintf("- skill_*: %d skill-derived tools — see Skills section for names/actions/descriptions\n", skillTools))
