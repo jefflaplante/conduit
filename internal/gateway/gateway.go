@@ -813,7 +813,7 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Handle client in separate goroutines.
-	// Use g.ctx (gateway lifecycle) instead of r.Context() because the HTTP request
+	// Use g.lifecycleCtx() (gateway lifecycle) instead of r.Context() because the HTTP request
 	// context is cancelled when this handler returns, which happens immediately
 	// after spawning these goroutines.
 	//

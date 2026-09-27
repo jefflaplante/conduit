@@ -32,7 +32,7 @@ func subAgentFallbackRouter(t *testing.T, responses []ai.MockResponse) *ai.Route
 
 func TestSubAgent_EmptyGuardFallback_RoutedToFailure(t *testing.T) {
 	gw, store := newTestGatewayWithSessions(t)
-	gw.ctx = context.Background()
+	gw.setLifecycleCtx(context.Background())
 	gw.ai = subAgentFallbackRouter(t, []ai.MockResponse{
 		// Model returns raw-empty twice (original + guard retry) → guard
 		// substitutes fallback text → sub-agent must treat as FAILURE.
@@ -72,7 +72,7 @@ func TestSubAgent_EmptyGuardFallback_RoutedToFailure(t *testing.T) {
 
 func TestSubAgent_NormalCompletion_StillWorks(t *testing.T) {
 	gw, store := newTestGatewayWithSessions(t)
-	gw.ctx = context.Background()
+	gw.setLifecycleCtx(context.Background())
 	gw.ai = subAgentFallbackRouter(t, []ai.MockResponse{
 		{Content: "The task is done. Report follows."},
 	})

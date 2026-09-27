@@ -84,7 +84,7 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 	go func() {
 		// Use gateway lifecycle context, not request context.
 		// Sub-agents are fire-and-forget - they should outlive the parent request.
-		subCtx, cancel := deriveSubAgentContext(g.ctx, timeoutSeconds)
+		subCtx, cancel := deriveSubAgentContext(g.lifecycleCtx(), timeoutSeconds)
 		defer cancel()
 
 		// Own WM bucket + read-only fallback to the parent's WM. conduit-31jg.30

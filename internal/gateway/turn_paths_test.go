@@ -73,7 +73,7 @@ func (s *recordingSink) Finish(_ context.Context, r *TurnResult) {
 
 func TestSubAgent_OnTurnRunner_VisibleStoppableTranscriptInLock(t *testing.T) {
 	gw, _, p := newTurnTestGateway(t)
-	gw.ctx = context.Background()
+	gw.setLifecycleCtx(context.Background())
 	p.hold(1)
 
 	key, err := gw.SpawnSubAgent(context.Background(), "research the thing", "", "", "", 30)
@@ -101,7 +101,7 @@ func TestSubAgent_OnTurnRunner_VisibleStoppableTranscriptInLock(t *testing.T) {
 
 func TestSubAgent_OnTurnRunner_CompletesWithCostAndModel(t *testing.T) {
 	gw, _, p := newTurnTestGateway(t)
-	gw.ctx = context.Background()
+	gw.setLifecycleCtx(context.Background())
 	p.usage = ai.Usage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120}
 
 	key, err := gw.SpawnSubAgentWithSkills(context.Background(), "summarize", "", "", "", 30, []string{"research"})
