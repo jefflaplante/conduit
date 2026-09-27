@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"time"
+
+	"conduit/internal/sessions"
 )
 
 // SessionCleanupTask handles cleanup of old session and message records
@@ -156,7 +158,7 @@ func (t *SessionCleanupTask) cleanupMessages(ctx context.Context, tx *sql.Tx, cu
 func (t *SessionCleanupTask) cleanupSessions(ctx context.Context, tx *sql.Tx, cutoff time.Time) TaskResult {
 	query := `DELETE FROM sessions WHERE updated_at < ?`
 
-	result, err := tx.ExecContext(ctx, query, cutoff)
+	result, err := tx.ExecContext(ctx, query, sessions.FormatUpdatedAt(cutoff)) // conduit-31jg.73: canonical updated_at text
 	if err != nil {
 		return TaskResult{
 			Success: false,
@@ -204,7 +206,7 @@ func (t *SessionCleanupTask) summarizeSessions(ctx context.Context, tx *sql.Tx, 
 		GROUP BY s.key, s.user_id, s.channel_id, s.created_at, s.updated_at
 	`
 
-	rows, err := tx.QueryContext(ctx, query, cutoff)
+	rows, err := tx.QueryContext(ctx, query, sessions.FormatUpdatedAt(cutoff))
 	if err != nil {
 		return TaskResult{
 			Success: false,
