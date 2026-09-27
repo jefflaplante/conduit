@@ -47,6 +47,7 @@ type Router struct {
 	sessionStore    *sessions.Store // Session store for retrieving message history
 	usageTracker    *UsageTracker
 	historyConfig   *config.HistoryConfig // Token-aware history retrieval config
+	historyCuts     historyCutCache       // per-session history cut, for a stable cached prefix (conduit-31jg.63)
 
 	// Smart routing components
 	modelSelector      ModelSelector

@@ -669,6 +669,12 @@ type HistoryConfig struct {
 	// CharsPerToken is the estimated characters per token for budgeting.
 	// Default: 4 (reasonable for English text)
 	CharsPerToken int `json:"chars_per_token,omitempty"`
+
+	// LowWaterFraction is the share of MaxTokens / MaxMessages that history
+	// is cut down to once it exceeds the budget. Cutting in large steps keeps
+	// the history prefix byte-stable between trims so provider prompt-cache
+	// breakpoints keep hitting (conduit-31jg.63). Default (0): 0.75.
+	LowWaterFraction float64 `json:"low_water_fraction,omitempty"`
 }
 
 // DefaultHistoryConfig returns sensible defaults for history retrieval
@@ -717,6 +723,12 @@ type PromptScalingConfig struct {
 	// CharsPerToken is the estimated characters per token for budget math.
 	// Default: 4 (reasonable for English text)
 	CharsPerToken int `json:"chars_per_token,omitempty"`
+
+	// LowWaterFraction is the share of MaxTokens / MaxMessages that history
+	// is cut down to once it exceeds the budget. Cutting in large steps keeps
+	// the history prefix byte-stable between trims so provider prompt-cache
+	// breakpoints keep hitting (conduit-31jg.63). Default (0): 0.75.
+	LowWaterFraction float64 `json:"low_water_fraction,omitempty"`
 }
 
 // DefaultPromptScalingConfig returns sensible defaults for prompt scaling
