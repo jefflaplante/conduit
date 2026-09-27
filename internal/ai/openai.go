@@ -645,3 +645,12 @@ func (o *OpenAIProvider) parseOpenAIUsage(resp map[string]interface{}) Usage {
 	}
 	return Usage{}
 }
+
+// getFloat64 returns m[key] when it is a JSON number, else 0. (Moved here
+// from streaming.go when the Anthropic parser became typed, conduit-31jg.36.)
+func getFloat64(m map[string]interface{}, key string) float64 {
+	if v, ok := m[key].(float64); ok {
+		return v
+	}
+	return 0
+}

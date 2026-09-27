@@ -1,0 +1,12 @@
+{
+  "resp": {
+    "content": "I can't help with that.",
+    "usage": {
+      "prompt_tokens": 1,
+      "completion_tokens": 1,
+      "total_tokens": 2
+    },
+    "finish_reason": "content_filter",
+    "stop_reason": "refusal"
+  }
+}

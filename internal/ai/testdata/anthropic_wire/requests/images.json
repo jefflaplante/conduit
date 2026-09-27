@@ -1,0 +1,125 @@
+{
+  "non_streaming": {
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": [
+            {
+              "source": {
+                "data": "iVBORw0KGgoBAgM=",
+                "media_type": "image/png",
+                "type": "base64"
+              },
+              "type": "image"
+            },
+            {
+              "text": "what is this?",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        },
+        {
+          "content": "a picture",
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "cache_control": {
+                "type": "ephemeral"
+              },
+              "source": {
+                "data": "iVBORw0KGgoBAgM=",
+                "media_type": "image/png",
+                "type": "base64"
+              },
+              "type": "image"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "system": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "\u003clen=20000 sha256=319ba78b7b3533b8 prefix=\"static instructions static instructions \"\u003e",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "streaming": {
+    "headers": {
+      "Accept": "text/event-stream",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": [
+            {
+              "source": {
+                "data": "iVBORw0KGgoBAgM=",
+                "media_type": "image/png",
+                "type": "base64"
+              },
+              "type": "image"
+            },
+            {
+              "text": "what is this?",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        },
+        {
+          "content": "a picture",
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "cache_control": {
+                "type": "ephemeral"
+              },
+              "source": {
+                "data": "iVBORw0KGgoBAgM=",
+                "media_type": "image/png",
+                "type": "base64"
+              },
+              "type": "image"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "stream": true,
+      "system": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "\u003clen=20000 sha256=319ba78b7b3533b8 prefix=\"static instructions static instructions \"\u003e",
+          "type": "text"
+        }
+      ]
+    }
+  }
+}

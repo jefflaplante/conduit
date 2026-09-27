@@ -1,0 +1,75 @@
+{
+  "non_streaming": {
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "Bearer sk-ant-oat01-golden",
+      "Content-Type": "application/json",
+      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "claude-cli/2.1.2 (external, cli)",
+      "x-app": "cli"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "hi",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "system": [
+        {
+          "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+          "type": "text"
+        },
+        {
+          "text": "static",
+          "type": "text"
+        },
+        {
+          "text": "dyn",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "streaming": {
+    "headers": {
+      "Accept": "text/event-stream",
+      "Authorization": "Bearer sk-ant-oat01-golden",
+      "Content-Type": "application/json",
+      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "claude-cli/2.1.2 (external, cli)",
+      "x-app": "cli"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "hi",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "stream": true,
+      "system": [
+        {
+          "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+          "type": "text"
+        },
+        {
+          "text": "static",
+          "type": "text"
+        },
+        {
+          "text": "dyn",
+          "type": "text"
+        }
+      ]
+    }
+  }
+}

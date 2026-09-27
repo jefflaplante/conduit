@@ -1,0 +1,29 @@
+{
+  "resp": {
+    "content": "Checking.",
+    "tool_calls": [
+      {
+        "id": "toolu_1",
+        "name": "Bash",
+        "arguments": {
+          "command": "ls",
+          "n": 3,
+          "nested": {
+            "a": [
+              1,
+              2
+            ]
+          }
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 100,
+      "completion_tokens": 20,
+      "total_tokens": 120,
+      "cache_creation_input_tokens": 5000
+    },
+    "finish_reason": "tool_calls",
+    "stop_reason": "tool_use"
+  }
+}

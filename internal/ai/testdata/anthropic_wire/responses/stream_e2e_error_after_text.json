@@ -1,0 +1,16 @@
+{
+  "resp": {
+    "content": "partial ans",
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 0,
+      "total_tokens": 10
+    },
+    "partial": true
+  },
+  "err": "anthropic stream error: overloaded_error: Overloaded",
+  "stream_err_type": "overloaded_error",
+  "deltas": [
+    "partial ans"
+  ]
+}

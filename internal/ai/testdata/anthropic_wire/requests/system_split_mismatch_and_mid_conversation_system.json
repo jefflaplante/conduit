@@ -1,0 +1,99 @@
+{
+  "non_streaming": {
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "hi",
+          "role": "user"
+        },
+        {
+          "content": "hello",
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "cache_control": {
+                "type": "ephemeral"
+              },
+              "text": "again",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "system": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "\u003clen=20010 sha256=6af48d06b52e5b0d prefix=\"static instructions static instructions \"\u003e",
+          "type": "text"
+        },
+        {
+          "text": "Mid-conversation note.",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "streaming": {
+    "headers": {
+      "Accept": "text/event-stream",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "hi",
+          "role": "user"
+        },
+        {
+          "content": "hello",
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "cache_control": {
+                "type": "ephemeral"
+              },
+              "text": "again",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "stream": true,
+      "system": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "\u003clen=20010 sha256=6af48d06b52e5b0d prefix=\"static instructions static instructions \"\u003e",
+          "type": "text"
+        },
+        {
+          "text": "Mid-conversation note.",
+          "type": "text"
+        }
+      ]
+    }
+  }
+}

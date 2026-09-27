@@ -494,26 +494,17 @@ func TestAnthropicProvider_ToolConversion(t *testing.T) {
 		t.Fatalf("Expected 1 tool, got: %d", len(anthropicTools))
 	}
 
-	toolMap, ok := anthropicTools[0].(map[string]interface{})
-	if !ok {
-		t.Fatal("Expected tool to be a map")
+	tool := anthropicTools[0]
+	if tool.Name != "test_tool" {
+		t.Fatalf("Expected name 'test_tool', got: %v", tool.Name)
 	}
 
-	if toolMap["name"] != "test_tool" {
-		t.Fatalf("Expected name 'test_tool', got: %v", toolMap["name"])
+	if tool.Description != "A test tool for validation" {
+		t.Fatalf("Expected description, got: %v", tool.Description)
 	}
 
-	if toolMap["description"] != "A test tool for validation" {
-		t.Fatalf("Expected description, got: %v", toolMap["description"])
-	}
-
-	schema, ok := toolMap["input_schema"].(map[string]interface{})
-	if !ok {
-		t.Fatal("Expected input_schema to be a map")
-	}
-
-	if schema["type"] != "object" {
-		t.Fatalf("Expected type 'object', got: %v", schema["type"])
+	if tool.InputSchema["type"] != "object" {
+		t.Fatalf("Expected type 'object', got: %v", tool.InputSchema["type"])
 	}
 }
 

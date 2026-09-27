@@ -156,10 +156,11 @@ type anthropicHTTPError struct {
 	err        error // "API error: NNN - body" (format relied on by classifiers)
 }
 
-// sendMessages performs ONE POST to /v1/messages. On a non-200 it drains
+// sendMessages performs ONE POST of the pre-serialized body to /v1/messages
+// (every retry attempt reuses the same bytes, conduit-31jg.36). On a non-200 it drains
 // the body and returns an anthropicHTTPError describing whether a retry
 // may help.
-func (a *AnthropicProvider) sendMessages(ctx context.Context, body map[string]interface{}, stream bool) (*http.Response, *anthropicHTTPError, error) {
+func (a *AnthropicProvider) sendMessages(ctx context.Context, body []byte, stream bool) (*http.Response, *anthropicHTTPError, error) {
 	httpReq, err := a.newMessagesHTTPRequest(ctx, body, stream)
 	if err != nil {
 		return nil, nil, err
@@ -219,7 +220,7 @@ func (p retryPolicy) backoff(ctx context.Context, tag string, n int, lastErr err
 
 // postMessagesWithRetry performs the non-streaming POST with bounded retry
 // for retryable HTTP statuses.
-func (a *AnthropicProvider) postMessagesWithRetry(ctx context.Context, body map[string]interface{}) (*http.Response, error) {
+func (a *AnthropicProvider) postMessagesWithRetry(ctx context.Context, body []byte) (*http.Response, error) {
 	for n := 1; ; n++ {
 		resp, he, err := a.sendMessages(ctx, body, false)
 		if err != nil {
@@ -240,7 +241,7 @@ func (a *AnthropicProvider) postMessagesWithRetry(ctx context.Context, body map[
 // so the client never receives duplicated text. Once text has been emitted
 // the error is returned (with the partial response) for the router to
 // handle.
-func (a *AnthropicProvider) streamMessagesWithRetry(ctx context.Context, body map[string]interface{}, onDelta StreamCallback) (*GenerateResponse, error) {
+func (a *AnthropicProvider) streamMessagesWithRetry(ctx context.Context, body []byte, onDelta StreamCallback) (*GenerateResponse, error) {
 	emitted := false
 	tracked := func(delta string, done bool) {
 		if delta != "" {

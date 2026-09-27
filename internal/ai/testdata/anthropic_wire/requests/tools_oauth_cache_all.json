@@ -1,0 +1,239 @@
+{
+  "non_streaming": {
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "Bearer sk-ant-oat01-golden",
+      "Content-Type": "application/json",
+      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "claude-cli/2.1.2 (external, cli)",
+      "x-app": "cli"
+    },
+    "body": {
+      "max_tokens": 1000,
+      "messages": [
+        {
+          "content": "list files and read one",
+          "role": "user"
+        },
+        {
+          "content": [
+            {
+              "text": "Let me look.",
+              "type": "text"
+            },
+            {
+              "id": "toolu_1",
+              "input": {
+                "command": "ls"
+              },
+              "name": "Bash",
+              "type": "tool_use"
+            },
+            {
+              "id": "toolu_2",
+              "input": {},
+              "name": "Read",
+              "type": "tool_use"
+            }
+          ],
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "content": "a.txt\nb.txt",
+              "tool_use_id": "toolu_1",
+              "type": "tool_result"
+            },
+            {
+              "cache_control": {
+                "type": "ephemeral"
+              },
+              "content": "error: missing path",
+              "is_error": true,
+              "tool_use_id": "toolu_2",
+              "type": "tool_result"
+            },
+            {
+              "text": "[guidance] stay focused",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "system": [
+        {
+          "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+          "type": "text"
+        },
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "\u003clen=20000 sha256=319ba78b7b3533b8 prefix=\"static instructions static instructions \"\u003e",
+          "type": "text"
+        },
+        {
+          "text": "## Time Context\nCurrent time: Sat 2026-09-26 21:14 PDT",
+          "type": "text"
+        }
+      ],
+      "tools": [
+        {
+          "description": "\u003clen=4013 sha256=04e55af1fa491c63 prefix=\"Read a file. read docs read docs read do\"\u003e",
+          "input_schema": {
+            "properties": {
+              "path": {
+                "description": "\u003cpath\u003e \u0026 more",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          },
+          "name": "Read"
+        },
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "description": "\u003clen=4015 sha256=95333303e073c071 prefix=\"Run a command. bash docs bash docs bash \"\u003e",
+          "input_schema": {
+            "properties": {
+              "command": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "name": "Bash"
+        }
+      ]
+    }
+  },
+  "streaming": {
+    "headers": {
+      "Accept": "text/event-stream",
+      "Authorization": "Bearer sk-ant-oat01-golden",
+      "Content-Type": "application/json",
+      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "claude-cli/2.1.2 (external, cli)",
+      "x-app": "cli"
+    },
+    "body": {
+      "max_tokens": 1000,
+      "messages": [
+        {
+          "content": "list files and read one",
+          "role": "user"
+        },
+        {
+          "content": [
+            {
+              "text": "Let me look.",
+              "type": "text"
+            },
+            {
+              "id": "toolu_1",
+              "input": {
+                "command": "ls"
+              },
+              "name": "Bash",
+              "type": "tool_use"
+            },
+            {
+              "id": "toolu_2",
+              "input": {},
+              "name": "Read",
+              "type": "tool_use"
+            }
+          ],
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "content": "a.txt\nb.txt",
+              "tool_use_id": "toolu_1",
+              "type": "tool_result"
+            },
+            {
+              "cache_control": {
+                "type": "ephemeral"
+              },
+              "content": "error: missing path",
+              "is_error": true,
+              "tool_use_id": "toolu_2",
+              "type": "tool_result"
+            },
+            {
+              "text": "[guidance] stay focused",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "stream": true,
+      "system": [
+        {
+          "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+          "type": "text"
+        },
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "\u003clen=20000 sha256=319ba78b7b3533b8 prefix=\"static instructions static instructions \"\u003e",
+          "type": "text"
+        },
+        {
+          "text": "## Time Context\nCurrent time: Sat 2026-09-26 21:14 PDT",
+          "type": "text"
+        }
+      ],
+      "tools": [
+        {
+          "description": "\u003clen=4013 sha256=04e55af1fa491c63 prefix=\"Read a file. read docs read docs read do\"\u003e",
+          "input_schema": {
+            "properties": {
+              "path": {
+                "description": "\u003cpath\u003e \u0026 more",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          },
+          "name": "Read"
+        },
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "description": "\u003clen=4015 sha256=95333303e073c071 prefix=\"Run a command. bash docs bash docs bash \"\u003e",
+          "input_schema": {
+            "properties": {
+              "command": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "name": "Bash"
+        }
+      ]
+    }
+  }
+}

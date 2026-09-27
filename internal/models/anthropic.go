@@ -8,7 +8,9 @@ import (
 	"conduit/internal/auth"
 )
 
-// AnthropicRequest represents a request to the Anthropic API
+// AnthropicRequest is the request type of the legacy BuildAnthropicRequest
+// helper (untyped system/content). The provider uses the fully typed
+// MessagesRequest (messages.go). conduit-31jg.36
 type AnthropicRequest struct {
 	Model       string             `json:"model"`
 	MaxTokens   int                `json:"max_tokens"`
@@ -27,39 +29,14 @@ type AnthropicMessage struct {
 	Content interface{} `json:"content"`
 }
 
-// AnthropicTool represents a tool definition for the Anthropic API
+// AnthropicTool represents a tool definition for the Anthropic API.
+// conduit-31jg.36: also the tool type of MessagesRequest; CacheControl marks
+// the tools cache breakpoint.
 type AnthropicTool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"input_schema"`
-}
-
-// AnthropicResponse represents a response from the Anthropic API
-type AnthropicResponse struct {
-	ID      string `json:"id"`
-	Type    string `json:"type"`
-	Role    string `json:"role"`
-	Model   string `json:"model"`
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text,omitempty"`
-	} `json:"content"`
-	StopReason   string `json:"stop_reason"`
-	StopSequence string `json:"stop_sequence,omitempty"`
-	Usage        struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
-}
-
-// AnthropicError represents an error response from the Anthropic API
-type AnthropicError struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
-}
-
-func (e *AnthropicError) Error() string {
-	return fmt.Sprintf("Anthropic API error (%s): %s", e.Type, e.Message)
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description"`
+	InputSchema  map[string]interface{} `json:"input_schema"`
+	CacheControl *CacheControl          `json:"cache_control,omitempty"`
 }
 
 // RequestOptions contains configuration options for building Anthropic requests

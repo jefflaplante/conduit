@@ -1,0 +1,191 @@
+{
+  "non_streaming": {
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "\u003clen=1811 sha256=248b495a6ac91877 prefix=\"question 0 history filler history filler\"\u003e",
+          "role": "user"
+        },
+        {
+          "content": "\u003clen=1809 sha256=9d6f8842ca9da8c6 prefix=\"answer 0 history filler history filler h\"\u003e",
+          "role": "assistant"
+        },
+        {
+          "content": "\u003clen=1811 sha256=ad2d8a164fad2f2e prefix=\"question 1 history filler history filler\"\u003e",
+          "role": "user"
+        },
+        {
+          "content": "\u003clen=1809 sha256=0c3bdd1210052e5a prefix=\"answer 1 history filler history filler h\"\u003e",
+          "role": "assistant"
+        },
+        {
+          "content": "\u003clen=1811 sha256=e3cb5b49b94897c8 prefix=\"question 2 history filler history filler\"\u003e",
+          "role": "user"
+        },
+        {
+          "content": "\u003clen=1809 sha256=36e9237c138c90f1 prefix=\"answer 2 history filler history filler h\"\u003e",
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "cache_control": {
+                "type": "ephemeral"
+              },
+              "text": "final question",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5",
+      "system": "\u003clen=6000 sha256=31c7b4f3fe010540 prefix=\"s s s s s s s s s s s s s s s s s s s s \"\u003e",
+      "tools": [
+        {
+          "description": "\u003clen=4013 sha256=04e55af1fa491c63 prefix=\"Read a file. read docs read docs read do\"\u003e",
+          "input_schema": {
+            "properties": {
+              "path": {
+                "description": "\u003cpath\u003e \u0026 more",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          },
+          "name": "Read"
+        },
+        {
+          "description": "Not a Claude Code tool",
+          "input_schema": {
+            "type": "object"
+          },
+          "name": "custom_tool"
+        },
+        {
+          "description": "\u003clen=4015 sha256=95333303e073c071 prefix=\"Run a command. bash docs bash docs bash \"\u003e",
+          "input_schema": {
+            "properties": {
+              "command": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "name": "Bash"
+        },
+        {
+          "description": "",
+          "input_schema": null,
+          "name": "NoSchema"
+        }
+      ]
+    }
+  },
+  "streaming": {
+    "headers": {
+      "Accept": "text/event-stream",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "\u003clen=1811 sha256=248b495a6ac91877 prefix=\"question 0 history filler history filler\"\u003e",
+          "role": "user"
+        },
+        {
+          "content": "\u003clen=1809 sha256=9d6f8842ca9da8c6 prefix=\"answer 0 history filler history filler h\"\u003e",
+          "role": "assistant"
+        },
+        {
+          "content": "\u003clen=1811 sha256=ad2d8a164fad2f2e prefix=\"question 1 history filler history filler\"\u003e",
+          "role": "user"
+        },
+        {
+          "content": "\u003clen=1809 sha256=0c3bdd1210052e5a prefix=\"answer 1 history filler history filler h\"\u003e",
+          "role": "assistant"
+        },
+        {
+          "content": "\u003clen=1811 sha256=e3cb5b49b94897c8 prefix=\"question 2 history filler history filler\"\u003e",
+          "role": "user"
+        },
+        {
+          "content": "\u003clen=1809 sha256=36e9237c138c90f1 prefix=\"answer 2 history filler history filler h\"\u003e",
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "cache_control": {
+                "type": "ephemeral"
+              },
+              "text": "final question",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-4-5",
+      "stream": true,
+      "system": "\u003clen=6000 sha256=31c7b4f3fe010540 prefix=\"s s s s s s s s s s s s s s s s s s s s \"\u003e",
+      "tools": [
+        {
+          "description": "\u003clen=4013 sha256=04e55af1fa491c63 prefix=\"Read a file. read docs read docs read do\"\u003e",
+          "input_schema": {
+            "properties": {
+              "path": {
+                "description": "\u003cpath\u003e \u0026 more",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          },
+          "name": "Read"
+        },
+        {
+          "description": "Not a Claude Code tool",
+          "input_schema": {
+            "type": "object"
+          },
+          "name": "custom_tool"
+        },
+        {
+          "description": "\u003clen=4015 sha256=95333303e073c071 prefix=\"Run a command. bash docs bash docs bash \"\u003e",
+          "input_schema": {
+            "properties": {
+              "command": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "name": "Bash"
+        },
+        {
+          "description": "",
+          "input_schema": null,
+          "name": "NoSchema"
+        }
+      ]
+    }
+  }
+}
