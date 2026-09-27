@@ -14,6 +14,7 @@ import (
 	"conduit/internal/protocol"
 	"conduit/internal/sessions"
 	"conduit/internal/tools"
+	"conduit/internal/tui"
 )
 
 // sendToClient sends a protocol message to a WebSocket client (non-blocking)
@@ -140,9 +141,25 @@ type wsTurnSink struct {
 	requestID  string
 }
 
-// Queued: WebSocket chat never had a busy-ack; the StreamStart for the queued
-// turn simply arrives once the previous turn has finished.
-func (s *wsTurnSink) Queued(context.Context) {}
+// queuedNoticeText is the WS/TUI queued notice (conduit-31jg.66).
+const queuedNoticeText = "Queued — I'll handle this right after the current request."
+
+// Queued tells the client its message is waiting behind the session's
+// running turn (conduit-31jg.66); its StreamStart arrives once that turn has
+// finished. Sent as a command_response with command "queued", which older
+// clients show as a plain system line.
+func (s *wsTurnSink) Queued(context.Context) {
+	s.g.sendToClient(s.client, &protocol.CommandResponse{
+		BaseMessage: protocol.BaseMessage{
+			Type:      protocol.TypeCommandResponse,
+			ID:        fmt.Sprintf("cr_%d", time.Now().UnixNano()),
+			Timestamp: time.Now(),
+		},
+		SessionKey: s.sessionKey,
+		Command:    tui.QueuedNoticeCommand,
+		Response:   queuedNoticeText,
+	})
+}
 
 func (s *wsTurnSink) Begin(context.Context) ai.StreamCallback {
 	s.g.sendToClient(s.client, &protocol.StreamStart{
@@ -546,6 +563,12 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 // handleReflectiveSessionEnd handles /goodbye and /end commands: it sends the
 // reflection prompt to the model so it can assess the session, then writes
 // Go-computed metrics and clears the session.
+//
+// conduit-31jg.66: the reflection turn runs on the shared TurnRunner, so the
+// prompt and reply are persisted inside the session's turn lock, the turn is
+// /stop-able, and the metrics + session clear happen inside the same lock
+// (goodbyeTurnSink.Finish) — a message queued behind /goodbye starts on the
+// cleared session instead of racing the clear.
 func (g *Gateway) handleReflectiveSessionEnd(ctx context.Context, client *Client, sessionKey string, sendResponse func(string)) {
 	session, err := g.sessions.GetSession(sessionKey)
 	if err != nil {
@@ -556,74 +579,44 @@ func (g *Gateway) handleReflectiveSessionEnd(ctx context.Context, client *Client
 	// If reflection is available and the session has enough history, let
 	// the model reflect before we tear down the context.
 	if g.sessionReflector != nil && session.MessageCount > 2 {
-		reflPrompt := g.reflectHighConfidencePre()
-		if reflPrompt != "" {
-			// Send the reflection prompt as a user message to the model so it
-			// can introspect on the conversation. We use a short timeout to
-			// avoid blocking the client if the model is slow.
+		if reflPrompt := g.reflectHighConfidencePre(); reflPrompt != "" {
+			// Short timeout to avoid blocking the client if the model is slow.
 			reflCtx, reflCancel := context.WithTimeout(ctx, 30*time.Second)
 			defer reflCancel()
 
-			modelOverride := session.Context["model"]
-			providerOverride := session.Context["provider"]
-
-			// Send a StreamStart so the TUI knows a response is coming
-			requestID := fmt.Sprintf("refl_%d", time.Now().UnixNano())
-			g.sendToClient(client, &protocol.StreamStart{
-				BaseMessage: protocol.BaseMessage{
-					Type:      protocol.TypeStreamStart,
-					ID:        fmt.Sprintf("ss_%d", time.Now().UnixNano()),
-					Timestamp: time.Now(),
+			userID := client.UserID
+			if userID == "" {
+				userID = client.Role
+			}
+			sink := &goodbyeTurnSink{wsTurnSink: wsTurnSink{
+				g: g, client: client, sessionKey: sessionKey,
+				requestID: fmt.Sprintf("refl_%d", time.Now().UnixNano()),
+			}}
+			g.turns().Run(reflCtx, TurnRequest{
+				Session:   session,
+				ChannelID: session.ChannelID,
+				UserID:    userID,
+				Text:      reflPrompt,
+				// Transcript shows what the user typed, not the internal
+				// prompt (matters if the reflection is stopped and the
+				// session continues).
+				StoreText: "/goodbye",
+				Origin: &approval.Origin{ // conduit-31jg.43: the user typed /goodbye
+					Source: "websocket", ChannelID: session.ChannelID, UserID: userID,
+					SessionKey: sessionKey, Notify: g.wsApprovalNotifier(client, sessionKey),
 				},
-				SessionKey: sessionKey,
-				RequestID:  requestID,
-			})
-
-			onDelta := func(delta string, done bool) {
-				if delta != "" {
-					g.sendToClient(client, &protocol.StreamDelta{
-						BaseMessage: protocol.BaseMessage{
-							Type:      protocol.TypeStreamDelta,
-							ID:        fmt.Sprintf("sd_%d", time.Now().UnixNano()),
-							Timestamp: time.Now(),
-						},
-						SessionKey: sessionKey,
-						RequestID:  requestID,
-						Delta:      delta,
-					})
-				}
+				SanitizeStored: true,
+				SkipReflection: true, // this turn IS the reflection
+			}, sink)
+			switch {
+			case !sink.ran:
+				sendResponse("Session end cancelled.")
+			case sink.clearErr != nil:
+				sendResponse("Session reflection complete, but failed to clear session.")
+			default:
+				sendResponse("Session reflection complete. Goodbye!")
 			}
-
-			convResponse, aiErr := g.ai.GenerateResponseStreaming(reflCtx, session, reflPrompt, providerOverride, modelOverride, onDelta)
-
-			var reflContent string
-			if aiErr == nil && convResponse != nil {
-				reflContent = convResponse.GetContent()
-			}
-
-			// Send StreamEnd with the reflection response
-			g.sendToClient(client, &protocol.StreamEnd{
-				BaseMessage: protocol.BaseMessage{
-					Type:      protocol.TypeStreamEnd,
-					ID:        fmt.Sprintf("se_%d", time.Now().UnixNano()),
-					Timestamp: time.Now(),
-				},
-				SessionKey: sessionKey,
-				RequestID:  requestID,
-				Content:    reflContent,
-			})
-
-			// Save the reflection response
-			if reflContent != "" {
-				_, _ = g.sessions.AddMessage(sessionKey, "assistant", reflContent, nil)
-			}
-
-			// Compute and write session metrics
-			if updatedSession, sErr := g.sessions.GetSession(sessionKey); sErr == nil {
-				g.reflectHighConfidencePost(reflCtx, updatedSession)
-			}
-
-			log.Printf("SPAR reflection: session-end reflection completed for %s", sessionKey)
+			return
 		}
 	} else if g.sessionReflector != nil {
 		// Session too short for model reflection — write Go-only metrics
@@ -632,11 +625,19 @@ func (g *Gateway) handleReflectiveSessionEnd(ctx context.Context, client *Client
 		reflCancel()
 	}
 
-	// Clear the session (same as /reset)
-	if err := g.sessions.ClearSessionMessages(sessionKey); err != nil {
-		log.Printf("Error clearing session after /goodbye: %v", err)
+	if err := g.clearEndedSession(sessionKey); err != nil {
 		sendResponse("Session reflection complete, but failed to clear session.")
 		return
+	}
+	sendResponse("Session reflection complete. Goodbye!")
+}
+
+// clearEndedSession clears the transcript and per-session usage context
+// (same as /reset) after /goodbye.
+func (g *Gateway) clearEndedSession(sessionKey string) error {
+	if err := g.sessions.ClearSessionMessages(sessionKey); err != nil {
+		log.Printf("Error clearing session after /goodbye: %v", err)
+		return err
 	}
 	_ = g.sessions.SetSessionContextBatch(sessionKey, map[string]string{
 		"last_prompt_tokens":        "",
@@ -646,7 +647,46 @@ func (g *Gateway) handleReflectiveSessionEnd(ctx context.Context, client *Client
 		"session_request_count":     "",
 		"session_unpriced_requests": "", // conduit-31jg.57
 	})
-	sendResponse("Session reflection complete. Goodbye!")
+	return nil
+}
+
+// goodbyeTurnSink renders the /goodbye reflection turn like a WS chat turn
+// and, inside the turn lock, writes the session metrics and clears the
+// session (conduit-31jg.66). As before, a failed (or timed-out) reflection
+// still ends the session; a turn dropped before it ran (/stop while queued,
+// shutdown) or stopped with /stop does not.
+type goodbyeTurnSink struct {
+	wsTurnSink
+	ran      bool
+	clearErr error
+}
+
+func (s *goodbyeTurnSink) Finish(ctx context.Context, res *TurnResult) {
+	if res.Dropped {
+		return
+	}
+	if res.Cancelled {
+		s.streamEnd("", nil) // Begin sent StreamStart; close the client's stream
+		return
+	}
+	s.ran = true
+	content := ""
+	if res.Delivered() {
+		content = channels.SanitizeOutgoingText(res.Content)
+	} else if res.Err != nil {
+		log.Printf("SPAR reflection: session-end reflection failed for %s: %v", s.sessionKey, res.Err)
+	}
+	s.streamEnd(content, res)
+
+	// Compute and write session metrics (after the reply was stored).
+	metricsCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	if updated, err := s.g.sessions.GetSession(s.sessionKey); err == nil {
+		s.g.reflectHighConfidencePost(metricsCtx, updated)
+	}
+	cancel()
+	log.Printf("SPAR reflection: session-end reflection completed for %s", s.sessionKey)
+
+	s.clearErr = s.g.clearEndedSession(s.sessionKey)
 }
 
 // handleWebSocketSessionSwitch handles session management requests

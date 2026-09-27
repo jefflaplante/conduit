@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"conduit/internal/agent"
@@ -14,14 +15,23 @@ import (
 	"conduit/internal/heartbeat"
 	"conduit/internal/protocol"
 	"conduit/internal/scheduler"
+	"conduit/internal/sessions"
 	"conduit/internal/tools/types"
 )
 
 // executeScheduledJob is called when a Go cron job fires. It routes heartbeat
 // jobs through the HEARTBEAT.md execution framework and runs plain cron jobs
 // as AI prompts against a per-job synthetic session.
+//
+// conduit-31jg.66: both run their LLM turn on the shared TurnRunner, marked
+// non-interactive and owned by the job (TurnRequest.ScheduledJob): transcript
+// written inside the turn lock, the turn visible in ActiveRequests (/stop,
+// status), usage/cost and compaction like any turn. ctx is the scheduler's
+// run context, so the drain's scheduler interrupt (conduit-31jg.77) cancels
+// the turn and the run is recorded as interrupted.
 func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) error {
 	g.logger.Info("executing scheduled job", "job_id", job.ID, "command", job.Command)
+	ctx = withScheduledJobID(ctx, job.ID)
 
 	// Check if this is a heartbeat job.
 	if heartbeat.IsHeartbeatJob(job) {
@@ -50,29 +60,30 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 		model = fullModel
 	}
 
-	// Store model and skill filter in session context for prompt/tool filtering.
-	if session.Context == nil {
-		session.Context = make(map[string]string)
-	}
-	session.Context["model"] = model
+	// Store model and skill filter in the session context (persisted: the
+	// runner re-reads the session inside the turn lock).
+	jobContext := map[string]string{"model": model}
 	if len(job.Skills) > 0 {
-		session.Context["skill_filter"] = strings.Join(job.Skills, ",")
+		jobContext["skill_filter"] = strings.Join(job.Skills, ",")
+	}
+	if err := g.sessions.SetSessionContextBatch(session.Key, jobContext); err != nil {
+		return fmt.Errorf("failed to configure job session: %w", err)
 	}
 
 	// Execute the job command as an AI prompt.
-	response, err := g.ai.GenerateResponseWithTools(ctx, session, job.Command, "", model)
-	if err != nil {
-		return fmt.Errorf("AI execution failed: %w", err)
+	res := g.turns().Run(ctx, TurnRequest{
+		Session:              session,
+		Text:                 job.Command,
+		NonInteractiveSource: "cron",
+		ScheduledJob:         job.ID,
+	}, discardTurnSink{})
+	if res.Err != nil {
+		return fmt.Errorf("AI execution failed: %w", res.Err)
 	}
-
-	// Usage accounting is router-level since bd-27hs: GenerateResponseWithTools
-	// records last_* / session_*_tokens_total to the session store for every
-	// path. No per-path recording here.
+	responseContent := res.Raw
 
 	// If there's a target, send the result there.
 	if job.Target != "" {
-		responseContent := response.GetContent()
-
 		// Check for silent response patterns - don't send these to the target.
 		if responseContent == "" || channels.IsSilentResponse(responseContent) {
 			g.logger.Debug("job completed with silent response, not sending to target", "job_id", job.ID)
@@ -106,9 +117,95 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 		}
 	}
 
-	g.logger.Info("job completed", "job_id", job.ID, "response_chars", len(response.GetContent()))
+	g.logger.Info("job completed", "job_id", job.ID, "response_chars", len(responseContent))
 	return nil
 }
+
+// scheduledJobKey carries the running scheduler job's ID to the heartbeat
+// AI executor (conduit-31jg.66).
+type scheduledJobKey struct{}
+
+func withScheduledJobID(ctx context.Context, jobID string) context.Context {
+	return context.WithValue(ctx, scheduledJobKey{}, jobID)
+}
+
+func scheduledJobID(ctx context.Context) string {
+	id, _ := ctx.Value(scheduledJobKey{}).(string)
+	return id
+}
+
+// turnAIExecutor runs the heartbeat's LLM prompt on the shared TurnRunner
+// (conduit-31jg.66) instead of calling the router directly. Installed on the
+// heartbeat integration by the gateway (SetAIExecutor).
+type turnAIExecutor struct {
+	g *Gateway
+
+	mu sync.Mutex
+	// stored maps session key → the user row a previous attempt stored for
+	// the same prompt, so the heartbeat executor's retries do not append the
+	// prompt to the transcript again.
+	stored map[string]storedPrompt
+}
+
+type storedPrompt struct {
+	prompt string
+	msgID  string
+}
+
+func newTurnAIExecutor(g *Gateway) *turnAIExecutor {
+	return &turnAIExecutor{g: g, stored: make(map[string]storedPrompt)}
+}
+
+// ExecutePrompt implements heartbeat.AIExecutor.
+func (e *turnAIExecutor) ExecutePrompt(ctx context.Context, session *sessions.Session, prompt, model string) (heartbeat.AIResponse, error) {
+	if model != "" {
+		if err := e.g.sessions.SetSessionContext(session.Key, "model", model); err != nil {
+			return nil, fmt.Errorf("configure heartbeat session: %w", err)
+		}
+	}
+	e.mu.Lock()
+	prev, retry := e.stored[session.Key]
+	e.mu.Unlock()
+	req := TurnRequest{
+		Session:              session,
+		Text:                 prompt,
+		NonInteractiveSource: "heartbeat",
+		ScheduledJob:         scheduledJobID(ctx),
+	}
+	if req.ScheduledJob == "" {
+		req.ScheduledJob = "heartbeat"
+	}
+	if retry && prev.prompt == prompt {
+		req.PersistedUserMessageID = prev.msgID
+	}
+
+	res := e.g.turns().Run(ctx, req, discardTurnSink{})
+
+	e.mu.Lock()
+	if res.Err != nil && res.UserMessageID != "" {
+		e.stored[session.Key] = storedPrompt{prompt: prompt, msgID: res.UserMessageID}
+	} else {
+		delete(e.stored, session.Key)
+	}
+	e.mu.Unlock()
+
+	switch {
+	case res.Cancelled, res.Dropped:
+		// Wrap context.Canceled so the heartbeat executor stops retrying a
+		// turn that was stopped (/stop, shutdown).
+		return nil, fmt.Errorf("heartbeat turn stopped (%v): %w", res.Err, context.Canceled)
+	case res.Err != nil:
+		return nil, res.Err
+	}
+	return turnAIResponse{res}, nil
+}
+
+// turnAIResponse adapts a TurnResult to heartbeat.AIResponse.
+type turnAIResponse struct{ res *TurnResult }
+
+func (r turnAIResponse) GetContent() string { return r.res.Raw }
+
+func (r turnAIResponse) GetUsage() interface{} { return r.res.Usage }
 
 // ScheduleJob adds a new scheduled job
 func (g *Gateway) ScheduleJob(job *types.SchedulerJob) error {

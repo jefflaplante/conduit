@@ -26,6 +26,17 @@ type Deliverer interface {
 // circuit breaker is open and the attempt was skipped.
 var ErrCircuitOpen = errors.New("circuit breaker open")
 
+// ErrDeliveryInterrupted is returned by DeliverAlert when the attempt failed
+// because its context was cancelled (shutdown: GatewayIntegration.Close,
+// conduit-31jg.81). Such an attempt is audited as "interrupted" and does not
+// count against the target's circuit breaker. A deadline (attempt timeout)
+// is still a genuine delivery failure.
+var ErrDeliveryInterrupted = errors.New("delivery interrupted")
+
+// auditTimeout bounds the audit write for an interrupted attempt, which
+// cannot use the (cancelled) delivery context.
+const auditTimeout = 2 * time.Second
+
 // DeliveryRegistry manages deliverer instances and routes alerts to the appropriate deliverer.
 type DeliveryRegistry struct {
 	deliverers map[string]Deliverer
@@ -106,6 +117,15 @@ func (r *DeliveryRegistry) DeliverAlert(ctx context.Context, alert Alert, target
 	// Attempt delivery
 	err := deliverer.Deliver(ctx, alert, target)
 
+	// conduit-31jg.81: cancelled (not timed out) mid-attempt → interrupted.
+	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+		wrapped := fmt.Errorf("%w for target %s: %v", ErrDeliveryInterrupted, target.Name, err)
+		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditTimeout)
+		r.auditDelivery(auditCtx, alert, target, "interrupted", wrapped)
+		cancel()
+		return wrapped
+	}
+
 	// Record result with circuit breaker
 	if err != nil {
 		r.breaker.RecordFailure(target.Name)
@@ -132,7 +152,10 @@ func (r *DeliveryRegistry) auditDelivery(ctx context.Context, alert Alert, targe
 	}
 
 	result := "success"
-	if deliveryErr != nil {
+	switch {
+	case errors.Is(deliveryErr, ErrDeliveryInterrupted):
+		result = "interrupted: " + deliveryErr.Error()
+	case deliveryErr != nil:
 		result = "error: " + deliveryErr.Error()
 	}
 
