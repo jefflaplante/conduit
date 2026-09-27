@@ -545,7 +545,7 @@ Optional MQTT event ingest for IoT/home automation. See [MQTT Integration](mqtt.
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable MQTT event ingest |
 | `broker_url` | string | required | Broker address (`tcp://` or `ssl://`) |
-| `client_id` | string | `"conduit"` | MQTT client ID |
+| `client_id` | string | unique `conduit-<host>-<random>` per process | MQTT client ID (must be unique per instance) |
 | `username` | string | `""` | Broker username (supports `${ENV_VAR}`) |
 | `password` | string | `""` | Broker password (supports `${ENV_VAR}`) |
 | `topics` | string[] | required | Topic subscriptions (wildcards: `#`, `+`) |
@@ -899,14 +899,14 @@ token-secret source.
 ## Example Configs
 
 The `configs/` directory contains example configurations:
-- `configs/config.example.json` - Full example with comments
+- `configs/examples/config.example.json` - Full example
 - `configs/config.telegram.json` - Telegram-focused
 - `configs/config.tools.json` - Tools-focused
 - `configs/config.skills.json` - Skills-focused
 
 Copy and customize:
 ```bash
-cp configs/config.example.json config.json
+cp configs/examples/config.example.json config.json
 # Edit config.json with your settings
 ```
 

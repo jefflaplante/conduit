@@ -28,15 +28,21 @@ type feedSelection struct {
 
 const defaultHoursAgo = 24
 
-// defaultEventsFile is a var (not const) so tests can redirect it.
-var defaultEventsFile = "/home/jules/ocgo/workspace/memory/recall-events.jsonl"
-
 func main() {
-	eventsFile := flag.String("file", defaultEventsFile, "Path to recall-events.jsonl")
+	eventsFile := flag.String("file", "", "Path to recall-events.jsonl (default: derived from the gateway config's workspace)")
+	configPath := flag.String("config", "", "Gateway config.json used to derive the events file (default: $CONDUIT_CONFIG, else $CONDUIT_HOME/config.json, else ~/ocgo/config.json)")
 	hoursAgo := flag.Int("hours", defaultHoursAgo, "Process events from last N hours")
 	flag.Parse()
 
-	if err := convertEvents(*eventsFile, *hoursAgo); err != nil {
+	path := *eventsFile
+	if path == "" {
+		var err error
+		if path, err = resolveEventsFile(*configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if err := convertEvents(path, *hoursAgo); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

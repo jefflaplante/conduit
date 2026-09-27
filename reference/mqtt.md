@@ -59,7 +59,7 @@ Add an `mqtt` section to your config JSON:
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable MQTT event ingest |
 | `broker_url` | string | **required** | Broker address: `tcp://host:1883` or `ssl://host:8883` |
-| `client_id` | string | `"conduit"` | MQTT client ID |
+| `client_id` | string | unique `conduit-<host>-<random>` per process | MQTT client ID (must be unique per instance) |
 | `username` | string | `""` | Broker username (supports `${ENV_VAR}`) |
 | `password` | string | `""` | Broker password (supports `${ENV_VAR}`) |
 | `topics` | string[] | **required** | Topic subscriptions (wildcards OK: `#`, `+`) |

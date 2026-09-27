@@ -235,13 +235,13 @@ func (a AgentHeartbeatConfig) GetLocation() *time.Location {
 func DefaultAgentHeartbeatConfig() AgentHeartbeatConfig {
 	return AgentHeartbeatConfig{
 		Enabled:         true,
-		IntervalMinutes: 5,                     // 5 minutes - more frequent than infrastructure heartbeat
-		Timezone:        "America/Los_Angeles", // the owner's timezone
+		IntervalMinutes: 5,  // 5 minutes - more frequent than infrastructure heartbeat
+		Timezone:        "", // inherit top-level timezone at Load; UTC if unset (conduit-31jg.40)
 
 		QuietEnabled: true,
 		QuietHours: QuietHoursConfig{
-			StartTime: "23:00", // 11:00 PM PT
-			EndTime:   "08:00", // 8:00 AM PT
+			StartTime: "23:00", // 11:00 PM in the effective timezone
+			EndTime:   "08:00", // 8:00 AM in the effective timezone
 		},
 
 		AlertTargets: []AlertTarget{},

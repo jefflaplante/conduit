@@ -171,9 +171,67 @@ func TestConvertEventsMalformedLines(t *testing.T) {
 	}
 }
 
-func TestDefaultEventsFileSet(t *testing.T) {
-	// Sanity: default path is redirectable var pointing at workspace
-	if !strings.Contains(defaultEventsFile, "recall-events.jsonl") {
-		t.Errorf("Unexpected default: %s", defaultEventsFile)
+// conduit-31jg.40: the default events file is derived, not hardcoded.
+func TestResolveEventsFile(t *testing.T) {
+	clear := func() {
+		for _, k := range []string{"CONDUIT_RECALL_EVENTS", "CONDUIT_WORKSPACE", "CONDUIT_CONFIG", "CONDUIT_HOME"} {
+			t.Setenv(k, "")
+		}
 	}
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"workspace":{"context_dir":"/srv/ws"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		env  map[string]string
+		flag string
+		want string
+	}{
+		{"explicit env file", map[string]string{"CONDUIT_RECALL_EVENTS": "/x/ev.jsonl", "CONDUIT_WORKSPACE": "/ignored"}, "", "/x/ev.jsonl"},
+		{"workspace env", map[string]string{"CONDUIT_WORKSPACE": "/ws"}, "", "/ws/memory/recall-events.jsonl"},
+		{"config flag", nil, cfgPath, "/srv/ws/memory/recall-events.jsonl"},
+		{"CONDUIT_CONFIG", map[string]string{"CONDUIT_CONFIG": cfgPath}, "", "/srv/ws/memory/recall-events.jsonl"},
+		{"CONDUIT_HOME", map[string]string{"CONDUIT_HOME": dir}, "", "/srv/ws/memory/recall-events.jsonl"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			clear()
+			for k, v := range c.env {
+				t.Setenv(k, v)
+			}
+			got, err := resolveEventsFile(c.flag)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != c.want {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+
+	t.Run("relative workspace anchors at config dir", func(t *testing.T) {
+		clear()
+		rel := filepath.Join(dir, "rel.json")
+		if err := os.WriteFile(rel, []byte(`{"workspace":{"context_dir":"workspace"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := resolveEventsFile(rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := filepath.Join(dir, "workspace", "memory", "recall-events.jsonl"); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("missing config errors", func(t *testing.T) {
+		clear()
+		if _, err := resolveEventsFile(filepath.Join(dir, "nope.json")); err == nil {
+			t.Error("expected error for missing config")
+		}
+	})
 }

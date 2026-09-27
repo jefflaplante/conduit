@@ -28,6 +28,8 @@ type Executor struct {
 	workspaceDir string
 	timeout      time.Duration
 	environment  map[string]string
+	// gog holds the resolved skills.gog settings (conduit-31jg.40).
+	gog *gogSettings
 
 	// approver gates owner-account sends (conduit-31jg.43). Nil => such
 	// sends fail closed.
@@ -48,6 +50,7 @@ func NewExecutor(cfg ExecutionConfig) *Executor {
 	return &Executor{
 		timeout:     timeout,
 		environment: cfg.Environment,
+		gog:         defaultGogSettings(),
 	}
 }
 
@@ -282,13 +285,9 @@ func (e *Executor) buildShellCommand(skill Skill, action string, args map[string
 	var command strings.Builder
 	action = normalizeAction(action)
 
-	// Source environment setup — try standard locations
-	homeDir, _ := os.UserHomeDir()
-	secretsPaths := []string{
-		filepath.Join(homeDir, "ocgo", ".ocgo-secrets.env"),
-		filepath.Join(homeDir, ".conduit-secrets.env"),
-	}
-	for _, p := range secretsPaths {
+	// Source environment setup — first existing skills.gog.env_files entry
+	// (conduit-31jg.40).
+	for _, p := range e.gog.envFiles {
 		if _, err := os.Stat(p); err == nil {
 			command.WriteString(fmt.Sprintf(". %s\n", shellQuote(p)))
 			break
@@ -363,13 +362,10 @@ func (e *Executor) buildSkillSpecificCommand(skillName, action string, args map[
 	}
 }
 
-// Shell expansions for the gog account identities. These are the ONLY
-// values ever emitted after --account; they are double-quoted so the shell
-// expands the env var without word-splitting or globbing (conduit-31jg.2).
-const (
-	gogOwnerAccount = `"$GOG_ACCOUNT"`
-	gogJulesAccount = `"$JULES_ACCOUNT"`
-)
+// Account selection: only the configured env-var expansions
+// (e.gog.ownerAccount / e.gog.agentAccount, double-quoted so the shell
+// expands them without word-splitting or globbing) are ever emitted after
+// --account (conduit-31jg.2, conduit-31jg.40).
 
 // Bounds for gog --max (conduit-31jg.2).
 const (
@@ -377,44 +373,6 @@ const (
 	gogMinMax     = 1
 	gogMaxMax     = 100
 )
-
-// isJulesAccount / isOwnerAccount define the known account aliases the
-// email skill already recognizes. Anything else is rejected.
-func isJulesAccount(v string) bool { return v == "jules" || v == "agent@example.com" }
-
-func isOwnerAccount(v string) bool {
-	return v == "jeff" || v == "owner@example.com" || v == "owner-alt@example.com"
-}
-
-// gogSendUsesOwner reports whether a gog/email send with these args goes out
-// as the owner ($GOG_ACCOUNT): any non-Jules account, or an owner-alias from.
-// Single source of truth for buildGogCommand and the approval gate
-// (conduit-31jg.43). Callers must run validateAccountArg first.
-func gogSendUsesOwner(args map[string]interface{}) bool {
-	if acct, ok := args["account"].(string); ok && acct != "" && !isJulesAccount(acct) {
-		return true
-	}
-	from, _ := args["from"].(string)
-	return isOwnerAccount(from)
-}
-
-// validateAccountArg rejects account/inbox values outside the known alias
-// set. Model-supplied identities are never interpolated into the shell;
-// they only select one of the fixed gog*Account expansions (conduit-31jg.2).
-func validateAccountArg(args map[string]interface{}, key string) error {
-	raw, present := args[key]
-	if !present || raw == nil {
-		return nil
-	}
-	v, ok := raw.(string)
-	if !ok {
-		return fmt.Errorf("%s must be a string", key)
-	}
-	if v == "" || isJulesAccount(v) || isOwnerAccount(v) {
-		return nil
-	}
-	return fmt.Errorf("unknown %s %q (allowed: jules, agent@example.com, jeff, owner@example.com, owner-alt@example.com)", key, v)
-}
 
 // parseMaxResults reads the first present key from args as a whole number,
 // accepting JSON numbers and numeric strings, and clamps it to
@@ -476,22 +434,24 @@ func parseMaxResults(args map[string]interface{}, keys ...string) (int, error) {
 // (max/limit). Account selection maps validated aliases onto fixed
 // env-var expansions; raw account strings are never interpolated.
 func (e *Executor) buildGogCommand(action string, args map[string]interface{}, command *strings.Builder) (bool, error) {
-	if err := validateAccountArg(args, "account"); err != nil {
+	g := e.gog
+	if err := g.validateAccountArg(args, "account"); err != nil {
 		return false, err
 	}
-	if err := validateAccountArg(args, "inbox"); err != nil {
+	if err := g.validateAccountArg(args, "inbox"); err != nil {
 		return false, err
 	}
+	gogBin := shellWord(g.binary)
 
-	// Determine which account to use
-	account := gogOwnerAccount // default to Jeff's account
+	// Reads default to the owner's inbox; an agent alias selects the agent's.
+	account := g.ownerAccount
 	if acct, ok := args["account"].(string); ok && acct != "" {
-		if isJulesAccount(acct) {
-			account = gogJulesAccount
+		if g.isAgentAlias(acct) {
+			account = g.agentAccount
 		}
 	} else if inbox, ok := args["inbox"].(string); ok {
-		if isJulesAccount(inbox) {
-			account = gogJulesAccount
+		if g.isAgentAlias(inbox) {
+			account = g.agentAccount
 		}
 	}
 
@@ -519,7 +479,7 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 		if err != nil {
 			return false, err
 		}
-		command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail search %s --account %s --max %d\n", shellQuote(query), account, maxResults))
+		command.WriteString(fmt.Sprintf("%s gmail search %s --account %s --max %d\n", gogBin, shellQuote(query), account, maxResults))
 
 	case "read":
 		msgID := getArg("message_id")
@@ -531,9 +491,9 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 			threadID = getArg("threadId")
 		}
 		if msgID != "" {
-			command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail read %s --account %s\n", shellQuote(msgID), account))
+			command.WriteString(fmt.Sprintf("%s gmail read %s --account %s\n", gogBin, shellQuote(msgID), account))
 		} else if threadID != "" {
-			command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail thread get %s --account %s\n", shellQuote(threadID), account))
+			command.WriteString(fmt.Sprintf("%s gmail thread get %s --account %s\n", gogBin, shellQuote(threadID), account))
 		} else {
 			return false, nil
 		}
@@ -542,20 +502,20 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 		to := getArg("to")
 		subject := getArg("subject")
 		body := getArg("body")
-		// Safety default: sends without an explicit identity go from Jules's
-		// account, never Jeff's. Matches email-safety policy (autonomous
-		// sends must use $JULES_ACCOUNT). An owner-alias account/from selects
-		// $GOG_ACCOUNT; ExecuteSkill only reaches this point for an owner
-		// send after the human approved it in-channel (conduit-31jg.43,
-		// see owner_approval.go).
-		sendAccount := gogJulesAccount
-		if gogSendUsesOwner(args) {
-			sendAccount = gogOwnerAccount // validated owner alias above
+		// Safety default: sends without an explicit identity go from the
+		// agent's account, never the owner's (email-safety policy:
+		// autonomous sends use the agent account). An owner-alias
+		// account/from selects the owner account; ExecuteSkill only reaches
+		// this point for an owner send after the human approved it
+		// in-channel (conduit-31jg.43, see owner_approval.go).
+		sendAccount := g.agentAccount
+		if g.sendUsesOwner(args) {
+			sendAccount = g.ownerAccount // validated owner alias above
 		}
 		if to == "" {
 			return false, nil
 		}
-		cmd := fmt.Sprintf("/usr/local/bin/gog gmail send --to %s", shellQuote(to))
+		cmd := fmt.Sprintf("%s gmail send --to %s", gogBin, shellQuote(to))
 		if subject != "" {
 			cmd += fmt.Sprintf(" --subject %s", shellQuote(subject))
 		}
@@ -567,14 +527,19 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 
 	case "cleanup":
 		// Cleanup runs the blocklist-based junk removal. Delegates to the
-		// workspace sweep script (searches last 24h against the junk
-		// blocklist, trashes thread matches, prints SUMMARY|total|trashed|errs).
-		command.WriteString("/home/jules/ocgo/workspace/scripts/hygiene-junk-sweep.sh\n")
+		// workspace sweep script (skills.gog.cleanup_script, default
+		// <workspace>/scripts/hygiene-junk-sweep.sh: searches last 24h
+		// against the junk blocklist, trashes thread matches, prints
+		// SUMMARY|total|trashed|errs).
+		if g.cleanupScript == "" {
+			return false, fmt.Errorf("cleanup needs skills.gog.cleanup_script or a configured workspace")
+		}
+		command.WriteString(shellWord(g.cleanupScript) + "\n")
 
 	case "list":
 		listAccount := account
-		if inbox, ok := args["inbox"].(string); ok && isJulesAccount(inbox) {
-			listAccount = gogJulesAccount
+		if inbox, ok := args["inbox"].(string); ok && g.isAgentAlias(inbox) {
+			listAccount = g.agentAccount
 		}
 		// conduit-31jg.2: max was interpolated unquoted; parse to int.
 		maxResults, err := parseMaxResults(args, "max", "limit")
@@ -585,10 +550,10 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 		if q := getArg("query"); q != "" {
 			query = q
 		}
-		command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail search %s --account %s --max %d\n", shellQuote(query), listAccount, maxResults))
+		command.WriteString(fmt.Sprintf("%s gmail search %s --account %s --max %d\n", gogBin, shellQuote(query), listAccount, maxResults))
 
 	case "status":
-		command.WriteString(fmt.Sprintf("/usr/local/bin/gog gmail search 'is:unread' --account %s --max 5\n", account))
+		command.WriteString(fmt.Sprintf("%s gmail search 'is:unread' --account %s --max 5\n", gogBin, account))
 
 	default:
 		return false, nil
@@ -604,6 +569,25 @@ func shellQuote(s string) string {
 	// Replace ' with '\'' (end quote, escaped quote, start quote)
 	escaped := strings.ReplaceAll(s, "'", "'\\''")
 	return "'" + escaped + "'"
+}
+
+// shellWord returns s unchanged when it is a plain path/word made only of
+// characters no shell treats specially, else shellQuote(s). Keeps generated
+// commands readable (and identical to the pre-config form) for ordinary
+// configured paths while staying injection-safe for odd ones.
+func shellWord(s string) string {
+	if s == "" {
+		return "''"
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '/' || r == '.' || r == '_' || r == '-' || r == '+' || r == ',' || r == ':' || r == '@':
+		default:
+			return shellQuote(s)
+		}
+	}
+	return s
 }
 
 // extractSingleLineCommand extracts the first single-line command relevant to the action

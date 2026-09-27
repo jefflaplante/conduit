@@ -39,7 +39,7 @@ Skill Scoping (important for small-context models):
 - Omit skills or set skills=[] to load all skills (default)
 
 Regular Actions:
-- Schedule a reminder: action=schedule, command="Remind Jeff to check email", delayMinutes=30
+- Schedule a reminder: action=schedule, command="Remind the user to check email", delayMinutes=30
 - Daily report: action=schedule, schedule="0 9 * * *", command="Generate daily briefing", type="go"
 - Scoped job: action=schedule, schedule="*/30 * * * *", command="Check solar production", model="haiku", skills=["solar"]
 - System backup: action=schedule, schedule="0 2 * * *", command="/usr/local/bin/backup.sh", type="system"
@@ -728,7 +728,7 @@ func (t *CronTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *t
 				Description: "Schedule a reminder in 30 minutes",
 				Args: map[string]interface{}{
 					"action":       "schedule",
-					"command":      "Remind Jeff to check email",
+					"command":      "Remind the user to check email",
 					"delayMinutes": 30,
 				},
 				Expected: "Reminder scheduled as a one-shot job",

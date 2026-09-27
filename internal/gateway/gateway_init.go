@@ -76,6 +76,7 @@ func (g *Gateway) initBrainSubsystem(cfg *config.Config) {
 		brainDBPath = config.DeriveBrainDBPath(cfg.Database.Path)
 	}
 	var brainOpts []brain.Option
+	brainOpts = append(brainOpts, brain.WithRecallEventsPath(cfg.RecallEventsPath())) // conduit-31jg.40
 	if cfg.Brain.MaxLTMEntries > 0 {
 		brainOpts = append(brainOpts, brain.WithMaxLTMEntries(cfg.Brain.MaxLTMEntries))
 	}

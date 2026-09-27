@@ -85,16 +85,19 @@ Execute shell commands in the sandbox environment.
 
 ### WebSearch
 
-Hybrid web search using Anthropic native search or Brave API fallback.
+Web search via the Brave Search API (requires `tools.services.brave.api_key`).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `query` | string | Yes | Search query |
-| `max_results` | int | No | Maximum results (default: 5) |
+| `count` | int | No | Number of results, 1-10 (default: 10) |
+| `country` | string | No | 2-letter country code (default: `US`) |
+| `freshness` | string | No | `pd`, `pw`, `pm` or `py` (past day/week/month/year) |
+| `search_lang` | string | No | Result language |
 
 ```json
 {"query": "golang best practices 2026"}
-{"query": "weather seattle", "max_results": 3}
+{"query": "weather seattle", "count": 3, "freshness": "pd"}
 ```
 
 ### WebFetch
@@ -289,19 +292,29 @@ Text-to-speech synthesis.
 
 ### Cron
 
-Schedule recurring tasks and manage heartbeat jobs.
+Schedule recurring tasks and reminders, and manage heartbeat jobs.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `action` | string | Yes | "list", "create", "delete", "run" |
-| `name` | string | Conditional | Job name (for create/delete) |
-| `schedule` | string | Conditional | Cron expression (for create) |
-| `command` | string | Conditional | Command to run (for create) |
+| `action` | string | Yes | `schedule`, `list`, `cancel`, `run`, `enable`, `disable`, `status`, `heartbeat_list`, `heartbeat_enable`, `heartbeat_disable`, `heartbeat_status` |
+| `schedule` | string | Conditional | Cron expression (for `schedule`, unless `delayMinutes` is given). May start with `CRON_TZ=<zone> ` |
+| `delayMinutes` | int | No | Run once in N minutes instead of on a cron expression |
+| `command` | string | Conditional | Go jobs: the AI prompt. System jobs: the shell command |
+| `name` | string | No | Human-readable job name |
+| `jobType` | string | No | `go` (default, in-process AI task) or `system` (crontab shell command) |
+| `model` | string | No | Model for Go jobs (e.g. `haiku`) |
+| `skills` | array | No | Only load these skills for the job (smaller prompt) |
+| `oneshot` | bool | No | Delete the job after its first run |
+| `jobId` | string | Conditional | Job for `cancel`/`run`/`enable`/`disable` |
+| `target` | string | No | Leave unset (defaults to the current chat); only for cross-channel routing |
+
+Go-job expressions are evaluated in the top-level `timezone` (else server local time). A `CRON_TZ=<zone> ` prefix pins one job to a zone, so its wall-clock time survives DST changes. System jobs run in the cron daemon's zone. To convert existing jobs, use `conduit cron migrate-tz` (see [CLI Reference](cli-reference.md#cron)).
 
 ```json
 {"action": "list"}
-{"action": "create", "name": "daily-backup", "schedule": "0 2 * * *", "command": "backup create"}
-{"action": "delete", "name": "old-job"}
+{"action": "schedule", "name": "daily-briefing", "schedule": "CRON_TZ=America/New_York 0 9 * * *", "command": "Generate daily briefing"}
+{"action": "schedule", "command": "Remind me to check the oven", "delayMinutes": 30}
+{"action": "cancel", "jobId": "job_123"}
 ```
 
 ## Workflow

@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Conduit Go - High-Performance AI Gateway</title>
-    <meta name="description" content="A clean, high-performance AI gateway rewrite in Go with native channel adapters, terminal UI, SSH access, and Telegram integration.">
+    <title>Conduit Go - AI Gateway in Go</title>
+    <meta name="description" content="A single-binary AI gateway written in Go with native channel adapters, terminal UI, SSH access, and Telegram integration.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -38,74 +38,14 @@
             <h1 class="hero-title">
                 <span class="hero-prompt">$</span> Conduit<span class="cursor">_</span>
             </h1>
-            <p class="hero-tagline">High-performance AI gateway rewritten in Go</p>
+            <p class="hero-tagline">Single-binary AI gateway written in Go</p>
             <p class="hero-description">
                 Native channel adapters, terminal UI, SSH access, and Telegram integration.
-                10x the connections. 90% less memory. Pure Go simplicity.
+                One static binary, pure-Go SQLite, no CGO.
             </p>
             <div class="hero-cta">
                 <a href="#quickstart" class="btn btn-primary">Get Started</a>
                 <a href="https://github.com/jefflaplante/conduit" class="btn btn-secondary" target="_blank" rel="noopener">View on GitHub</a>
-            </div>
-        </div>
-    </section>
-
-    <!-- Performance Table -->
-    <section class="performance" id="performance">
-        <div class="container">
-            <h2 class="section-title">Performance</h2>
-            <p class="section-subtitle">TypeScript vs Go comparison</p>
-            <div class="terminal-window">
-                <div class="terminal-header">
-                    <span class="terminal-dot red"></span>
-                    <span class="terminal-dot yellow"></span>
-                    <span class="terminal-dot green"></span>
-                    <span class="terminal-title">benchmark.go</span>
-                </div>
-                <div class="terminal-body">
-                    <table class="perf-table">
-                        <thead>
-                            <tr>
-                                <th>Metric</th>
-                                <th>TypeScript</th>
-                                <th>Go</th>
-                                <th>Improvement</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>Memory (idle)</td>
-                                <td class="muted">150MB</td>
-                                <td>80MB</td>
-                                <td class="improvement">47% less</td>
-                            </tr>
-                            <tr>
-                                <td>Memory (1000 sessions)</td>
-                                <td class="muted">300MB</td>
-                                <td>120MB</td>
-                                <td class="improvement">60% less</td>
-                            </tr>
-                            <tr>
-                                <td>Startup time</td>
-                                <td class="muted">8s</td>
-                                <td>2s</td>
-                                <td class="improvement">75% faster</td>
-                            </tr>
-                            <tr>
-                                <td>Message latency</td>
-                                <td class="muted">150ms</td>
-                                <td>50ms</td>
-                                <td class="improvement">67% faster</td>
-                            </tr>
-                            <tr>
-                                <td>Concurrent connections</td>
-                                <td class="muted">1,000</td>
-                                <td>10,000+</td>
-                                <td class="improvement">10x more</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
             </div>
         </div>
     </section>
@@ -155,7 +95,7 @@
                             <div class="feature-icon">&#x2709;</div>
                             <h3>Telegram Bot</h3>
                             <p>Native Go adapter with full Bot API support. Photo handling, inline keyboards, and seamless user pairing. Chat with your AI from anywhere.</p>
-                            <code>./bin/conduit pairing create --telegram-id 123456789</code>
+                            <code>./bin/conduit pairing telegram approve ABC123</code>
                         </div>
                     </div>
 
@@ -172,7 +112,7 @@
                         <div class="feature-card">
                             <div class="feature-icon">&#x1F50D;</div>
                             <h3>Search & Memory</h3>
-                            <p>FTS5 full-text search over documents and messages. Semantic memory search across MEMORY.md and session history. Hybrid Anthropic + Brave web search.</p>
+                            <p>FTS5 full-text search over documents and messages. Semantic memory search across MEMORY.md and session history. Web search via the Brave Search API.</p>
                             <code>SELECT * FROM fts_documents WHERE content MATCH 'query';</code>
                         </div>
                     </div>
@@ -181,8 +121,8 @@
                         <div class="feature-card">
                             <div class="feature-icon">&#x1F9E0;</div>
                             <h3>Brain — Cognitive Memory</h3>
-                            <p><strong>Eliminates context window poisoning.</strong> Instead of dumping entire files into the prompt to recall a single fact, Brain returns just the answer — 30 bytes vs. 12KB+. Three tiers: long-term (SQLite-persisted), working (per-session), and scratchpad (LIFO stack). Salience-scored with auto-promotion, configurable decay, and sub-agent memory sharing. Critical for smaller models where every token counts.</p>
-                            <code>Brain(action="get", key="jeff.birthday") → "January 1"</code>
+                            <p><strong>Eliminates context window poisoning.</strong> Instead of dumping entire files into the prompt to recall a single fact, Brain returns just the answer — 30 bytes vs. 12KB+. Three tiers: long-term (SQLite-persisted), working (in-process, per user), and scratchpad (LIFO stack). Salience-scored with auto-promotion, configurable decay, and sub-agent memory sharing. Critical for smaller models where every token counts.</p>
+                            <code>Brain(action="get", key="user.birthday") → "January 1"</code>
                         </div>
                     </div>
 
@@ -200,7 +140,7 @@
                             <div class="feature-icon">&#x2705;</div>
                             <h3>Tool SelfTest</h3>
                             <p>Every built-in tool exposes a <strong>SelfTest</strong> capability. The gateway can programmatically verify tool health at startup or on demand — checking connectivity, credentials, and runtime dependencies. Surfaces issues before they hit a user session.</p>
-                            <code>./bin/conduit tools selftest --all</code>
+                            <code>registry.SelfTestAll(ctx, &amp;types.SelfTestOptions{Verbose: true})</code>
                         </div>
                     </div>
 
@@ -294,21 +234,14 @@
 
                     <!-- Adapter boxes -->
                     <g class="adapters">
-                        <!-- Native Go Adapters -->
-                        <rect x="80" y="235" width="280" height="120" rx="8" fill="#1e293b" stroke="#10b981" stroke-width="2"/>
-                        <text x="220" y="260" text-anchor="middle" fill="#10b981" font-size="14" font-weight="600">Native Go Adapters</text>
-                        <text x="100" y="285" fill="#f8fafc" font-size="12">• Telegram (go-telegram/bot)</text>
-                        <text x="100" y="305" fill="#f8fafc" font-size="12">• Discord (planned)</text>
-                        <text x="100" y="325" fill="#f8fafc" font-size="12">• Slack (planned)</text>
-                        <text x="100" y="345" fill="#94a3b8" font-size="11">Pure Go, high performance</text>
-
-                        <!-- TypeScript Adapters -->
-                        <rect x="440" y="235" width="280" height="120" rx="8" fill="#1e293b" stroke="#f59e0b" stroke-width="2"/>
-                        <text x="580" y="260" text-anchor="middle" fill="#f59e0b" font-size="14" font-weight="600">TypeScript Adapters</text>
-                        <text x="460" y="285" fill="#f8fafc" font-size="12">• WhatsApp (Baileys)</text>
-                        <text x="460" y="305" fill="#f8fafc" font-size="12">• Signal</text>
-                        <text x="460" y="325" fill="#f8fafc" font-size="12">• Other legacy</text>
-                        <text x="460" y="345" fill="#94a3b8" font-size="11">Process bridge for compatibility</text>
+                        <!-- Native Go Adapters (the TypeScript process bridge was removed; README c780277) -->
+                        <rect x="80" y="235" width="640" height="120" rx="8" fill="#1e293b" stroke="#10b981" stroke-width="2"/>
+                        <text x="400" y="260" text-anchor="middle" fill="#10b981" font-size="14" font-weight="600">Native Go Adapters</text>
+                        <text x="120" y="290" fill="#f8fafc" font-size="12">• Telegram (go-telegram/bot)</text>
+                        <text x="120" y="315" fill="#f8fafc" font-size="12">• TUI (in-process BubbleTea adapter)</text>
+                        <text x="440" y="290" fill="#f8fafc" font-size="12">• Discord (planned)</text>
+                        <text x="440" y="315" fill="#f8fafc" font-size="12">• Slack (planned)</text>
+                        <text x="400" y="342" text-anchor="middle" fill="#94a3b8" font-size="11">All adapters are pure Go, no external process bridge</text>
                     </g>
 
                     <!-- Core Services box -->
