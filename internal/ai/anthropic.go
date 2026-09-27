@@ -349,7 +349,7 @@ func mapAnthropicStopReason(stopReason string) string {
 	case "pause_turn":
 		// Only produced when Anthropic server tools (web_search_2025xxxx,
 		// etc.) run a long turn. Conduit sends only custom tools
-		// (convertToolsToAnthropic) and the map-based parser does not keep
+		// (convertToolsToAnthropic) and the response parser does not keep
 		// server_tool_use blocks, so the paused turn cannot be faithfully
 		// resent to resume it. Treat it as a final answer.
 		return "stop"
