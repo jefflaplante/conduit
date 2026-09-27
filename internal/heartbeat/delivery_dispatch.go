@@ -65,14 +65,38 @@ func actionAlertMeta(action HeartbeatAction, jobID string) alertMeta {
 }
 
 // retryState tracks background retries so they stay bounded and can be
-// stopped on shutdown.
+// stopped on shutdown. ctx is cancelled by Close: it aborts backoff waits AND
+// in-flight attempts (conduit-31jg.81), so Close never waits out
+// retryAttemptTimeout.
 type retryState struct {
 	mu      sync.Mutex
 	wg      sync.WaitGroup
 	pending int
-	stop    chan struct{}
+	ctx     context.Context
+	cancel  context.CancelFunc
 	closed  bool
 }
+
+func newRetryState() retryState {
+	ctx, cancel := context.WithCancel(context.Background())
+	return retryState{ctx: ctx, cancel: cancel}
+}
+
+// lifetimeLocked returns the retry context, creating it for zero-value
+// integrations. Caller holds mu.
+func (r *retryState) lifetimeLocked() context.Context {
+	if r.ctx == nil {
+		r.ctx, r.cancel = context.WithCancel(context.Background())
+	}
+	return r.ctx
+}
+
+// closeWait bounds how long Close waits for retry goroutines after
+// cancelling them. A cancelled attempt normally returns at once; the bound
+// only matters for a deliverer that ignores its context, and keeps Close
+// well inside the shutdown stop budget (conduit-31jg.27/.77/.81). A var so
+// tests can shorten it.
+var closeWait = 500 * time.Millisecond
 
 // SetDeliveryRegistry routes heartbeat delivery through reg (typically the
 // gateway's audited registry) and registers a ChannelSenderDeliverer on it
@@ -94,16 +118,29 @@ func (g *GatewayIntegration) deliveryRegistry() *DeliveryRegistry {
 	return g.delivery
 }
 
-// Close stops pending background retries and waits for in-flight attempts.
+// Close stops background retries: pending backoff waits end and in-flight
+// attempts are cancelled (and audited as interrupted, not failed —
+// conduit-31jg.81). It waits at most closeWait for the goroutines to exit.
 // Safe to call more than once.
 func (g *GatewayIntegration) Close() error {
 	g.retries.mu.Lock()
 	if !g.retries.closed {
 		g.retries.closed = true
-		close(g.retries.stop)
+		g.retries.lifetimeLocked()
+		g.retries.cancel()
 	}
 	g.retries.mu.Unlock()
-	g.retries.wg.Wait()
+
+	done := make(chan struct{})
+	go func() {
+		g.retries.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(closeWait):
+		log.Printf("[HeartbeatIntegration] Close: background retry still running after %s; not waiting longer", closeWait)
+	}
 	return nil
 }
 
@@ -152,7 +189,7 @@ func (g *GatewayIntegration) scheduleRetries(reg *DeliveryRegistry, alert Alert,
 	}
 	g.retries.pending++
 	g.retries.wg.Add(1)
-	stop := g.retries.stop
+	lifetime := g.retries.lifetimeLocked()
 	g.retries.mu.Unlock()
 
 	go func() {
@@ -174,15 +211,21 @@ func (g *GatewayIntegration) scheduleRetries(reg *DeliveryRegistry, alert Alert,
 		for attempt := 1; attempt <= policy.MaxRetries; attempt++ {
 			timer := time.NewTimer(delay)
 			select {
-			case <-stop:
+			case <-lifetime.Done():
 				timer.Stop()
 				return
 			case <-timer.C:
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), retryAttemptTimeout)
+			// conduit-31jg.81: derived from the retry lifetime so Close
+			// cancels an attempt already in flight.
+			ctx, cancel := context.WithTimeout(lifetime, retryAttemptTimeout)
 			err := reg.DeliverAlert(ctx, alert, target)
 			cancel()
+			if errors.Is(err, ErrDeliveryInterrupted) {
+				log.Printf("[HeartbeatIntegration] Delivery retry %d to %s interrupted by shutdown", attempt, target.Name)
+				return
+			}
 			if err == nil {
 				log.Printf("[HeartbeatIntegration] Delivery to %s succeeded on retry %d", target.Name, attempt)
 				return

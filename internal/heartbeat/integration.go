@@ -92,7 +92,7 @@ func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, a
 		workspaceDir:     workspaceDir,
 		deferred:         NewSharedAlertQueue(deferredQueuePath(workspaceDir, "")),
 		delivery:         delivery,
-		retries:          retryState{stop: make(chan struct{})},
+		retries:          newRetryState(),
 	}
 }
 
