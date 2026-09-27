@@ -45,8 +45,6 @@ func TestDefaultPricingMatrix_ResolvedPrices(t *testing.T) {
 		"claude-sonnet-4-0":          {3, 15, 0.30},
 		"claude-sonnet-4-20250514":   {3, 15, 0.30},
 		"claude-sonnet-5-20260101":   {2, 10, 0.20}, // not sonnet-4 / not $3
-		// Not a real model; kept for the smart-routing cost optimizer.
-		"claude-haiku-4": {0.80, 4, 0.08},
 		// Anthropic — retired
 		"claude-3-5-haiku":           {0.80, 4, 0.08},
 		"claude-3-5-haiku-20241022":  {0.80, 4, 0.08},

@@ -71,12 +71,8 @@ var DefaultPricingMatrix = map[string]ModelPricing{
 	"claude-sonnet-4-5": {InputPerMToken: 3.0, OutputPerMToken: 15.0},
 	"claude-sonnet-4":   {InputPerMToken: 3.0, OutputPerMToken: 15.0}, // Sonnet 4 (-0 / -20250514); retired on the Claude API
 	"claude-3-5-haiku":  {InputPerMToken: 0.80, OutputPerMToken: 4.0}, // Haiku 3.5; retired on the Claude API
-	// There is no Claude Haiku 4 model (Haiku 4.5 has its own entry). This
-	// entry is kept only because the smart-routing cost optimizer
-	// (cost_optimizer.go, being deleted) still names "claude-haiku-4"; drop
-	// it with that code — it would price a future claude-haiku-4-x at Haiku
-	// 3.5's rate. conduit-31jg.76
-	"claude-haiku-4": {InputPerMToken: 0.80, OutputPerMToken: 4.0}, // unverified (not a real model ID)
+	// There is no Claude Haiku 4 model (Haiku 4.5 has its own entry), so
+	// there is deliberately no "claude-haiku-4" key. conduit-31jg.76
 	//
 	// Anthropic — retired, absent from the pricing page: historical prices.
 	"claude-3-5-sonnet": {InputPerMToken: 3.0, OutputPerMToken: 15.0},  // unverified (retired 2025-10-28)
@@ -204,8 +200,8 @@ func lookupPricing(overrides map[string]ModelPricing, candidates []string) (Mode
 // conduit-31jg.57: salvaged from the smart-routing dead code. It no longer
 // depends on SmartRoutingConfig: the gateway builds ONE resolver from
 // AIConfig at init (NewPricingResolverFromConfig) and every cost path —
-// the per-call metering hook, UsageTracker, TurnRunner session cost, and
-// the package-level CalculateCost — prices through it.
+// the per-call metering hook, UsageTracker and TurnRunner session cost —
+// prices through it.
 type PricingResolver struct {
 	overrides map[string]ModelPricing // lower-cased keys
 	// writeMult is the cache-write premium (1.25x for the 5-minute TTL, 2x
@@ -347,9 +343,9 @@ func (pr *PricingResolver) CalculateCost(model string, inputTokens, outputTokens
 	return c
 }
 
-// defaultResolver backs the package-level CalculateCost so legacy call
-// sites (smart-routing cost optimizer) price with the same overrides. The
-// gateway installs its resolver at init. conduit-31jg.57
+// defaultResolver is the package-level resolver used when no explicit one
+// is wired (UsageTracker, Router before init). The gateway installs its
+// resolver at init. conduit-31jg.57
 var defaultResolver atomic.Pointer[PricingResolver]
 
 // SetDefaultPricingResolver installs pr as the package-level resolver (nil
@@ -365,9 +361,3 @@ func DefaultPricingResolver() *PricingResolver {
 }
 
 var builtinResolver = NewPricingResolver(nil)
-
-// CalculateCost returns the estimated cost for a given model and token usage
-// via the package-level resolver.
-func CalculateCost(model string, inputTokens, outputTokens int) float64 {
-	return DefaultPricingResolver().CalculateCost(model, inputTokens, outputTokens)
-}

@@ -311,7 +311,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 	// conduit-31jg.57: the router built ONE pricing resolver from cfg.AI
 	// (ai.pricing_overrides + deprecated smart_routing alias + built-ins);
-	// make it the package default so legacy CalculateCost callers agree.
+	// make it the package default so resolver-less paths agree.
 	ai.SetDefaultPricingResolver(aiRouter.PricingResolver())
 	if n := len(aiRouter.PricingResolver().OverrideModels()); n > 0 {
 		logger.Info("pricing overrides loaded", "models", n)

@@ -39,7 +39,7 @@ func TestPricingForModel_Empty(t *testing.T) {
 }
 
 func TestCalculateCost(t *testing.T) {
-	cost := CalculateCost("claude-sonnet-4", 1000, 500)
+	cost := DefaultPricingResolver().CalculateCost("claude-sonnet-4", 1000, 500)
 	// 1000 input tokens at $3/MTok = $0.003
 	// 500 output tokens at $15/MTok = $0.0075
 	expected := 0.003 + 0.0075
@@ -50,7 +50,7 @@ func TestCalculateCost(t *testing.T) {
 }
 
 func TestCalculateCost_ZeroTokens(t *testing.T) {
-	cost := CalculateCost("claude-sonnet-4", 0, 0)
+	cost := DefaultPricingResolver().CalculateCost("claude-sonnet-4", 0, 0)
 	if cost != 0.0 {
 		t.Errorf("Expected 0 cost for zero tokens, got %f", cost)
 	}
