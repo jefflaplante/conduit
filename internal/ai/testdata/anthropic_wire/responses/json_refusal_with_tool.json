@@ -1,0 +1,12 @@
+{
+  "resp": {
+    "content": "The model declined to respond to this request (stop_reason: refusal).",
+    "usage": {
+      "prompt_tokens": 1,
+      "completion_tokens": 1,
+      "total_tokens": 2
+    },
+    "finish_reason": "content_filter",
+    "stop_reason": "refusal"
+  }
+}

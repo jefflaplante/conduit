@@ -16,6 +16,7 @@ import (
 	"conduit/internal/config"
 	"conduit/internal/datadir"
 	"conduit/internal/gateway"
+	"conduit/internal/redact"
 	internalssh "conduit/internal/ssh"
 	"conduit/internal/version"
 
@@ -272,6 +273,12 @@ func runServer() error {
 }
 
 func main() {
+	// conduit-31jg.83: every std-logger line (and slog's default handler,
+	// which writes through it) is scrubbed of Telegram bot tokens and any
+	// secret registered with redact.RegisterSecret. This is the backstop for
+	// third-party code that log.Printf's raw errors containing request URLs.
+	log.SetOutput(redact.NewWriter(os.Stderr))
+
 	// Update CLI config with actual values after flags are parsed
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
 		// conduit-31jg.3: token commands load the server's config (--config)

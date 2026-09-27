@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"strings"
+
+	"conduit/internal/models"
 )
 
 // VerboseLogging controls whether debug-level AI messages appear in the journal.
@@ -33,7 +35,7 @@ const maxSSELineBytes = 4 << 20
 //
 // conduit-31jg.12: the request is built by the SAME code path as
 // GenerateResponse (buildMessagesRequest + newMessagesHTTPRequest) plus
-// "stream": true. The previous hand-rolled request hardcoded
+// Stream: true. The previous hand-rolled request hardcoded
 // https://api.anthropic.com and max_tokens=16000, skipped cache breakpoints
 // and OAuth refresh, read a.apiKey without oauthMu, and kept only
 // messages[0] as the system prompt (later system messages were dropped).
@@ -43,19 +45,24 @@ func (a *AnthropicProvider) GenerateResponseStreaming(ctx context.Context, req *
 	}
 
 	body, modelToUse := a.buildMessagesRequest(req)
-	body["stream"] = true
+	body.Stream = true
+	payload, err := marshalMessagesRequest(body)
+	if err != nil {
+		return nil, err
+	}
 
 	log.Printf("[Anthropic] Streaming request: model=%s, isOAuth=%v", modelToUse, a.isOAuth)
 
 	// conduit-31jg.46: retries retryable HTTP statuses and mid-stream
 	// overloaded/rate-limit errors, the latter only before any text has
 	// been emitted to onDelta.
-	return a.streamMessagesWithRetry(ctx, body, onDelta)
+	return a.streamMessagesWithRetry(ctx, payload, onDelta)
 }
 
 // parseSSEStream parses Server-Sent Events from Anthropic's streaming API.
-// All type assertions are comma-ok: a malformed event is logged and skipped,
-// never a panic (conduit-31jg.12).
+// Events decode into models.StreamEvent, which treats a field of the wrong
+// JSON kind as absent: a malformed event is logged and skipped, never a
+// panic (conduit-31jg.12, typed since conduit-31jg.36).
 func (a *AnthropicProvider) parseSSEStream(body io.Reader, onDelta StreamCallback) (*GenerateResponse, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxSSELineBytes)
@@ -99,68 +106,60 @@ func (a *AnthropicProvider) parseSSEStream(body io.Reader, onDelta StreamCallbac
 			continue
 		}
 
-		var event map[string]interface{}
+		var event models.StreamEvent
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			log.Printf("[Streaming] Failed to parse event: %v", err)
 			continue
 		}
 
-		eventType, _ := event["type"].(string)
-
-		switch eventType {
-		case "message_start":
+		switch event.Type {
+		case models.EventMessageStart:
 			// input_tokens and the cache counters arrive here; output_tokens
 			// (cumulative) arrive in message_delta. conduit-31jg.12: cache
 			// counts were previously dropped on the streaming path.
-			if msg, ok := event["message"].(map[string]interface{}); ok {
-				if u, ok := msg["usage"].(map[string]interface{}); ok {
-					mergeAnthropicStreamUsage(&usage, u)
-				}
+			if event.Message != nil && event.Message.Usage != nil {
+				mergeAnthropicStreamUsage(&usage, event.Message.Usage)
 			}
 
-		case "content_block_start":
-			cb, ok := event["content_block"].(map[string]interface{})
-			if !ok {
+		case models.EventContentBlockStart:
+			cb := event.ContentBlock
+			if cb == nil {
 				log.Printf("[Streaming] content_block_start without content_block — skipped (conduit-31jg.12)")
 				continue
 			}
-			cbType, _ := cb["type"].(string)
-			lastBlockType = cbType
-			if cbType == "tool_use" {
-				id, idOK := cb["id"].(string)
-				name, nameOK := cb["name"].(string)
-				if !idOK || !nameOK || id == "" || name == "" {
+			lastBlockType = cb.Type
+			if cb.Type == models.BlockToolUse {
+				if !cb.HasID() || !cb.HasName() || cb.ID == "" || cb.Name == "" {
 					// conduit-31jg.12: was an unchecked cb["id"].(string) — a
 					// malformed block panicked the gateway goroutine.
-					log.Printf("[Streaming] malformed tool_use content_block_start (id=%v name=%v) — skipped", cb["id"], cb["name"])
+					log.Printf("[Streaming] malformed tool_use content_block_start (%s) — skipped", event.RawContentBlock)
 					currentToolCall = nil
 					continue
 				}
-				currentToolCall = &ToolCall{ID: id, Name: name}
+				currentToolCall = &ToolCall{ID: cb.ID, Name: cb.Name}
 				currentToolInput.Reset()
 			}
 
-		case "content_block_delta":
-			delta, ok := event["delta"].(map[string]interface{})
-			if !ok {
+		case models.EventContentBlockDelta:
+			delta := event.Delta
+			if delta == nil {
 				continue
 			}
-			deltaType, _ := delta["type"].(string)
-			switch deltaType {
-			case "text_delta":
-				if text, ok := delta["text"].(string); ok {
-					contentBuilder.WriteString(text)
+			switch delta.Type {
+			case models.DeltaText:
+				if delta.HasText() {
+					contentBuilder.WriteString(delta.Text)
 					if onDelta != nil {
-						onDelta(text, false)
+						onDelta(delta.Text, false)
 					}
 				}
-			case "input_json_delta":
-				if partialJSON, ok := delta["partial_json"].(string); ok && currentToolCall != nil {
-					currentToolInput.WriteString(partialJSON)
+			case models.DeltaInputJSON:
+				if delta.HasPartialJSON() && currentToolCall != nil {
+					currentToolInput.WriteString(delta.PartialJSON)
 				}
 			}
 
-		case "content_block_stop":
+		case models.EventContentBlockStop:
 			if currentToolCall != nil {
 				raw := currentToolInput.String()
 				if strings.TrimSpace(raw) == "" {
@@ -178,43 +177,41 @@ func (a *AnthropicProvider) parseSSEStream(body io.Reader, onDelta StreamCallbac
 				currentToolCall = nil
 			}
 
-		case "message_delta":
-			if delta, ok := event["delta"].(map[string]interface{}); ok {
-				if sr, ok := delta["stop_reason"].(string); ok {
-					stopReason = sr
-					if VerboseLogging {
-						log.Printf("[Streaming] Stop reason: %s", sr)
-					}
+		case models.EventMessageDelta:
+			if delta := event.Delta; delta != nil && delta.HasStopReason() {
+				stopReason = delta.StopReason
+				if VerboseLogging {
+					log.Printf("[Streaming] Stop reason: %s", stopReason)
 				}
 			}
-			if u, ok := event["usage"].(map[string]interface{}); ok {
-				mergeAnthropicStreamUsage(&usage, u)
+			if event.Usage != nil {
+				mergeAnthropicStreamUsage(&usage, event.Usage)
 			}
 			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 
-		case "message_stop":
+		case models.EventMessageStop:
 			if onDelta != nil {
 				onDelta("", true)
 			}
 
-		case "error":
+		case models.EventError:
 			// conduit-31jg.12: mid-stream errors (overloaded_error,
 			// api_error, ...) used to be ignored, returning the partial text
 			// as a successful response. Surface them — with the error type in
 			// the message so ClassifyError / the router's retry and fallback
 			// logic can act on it.
 			errType, errMsg := "unknown_error", ""
-			if e, ok := event["error"].(map[string]interface{}); ok {
-				if t, ok := e["type"].(string); ok && t != "" {
-					errType = t
+			if e := event.Error; e != nil {
+				if e.Type != "" {
+					errType = e.Type
 				}
-				errMsg, _ = e["message"].(string)
+				errMsg = e.Message
 			}
 			log.Printf("[Streaming] error event mid-stream: %s: %s", errType, errMsg)
 			// conduit-31jg.46: typed so retry logic can read the type.
 			return partial(), &anthropicStreamError{Type: errType, Message: errMsg}
 
-		case "ping":
+		case models.EventPing:
 			// keepalive
 		}
 	}
@@ -235,32 +232,25 @@ func (a *AnthropicProvider) parseSSEStream(body io.Reader, onDelta StreamCallbac
 	// conduit-31jg.11: same stop_reason mapping as the non-streaming path.
 	// A tool_use severed by max_tokens reached content_block_stop with
 	// unparseable partial JSON (Args=nil) and used to be executed anyway.
-	applyAnthropicStopReason(result, stopReason, lastBlockType == "tool_use")
+	applyAnthropicStopReason(result, stopReason, lastBlockType == models.BlockToolUse)
 	return result, nil
 }
 
 // mergeAnthropicStreamUsage folds a streaming usage object (from
-// message_start or message_delta) into usage. Only fields present and
-// non-zero overwrite, since message_delta usage is cumulative and may omit
+// message_start or message_delta) into usage. Only non-zero counters
+// overwrite, since message_delta usage is cumulative and may omit
 // input/cache counters. conduit-31jg.12.
-func mergeAnthropicStreamUsage(usage *Usage, u map[string]interface{}) {
-	if v := int(getFloat64(u, "input_tokens")); v > 0 {
-		usage.PromptTokens = v
+func mergeAnthropicStreamUsage(usage *Usage, u *models.Usage) {
+	if u.InputTokens > 0 {
+		usage.PromptTokens = u.InputTokens
 	}
-	if v := int(getFloat64(u, "output_tokens")); v > 0 {
-		usage.CompletionTokens = v
+	if u.OutputTokens > 0 {
+		usage.CompletionTokens = u.OutputTokens
 	}
-	if v := int(getFloat64(u, "cache_creation_input_tokens")); v > 0 {
-		usage.CacheCreationInputTokens = v
+	if u.CacheCreationInputTokens > 0 {
+		usage.CacheCreationInputTokens = u.CacheCreationInputTokens
 	}
-	if v := int(getFloat64(u, "cache_read_input_tokens")); v > 0 {
-		usage.CacheReadInputTokens = v
+	if u.CacheReadInputTokens > 0 {
+		usage.CacheReadInputTokens = u.CacheReadInputTokens
 	}
-}
-
-func getFloat64(m map[string]interface{}, key string) float64 {
-	if v, ok := m[key].(float64); ok {
-		return v
-	}
-	return 0
 }

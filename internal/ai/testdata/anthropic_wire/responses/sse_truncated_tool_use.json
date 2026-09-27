@@ -1,0 +1,22 @@
+{
+  "resp": {
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "t1",
+        "name": "Read",
+        "arguments": {
+          "path": "a"
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 5,
+      "completion_tokens": 100,
+      "total_tokens": 105
+    },
+    "finish_reason": "length",
+    "stop_reason": "max_tokens"
+  },
+  "done_calls": 1
+}

@@ -1,0 +1,13 @@
+{
+  "resp": {
+    "content": "cut",
+    "usage": {
+      "prompt_tokens": 2,
+      "completion_tokens": 0,
+      "total_tokens": 2
+    }
+  },
+  "deltas": [
+    "cut"
+  ]
+}

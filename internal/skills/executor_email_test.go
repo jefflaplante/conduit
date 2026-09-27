@@ -24,6 +24,11 @@ func emailCommand(t *testing.T, action string, args map[string]interface{}) stri
 // emailCommandErr is emailCommand without failing on validation errors.
 func emailCommandErr(action string, args map[string]interface{}) (string, error) {
 	e := NewExecutor(ExecutionConfig{TimeoutSeconds: 10})
+	// Default aliases/env vars; pin the binary and workspace so commands are
+	// deterministic regardless of the host's PATH (conduit-31jg.40).
+	if err := e.ConfigureGog(&GogConfig{Binary: testGogBinary}, testWorkspace); err != nil {
+		return "", err
+	}
 	skill := Skill{Name: "email"}
 	return e.buildShellCommand(skill, action, args)
 }
@@ -346,7 +351,7 @@ func TestGogCommand_InjectionDoesNotExecute(t *testing.T) {
 		}
 		for _, r := range runs {
 			cmdStr := emailCommand(t, r.action, r.args)
-			cmdStr = strings.ReplaceAll(cmdStr, "/usr/local/bin/gog", shellQuote(fakeGog))
+			cmdStr = strings.ReplaceAll(cmdStr, testGogBinary+" gmail", shellQuote(fakeGog)+" gmail")
 			cmd := exec.Command(bash, "-c", cmdStr)
 			cmd.Dir = dir
 			cmd.Env = append(os.Environ(),

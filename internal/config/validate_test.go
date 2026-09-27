@@ -142,8 +142,8 @@ func TestValidateSemantic_AIAPIKeyOnly(t *testing.T) {
 // TestValidateSemantic_AITemplateMode_ExpandedToEmpty documents the "neither
 // set" acceptance path that is the core of conduit-l4w0.
 //
-// config.Load uses os.ExpandEnv to expand ${ENV_VAR} placeholders.  When the
-// referenced variable is absent from the environment, os.ExpandEnv returns "".
+// config.Load expands ${ENV_VAR} placeholders (expandEnvBraced).  When the
+// referenced variable is absent from the environment, the expansion is "".
 // So a template config like:
 //
 //	"api_key": "${ANTHROPIC_API_KEY}"
@@ -153,7 +153,7 @@ func TestValidateSemantic_AIAPIKeyOnly(t *testing.T) {
 // supply credentials at runtime (env export, secrets_file, etc.).  The first
 // failed AI call will surface a clear "no credentials" error at the right layer.
 func TestValidateSemantic_AITemplateMode_ExpandedToEmpty(t *testing.T) {
-	// Simulate what config.Load sees after os.ExpandEnv with an unset var:
+	// Simulate what config.Load sees after ${NAME} expansion with an unset var:
 	// the placeholder collapses to "" — neither api_key nor oauth_token is set.
 	cfg := minimalValidConfig()
 	cfg.AI.Providers[0].APIKey = "" // post-expansion of "${ANTHROPIC_API_KEY}" when unset
@@ -418,8 +418,8 @@ func TestValidateSemantic_OneEnabledTool(t *testing.T) {
 
 func TestValidateSemantic_MultipleErrors(t *testing.T) {
 	cfg := minimalValidConfig()
-	cfg.Port = 80                 // bad port
-	cfg.Tools.EnabledTools = nil  // no tools
+	cfg.Port = 80                // bad port
+	cfg.Tools.EnabledTools = nil // no tools
 
 	err := cfg.ValidateSemantic()
 	if err == nil {

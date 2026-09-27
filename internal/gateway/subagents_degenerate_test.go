@@ -32,7 +32,7 @@ func subAgentFallbackRouter(t *testing.T, responses []ai.MockResponse) *ai.Route
 
 func TestSubAgent_EmptyGuardFallback_RoutedToFailure(t *testing.T) {
 	gw, store := newTestGatewayWithSessions(t)
-	gw.ctx = context.Background()
+	gw.setLifecycleCtx(context.Background())
 	gw.ai = subAgentFallbackRouter(t, []ai.MockResponse{
 		// Model returns raw-empty twice (original + guard retry) → guard
 		// substitutes fallback text → sub-agent must treat as FAILURE.
@@ -48,7 +48,9 @@ func TestSubAgent_EmptyGuardFallback_RoutedToFailure(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		msgs, _ := store.GetMessages(sessionKey, 10)
-		if len(msgs) >= 1 {
+		// conduit-31jg.66: the task row is stored first (inside the turn
+		// lock); wait for the sub-agent's final assistant row.
+		if len(msgs) >= 2 && msgs[len(msgs)-1].Role == "assistant" && !gw.turns().Busy(sessionKey) {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -70,7 +72,7 @@ func TestSubAgent_EmptyGuardFallback_RoutedToFailure(t *testing.T) {
 
 func TestSubAgent_NormalCompletion_StillWorks(t *testing.T) {
 	gw, store := newTestGatewayWithSessions(t)
-	gw.ctx = context.Background()
+	gw.setLifecycleCtx(context.Background())
 	gw.ai = subAgentFallbackRouter(t, []ai.MockResponse{
 		{Content: "The task is done. Report follows."},
 	})
@@ -83,7 +85,9 @@ func TestSubAgent_NormalCompletion_StillWorks(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		msgs, _ := store.GetMessages(sessionKey, 10)
-		if len(msgs) >= 1 {
+		// conduit-31jg.66: the task row is stored first (inside the turn
+		// lock); wait for the sub-agent's final assistant row.
+		if len(msgs) >= 2 && msgs[len(msgs)-1].Role == "assistant" && !gw.turns().Busy(sessionKey) {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)

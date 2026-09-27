@@ -26,7 +26,13 @@ type AgentHeartbeatConfig struct {
 	// the HEARTBEAT.md prompt; the gateway no longer processes it
 	// (conduit-31jg.59). Still accepted, with a load-time warning; when set,
 	// only its directory is used, to place the deferred.json queue.
-	AlertQueuePath   string           `json:"alert_queue_path,omitempty"`
+	AlertQueuePath string `json:"alert_queue_path,omitempty"`
+	// AlertTargets is validated but does NOT route alerts (conduit-31jg.73).
+	// Only AlertTargets[0], when type "telegram", is read: its
+	// config.chat_id becomes the agent heartbeat job's target. Additional
+	// targets, other types and Severity filters are reserved; alert delivery
+	// goes through heartbeat.DeliveryRegistry. A load-time warning is logged
+	// when reserved parts are configured.
 	AlertTargets     []AlertTarget    `json:"alert_targets"`
 	AlertRetryPolicy AlertRetryPolicy `json:"alert_retry_policy"`
 
@@ -45,12 +51,14 @@ type QuietHoursConfig struct {
 	EndTime   string `json:"end_time"`   // Format: "08:00"
 }
 
-// AlertTarget defines where alerts should be delivered
+// AlertTarget describes an alert destination. Reserved: see
+// AgentHeartbeatConfig.AlertTargets — only the first telegram target's
+// chat_id is used today, and nothing filters by Severity.
 type AlertTarget struct {
 	Name     string            `json:"name"`
 	Type     string            `json:"type" validate:"enum=telegram|email|slack|webhook|mqtt"` // "telegram", "email", "slack", etc.
 	Config   map[string]string `json:"config"`
-	Severity []string          `json:"severity"` // Which severities this target handles
+	Severity []string          `json:"severity"` // Reserved: not used for routing
 }
 
 // AlertRetryPolicy defines how failed alert deliveries should be retried
@@ -227,13 +235,13 @@ func (a AgentHeartbeatConfig) GetLocation() *time.Location {
 func DefaultAgentHeartbeatConfig() AgentHeartbeatConfig {
 	return AgentHeartbeatConfig{
 		Enabled:         true,
-		IntervalMinutes: 5,                     // 5 minutes - more frequent than infrastructure heartbeat
-		Timezone:        "America/Los_Angeles", // the owner's timezone
+		IntervalMinutes: 5,  // 5 minutes - more frequent than infrastructure heartbeat
+		Timezone:        "", // inherit top-level timezone at Load; UTC if unset (conduit-31jg.40)
 
 		QuietEnabled: true,
 		QuietHours: QuietHoursConfig{
-			StartTime: "23:00", // 11:00 PM PT
-			EndTime:   "08:00", // 8:00 AM PT
+			StartTime: "23:00", // 11:00 PM in the effective timezone
+			EndTime:   "08:00", // 8:00 AM in the effective timezone
 		},
 
 		AlertTargets: []AlertTarget{},

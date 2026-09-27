@@ -200,6 +200,15 @@ type BrainConfig struct {
 	WarmthInjectFloor float64 `json:"warmth_inject_floor,omitempty"` // min warmth to qualify (default 0.7)
 	WarmthInjectLimit int     `json:"warmth_inject_limit,omitempty"` // max injected per recall (default 2; 0 disables)
 
+	// LTMEvictionGraceSeconds: a freshly written or accessed LTM row is immune
+	// from capacity eviction for this long. 0/omitted = default (3600);
+	// negative = no window beyond the write's own second. conduit-31jg.53
+	LTMEvictionGraceSeconds int `json:"ltm_eviction_grace_seconds,omitempty"`
+	// MaxWMEntriesPerUser caps each user's working-memory bucket (lowest-value
+	// entries are evicted, hot ones promoted to LTM first). 0/omitted =
+	// default (1000); negative = unbounded. conduit-31jg.53
+	MaxWMEntriesPerUser int `json:"max_wm_entries_per_user,omitempty"`
+
 	// DashboardEnabled toggles the /dashboard/brain memory-graph dashboard
 	// and its backing /api/brain/graph endpoint. Off by default.
 	DashboardEnabled bool `json:"dashboard_enabled,omitempty"`
@@ -229,6 +238,9 @@ func DefaultBrainConfig() BrainConfig {
 		REMLogPath:           "memory/rem-log",
 		WarmthInjectFloor:    0.7,
 		WarmthInjectLimit:    2,
+
+		LTMEvictionGraceSeconds: 3600,
+		MaxWMEntriesPerUser:     1000,
 	}
 }
 
@@ -276,6 +288,12 @@ func (b *BrainConfig) ApplyDefaults() {
 	}
 	if b.REMLogPath == "" {
 		b.REMLogPath = defaults.REMLogPath
+	}
+	if b.LTMEvictionGraceSeconds == 0 {
+		b.LTMEvictionGraceSeconds = defaults.LTMEvictionGraceSeconds
+	}
+	if b.MaxWMEntriesPerUser == 0 {
+		b.MaxWMEntriesPerUser = defaults.MaxWMEntriesPerUser
 	}
 }
 
@@ -1069,6 +1087,7 @@ func Load(path string) (*Config, error) {
 	// alias into ai.pricing_overrides.
 	cfg.AI.normalizePricingOverrides()
 	cfg.warnDeprecatedKeys()
+	cfg.applyDerivedDefaults() // conduit-31jg.40
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {

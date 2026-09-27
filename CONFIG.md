@@ -654,7 +654,7 @@ The `enabled_tools` values must match the internal tool names exactly:
 | `SessionsSpawn` | core | Spawn sub-agent sessions |
 | `SessionStatus` | core | Get session status and metadata |
 | `Gateway` | core | Gateway operations (status, restart, config, metrics, channels, scheduler) |
-| `WebSearch` | web | Web search via Brave API or Anthropic search |
+| `WebSearch` | web | Web search via the Brave Search API |
 | `WebFetch` | web | Fetch and parse web pages to markdown |
 | `Message` | communication | Send messages to channels (Telegram, etc.) |
 | `Tts` | communication | Text-to-speech generation |
@@ -679,7 +679,6 @@ The `services` map provides tool-specific configuration. Each key is a service n
 |---------|--------|---------|
 | `brave` | `api_key` | WebSearch tool — Brave Search API key |
 | `tts` | `provider`, `voice` | Tts tool — TTS engine and voice selection |
-| `search` | `provider` | WebSearch tool — search provider preference (`"brave"` or `"anthropic"`) |
 
 **UniFi tool** does not use `services` — it reads `UNVR_URL` and `UNVR_API_KEY` environment variables directly.
 
@@ -832,7 +831,7 @@ Agent heartbeat — periodic task processing loop. Every N minutes, the agent re
 |-------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable the agent heartbeat loop |
 | `interval_minutes` | int | `5` | How often the agent checks for tasks. Range: 1–60 |
-| `timezone` | string | `"America/Los_Angeles"` | IANA timezone for quiet hours and scheduling |
+| `timezone` | string | `""` (inherits top-level `timezone`; UTC if both empty) | IANA timezone for quiet hours and scheduling |
 | `heartbeat_task_path` | string | `"HEARTBEAT.md"` | Path to task instructions file (relative to `workspace.context_dir`) |
 | `enabled_task_types` | string array | `["alerts", "checks", "reports"]` | Which task types to process. Options: `"alerts"`, `"checks"`, `"reports"`, `"maintenance"` |
 | `log_level` | string | `"info"` | Log level: `"debug"`, `"info"`, `"warn"`, `"error"` |
@@ -955,9 +954,9 @@ Integrated SSH server that serves the BubbleTea TUI over SSH via Wish. Clients c
 
 ### SSH setup steps
 
-1. `./bin/gateway ssh-keys init` — generates host key and creates authorized_keys file
-2. `./bin/gateway ssh-keys add ~/.ssh/id_ed25519.pub` — authorize a client public key
-3. Set `ssh.enabled: true` in config and restart, or run `./bin/gateway ssh-server` standalone
+1. `./bin/conduit ssh-keys init` — generates host key and creates authorized_keys file
+2. `./bin/conduit ssh-keys add ~/.ssh/id_ed25519.pub` — authorize a client public key
+3. Set `ssh.enabled: true` in config and restart, or run `./bin/conduit ssh-server` standalone
 
 The SSH server uses a direct in-process client (`gateway/direct_client.go`) instead of WebSocket loopback, so it doesn't consume an API token. However, the standalone `ssh-server` command does require a `--gateway-token` flag for WebSocket connection to the gateway.
 
@@ -1090,6 +1089,8 @@ Tiered cognitive memory: long-term memory (SQLite-persisted), working memory (in
 | `enabled` | bool | `false` | Enable the brain subsystem |
 | `path` | string | derived | Brain database path. Defaults to `<gateway-db>.brain.db` |
 | `max_ltm_entries` | int | `10000` | Maximum long-term memory entries |
+| `ltm_eviction_grace_seconds` | int | `3600` | LTM rows written/accessed this recently are never capacity-evicted (negative = only the write's own second) |
+| `max_wm_entries_per_user` | int | `1000` | Per-user working-memory cap; lowest-value entries evicted, hot ones promoted to LTM first (negative = unbounded) |
 | `wm_grace_period_seconds` | int | `300` | Seconds to keep working memory after session ends |
 | `auto_flush_seconds` | int | `600` | Auto-flush interval for WM to LTM |
 | `consolidate_threshold` | float | `0.6` | Salience threshold for auto-promoting WM to LTM |
@@ -1140,7 +1141,7 @@ MQTT event ingest. Subscribes to topics and buffers events for the MQTT tool. Se
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable MQTT event ingest |
 | `broker_url` | string | — | MQTT broker URL. Required. Supports `${ENV_VAR}` |
-| `client_id` | string | `"conduit"` | MQTT client identifier |
+| `client_id` | string | unique `conduit-<host>-<random>` per process | MQTT client identifier. Set it explicitly only if it is unique per instance; two clients with the same ID disconnect each other |
 | `username` | string | `""` | MQTT username. Supports `${ENV_VAR}` |
 | `password` | string | `""` | MQTT password. Supports `${ENV_VAR}` |
 | `topics` | string array | — | Topic subscriptions (wildcards supported). Required |
@@ -1495,7 +1496,7 @@ Add web search and fetch tools with Brave API:
 }
 ```
 
-Requires: `BRAVE_API_KEY` environment variable. WebSearch can also use Anthropic's built-in search as a fallback if no Brave key is configured.
+Requires a Brave Search API key (here via `BRAVE_API_KEY`). Without one, WebSearch returns an error; there is no Anthropic-search fallback.
 
 ### SSH access
 
@@ -1514,8 +1515,8 @@ Enable the integrated SSH server:
 
 Before starting, run:
 ```bash
-./bin/gateway ssh-keys init
-./bin/gateway ssh-keys add ~/.ssh/id_ed25519.pub
+./bin/conduit ssh-keys init
+./bin/conduit ssh-keys add ~/.ssh/id_ed25519.pub
 ```
 
 ### Agent heartbeat with Telegram alerts
@@ -1600,7 +1601,35 @@ Enable custom skills from SKILL.md files:
 
 Each skill directory must contain a `SKILL.md` file. The skills system discovers executable scripts (.sh, .py, .js) and reference files in each skill directory. Skills are exposed to the AI as additional tools.
 
-Note: Skills integration is currently disabled in the tool registry pending a refactor (`registerAllTools` has the skill adapter registration commented out). The config infrastructure is in place for when it's re-enabled.
+#### `skills.gog` (built-in gog/email skill)
+
+The `gog` / `email` skills build `gog gmail ...` commands in Go rather than from SKILL.md. Their settings are optional. Any field you leave unset keeps its legacy default, so existing configs behave the same. Owner-account sends need human approval in the originating channel, and `owner_aliases` decides which identities count as the owner. Changing that list changes what is gated.
+
+```json
+"skills": {
+  "gog": {
+    "binary": "/usr/local/bin/gog",
+    "owner_account_env": "GOG_ACCOUNT",
+    "agent_account_env": "AGENT_ACCOUNT",
+    "owner_aliases": ["owner", "owner@example.com"],
+    "agent_aliases": ["agent", "agent@example.com"],
+    "env_files": ["~/.conduit-secrets.env"],
+    "cleanup_script": "scripts/hygiene-junk-sweep.sh"
+  }
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `binary` | `gog` resolved on `PATH` at startup | gog executable |
+| `owner_account_env` | `GOG_ACCOUNT` | Env var holding the owner's account. Only this expansion and the agent's are ever passed to `--account` |
+| `agent_account_env` | `JULES_ACCOUNT` | Env var holding the agent's own account |
+| `owner_aliases` | legacy built-in list | `account`/`from`/`inbox` values that select the owner (sends are approval-gated) |
+| `agent_aliases` | legacy built-in list | Values that select the agent account. Sends default to the agent |
+| `env_files` | `~/ocgo/.ocgo-secrets.env`, `~/.conduit-secrets.env` | Shell env files sourced before each command. The first one that exists wins. Relative paths resolve against `workspace.context_dir` |
+| `cleanup_script` | `scripts/hygiene-junk-sweep.sh` | Script run by the `cleanup` action. Relative paths resolve against `workspace.context_dir` |
+
+Discovered skills are registered in the tool registry as `skill_<name>` tools (`registerSkillTools`), plus per-action wrappers unless `generate_action_tools` is `false`.
 
 ### Vector/semantic search
 

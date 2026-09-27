@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	"conduit/internal/tools/types"
 
 	"gopkg.in/yaml.v3"
 )
@@ -238,10 +239,15 @@ func (im *InventoryManager) StartAutoRefresh(interval time.Duration) {
 		for {
 			select {
 			case <-ticker.C:
-				if err := im.Refresh(); err != nil {
-					// Log error but continue refreshing
-					fmt.Fprintf(os.Stderr, "inventory auto-refresh error: %v\n", err)
-				}
+				// conduit-31jg.73: a panicking refresh must neither crash the
+				// gateway nor stop the refresh loop.
+				func() {
+					defer types.RecoverPanic("SSH inventory auto-refresh", nil)
+					if err := im.Refresh(); err != nil {
+						// Log error but continue refreshing
+						fmt.Fprintf(os.Stderr, "inventory auto-refresh error: %v\n", err)
+					}
+				}()
 			case <-stopChan:
 				return
 			}

@@ -13,9 +13,9 @@ import (
 
 // mockChannelSender implements types.ChannelSender for testing
 type mockChannelSender struct {
-	sendError      error
-	sentMessages   []sentMessage
-	channelStatus  map[string]string
+	sendError        error
+	sentMessages     []sentMessage
+	channelStatus    map[string]string
 	availableTargets []string
 }
 
@@ -365,9 +365,9 @@ func TestMessageTool_SendMessage_SendError(t *testing.T) {
 
 func TestMessageTool_SendMessage_ErrorCategorization(t *testing.T) {
 	tests := []struct {
-		name          string
-		errMsg        string
-		expectedType  string
+		name         string
+		errMsg       string
+		expectedType string
 	}{
 		{"not found error", "channel not found", "invalid_parameter"},
 		{"invalid error", "invalid channel ID", "invalid_parameter"},

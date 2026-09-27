@@ -9,6 +9,16 @@ import (
 type migration struct {
 	Version int
 	SQL     string
+	// Fn, when set, runs after SQL inside the same transaction. It is for
+	// data migrations that depend on configuration (see migrationParams).
+	Fn func(tx *sql.Tx, p migrationParams) error
+}
+
+// migrationParams carries the configuration data migrations may depend on.
+type migrationParams struct {
+	// recencyWeight is the configured salience recency weight: the constant
+	// the pre-conduit-31jg.53 upsert baked into brain_ltm.salience.
+	recencyWeight float64
 }
 
 var migrations = []migration{
@@ -113,11 +123,27 @@ var migrations = []migration{
 	// inflating confidence.
 	{
 		Version: 8,
-		SQL: `ALTER TABLE brain_relationships ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;`,
+		SQL:     `ALTER TABLE brain_relationships ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;`,
+	},
+	// Migration 9 (conduit-31jg.53): brain_ltm.salience becomes BASE salience
+	// (no recency term); recency is computed at query time. Every row written
+	// by the legacy upsert/Get carried recency = 1.0, i.e. recencyWeight*1.0,
+	// so that constant is subtracted once. Rows that still hold the legacy
+	// flat insert value (0.5, plus REM boosts) get the same treatment: REM
+	// compares peak = base + recencyWeight against its thresholds, so for
+	// every row the peak equals the old stored value and REM decisions are
+	// unchanged. The version row makes the conversion run exactly once.
+	{
+		Version: 9,
+		SQL:     `SELECT 1;`,
+		Fn: func(tx *sql.Tx, p migrationParams) error {
+			_, err := tx.Exec(`UPDATE brain_ltm SET salience = salience - ?`, p.recencyWeight)
+			return err
+		},
 	},
 }
 
-func runMigrations(db *sql.DB) error {
+func runMigrations(db *sql.DB, p migrationParams) error {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS brain_migrations (
 		version INTEGER PRIMARY KEY,
 		applied_at DATETIME DEFAULT (datetime('now'))
@@ -139,6 +165,12 @@ func runMigrations(db *sql.DB) error {
 		if _, err := tx.Exec(m.SQL); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("migration %d failed: %w", m.Version, err)
+		}
+		if m.Fn != nil {
+			if err := m.Fn(tx, p); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("migration %d failed: %w", m.Version, err)
+			}
 		}
 		if _, err := tx.Exec("INSERT INTO brain_migrations (version) VALUES (?)", m.Version); err != nil {
 			tx.Rollback()

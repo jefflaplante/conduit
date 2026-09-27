@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"conduit/internal/ai"
-	"conduit/internal/approval"
 	"conduit/internal/channels"
 	"conduit/internal/protocol"
+	"conduit/internal/tools"
 	"conduit/internal/tools/types"
 )
 
@@ -53,133 +53,187 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 	// brain adapter scopes the parent's turn to). conduit-31jg.30
 	parentBrainUID := effectiveBrainUserID(ctx)
 
+	// Resolve model (explicit model wins; empty uses configured sub-agent
+	// default, falling back to the gateway default) and persist it with the
+	// skill filter: the TurnRunner re-reads the session inside the turn lock
+	// and takes the model override from its context (conduit-31jg.66).
+	modelToUse := g.getSubagentModel(model)
+	subContext := map[string]string{"model": modelToUse}
+	if len(skills) > 0 {
+		subContext["skill_filter"] = strings.Join(skills, ",")
+	}
+	if err := g.sessions.SetSessionContextBatch(session.Key, subContext); err != nil {
+		return "", fmt.Errorf("failed to configure sub-agent session: %w", err)
+	}
+	if session.Context == nil {
+		session.Context = make(map[string]string)
+	}
+	for k, v := range subContext {
+		session.Context[k] = v
+	}
+
+	spawn := subAgentSpawn{
+		task:             task,
+		parentSessionKey: parentSessionKey,
+		parentChannelID:  parentChannelID,
+		parentUserID:     parentUserID,
+		announce:         announce,
+	}
+
 	// Run the sub-agent in a goroutine
 	go func() {
 		// Use gateway lifecycle context, not request context.
 		// Sub-agents are fire-and-forget - they should outlive the parent request.
-		subCtx, cancel := deriveSubAgentContext(g.ctx, timeoutSeconds)
+		subCtx, cancel := deriveSubAgentContext(g.lifecycleCtx(), timeoutSeconds)
 		defer cancel()
-		subCtx = approval.WithNonInteractive(subCtx, "subagent") // conduit-31jg.43
 
 		// Own WM bucket + read-only fallback to the parent's WM. conduit-31jg.30
 		subCtx = withSubAgentBrainScope(subCtx, parentBrainUID, session.Key)
 
-		// Resolve model (explicit model wins; empty uses configured sub-agent
-		// default, falling back to the gateway default)
-		modelToUse := g.getSubagentModel(model)
-
-		// Set model context for prompt builder's context window calculations
-		if session.Context == nil {
-			session.Context = make(map[string]string)
-		}
-		session.Context["model"] = modelToUse
-
-		// Set skill filter if skills are provided
-		if len(skills) > 0 {
-			session.Context["skill_filter"] = strings.Join(skills, ",")
-		}
-
 		log.Printf("[SubAgent] Starting task: %s (session: %s, model: %s, announce: %v)", task, session.Key, modelToUse, announce)
 
-		response, err := g.ai.GenerateResponseWithTools(subCtx, session, task, "", modelToUse)
-		if err != nil {
-			log.Printf("[SubAgent] Error on %s: %v", session.Key, err)
-			// Store error in session for manager to query
-			errorMsg := fmt.Sprintf("Error: %v", err)
-			_, _ = g.sessions.AddMessage(session.Key, "assistant", errorMsg, nil)
-			// Announce failure if requested
-			if announce && parentChannelID != "" && parentUserID != "" {
-				g.announceToParent(parentChannelID, parentUserID, fmt.Sprintf("❌ Sub-agent failed: %v", err))
-			}
-			// Wake the parent session so it knows the sub-agent failed (even in silent mode)
-			if parentSessionKey != "" {
-				wakeErr := g.sendToSessionWakeWithSource(context.Background(), parentSessionKey, "", errorMsg, types.WakeSourceSubAgentFailed)
-				if wakeErr != nil {
-					log.Printf("[SubAgent] Failed to wake parent session %s on error: %v", parentSessionKey, wakeErr)
-				}
-			}
-			return
-		}
-
-		// bd-1k3o: a "successful" chain whose final answer is the empty-guard
-		// fallback is a silent death, not a completion — the model returned
-		// raw-empty twice and the guard substituted local text (2026-09-04
-		// RCA: sub-agent 6eb4bfe1 logged "Completed" while delivering the
-		// fallback). Route it through the error path so the parent gets
-		// WakeSourceSubAgentFailed instead of a fake result.
-		if ai.IsEmptyResponseFallback(response.GetContent()) {
-			err := fmt.Errorf("model returned empty responses (empty-guard fallback delivered); task not completed")
-			log.Printf("[SubAgent] Degenerate final (empty-guard fallback) on %s — routing to failure: %v", session.Key, err)
-			errorMsg := fmt.Sprintf("Error: %v", err)
-			_, _ = g.sessions.AddMessage(session.Key, "assistant", errorMsg, nil)
-			if announce && parentChannelID != "" && parentUserID != "" {
-				g.announceToParent(parentChannelID, parentUserID, fmt.Sprintf("❌ Sub-agent failed: %v", err))
-			}
-			if parentSessionKey != "" {
-				wakeErr := g.sendToSessionWakeWithSource(context.Background(), parentSessionKey, "", errorMsg, types.WakeSourceSubAgentFailed)
-				if wakeErr != nil {
-					log.Printf("[SubAgent] Failed to wake parent session %s on degenerate final: %v", parentSessionKey, wakeErr)
-				}
-			}
-			return
-		}
-
-		log.Printf("[SubAgent] Completed: %s", session.Key)
-
-		// Usage accounting is router-level since bd-27hs (GenerateResponseWithTools
-		// records it inside the turn lock); sub-agent path no longer records here.
-
-		// Store the result
-		_, _ = g.sessions.AddMessage(session.Key, "assistant", response.GetContent(), nil)
-
-		result := response.GetContent()
-
-		// Did we (the spawn path) post the raw result directly to the channel?
-		// This controls the wake_source tag we pass to the parent: if the human
-		// already saw the text, the parent LLM can safely stay silent; otherwise
-		// it must decide whether to surface the result.
-		var announced bool
-
-		// Announce result to channel if requested
-		if announce && parentUserID != "" {
-			if result != "" && !channels.IsSilentResponse(result) {
-				announceText := result
-				if len(announceText) > 3500 {
-					announceText = announceText[:3500] + "\n\n_(truncated)_"
-				}
-				// Resolve the parent's current channel from its session rather
-				// than relying on the captured parentChannelID snapshot — if the
-				// parent reconnected on a new channel since spawn time, this picks
-				// the live one.
-				channelID := g.resolveAnnounceChannelID(parentSessionKey, parentChannelID)
-				if channelID != "" {
-					g.announceToParent(channelID, parentUserID, announceText)
-					announced = true
-				} else {
-					log.Printf("[SubAgent] Cannot announce result for session %s: no live channel (captured=%q)",
-						parentSessionKey, parentChannelID)
-				}
-			}
-		}
-
-		// Wake the parent session so it can process sub-agent output autonomously.
-		// This works regardless of announce mode — the parent session always gets woken.
-		if parentSessionKey != "" && result != "" && !channels.IsSilentResponse(result) {
-			wakeResult := result
-			if len(wakeResult) > 3500 {
-				wakeResult = wakeResult[:3500] + "\n\n_(truncated)_"
-			}
-			wakeSource := types.WakeSourceSubAgentSilent
-			if announced {
-				wakeSource = types.WakeSourceSubAgentAnnounced
-			}
-			if wakeErr := g.sendToSessionWakeWithSource(context.Background(), parentSessionKey, "", wakeResult, wakeSource); wakeErr != nil {
-				log.Printf("[SubAgent] Failed to wake parent session %s: %v", parentSessionKey, wakeErr)
-			}
-		}
+		// conduit-31jg.66: run on the shared TurnRunner — task and result
+		// persisted inside the turn lock, the turn registered in
+		// ActiveRequests (/stop and the shutdown drain see it), usage/cost
+		// (incl. SideCallLedger) and compaction like every other turn.
+		// No channel/user: the sub-agent has no live human (conduit-31jg.43).
+		sink := &subAgentTurnSink{g: g, sessionKey: session.Key}
+		g.turns().Run(subCtx, TurnRequest{
+			Session:              session,
+			Text:                 task,
+			NonInteractiveSource: "subagent",
+		}, sink)
+		g.finishSubAgent(session.Key, spawn, sink.outcome)
 	}()
 
 	return session.Key, nil
+}
+
+// subAgentSpawn is what the spawn call captured for routing the result.
+type subAgentSpawn struct {
+	task             string
+	parentSessionKey string
+	parentChannelID  string
+	parentUserID     string
+	announce         bool
+}
+
+// subAgentOutcome is how a sub-agent turn ended: failed (err set) or
+// completed with result (possibly silent/empty).
+type subAgentOutcome struct {
+	err    error
+	result string
+}
+
+// subAgentTurnSink keeps the sub-agent's custom failure / degenerate-reply
+// routing on the TurnRunner (conduit-31jg.66). Finish runs inside the turn
+// lock, so the "Error: …" row the sessions tools read is written in
+// transcript order; the parent announcement and wake happen after the lock
+// is released (finishSubAgent).
+type subAgentTurnSink struct {
+	g          *Gateway
+	sessionKey string
+	outcome    subAgentOutcome
+}
+
+func (s *subAgentTurnSink) Queued(context.Context)                         {}
+func (s *subAgentTurnSink) Begin(context.Context) ai.StreamCallback        { return nil }
+func (s *subAgentTurnSink) Progress(string)                                {}
+func (s *subAgentTurnSink) ToolEvent(context.Context, tools.ToolEventInfo) {}
+
+func (s *subAgentTurnSink) Finish(_ context.Context, res *TurnResult) {
+	switch {
+	case res.Dropped:
+		s.outcome.err = fmt.Errorf("sub-agent did not start: %v", res.Err)
+	case res.Cancelled:
+		s.outcome.err = fmt.Errorf("sub-agent stopped: %v", res.Err)
+	case res.Err != nil:
+		s.outcome.err = res.Err
+	case ai.IsEmptyResponseFallback(res.Raw):
+		// bd-1k3o: a "successful" chain whose final answer is the
+		// empty-guard fallback is a silent death, not a completion — the
+		// model returned raw-empty twice and the guard substituted local
+		// text (2026-09-04 RCA: sub-agent 6eb4bfe1 logged "Completed" while
+		// delivering the fallback). Route it through the error path so the
+		// parent gets WakeSourceSubAgentFailed instead of a fake result.
+		s.outcome.err = fmt.Errorf("model returned empty responses (empty-guard fallback delivered); task not completed")
+		log.Printf("[SubAgent] Degenerate final (empty-guard fallback) on %s — routing to failure: %v", s.sessionKey, s.outcome.err)
+	default:
+		// The runner already stored the reply (inside the lock).
+		s.outcome.result = res.Raw
+		return
+	}
+	// Store the error in the session for the manager to query.
+	if _, err := s.g.sessions.AddMessage(s.sessionKey, "assistant", fmt.Sprintf("Error: %v", s.outcome.err), nil); err != nil {
+		log.Printf("[SubAgent] Failed to store error for %s: %v", s.sessionKey, err)
+	}
+}
+
+// finishSubAgent announces the sub-agent's outcome to the parent channel
+// (when requested) and wakes the parent session.
+func (g *Gateway) finishSubAgent(sessionKey string, sp subAgentSpawn, out subAgentOutcome) {
+	if out.err != nil {
+		log.Printf("[SubAgent] Error on %s: %v", sessionKey, out.err)
+		errorMsg := fmt.Sprintf("Error: %v", out.err)
+		// Announce failure if requested
+		if sp.announce && sp.parentChannelID != "" && sp.parentUserID != "" {
+			g.announceToParent(sp.parentChannelID, sp.parentUserID, fmt.Sprintf("❌ Sub-agent failed: %v", out.err))
+		}
+		// Wake the parent session so it knows the sub-agent failed (even in silent mode)
+		if sp.parentSessionKey != "" {
+			if wakeErr := g.sendToSessionWakeWithSource(context.Background(), sp.parentSessionKey, "", errorMsg, types.WakeSourceSubAgentFailed); wakeErr != nil {
+				log.Printf("[SubAgent] Failed to wake parent session %s on error: %v", sp.parentSessionKey, wakeErr)
+			}
+		}
+		return
+	}
+
+	log.Printf("[SubAgent] Completed: %s", sessionKey)
+	result := out.result
+
+	// Did we (the spawn path) post the raw result directly to the channel?
+	// This controls the wake_source tag we pass to the parent: if the human
+	// already saw the text, the parent LLM can safely stay silent; otherwise
+	// it must decide whether to surface the result.
+	var announced bool
+
+	// Announce result to channel if requested
+	if sp.announce && sp.parentUserID != "" {
+		if result != "" && !channels.IsSilentResponse(result) {
+			announceText := result
+			if len(announceText) > 3500 {
+				announceText = announceText[:3500] + "\n\n_(truncated)_"
+			}
+			// Resolve the parent's current channel from its session rather
+			// than relying on the captured parentChannelID snapshot — if the
+			// parent reconnected on a new channel since spawn time, this picks
+			// the live one.
+			channelID := g.resolveAnnounceChannelID(sp.parentSessionKey, sp.parentChannelID)
+			if channelID != "" {
+				g.announceToParent(channelID, sp.parentUserID, announceText)
+				announced = true
+			} else {
+				log.Printf("[SubAgent] Cannot announce result for session %s: no live channel (captured=%q)",
+					sp.parentSessionKey, sp.parentChannelID)
+			}
+		}
+	}
+
+	// Wake the parent session so it can process sub-agent output autonomously.
+	// This works regardless of announce mode — the parent session always gets woken.
+	if sp.parentSessionKey != "" && result != "" && !channels.IsSilentResponse(result) {
+		wakeResult := result
+		if len(wakeResult) > 3500 {
+			wakeResult = wakeResult[:3500] + "\n\n_(truncated)_"
+		}
+		wakeSource := types.WakeSourceSubAgentSilent
+		if announced {
+			wakeSource = types.WakeSourceSubAgentAnnounced
+		}
+		if wakeErr := g.sendToSessionWakeWithSource(context.Background(), sp.parentSessionKey, "", wakeResult, wakeSource); wakeErr != nil {
+			log.Printf("[SubAgent] Failed to wake parent session %s: %v", sp.parentSessionKey, wakeErr)
+		}
+	}
 }
 
 // resolveAnnounceChannelID returns the parent session's current ChannelID if it

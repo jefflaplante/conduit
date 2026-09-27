@@ -1,0 +1,4 @@
+{
+  "resp": null,
+  "err": "API error: 400 - {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"max_tokens: required\"}}"
+}

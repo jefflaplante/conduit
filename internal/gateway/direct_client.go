@@ -236,9 +236,16 @@ type directTurnSink struct {
 	requestID string
 }
 
-// Queued: the TUI never had a busy-ack; the queued turn's StreamStart arrives
-// once the previous turn finished.
-func (s *directTurnSink) Queued(context.Context) {}
+// Queued tells the TUI the message is waiting behind the session's running
+// turn (conduit-31jg.66); the turn's StreamStart arrives once that finished.
+func (s *directTurnSink) Queued(context.Context) {
+	s.c.send(tui.CommandResponseMsg{
+		SessionKey: s.session.Key,
+		RequestID:  s.requestID,
+		Command:    tui.QueuedNoticeCommand,
+		Response:   queuedNoticeText,
+	})
+}
 
 func (s *directTurnSink) Begin(context.Context) ai.StreamCallback {
 	s.c.send(tui.StreamStartMsg{SessionKey: s.session.Key, RequestID: s.requestID})

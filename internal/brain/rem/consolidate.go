@@ -107,8 +107,10 @@ func (r *REMCycle) promoteHighSalienceEntries(ctx context.Context, result *Conso
 // mergeDuplicates detects and merges duplicate keys in LTM
 func (r *REMCycle) mergeDuplicates(ctx context.Context, result *ConsolidationResult, dryRun bool) error {
 	// Query all LTM entries
+	// Peak salience: relative order is unchanged, and the archived value keeps
+	// its historical meaning. conduit-31jg.53
 	rows, err := r.db.Query(`
-		SELECT key, value, salience, access_count
+		SELECT key, value, ` + r.peakSalienceSQL() + `, access_count
 		FROM brain_ltm
 		ORDER BY key
 	`)
@@ -212,12 +214,13 @@ func (r *REMCycle) applySalienceDecay(ctx context.Context, result *Consolidation
 		return nil
 	}
 
-	// Apply decay
+	// Apply decay. The floor is peak salience 0.0, i.e. base = -recencyWeight
+	// (conduit-31jg.53: the column stores base salience).
 	res, err := r.db.Exec(`
 		UPDATE brain_ltm
-		SET salience = MAX(0.0, salience - ?)
+		SET salience = MAX(0.0 - ?, salience - ?)
 		WHERE accessed_at < ?
-	`, r.config.SalienceDecayRate, sevenDaysAgo)
+	`, r.recencyWeight(), r.config.SalienceDecayRate, sevenDaysAgo)
 	if err != nil {
 		return fmt.Errorf("apply decay: %w", err)
 	}
@@ -250,12 +253,13 @@ func (r *REMCycle) boostRecentlyAccessed(ctx context.Context, result *Consolidat
 		return nil
 	}
 
-	// Apply boost (cap at 1.0)
+	// Apply boost, capped at peak salience 1.0, i.e. base = 1 - recencyWeight
+	// (conduit-31jg.53: the column stores base salience).
 	res, err := r.db.Exec(`
 		UPDATE brain_ltm
-		SET salience = MIN(1.0, salience + 0.05)
+		SET salience = MIN(1.0 - ?, salience + 0.05)
 		WHERE accessed_at >= ?
-	`, oneDayAgo)
+	`, r.recencyWeight(), oneDayAgo)
 	if err != nil {
 		return fmt.Errorf("apply boost: %w", err)
 	}

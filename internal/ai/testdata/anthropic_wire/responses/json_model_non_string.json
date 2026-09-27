@@ -1,0 +1,12 @@
+{
+  "resp": {
+    "content": "x",
+    "usage": {
+      "prompt_tokens": 1,
+      "completion_tokens": 1,
+      "total_tokens": 2
+    },
+    "finish_reason": "stop",
+    "stop_reason": "end_turn"
+  }
+}

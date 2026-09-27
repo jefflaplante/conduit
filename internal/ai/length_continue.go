@@ -8,18 +8,23 @@ import (
 	"time"
 )
 
-// maxLengthAutoContinues bounds the auto-continue loop (bd-1k3o parity with
-// the tool loop in internal/tools/execution.go).
+// maxLengthAutoContinues bounds the auto-continue loop (bd-1k3o). It is the
+// single budget for every round trip: the router's first call and each
+// tool-loop round (internal/tools/execution.go roundTrip) both go through
+// ContinueLengthTruncated (conduit-31jg.51).
 const maxLengthAutoContinues = 2
 
 // lengthTruncatedMarker is appended when a final is still truncated after
-// the continue budget is spent. Must match the tool loop's marker.
+// the continue budget is spent.
 const lengthTruncatedMarker = "\n\n_(truncated at max_tokens — ask me to continue if this cuts off)_"
 
 // ContinueLengthTruncated applies the bd-1k3o length-truncation guard to a
-// router-level (first round trip) response. conduit-31jg.11: the guard only
-// ran inside the tool loop after tool execution, so a turn whose FIRST reply
-// hit max_tokens was delivered truncated as if complete.
+// round trip's response. It is shared by the router's first round trip and
+// every tool-loop round (ExecutionEngine.roundTrip); the tool loop no longer
+// has an auto-continue loop of its own (conduit-31jg.51). History:
+// conduit-31jg.11 — the guard originally ran only inside the tool loop after
+// tool execution, so a turn whose FIRST reply hit max_tokens was delivered
+// truncated as if complete.
 //
 // While resp.FinishReason == "length" and there are no tool calls, the
 // fragment is appended to req.Messages as an assistant turn followed by a

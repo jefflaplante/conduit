@@ -105,12 +105,12 @@ Complete this checklist to verify the authentication system is production-ready 
 ### Token Generation
 
 - [x] **Tokens use cryptographically secure random generation**
-  - Code location: `pkg/tokens/generator.go`
+  - Code location: `internal/tokens/generator.go`
   - Implementation: `crypto/rand`
   - Result: ✓ PASS
 
 - [x] **Token entropy is sufficient (≥256 bits)**
-  - Code location: `pkg/tokens/generator.go`
+  - Code location: `internal/tokens/generator.go`
   - Actual: 32 bytes = 256 bits
   - Result: ✓ PASS
 

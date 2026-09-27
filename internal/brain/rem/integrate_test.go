@@ -368,11 +368,11 @@ func TestIntegrate_JaccardThresholdVer60(t *testing.T) {
 	// - stopwords.a vs low.similarity (similarity too low: 2/6 = 33% < 60%)
 	// - stopwords.a vs moderate.similarity (2/6 = 33% < 60%)
 	// - low.similarity vs moderate.similarity (2/6 = 33% < 60%)
-	
+
 	// Should create relationships for:
 	// - stopwords.b (100% similarity with stopwords.a)
 	// - high.similarity vs low.similarity (3/4 = 75% >= 60%)
-	
+
 	// Expected relationships: 2
 	assert.GreaterOrEqual(t, result.RelationshipsCreated, 1, "Should create at least 1 relationship for high similarity")
 
@@ -439,7 +439,7 @@ func TestIntegrate_NamespacePairCap(t *testing.T) {
 		key := fmt.Sprintf("large.namespace.entry%03d", i)
 		_, err := rem.db.Exec(`
 			UPDATE brain_ltm
-			SET salience = 0.7
+			SET salience = 0.7 - 0.4 -- peak 0.7
 			WHERE key = ?
 		`, key)
 		require.NoError(t, err)
@@ -464,9 +464,9 @@ func TestIntegrate_NamespacePairCap(t *testing.T) {
 	if rows.Next() {
 		require.NoError(t, rows.Scan(&count))
 	}
-	
+
 	// Should be capped, not the full 4,950 pairs
-	assert.LessOrEqual(t, count, namespacePairCap, 
+	assert.LessOrEqual(t, count, namespacePairCap,
 		"Namespace relationships should be capped at namespacePairCap")
 	assert.Greater(t, count, 0, "Should have created at least some namespace relationships")
 
@@ -483,7 +483,7 @@ func TestIntegrate_NamespaceSalienceGate(t *testing.T) {
 
 	// Create entries in the same namespace with varying salience
 	// Some low salience (< 0.5), some high salience (>= 0.5)
-	
+
 	// Low-salience entries
 	lowSalienceKeys := []string{"salience.low1", "salience.low2", "salience.low3"}
 	// Values are distinct so token-overlap (Jaccard) does not create edges;
@@ -508,7 +508,7 @@ func TestIntegrate_NamespaceSalienceGate(t *testing.T) {
 	for _, key := range lowSalienceKeys {
 		_, err := rem.db.Exec(`
 			UPDATE brain_ltm
-			SET salience = 0.3
+			SET salience = 0.3 - 0.4 -- peak 0.3; column = base (conduit-31jg.53)
 			WHERE key = ?
 		`, key)
 		require.NoError(t, err)
@@ -518,7 +518,7 @@ func TestIntegrate_NamespaceSalienceGate(t *testing.T) {
 	for _, key := range highSalienceKeys {
 		_, err := rem.db.Exec(`
 			UPDATE brain_ltm
-			SET salience = 0.7
+			SET salience = 0.7 - 0.4 -- peak 0.7
 			WHERE key = ?
 		`, key)
 		require.NoError(t, err)
@@ -568,7 +568,7 @@ func TestIntegrate_NamespaceSalienceGate(t *testing.T) {
 				isLowB = true
 			}
 		}
-		
+
 		// If both are low-salience, this is a violation of the salience gate
 		if isLowA && isLowB {
 			t.Errorf("Found namespace relationship (confidence=0.7) between two low-salience entries: %s ↔ %s", r.KeyA, r.KeyB)
@@ -594,6 +594,6 @@ func TestIntegrate_NamespaceSalienceGate(t *testing.T) {
 		}
 	}
 
-	assert.True(t, hasHighSalienceRelation, 
+	assert.True(t, hasHighSalienceRelation,
 		"Should have at least one relationship involving a high-salience entry")
 }

@@ -364,7 +364,7 @@ func (s stubHooks) AfterReflection(context.Context, *sessions.Session) {}
 // transcript and may not be the last row; it must be sent exactly once.
 func TestTurnRunner_WakeMessageNotSentTwice(t *testing.T) {
 	gw, store, p := newTurnTestGateway(t)
-	gw.ctx = context.Background()
+	gw.setLifecycleCtx(context.Background())
 	sess, _ := store.GetOrCreateSession("42", "telegram")
 	if _, err := store.AddMessage(sess.Key, "user", "ping from sibling", map[string]string{"source": "inter_session"}); err != nil {
 		t.Fatal(err)

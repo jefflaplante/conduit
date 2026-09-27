@@ -28,7 +28,7 @@ make channel-deps
 
 ```bash
 # Run with test config (no API keys needed)
-./bin/gateway --config config.test.json --verbose
+./bin/conduit --config config.test.json --verbose
 
 # Run with Telegram adapter
 export TELEGRAM_BOT_TOKEN="your_bot_token"
@@ -36,7 +36,7 @@ make run-telegram
 
 # Run with full AI integration
 export ANTHROPIC_API_KEY="your_api_key"
-./bin/gateway --config config.json --verbose
+./bin/conduit --config config.json --verbose
 ```
 
 ## First-Time Setup
@@ -48,10 +48,10 @@ For a complete new installation:
 make init
 
 # Create your first authentication token
-./bin/gateway token create --client-name "my-client" --expires-in "1y"
+./bin/conduit token create --client-name "my-client" --expires-in "1y"
 
 # Start the gateway
-./bin/gateway server --verbose
+./bin/conduit server --verbose
 ```
 
 ## Environment Variables

@@ -25,6 +25,8 @@ type Client struct {
 
 // NewClient creates a new MQTT client (does not connect yet).
 func NewClient(cfg config.MQTTConfig, onMessage func(Event)) *Client {
+	// conduit-31jg.40: resolve a unique ID once so reconnects reuse it.
+	cfg.ClientID = cfg.EffectiveClientID()
 	return &Client{
 		cfg:       cfg,
 		onMessage: onMessage,

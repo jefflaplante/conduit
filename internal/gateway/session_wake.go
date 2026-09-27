@@ -79,7 +79,7 @@ func (g *Gateway) wakeSession(sessionKey string) {
 		"session_key", sessionKey, "wake_depth", depth+1, "wake_source", wakeSource)
 
 	// Derive a context from the gateway lifecycle context (not a request context).
-	wakeCtx, cancel := context.WithTimeout(g.ctx, 5*time.Minute)
+	wakeCtx, cancel := context.WithTimeout(g.lifecycleCtx(), 5*time.Minute)
 	defer cancel()
 
 	// conduit-31jg.35: run through the shared TurnRunner. The wake message is

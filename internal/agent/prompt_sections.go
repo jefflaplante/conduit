@@ -597,7 +597,7 @@ At session end or handoff, call ` + "`Brain(action=\"consolidate\")`" + ` to aut
 // priority (lower = more important) and token budget weight.
 type situationCategory struct {
 	header   string
-	priority int // 1=highest, 6=lowest
+	priority int // 1=highest, 7=lowest
 	entries  []*brain.Entry
 }
 
@@ -690,8 +690,11 @@ func (pb *PromptBuilder) querySituationCategories(ctx context.Context) []*situat
 		{"sense.tasks.", "Active Work", 2},
 		{"sense.alerts.", "Recent Alerts", 3},
 		{"reflect.learned.", "Learned Patterns", 4},
-		{"reflect.clusters.", "Pattern Clusters", 5},
-		{"sense.briefing.", "Daily Briefing", 6},
+		// conduit-31jg.54: SPAR pivot/circular patterns that recurred across
+		// sessions, consolidated nightly by REM Reflect.
+		{"reflect.tools.", "Tool Pitfalls", 5},
+		{"reflect.clusters.", "Pattern Clusters", 6},
+		{"sense.briefing.", "Daily Briefing", 7},
 	}
 
 	categories := make([]*situationCategory, 0, len(defs))

@@ -1,6 +1,6 @@
 # Conduit Go Gateway
 
-A clean, high-performance rewrite of the Conduit gateway core in Go, with native channel adapters, vector database integration, and a pluggable tool/skill architecture.
+A rewrite of the Conduit gateway core in Go (single static binary, pure-Go SQLite), with native channel adapters, vector database integration, and a pluggable tool/skill architecture.
 
 ## Architecture
 
@@ -40,16 +40,6 @@ A clean, high-performance rewrite of the Conduit gateway core in Go, with native
 └───────────────────────────────────────────────────────────────┘
 ```
 
-## Performance
-
-| Metric | TypeScript | Go | Improvement |
-|--------|------------|----|-----------|
-| Memory (idle) | 150MB | 80MB | **47% less** |
-| Memory (1000 sessions) | 300MB | 120MB | **60% less** |
-| Startup time | 8s | 2s | **75% faster** |
-| Message latency | 150ms | 50ms | **67% faster** |
-| Concurrent connections | 1,000 | 10,000+ | **10x more** |
-
 ## Quick Start
 
 ```bash
@@ -57,13 +47,13 @@ A clean, high-performance rewrite of the Conduit gateway core in Go, with native
 make build
 
 # Create auth token
-./bin/gateway token create --client-name "my-client"
+./bin/conduit token create --client-name "my-client"
 
 # Start server
-./bin/gateway server
+./bin/conduit server
 
 # Launch terminal UI
-./bin/gateway tui --token "conduit_v1_..."
+./bin/conduit tui --token "conduit_v1_..."
 ```
 
 See [Getting Started](reference/getting-started.md) for detailed setup instructions.
@@ -85,7 +75,7 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **WebSocket API** — Real-time bidirectional communication
 
 ### Search & Memory
-- **[Brain (Cognitive Memory)](reference/brain.md)** — Tiered memory system: long-term (SQLite), working (per-session), and scratchpad (LIFO stack). Salience-scored with configurable weights, auto-promotion, and sub-agent working memory sharing. **Eliminates context window poisoning** — instead of dumping entire files into the prompt to retrieve a single fact, Brain returns just the fact (30 bytes vs. 12KB+). This dramatically reduces token waste, lowers cost, and keeps the context window clear for actual reasoning — especially critical for smaller models (Haiku, local quantized) where every token counts
+- **[Brain (Cognitive Memory)](reference/brain.md)** — Tiered memory system: long-term (SQLite), working (in-process, per user), and scratchpad (LIFO stack). Salience-scored with configurable weights, auto-promotion, and sub-agent working memory sharing. **Eliminates context window poisoning** — instead of dumping entire files into the prompt to retrieve a single fact, Brain returns just the fact (30 bytes vs. 12KB+). This dramatically reduces token waste, lowers cost, and keeps the context window clear for actual reasoning — especially critical for smaller models (Haiku, local quantized) where every token counts
 - **[REM Sleep Cycle](reference/brain.md#rem-sleep-cycle)** — A 5-phase memory consolidation process inspired by biological sleep. Phases: **Triage** (identify valuable working memory), **Consolidation** (promote high-value entries to LTM), **Pruning** (evict stale/low-value entries), **Integration** (cross-reference with workspace files), and **Grooming** (staleness tracking across all sources). Runs on a configurable schedule to keep long-term memory lean and relevant
 - **[SPAR Reflect](reference/spar.md)** — Cross-session learning loop. Tool outcomes are captured automatically on every execution, session summaries are written on idle/farewell/context budget, and the nightly REM Reflect phase clusters patterns (e.g., "WebFetch fails frequently") and feeds them back into the agent's Situation Awareness prompt section
 - **FTS5 Full-Text Search** — SQLite-based document, message, and brain LTM search

@@ -48,11 +48,11 @@ func (m *Manager) SetApprover(a Approver) {
 
 // isOwnerEmailSend reports whether this call would send mail as the owner.
 // Reads/searches/lists of the owner inbox are intentionally not gated.
-func isOwnerEmailSend(skill Skill, action string, args map[string]interface{}) bool {
+func (e *Executor) isOwnerEmailSend(skill Skill, action string, args map[string]interface{}) bool {
 	if skill.Name != "email" && skill.Name != "gog" {
 		return false
 	}
-	return normalizeAction(action) == "send" && gogSendUsesOwner(args)
+	return normalizeAction(action) == "send" && e.gog.sendUsesOwner(args)
 }
 
 // gateOwnerSend diverts owner-account email sends to human approval
@@ -60,12 +60,12 @@ func isOwnerEmailSend(skill Skill, action string, args map[string]interface{}) b
 // should run normally. When gated, the returned result is what the model
 // sees; the send itself happens only if and when the human approves.
 func (e *Executor) gateOwnerSend(ctx context.Context, skill Skill, action string, args map[string]interface{}) (*ExecutionResult, bool) {
-	if !isOwnerEmailSend(skill, action, args) {
+	if !e.isOwnerEmailSend(skill, action, args) {
 		return nil, false
 	}
 	// Validate before prompting a human about a request that cannot run.
 	for _, key := range []string{"account", "inbox"} {
-		if err := validateAccountArg(args, key); err != nil {
+		if err := e.gog.validateAccountArg(args, key); err != nil {
 			return &ExecutionResult{Success: false, Error: fmt.Sprintf("invalid arguments for action %s: %v", action, err)}, true
 		}
 	}
@@ -91,7 +91,7 @@ func (e *Executor) gateOwnerSend(ctx context.Context, skill Skill, action string
 	subject, _ := frozen["subject"].(string)
 	body, _ := frozen["body"].(string)
 	identity, _ := frozen["account"].(string)
-	if identity == "" || isJulesAccount(identity) {
+	if identity == "" || e.gog.isAgentAlias(identity) {
 		identity, _ = frozen["from"].(string)
 	}
 

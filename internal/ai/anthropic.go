@@ -16,6 +16,7 @@ import (
 	"conduit/internal/auth/oauthflow"
 	"conduit/internal/config"
 	"conduit/internal/httpsafe"
+	"conduit/internal/models"
 )
 
 // AnthropicProvider implements the Anthropic API
@@ -109,13 +110,18 @@ func (a *AnthropicProvider) Name() string {
 	return a.name
 }
 
+// claudeCodeIdentity is the system block OAuth (Pro/Max subscription)
+// requests must start with.
+const claudeCodeIdentity = "You are Claude Code, Anthropic's official CLI for Claude."
+
 // buildMessagesRequest builds the Messages API request body for req and
 // returns it with the resolved model. conduit-31jg.12: this is the ONE request
 // builder for GenerateResponse and GenerateResponseStreaming — the streaming
 // path used to hand-roll its own body and drifted (hardcoded max_tokens, no
 // cache breakpoints, mid-conversation system messages dropped). Streaming
-// callers add "stream": true to the returned map.
-func (a *AnthropicProvider) buildMessagesRequest(req *GenerateRequest) (map[string]interface{}, string) {
+// callers set Stream on the returned request. conduit-31jg.36: typed
+// (models.MessagesRequest) instead of map[string]interface{}.
+func (a *AnthropicProvider) buildMessagesRequest(req *GenerateRequest) (*models.MessagesRequest, string) {
 	// Determine which model to use
 	modelToUse := a.model
 	if req.Model != "" {
@@ -129,16 +135,10 @@ func (a *AnthropicProvider) buildMessagesRequest(req *GenerateRequest) (map[stri
 		maxTokens = defaultChainMaxTokens
 	}
 
-	// Build messages, injecting Claude Code identity for OAuth
-	messages := req.Messages
-	var systemBlocks []map[string]interface{}
-
+	var systemBlocks []models.ContentBlock
 	if a.isOAuth {
 		// OAuth requires Claude Code identity as first system block
-		systemBlocks = append(systemBlocks, map[string]interface{}{
-			"type": "text",
-			"text": "You are Claude Code, Anthropic's official CLI for Claude.",
-		})
+		systemBlocks = append(systemBlocks, models.TextBlock(claudeCodeIdentity))
 	}
 
 	// Extract ALL system messages from the array and consolidate into system blocks.
@@ -151,13 +151,10 @@ func (a *AnthropicProvider) buildMessagesRequest(req *GenerateRequest) (map[stri
 	staticEnd := len(systemBlocks) - 1
 	prefixOpen := true
 	var filteredMessages []ChatMessage
-	for _, msg := range messages {
+	for _, msg := range req.Messages {
 		if msg.Role == "system" {
 			for _, blk := range systemMessageBlocks(msg) {
-				systemBlocks = append(systemBlocks, map[string]interface{}{
-					"type": "text",
-					"text": blk.Text,
-				})
+				systemBlocks = append(systemBlocks, models.TextBlock(blk.Text))
 				if blk.Dynamic {
 					prefixOpen = false
 				}
@@ -170,38 +167,31 @@ func (a *AnthropicProvider) buildMessagesRequest(req *GenerateRequest) (map[stri
 			filteredMessages = append(filteredMessages, msg)
 		}
 	}
-	messages = filteredMessages
-
-	// Convert messages to Anthropic format (handles tool results)
-	anthropicMessages := a.convertMessagesToAnthropic(messages)
-
-	anthropicReq := map[string]interface{}{
-		"model":      modelToUse,
-		"max_tokens": maxTokens,
-		"messages":   anthropicMessages,
+	body := &models.MessagesRequest{
+		Model:     modelToUse,
+		MaxTokens: maxTokens,
+		// Convert messages to Anthropic format (handles tool results)
+		Messages: a.convertMessagesToAnthropic(filteredMessages),
 	}
 
-	// Add tools if provided (with OAuth name mapping if needed)
-	var convertedTools []interface{}
+	// Add tools if provided (OAuth keeps only Claude Code tool names). An
+	// empty result is omitted from the wire (omitempty).
 	if len(req.Tools) > 0 {
-		convertedTools = a.convertToolsToAnthropic(req.Tools)
-		if len(convertedTools) > 0 {
-			anthropicReq["tools"] = convertedTools
-		}
+		body.Tools = a.convertToolsToAnthropic(req.Tools)
 	}
 
 	// Apply cache breakpoints BEFORE serializing the system prompt:
 	// conduit-3dru — previously markers were added after API-key auth had
 	// already flattened systemBlocks to a plain string, silently dropping
 	// the system breakpoint (the largest cacheable prefix) for API-key users.
-	a.addCacheBreakpoints(convertedTools, systemBlocks, staticEnd, anthropicMessages, modelToUse)
+	a.addCacheBreakpoints(body.Tools, systemBlocks, staticEnd, body.Messages, modelToUse)
 
 	// Detect whether any system block now carries a cache marker; if so the
 	// block-array form must be preserved even for API-key auth, because
 	// cache_control cannot be expressed in the plain-string system form.
 	systemHasCacheMarker := false
 	for _, block := range systemBlocks {
-		if _, ok := block["cache_control"]; ok {
+		if block.CacheControl != nil {
 			systemHasCacheMarker = true
 			break
 		}
@@ -210,41 +200,44 @@ func (a *AnthropicProvider) buildMessagesRequest(req *GenerateRequest) (map[stri
 	// Add system prompt - as array for OAuth, string for API key
 	if len(systemBlocks) > 0 {
 		if a.isOAuth || systemHasCacheMarker {
-			anthropicReq["system"] = systemBlocks
+			body.System = &models.SystemPrompt{Blocks: systemBlocks}
 		} else {
 			// For API key auth without cache markers, use simple string format
 			var systemText string
 			for _, block := range systemBlocks {
-				if text, ok := block["text"].(string); ok {
-					if systemText != "" {
-						systemText += "\n\n"
-					}
-					systemText += text
+				if systemText != "" {
+					systemText += "\n\n"
 				}
+				systemText += block.Text
 			}
-			anthropicReq["system"] = systemText
+			body.System = &models.SystemPrompt{Text: systemText}
 		}
 	}
 
-	return anthropicReq, modelToUse
+	return body, modelToUse
 }
 
-// newMessagesHTTPRequest serializes body and builds the POST to
+// marshalMessagesRequest serializes the request body once per call, so every
+// retry attempt sends the identical bytes (conduit-31jg.46).
+func marshalMessagesRequest(body *models.MessagesRequest) ([]byte, error) {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	return b, nil
+}
+
+// newMessagesHTTPRequest builds the POST of the serialized body to
 // {baseURL}/v1/messages with auth headers. conduit-31jg.12: shared by both
 // paths — streaming used to hardcode https://api.anthropic.com (ignoring a
 // configured base_url/proxy) and read a.apiKey without oauthMu.
-func (a *AnthropicProvider) newMessagesHTTPRequest(ctx context.Context, body map[string]interface{}, stream bool) (*http.Request, error) {
+func (a *AnthropicProvider) newMessagesHTTPRequest(ctx context.Context, body []byte, stream bool) (*http.Request, error) {
 	accept := "application/json"
 	if stream {
 		accept = "text/event-stream"
 	}
 
-	reqBody, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.baseURL+"/v1/messages", bytes.NewBuffer(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.baseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -281,37 +274,37 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 	}
 
 	// conduit-31jg.12: shared with GenerateResponseStreaming.
-	anthropicReq, modelToUse := a.buildMessagesRequest(req)
+	body, modelToUse := a.buildMessagesRequest(req)
+	payload, err := marshalMessagesRequest(body)
+	if err != nil {
+		return nil, err
+	}
 	// conduit-31jg.46: bounded, jittered retry for 429/529/5xx honouring
 	// retry-after and the ctx deadline.
-	resp, err := a.postMessagesWithRetry(ctx, anthropicReq)
+	resp, err := a.postMessagesWithRetry(ctx, payload)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var anthropicResp map[string]interface{}
+	var anthropicResp models.MessagesResponse
 	if err := json.NewDecoder(httpsafe.LimitReader(resp.Body, providerResponseBodyLimit)).Decode(&anthropicResp); err != nil { // conduit-31jg.70
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	// Log the model from API response (confirms what Anthropic actually used)
-	respModel := ""
-	if m, ok := anthropicResp["model"].(string); ok {
-		respModel = m
-	}
-
-	// Parity check: requested vs served model. conduit-31jg.16: LOG ONLY.
-	// The old check split on "-2025" (so 2024/2026 snapshots behind an alias
-	// looked like a mismatch) and replaced the real reply — content and tool
-	// calls — with a warning string returned as a success.
+	// Parity check: requested vs served model (what Anthropic actually
+	// used). conduit-31jg.16: LOG ONLY. The old check split on "-2025" (so
+	// 2024/2026 snapshots behind an alias looked like a mismatch) and
+	// replaced the real reply — content and tool calls — with a warning
+	// string returned as a success.
+	respModel := anthropicResp.Model
 	if modelToUse != "" && respModel != "" && !anthropicModelsMatch(modelToUse, respModel) {
 		log.Printf("[Anthropic] WARNING: model mismatch: requested %q, served %q — keeping the response (conduit-31jg.16)", modelToUse, respModel)
 	}
 
 	// Extract content and tool calls from Anthropic response format
-	content, toolCalls := a.parseAnthropicContent(anthropicResp)
-	usage := a.parseAnthropicUsage(anthropicResp)
+	content, toolCalls := a.parseAnthropicContent(&anthropicResp)
+	usage := a.parseAnthropicUsage(anthropicResp.Usage)
 
 	// Log cache statistics for debugging and monitoring
 	if usage.CacheCreationInputTokens > 0 || usage.CacheReadInputTokens > 0 {
@@ -333,8 +326,7 @@ func (a *AnthropicProvider) GenerateResponse(ctx context.Context, req *GenerateR
 	}
 	// conduit-31jg.11: map stop_reason so the bd-1k3o length guard, refusal
 	// handling and truncated-tool_use dropping work for Anthropic too.
-	stopReason, _ := anthropicResp["stop_reason"].(string)
-	applyAnthropicStopReason(result, stopReason, lastContentBlockType(anthropicResp) == "tool_use")
+	applyAnthropicStopReason(result, anthropicResp.StopReason, lastContentBlockType(&anthropicResp) == models.BlockToolUse)
 	return result, nil
 }
 
@@ -357,7 +349,7 @@ func mapAnthropicStopReason(stopReason string) string {
 	case "pause_turn":
 		// Only produced when Anthropic server tools (web_search_2025xxxx,
 		// etc.) run a long turn. Conduit sends only custom tools
-		// (convertToolsToAnthropic) and the map-based parser does not keep
+		// (convertToolsToAnthropic) and the response parser does not keep
 		// server_tool_use blocks, so the paused turn cannot be faithfully
 		// resent to resume it. Treat it as a final answer.
 		return "stop"
@@ -413,69 +405,51 @@ func applyAnthropicStopReason(resp *GenerateResponse, stopReason string, lastBlo
 
 // lastContentBlockType returns the type of the final content block in a
 // non-streaming Messages API response, or "" if unavailable.
-func lastContentBlockType(resp map[string]interface{}) string {
-	blocks, ok := resp["content"].([]interface{})
-	if !ok || len(blocks) == 0 {
+func lastContentBlockType(resp *models.MessagesResponse) string {
+	if len(resp.Content) == 0 {
 		return ""
 	}
-	last, ok := blocks[len(blocks)-1].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	t, _ := last["type"].(string)
-	return t
+	return resp.Content[len(resp.Content)-1].Type
 }
 
 // convertMessagesToAnthropic converts messages to Anthropic API format
 // This handles the special case of tool results which must be sent as user messages
-func (a *AnthropicProvider) convertMessagesToAnthropic(messages []ChatMessage) []map[string]interface{} {
-	result := make([]map[string]interface{}, 0, len(messages))
+func (a *AnthropicProvider) convertMessagesToAnthropic(messages []ChatMessage) []models.Message {
+	result := make([]models.Message, 0, len(messages))
 
 	for _, msg := range messages {
 		before := len(result)
 		switch msg.Role {
 		case "user":
 			if len(msg.Attachments) > 0 {
-				contentBlocks := make([]map[string]interface{}, 0, len(msg.Attachments)+1)
+				contentBlocks := make([]models.ContentBlock, 0, len(msg.Attachments)+1)
 				for _, att := range msg.Attachments {
 					if att.Type == "image" && len(att.Data) > 0 {
-						contentBlocks = append(contentBlocks, map[string]interface{}{
-							"type": "image",
-							"source": map[string]interface{}{
-								"type":       "base64",
-								"media_type": att.MediaType,
-								"data":       base64.StdEncoding.EncodeToString(att.Data),
+						contentBlocks = append(contentBlocks, models.ContentBlock{
+							Type: models.BlockImage,
+							Source: &models.ImageSource{
+								Type:      "base64",
+								MediaType: att.MediaType,
+								Data:      base64.StdEncoding.EncodeToString(att.Data),
 							},
 						})
 					}
 				}
 				if msg.Content != "" {
-					contentBlocks = append(contentBlocks, map[string]interface{}{
-						"type": "text",
-						"text": msg.Content,
-					})
+					contentBlocks = append(contentBlocks, models.TextBlock(msg.Content))
 				}
 				if len(contentBlocks) > 0 {
-					result = append(result, map[string]interface{}{
-						"role":    "user",
-						"content": contentBlocks,
-					})
+					result = append(result, models.Message{Role: "user", Blocks: contentBlocks})
 				}
 			} else {
-				result = append(result, map[string]interface{}{
-					"role":    "user",
-					"content": msg.Content,
-				})
+				result = append(result, models.Message{Role: "user", Text: msg.Content})
 			}
 		case "assistant":
 			// Build assistant message with potential tool_use blocks
 			if len(msg.ToolCalls) > 0 {
-				content := make([]map[string]interface{}, 0)
+				content := make([]models.ContentBlock, 0, len(msg.ToolCalls)+1)
 				if msg.Content != "" {
-					content = append(content, map[string]interface{}{
-						"type": "text",
-						"text": msg.Content,
-					})
+					content = append(content, models.TextBlock(msg.Content))
 				}
 				for _, tc := range msg.ToolCalls {
 					// Ensure tool input is always a valid JSON object for OAuth
@@ -483,22 +457,16 @@ func (a *AnthropicProvider) convertMessagesToAnthropic(messages []ChatMessage) [
 					if input == nil {
 						input = make(map[string]interface{})
 					}
-					content = append(content, map[string]interface{}{
-						"type":  "tool_use",
-						"id":    tc.ID,
-						"name":  tc.Name,
-						"input": input,
+					content = append(content, models.ContentBlock{
+						Type:  models.BlockToolUse,
+						ID:    tc.ID,
+						Name:  tc.Name,
+						Input: input,
 					})
 				}
-				result = append(result, map[string]interface{}{
-					"role":    "assistant",
-					"content": content,
-				})
+				result = append(result, models.Message{Role: "assistant", Blocks: content})
 			} else {
-				result = append(result, map[string]interface{}{
-					"role":    "assistant",
-					"content": msg.Content,
-				})
+				result = append(result, models.Message{Role: "assistant", Text: msg.Content})
 			}
 		case "tool":
 			// Tool results must be sent as user messages with tool_result content.
@@ -506,21 +474,16 @@ func (a *AnthropicProvider) convertMessagesToAnthropic(messages []ChatMessage) [
 			// one round share ONE user message (the API requires every
 			// tool_result for an assistant turn in the next user turn; we no
 			// longer rely on it merging consecutive user turns).
-			block := map[string]interface{}{
-				"type":        "tool_result",
-				"tool_use_id": msg.ToolCallID,
-				"content":     msg.Content,
-			}
-			if msg.IsError {
-				block["is_error"] = true
+			block := models.ContentBlock{
+				Type:      models.BlockToolResult,
+				ToolUseID: msg.ToolCallID,
+				Content:   msg.Content,
+				IsError:   msg.IsError,
 			}
 			if blocks := trailingToolResultBlocks(result); blocks != nil {
-				result[len(result)-1]["content"] = append(blocks, block)
+				result[len(result)-1].Blocks = append(blocks, block)
 			} else {
-				result = append(result, map[string]interface{}{
-					"role":    "user",
-					"content": []map[string]interface{}{block},
-				})
+				result = append(result, models.Message{Role: "user", Blocks: []models.ContentBlock{block}})
 			}
 		}
 
@@ -529,7 +492,7 @@ func (a *AnthropicProvider) convertMessagesToAnthropic(messages []ChatMessage) [
 		// tool_result blocks instead of forming a second user turn.
 		if msg.Role == "user" && before > 0 && len(result) == before+1 {
 			if blocks := trailingToolResultBlocks(result[:len(result)-1]); blocks != nil {
-				result[len(result)-2]["content"] = append(blocks, userContentBlocks(result[len(result)-1]["content"])...)
+				result[len(result)-2].Blocks = append(blocks, userContentBlocks(result[len(result)-1])...)
 				result = result[:len(result)-1]
 			}
 		}
@@ -541,34 +504,27 @@ func (a *AnthropicProvider) convertMessagesToAnthropic(messages []ChatMessage) [
 // trailingToolResultBlocks returns the content blocks of the last converted
 // message when it is a user turn carrying tool_result blocks, else nil.
 // conduit-31jg.45.
-func trailingToolResultBlocks(converted []map[string]interface{}) []map[string]interface{} {
+func trailingToolResultBlocks(converted []models.Message) []models.ContentBlock {
 	if len(converted) == 0 {
 		return nil
 	}
 	last := converted[len(converted)-1]
-	if last["role"] != "user" {
+	if last.Role != "user" || len(last.Blocks) == 0 || last.Blocks[0].Type != models.BlockToolResult {
 		return nil
 	}
-	blocks, ok := last["content"].([]map[string]interface{})
-	if !ok || len(blocks) == 0 || blocks[0]["type"] != "tool_result" {
-		return nil
-	}
-	return blocks
+	return last.Blocks
 }
 
 // userContentBlocks normalizes converted user content (string or blocks) to
 // a block slice. conduit-31jg.45.
-func userContentBlocks(content interface{}) []map[string]interface{} {
-	switch c := content.(type) {
-	case []map[string]interface{}:
-		return c
-	case string:
-		if c == "" {
-			return nil
-		}
-		return []map[string]interface{}{{"type": "text", "text": c}}
+func userContentBlocks(msg models.Message) []models.ContentBlock {
+	if msg.HasBlocks() {
+		return msg.Blocks
 	}
-	return nil
+	if msg.Text == "" {
+		return nil
+	}
+	return []models.ContentBlock{models.TextBlock(msg.Text)}
 }
 
 // Claude Code tool names that are known to work with OAuth tokens
@@ -582,8 +538,8 @@ var claudeCodeTools = map[string]bool{
 
 // convertToolsToAnthropic converts tool definitions to Anthropic format
 // When using OAuth tokens, only Claude Code-compatible tools are included
-func (a *AnthropicProvider) convertToolsToAnthropic(tools []Tool) []interface{} {
-	anthropicTools := make([]interface{}, 0, len(tools))
+func (a *AnthropicProvider) convertToolsToAnthropic(tools []Tool) []models.AnthropicTool {
+	anthropicTools := make([]models.AnthropicTool, 0, len(tools))
 
 	for _, tool := range tools {
 		// For OAuth tokens, only include Claude Code-compatible tools
@@ -591,39 +547,35 @@ func (a *AnthropicProvider) convertToolsToAnthropic(tools []Tool) []interface{} 
 			continue
 		}
 
-		anthropicTools = append(anthropicTools, map[string]interface{}{
-			"name":         tool.Name,
-			"description":  tool.Description,
-			"input_schema": tool.Parameters,
+		anthropicTools = append(anthropicTools, models.AnthropicTool{
+			Name:        tool.Name,
+			Description: tool.Description,
+			InputSchema: tool.Parameters,
 		})
 	}
 	return anthropicTools
 }
 
-// parseAnthropicContent extracts content and tool calls from Anthropic response
-func (a *AnthropicProvider) parseAnthropicContent(resp map[string]interface{}) (string, []ToolCall) {
+// parseAnthropicContent extracts content and tool calls from an Anthropic
+// response. Text blocks are joined with "\n", tool_use blocks become tool
+// calls, and every other block type (thinking, server tool blocks, ...) is
+// ignored.
+func (a *AnthropicProvider) parseAnthropicContent(resp *models.MessagesResponse) (string, []ToolCall) {
 	var content strings.Builder
 	var toolCalls []ToolCall
 
-	if contentArray, ok := resp["content"].([]interface{}); ok {
-		for _, item := range contentArray {
-			if contentObj, ok := item.(map[string]interface{}); ok {
-				if contentType, ok := contentObj["type"].(string); ok {
-					switch contentType {
-					case "text":
-						if text, ok := contentObj["text"].(string); ok {
-							if content.Len() > 0 {
-								content.WriteString("\n")
-							}
-							content.WriteString(text)
-						}
-					case "tool_use":
-						// Parse tool call
-						if toolCall := a.parseAnthropicToolCall(contentObj); toolCall != nil {
-							toolCalls = append(toolCalls, *toolCall)
-						}
-					}
+	for _, block := range resp.Content {
+		switch block.Type {
+		case models.BlockText:
+			if block.HasText() {
+				if content.Len() > 0 {
+					content.WriteString("\n")
 				}
+				content.WriteString(block.Text)
+			}
+		case models.BlockToolUse:
+			if toolCall := a.parseAnthropicToolCall(block); toolCall != nil {
+				toolCalls = append(toolCalls, *toolCall)
 			}
 		}
 	}
@@ -631,47 +583,31 @@ func (a *AnthropicProvider) parseAnthropicContent(resp map[string]interface{}) (
 	return content.String(), toolCalls
 }
 
-// parseAnthropicToolCall extracts a tool call from Anthropic tool_use block
-func (a *AnthropicProvider) parseAnthropicToolCall(toolObj map[string]interface{}) *ToolCall {
-	id, hasID := toolObj["id"].(string)
-	name, hasName := toolObj["name"].(string)
-	input, hasInput := toolObj["input"].(map[string]interface{})
-
-	if !hasID || !hasName || !hasInput {
+// parseAnthropicToolCall extracts a tool call from an Anthropic tool_use
+// block: id and name must be strings and input a JSON object, otherwise the
+// block is skipped.
+func (a *AnthropicProvider) parseAnthropicToolCall(block models.ResponseBlock) *ToolCall {
+	if !block.HasID() || !block.HasName() || block.Input == nil {
 		return nil
 	}
-
-	// Tool names now match Claude Code format directly, no conversion needed
-
 	return &ToolCall{
-		ID:   id,
-		Name: name,
-		Args: input,
+		ID:   block.ID,
+		Name: block.Name,
+		Args: block.Input,
 	}
 }
 
-// parseAnthropicUsage extracts usage statistics from Anthropic response
-func (a *AnthropicProvider) parseAnthropicUsage(resp map[string]interface{}) Usage {
+// parseAnthropicUsage converts a response usage object (nil when absent).
+func (a *AnthropicProvider) parseAnthropicUsage(u *models.Usage) Usage {
 	var usage Usage
-
-	if usageObj, ok := resp["usage"].(map[string]interface{}); ok {
-		if inputTokens, ok := usageObj["input_tokens"].(float64); ok {
-			usage.PromptTokens = int(inputTokens)
-		}
-		if outputTokens, ok := usageObj["output_tokens"].(float64); ok {
-			usage.CompletionTokens = int(outputTokens)
-		}
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-
-		// Parse cache metrics from Anthropic response
-		if cacheCreate, ok := usageObj["cache_creation_input_tokens"].(float64); ok {
-			usage.CacheCreationInputTokens = int(cacheCreate)
-		}
-		if cacheRead, ok := usageObj["cache_read_input_tokens"].(float64); ok {
-			usage.CacheReadInputTokens = int(cacheRead)
-		}
+	if u == nil {
+		return usage
 	}
-
+	usage.PromptTokens = u.InputTokens
+	usage.CompletionTokens = u.OutputTokens
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	usage.CacheCreationInputTokens = u.CacheCreationInputTokens
+	usage.CacheReadInputTokens = u.CacheReadInputTokens
 	return usage
 }
 
@@ -724,22 +660,19 @@ func estimateJSONTokens(v interface{}) int {
 // estimateMessageTokens estimates one converted message. conduit-31jg.14:
 // the old estimate counted only string content, so tool turns (block
 // arrays: tool_use / tool_result / text) counted as zero.
-func estimateMessageTokens(msg map[string]interface{}) int {
-	switch c := msg["content"].(type) {
-	case string:
-		return estimateTokens(c)
-	case []map[string]interface{}:
-		n := 0
-		for _, block := range c {
-			if block["type"] == "image" {
-				n += imageTokenEstimate
-				continue
-			}
-			n += estimateJSONTokens(block)
-		}
-		return n
+func estimateMessageTokens(msg models.Message) int {
+	if !msg.HasBlocks() {
+		return estimateTokens(msg.Text)
 	}
-	return 0
+	n := 0
+	for _, block := range msg.Blocks {
+		if block.Type == models.BlockImage {
+			n += imageTokenEstimate
+			continue
+		}
+		n += estimateJSONTokens(block)
+	}
+	return n
 }
 
 // markMessageBreakpoint puts cc on one content block of msg and reports
@@ -747,39 +680,35 @@ func estimateMessageTokens(msg map[string]interface{}) int {
 // block array the last tool_result is preferred: text after it is ephemeral
 // loop guidance (conduit-31jg.13) that the next request strips, so caching
 // through it would write an entry that is never read.
-func markMessageBreakpoint(msg map[string]interface{}, cc map[string]interface{}) bool {
-	switch c := msg["content"].(type) {
-	case string:
-		if c == "" {
+func markMessageBreakpoint(msg *models.Message, cc *models.CacheControl) bool {
+	if !msg.HasBlocks() {
+		if msg.Text == "" {
 			return false
 		}
-		msg["content"] = []map[string]interface{}{
-			{"type": "text", "text": c, "cache_control": cc},
-		}
-		return true
-	case []map[string]interface{}:
-		target := -1
-		for i := len(c) - 1; i >= 0; i-- {
-			if c[i]["type"] == "tool_result" {
-				target = i
-				break
-			}
-		}
-		if target < 0 {
-			target = len(c) - 1
-		}
-		if target < 0 {
-			return false
-		}
-		if c[target]["type"] == "text" {
-			if text, _ := c[target]["text"].(string); text == "" {
-				return false
-			}
-		}
-		c[target]["cache_control"] = cc
+		block := models.TextBlock(msg.Text)
+		block.CacheControl = cc
+		msg.Blocks, msg.Text = []models.ContentBlock{block}, ""
 		return true
 	}
-	return false
+	c := msg.Blocks
+	target := -1
+	for i := len(c) - 1; i >= 0; i-- {
+		if c[i].Type == models.BlockToolResult {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		target = len(c) - 1
+	}
+	if target < 0 {
+		return false
+	}
+	if c[target].Type == models.BlockText && c[target].Text == "" {
+		return false
+	}
+	c[target].CacheControl = cc
+	return true
 }
 
 // addCacheBreakpoints adds cache_control markers to the request components
@@ -797,20 +726,21 @@ func markMessageBreakpoint(msg map[string]interface{}, cc map[string]interface{}
 //
 // Each is placed only when the estimated prefix up to it (tools → system →
 // messages, in API order) reaches the model's minimum cacheable length.
+// The slices' elements are modified in place.
 func (a *AnthropicProvider) addCacheBreakpoints(
-	tools []interface{},
-	systemBlocks []map[string]interface{},
+	tools []models.AnthropicTool,
+	systemBlocks []models.ContentBlock,
 	staticEnd int,
-	messages []map[string]interface{},
+	messages []models.Message,
 	model string,
 ) {
 	if !a.caching.Enabled {
 		return
 	}
 	minTokens := GetCacheMinTokens(model)
-	cacheControl := map[string]interface{}{"type": "ephemeral"}
+	cacheControl := &models.CacheControl{Type: "ephemeral"}
 	if a.caching.ExtendedTTL {
-		cacheControl["ttl"] = "1h"
+		cacheControl.TTL = "1h"
 	}
 
 	used := 0
@@ -823,19 +753,16 @@ func (a *AnthropicProvider) addCacheBreakpoints(
 	if len(tools) > 0 {
 		prefix += estimateJSONTokens(tools)
 		if a.caching.CacheTools && prefix >= minTokens && canMark() {
-			if lastTool, ok := tools[len(tools)-1].(map[string]interface{}); ok {
-				lastTool["cache_control"] = cacheControl
-				used++
-			}
+			tools[len(tools)-1].CacheControl = cacheControl
+			used++
 		}
 	}
 
 	// Breakpoint 2: last static system block.
-	for i, block := range systemBlocks {
-		text, _ := block["text"].(string)
-		prefix += estimateTokens(text)
+	for i := range systemBlocks {
+		prefix += estimateTokens(systemBlocks[i].Text)
 		if i == staticEnd && a.caching.CacheSystem && prefix >= minTokens && canMark() {
-			block["cache_control"] = cacheControl
+			systemBlocks[i].CacheControl = cacheControl
 			used++
 		}
 	}
@@ -854,7 +781,7 @@ func (a *AnthropicProvider) addCacheBreakpoints(
 
 	last := len(messages) - 1
 	if msgPrefix[last] >= minTokens && canMark() {
-		if markMessageBreakpoint(messages[last], cacheControl) {
+		if markMessageBreakpoint(&messages[last], cacheControl) {
 			used++
 		}
 	}
@@ -865,7 +792,7 @@ func (a *AnthropicProvider) addCacheBreakpoints(
 	}
 	anchor := last - interval
 	if anchor >= 0 && msgPrefix[anchor] >= minTokens && canMark() {
-		if markMessageBreakpoint(messages[anchor], cacheControl) {
+		if markMessageBreakpoint(&messages[anchor], cacheControl) {
 			used++
 		}
 	}

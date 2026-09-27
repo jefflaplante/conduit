@@ -1,0 +1,173 @@
+{
+  "non_streaming": {
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "go",
+          "role": "user"
+        },
+        {
+          "content": [
+            {
+              "id": "t1",
+              "input": {
+                "command": "true"
+              },
+              "name": "Bash",
+              "type": "tool_use"
+            }
+          ],
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "content": "",
+              "tool_use_id": "t1",
+              "type": "tool_result"
+            }
+          ],
+          "role": "user"
+        },
+        {
+          "content": [
+            {
+              "id": "t2",
+              "input": {
+                "path": "x"
+              },
+              "name": "Read",
+              "type": "tool_use"
+            },
+            {
+              "id": "t3",
+              "input": {},
+              "name": "Read",
+              "type": "tool_use"
+            }
+          ],
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "content": "x contents",
+              "tool_use_id": "t2",
+              "type": "tool_result"
+            },
+            {
+              "content": "boom",
+              "is_error": true,
+              "tool_use_id": "t3",
+              "type": "tool_result"
+            }
+          ],
+          "role": "user"
+        },
+        {
+          "content": "",
+          "role": "assistant"
+        },
+        {
+          "content": "thanks",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6"
+    }
+  },
+  "streaming": {
+    "headers": {
+      "Accept": "text/event-stream",
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "user-agent": "Go-http-client/1.1",
+      "x-api-key": "sk-ant-api03-golden"
+    },
+    "body": {
+      "max_tokens": 500,
+      "messages": [
+        {
+          "content": "go",
+          "role": "user"
+        },
+        {
+          "content": [
+            {
+              "id": "t1",
+              "input": {
+                "command": "true"
+              },
+              "name": "Bash",
+              "type": "tool_use"
+            }
+          ],
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "content": "",
+              "tool_use_id": "t1",
+              "type": "tool_result"
+            }
+          ],
+          "role": "user"
+        },
+        {
+          "content": [
+            {
+              "id": "t2",
+              "input": {
+                "path": "x"
+              },
+              "name": "Read",
+              "type": "tool_use"
+            },
+            {
+              "id": "t3",
+              "input": {},
+              "name": "Read",
+              "type": "tool_use"
+            }
+          ],
+          "role": "assistant"
+        },
+        {
+          "content": [
+            {
+              "content": "x contents",
+              "tool_use_id": "t2",
+              "type": "tool_result"
+            },
+            {
+              "content": "boom",
+              "is_error": true,
+              "tool_use_id": "t3",
+              "type": "tool_result"
+            }
+          ],
+          "role": "user"
+        },
+        {
+          "content": "",
+          "role": "assistant"
+        },
+        {
+          "content": "thanks",
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-4-6",
+      "stream": true
+    }
+  }
+}

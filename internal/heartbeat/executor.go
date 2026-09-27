@@ -2,6 +2,7 @@ package heartbeat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -102,6 +103,7 @@ func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExec
 	// Execute AI prompt with retries
 	var response AIResponse
 	var lastErr error
+	attempts := 0
 
 	for attempt := 0; attempt <= e.config.MaxRetries; attempt++ {
 		if attempt > 0 {
@@ -114,8 +116,14 @@ func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExec
 			}
 		}
 
+		attempts++
 		response, lastErr = aiExecutor.ExecutePrompt(ctx, session, prompt, e.config.DefaultModel)
 		if lastErr == nil {
+			break
+		}
+		// conduit-31jg.66: a stopped turn (/stop, shutdown) is not retried.
+		if errors.Is(lastErr, context.Canceled) || ctx.Err() != nil {
+			log.Printf("[Heartbeat] Attempt %d stopped: %v", attempt+1, lastErr)
 			break
 		}
 
@@ -123,7 +131,7 @@ func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExec
 	}
 
 	if lastErr != nil {
-		return nil, fmt.Errorf("failed to execute AI prompt after %d attempts: %w", e.config.MaxRetries+1, lastErr)
+		return nil, fmt.Errorf("failed to execute AI prompt after %d attempt(s): %w", attempts, lastErr)
 	}
 
 	// Process the AI response

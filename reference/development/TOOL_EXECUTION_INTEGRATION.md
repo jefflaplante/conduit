@@ -32,7 +32,7 @@ The tool execution integration connects AI providers with the tool system for fu
    - Integration tests for AI router (`internal/ai/router_integration_test.go`)
    - Mock implementations for testing
 
-5. **Demo Example** (`examples/tool_execution_demo.go`)
+5. **Demo Example** (`examples/tool-execution/main.go`)
    - Complete working demonstration
    - Shows tool chaining in action
    - Includes calculator and weather tools
@@ -243,9 +243,8 @@ engine := NewExecutionEngine(registry, 3, 30*time.Second)
 
 ## 📚 Documentation Files
 
-- **Implementation Guide**: `.claude/tickets/010-tool-execution-integration.md`
 - **API Documentation**: Code comments and interfaces
-- **Demo Code**: `examples/tool_execution_demo.go`
+- **Demo Code**: `examples/tool-execution/main.go`
 - **Test Examples**: Comprehensive test suites
 
 ## 🎉 Status: COMPLETE

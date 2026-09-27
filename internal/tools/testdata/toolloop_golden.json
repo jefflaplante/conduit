@@ -1,0 +1,6048 @@
+{
+  "chain": {
+    "content": "nearly\n\n**Tool chain limit reached (5 steps).** I've completed 5 tool operations but reached the maximum allowed chain length. This prevents runaway tool usage while still allowing complex workflows. If you need to continue, you can:\n- Ask me to pick up where I left off with a more focused approach\n- Break the task into smaller steps\n- Increase the `max_tool_chains` setting in config.json if this limit is too restrictive",
+    "usage": {
+      "prompt_tokens": 36,
+      "completion_tokens": 8,
+      "total_tokens": 44,
+      "context_tokens": 8
+    },
+    "steps": 6,
+    "chain_depth": 5,
+    "tool_result_ids": null,
+    "requests": [
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the chain thing"
+          },
+          {
+            "role": "assistant",
+            "content": "starting",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-1-0",
+            "is_error": true
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the chain thing"
+          },
+          {
+            "role": "assistant",
+            "content": "starting",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-1-0",
+            "is_error": true
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the chain thing"
+          },
+          {
+            "role": "assistant",
+            "content": "starting",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-1-0",
+            "is_error": true
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-3-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 3
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-3-0",
+            "is_error": true
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the chain thing"
+          },
+          {
+            "role": "assistant",
+            "content": "starting",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-1-0",
+            "is_error": true
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-3-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 3
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-3-0",
+            "is_error": true
+          },
+          {
+            "role": "assistant",
+            "content": "again",
+            "tool_calls": [
+              {
+                "id": "tc-4-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 4
+                }
+              },
+              {
+                "id": "tc-4-1",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 1,
+                  "n": 4
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-4-0",
+            "is_error": true
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-4-1"
+          },
+          {
+            "role": "user",
+            "content": "[Tool-loop guidance] Multiple failures detected with 'hard_fail'. Consider a different approach or tool."
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the chain thing"
+          },
+          {
+            "role": "assistant",
+            "content": "starting",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-1-0",
+            "is_error": true
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-3-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 3
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-3-0",
+            "is_error": true
+          },
+          {
+            "role": "assistant",
+            "content": "again",
+            "tool_calls": [
+              {
+                "id": "tc-4-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 4
+                }
+              },
+              {
+                "id": "tc-4-1",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 1,
+                  "n": 4
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-4-0",
+            "is_error": true
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-4-1"
+          },
+          {
+            "role": "user",
+            "content": "[Tool-loop guidance] Multiple failures detected with 'hard_fail'. Consider a different approach or tool."
+          },
+          {
+            "role": "assistant",
+            "content": "partial answer "
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the chain thing"
+          },
+          {
+            "role": "assistant",
+            "content": "starting",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-1-0",
+            "is_error": true
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-3-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 3
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-3-0",
+            "is_error": true
+          },
+          {
+            "role": "assistant",
+            "content": "again",
+            "tool_calls": [
+              {
+                "id": "tc-4-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 4
+                }
+              },
+              {
+                "id": "tc-4-1",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 1,
+                  "n": 4
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-4-0",
+            "is_error": true
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-4-1"
+          },
+          {
+            "role": "assistant",
+            "content": "partial answer "
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          },
+          {
+            "role": "assistant",
+            "content": "continued",
+            "tool_calls": [
+              {
+                "id": "tc-6-0",
+                "name": "ok_b",
+                "arguments": {
+                  "i": 0,
+                  "n": 6
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-6-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the chain thing"
+          },
+          {
+            "role": "assistant",
+            "content": "starting",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-1-0",
+            "is_error": true
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-3-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 3
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-3-0",
+            "is_error": true
+          },
+          {
+            "role": "assistant",
+            "content": "again",
+            "tool_calls": [
+              {
+                "id": "tc-4-0",
+                "name": "hard_fail",
+                "arguments": {
+                  "i": 0,
+                  "n": 4
+                }
+              },
+              {
+                "id": "tc-4-1",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 1,
+                  "n": 4
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "Tool 'hard_fail' failed: boom",
+            "tool_call_id": "tc-4-0",
+            "is_error": true
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-4-1"
+          },
+          {
+            "role": "assistant",
+            "content": "partial answer "
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          },
+          {
+            "role": "assistant",
+            "content": "continued",
+            "tool_calls": [
+              {
+                "id": "tc-6-0",
+                "name": "ok_b",
+                "arguments": {
+                  "i": 0,
+                  "n": 6
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-6-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-7-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 7
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-7-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      }
+    ]
+  },
+  "deep_refocus": {
+    "content": "all done",
+    "usage": {
+      "prompt_tokens": 2753,
+      "completion_tokens": 24,
+      "total_tokens": 2777,
+      "context_tokens": 200
+    },
+    "steps": 24,
+    "chain_depth": 22,
+    "tool_result_ids": [
+      "tc-122-0"
+    ],
+    "requests": [
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "user",
+            "content": "[Tool-loop guidance] STOP. Circular pattern detected: ok_a -\u003e ok_b (repeated 3+ times).\n\nBefore making another tool call, you MUST:\n1. State what you are trying to accomplish in one sentence\n2. Explain why the previous attempts did not achieve the goal\n3. Describe a DIFFERENT approach you will try\n\nDo not repeat the same tool call with the same arguments. If you are stuck, ask the user for guidance instead of looping."
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-111-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-111-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-111-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-111-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-112-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-112-0"
+          },
+          {
+            "role": "user",
+            "content": "[Tool-loop guidance] STOP. Circular pattern detected: ok_a -\u003e ok_b (repeated 3+ times).\n\nBefore making another tool call, you MUST:\n1. State what you are trying to accomplish in one sentence\n2. Explain why the previous attempts did not achieve the goal\n3. Describe a DIFFERENT approach you will try\n\nDo not repeat the same tool call with the same arguments. If you are stuck, ask the user for guidance instead of looping."
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-111-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-111-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-112-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-112-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-113-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-113-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-111-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-111-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-112-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-112-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-113-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-113-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-114-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-114-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-111-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-111-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-112-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-112-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-113-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-113-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-114-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-114-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-115-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-115-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-111-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-111-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-112-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-112-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-113-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-113-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-114-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-114-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-115-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-115-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-116-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-116-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-111-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-111-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-112-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-112-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-113-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-113-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-114-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-114-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-115-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-115-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-116-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-116-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-117-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-117-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-111-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-111-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-112-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-112-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-113-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-113-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-114-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-114-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-115-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-115-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-116-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-116-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-117-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-117-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-118-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-118-0"
+          },
+          {
+            "role": "user",
+            "content": "[Tool-loop guidance] STOP. Circular pattern detected: ok_a -\u003e ok_b (repeated 3+ times).\n\nBefore making another tool call, you MUST:\n1. State what you are trying to accomplish in one sentence\n2. Explain why the previous attempts did not achieve the goal\n3. Describe a DIFFERENT approach you will try\n\nDo not repeat the same tool call with the same arguments. If you are stuck, ask the user for guidance instead of looping."
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-111-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-111-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-112-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-112-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-113-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-113-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-114-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-114-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-115-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-115-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-116-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-116-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-117-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-117-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-118-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-118-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-119-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-119-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-111-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-111-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-112-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-112-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-113-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-113-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-114-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-114-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-115-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-115-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-116-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-116-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-117-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-117-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-118-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-118-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-119-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-119-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-120-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-120-0"
+          },
+          {
+            "role": "user",
+            "content": "[Tool-loop guidance] Turn progress: depth 20 of max 25. Original request: do the deep_refocus thing"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-111-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-111-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-112-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-112-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-113-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-113-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-114-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-114-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-115-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-115-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-116-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-116-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-117-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-117-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-118-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-118-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-119-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-119-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-120-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-120-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-121-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-121-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the deep_refocus thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-100-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 100
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-100-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-101-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-101-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-102-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-102-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-103-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-103-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-104-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-104-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-105-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-105-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-106-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-106-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-107-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-107-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-108-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-108-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-109-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-109-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-110-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-110-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-111-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-111-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-112-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-112-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-113-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-113-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-114-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-114-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-115-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-115-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-116-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-116-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-117-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-117-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-118-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-118-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-119-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-119-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-120-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-120-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-121-0",
+                "name": "ok_a",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-121-0"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-122-0",
+                "name": "ok_b",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-122-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      }
+    ]
+  },
+  "final_continue": {
+    "content": "frag1 frag2 end",
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 4,
+      "total_tokens": 14,
+      "context_tokens": 4
+    },
+    "steps": 2,
+    "chain_depth": 0,
+    "tool_result_ids": [
+      "tc-1-0"
+    ],
+    "requests": [
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the final_continue thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-1-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the final_continue thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-1-0"
+          },
+          {
+            "role": "assistant",
+            "content": "frag1 "
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the final_continue thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-1-0"
+          },
+          {
+            "role": "assistant",
+            "content": "frag1 "
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          },
+          {
+            "role": "assistant",
+            "content": "frag2 "
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      }
+    ]
+  },
+  "final_continue_error": {
+    "content": "only fragment\n\n_(truncated at max_tokens — ask me to continue if this cuts off)_",
+    "usage": {
+      "prompt_tokens": 3,
+      "completion_tokens": 2,
+      "total_tokens": 5,
+      "context_tokens": 2
+    },
+    "steps": 2,
+    "chain_depth": 0,
+    "tool_result_ids": [
+      "tc-1-0"
+    ],
+    "requests": [
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the final_continue_error thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-1-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the final_continue_error thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "ok_a",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "a",
+            "tool_call_id": "tc-1-0"
+          },
+          {
+            "role": "assistant",
+            "content": "only fragment"
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      }
+    ]
+  },
+  "final_continue_exhausted": {
+    "content": "a b c\n\n_(truncated at max_tokens — ask me to continue if this cuts off)_",
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 4,
+      "total_tokens": 14,
+      "context_tokens": 4
+    },
+    "steps": 2,
+    "chain_depth": 0,
+    "tool_result_ids": [
+      "tc-1-0"
+    ],
+    "requests": [
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the final_continue_exhausted thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "ok_b",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-1-0"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the final_continue_exhausted thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "ok_b",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-1-0"
+          },
+          {
+            "role": "assistant",
+            "content": "a "
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      },
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "do the final_continue_exhausted thing"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "tc-1-0",
+                "name": "ok_b",
+                "arguments": {
+                  "i": 0,
+                  "n": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "b",
+            "tool_call_id": "tc-1-0"
+          },
+          {
+            "role": "assistant",
+            "content": "a "
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          },
+          {
+            "role": "assistant",
+            "content": "b "
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "tools": [
+          {
+            "name": "ok_a",
+            "description": "a",
+            "parameters": null
+          }
+        ],
+        "max_tokens": 1024
+      }
+    ]
+  }
+}

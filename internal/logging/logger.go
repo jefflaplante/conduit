@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"conduit/internal/redact"
 )
 
 // Default logger instance, initialized to a text handler writing to stderr
@@ -19,7 +21,7 @@ var (
 
 func init() {
 	// Initialize with a default text logger
-	defaultLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	defaultLogger = slog.New(slog.NewTextHandler(redact.NewWriter(os.Stderr), &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 }
@@ -59,7 +61,7 @@ func ParseLevel(level string) slog.Level {
 // New creates a new slog.Logger with the specified configuration.
 // It writes to os.Stderr by default.
 func New(level string, format string) *slog.Logger {
-	return NewWithWriter(level, format, os.Stderr)
+	return NewWithWriter(level, format, redact.NewWriter(os.Stderr)) // conduit-31jg.83
 }
 
 // NewWithWriter creates a new slog.Logger with the specified configuration

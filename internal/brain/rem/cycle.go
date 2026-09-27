@@ -123,6 +123,26 @@ func (r *REMCycle) runGrooming(ctx context.Context, dryRun bool) (*GroomResult, 
 	return r.Groom(ctx, dryRun)
 }
 
+// peakSalienceSQL is the SQL expression REM compares against its absolute
+// salience thresholds: base salience + recency weight, i.e. the value a row
+// has at the moment it is accessed. brain_ltm.salience stores base salience
+// only (conduit-31jg.53); before that it stored exactly this peak value, so
+// REM thresholds keep their historical meaning.
+func (r *REMCycle) peakSalienceSQL() string {
+	if r.brain == nil {
+		return "salience"
+	}
+	return r.brain.PeakSalienceSQL()
+}
+
+// recencyWeight is the gap between stored base salience and peak salience.
+func (r *REMCycle) recencyWeight() float64 {
+	if r.brain == nil {
+		return 0
+	}
+	return r.brain.RecencyWeight()
+}
+
 // resolvePath resolves a path against WorkspaceDir if it's not absolute.
 func (r *REMCycle) resolvePath(p string) string {
 	if filepath.IsAbs(p) {

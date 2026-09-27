@@ -1,0 +1,20 @@
+{
+  "resp": {
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "t1",
+        "name": "Read",
+        "arguments": {}
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "total_tokens": 0
+    },
+    "partial": true
+  },
+  "err": "anthropic stream error: api_error: boom",
+  "stream_err_type": "api_error"
+}

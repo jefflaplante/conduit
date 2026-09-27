@@ -331,10 +331,10 @@ echo "# Example configs for different use cases" > references/config-examples.md
 ```bash
 # Test skill discovery
 cd $PROJECT_DIR
-./bin/gateway --config config.json --test-skills
+./bin/conduit --config config.json tools list skill_   # skills register as skill_<name> tools
 
 # Check skill validation
-./bin/gateway --validate-skill ~/.local/skills/my-weather-skill
+./bin/conduit --config config.json tools describe skill_my-weather-skill
 ```
 
 ## Configuration
@@ -723,7 +723,7 @@ metadata:
   conduit:
     emoji: 🐙
     version: "1.0.0"
-    author: "Jeff LaPlante"
+    author: "Your Name"
     tags: ["api", "status", "github"]
     requires:
       bins: ["python3", "curl"]
@@ -926,13 +926,13 @@ This skill requires access to the Docker socket and should only be used in trust
 **Debug Commands:**
 ```bash
 # Test skill discovery
-./bin/gateway --test-skills --verbose
+./bin/conduit --config config.json tools list skill_
 
 # Validate specific skill
-./bin/gateway --validate-skill /path/to/skill/
+./bin/conduit --config config.json tools describe skill_<name>
 
 # Check discovery logs
-./bin/gateway --config config.json --log-level debug | grep skills
+./bin/conduit --config config.json --verbose | grep skills
 ```
 
 #### Requirement Validation Failures
@@ -1038,10 +1038,10 @@ Enable debug logging to troubleshoot skills:
 
 ```bash
 # Run gateway with debug logging
-./bin/gateway --config config.json --log-level debug --verbose
+./bin/conduit --config config.json --verbose
 
 # Filter skill-related logs
-./bin/gateway --config config.json --log-level debug 2>&1 | grep -i skill
+./bin/conduit --config config.json --verbose 2>&1 | grep -i skill
 ```
 
 ### Skill Testing
@@ -1075,13 +1075,13 @@ Monitor skill performance:
 
 ```bash
 # Monitor execution times
-./bin/gateway --config config.json --metrics-enabled 2>&1 | grep "skill_execution_duration"
+./bin/conduit --config config.json --metrics-enabled 2>&1 | grep "skill_execution_duration"
 
 # Check cache performance
-./bin/gateway --config config.json --cache-stats
+./bin/conduit --config config.json --cache-stats
 
 # Monitor resource usage
-./bin/gateway --config config.json --resource-monitoring &
+./bin/conduit --config config.json --resource-monitoring &
 top -p $!
 ```
 
@@ -1097,7 +1097,7 @@ For additional support, see the main Conduit documentation or file issues on the
 
 ## Owner-Account Email Sends Require Approval
 
-The built-in `email`/`gog` skill sends from the agent's own account (`$JULES_ACCOUNT`) by default, and those sends are never gated. A `send`/`reply`/`compose` action with `account` or `from` set to an owner alias (jeff, owner@example.com, owner-alt@example.com) would go out as the owner (`$GOG_ACCOUNT`). Such sends go through human approval (conduit-31jg.43):
+The built-in `email`/`gog` skill sends from the agent's own account (`$JULES_ACCOUNT`, or `skills.gog.agent_account_env`) by default, and those sends are never gated. A `send`/`reply`/`compose` action with `account` or `from` set to an owner alias (`skills.gog.owner_aliases`) would go out as the owner (`$GOG_ACCOUNT`, or `skills.gog.owner_account_env`). Such sends go through human approval (conduit-31jg.43):
 
 - **Interactive chat:** the skill returns `approval_status: pending` without sending. The owner gets a prompt in the same chat and answers `YES <code>` or `NO <code>`, or taps the Telegram buttons. The exact frozen send runs only after YES.
 - **Heartbeat, cron, sub-agents or wakes:** the skill fails with `NOT SENT ... non-interactive`.

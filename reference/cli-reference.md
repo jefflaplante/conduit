@@ -214,14 +214,43 @@ conduit tools examples WebSearch
 Manage pairing codes for channel authentication.
 
 ```bash
-# Generate a pairing code
-conduit pairing create --channel telegram
+# List pending Telegram pairing codes
+conduit pairing telegram list [--include-expired]
 
-# List active pairing codes
-conduit pairing list
+# Approve a pairing code sent to the bot
+conduit pairing telegram approve <CODE>
+```
 
-# Revoke a pairing code
-conduit pairing revoke <code>
+### cron
+
+Scheduler job maintenance for `cron_jobs.json`.
+
+```bash
+# Preview rewriting UTC-written Go jobs as CRON_TZ wall-clock jobs
+conduit cron migrate-tz --from UTC --to America/New_York --file workspace/cron_jobs.json --dry-run
+
+# Apply (timestamped backup, atomic replace; re-running is a no-op)
+conduit cron migrate-tz --from UTC --to America/New_York --file workspace/cron_jobs.json --apply
+
+# Also convert system (crontab) jobs; --apply additionally needs --update-crontab
+conduit cron migrate-tz --from UTC --to America/New_York --file workspace/cron_jobs.json --include-system --dry-run
+```
+
+### brain
+
+```bash
+# Export the Brain LTM graph to JSON
+conduit brain export [--db <brain.db>] [--out <file>]
+```
+
+### restart / stop / status
+
+Signal a running gateway (found through its PID file) instead of going through an HTTP endpoint.
+
+```bash
+conduit restart   # graceful restart (SIGHUP)
+conduit stop      # graceful shutdown (SIGTERM)
+conduit status    # report whether Conduit is running
 ```
 
 ### auth

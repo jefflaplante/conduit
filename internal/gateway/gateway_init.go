@@ -76,6 +76,7 @@ func (g *Gateway) initBrainSubsystem(cfg *config.Config) {
 		brainDBPath = config.DeriveBrainDBPath(cfg.Database.Path)
 	}
 	var brainOpts []brain.Option
+	brainOpts = append(brainOpts, brain.WithRecallEventsPath(cfg.RecallEventsPath())) // conduit-31jg.40
 	if cfg.Brain.MaxLTMEntries > 0 {
 		brainOpts = append(brainOpts, brain.WithMaxLTMEntries(cfg.Brain.MaxLTMEntries))
 	}
@@ -113,6 +114,7 @@ func (g *Gateway) initBrainSubsystem(cfg *config.Config) {
 	if cfg.Brain.WarmthInjectLimit != 0 {
 		brainOpts = append(brainOpts, brain.WithWarmthInjectLimit(cfg.Brain.WarmthInjectLimit))
 	}
+	brainOpts = append(brainOpts, brainCapacityOptions(cfg.Brain)...) // conduit-31jg.53
 	brainSvc, brainErr := brain.New(brainDBPath, brainOpts...)
 	if brainErr != nil {
 		g.logger.Warn("failed to initialize brain, continuing without", "error", brainErr)

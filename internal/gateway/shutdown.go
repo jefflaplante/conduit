@@ -342,24 +342,8 @@ func (sm *ShutdownManager) drainActiveRequests() {
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 
-	activeRequests := func() int {
-		if gw == nil || gw.ws == nil {
-			return 0
-		}
-		gw.ws.ActiveRequestsMu.RLock()
-		defer gw.ws.ActiveRequestsMu.RUnlock()
-		return len(gw.ws.ActiveRequests)
-	}
-	runningJobs := func() []string {
-		if sched == nil {
-			return nil
-		}
-		return sched.RunningJobs()
-	}
-
 	for {
-		active := activeRequests()
-		jobs := runningJobs()
+		active, jobs := sm.inFlight(sched)
 		if active == 0 && len(jobs) == 0 {
 			sm.logger.Info("all active requests and scheduler jobs drained")
 			return
@@ -374,6 +358,17 @@ func (sm *ShutdownManager) drainActiveRequests() {
 				"remaining_jobs", jobs,
 				"timeout", sm.drainTimeout,
 			)
+			// conduit-31jg.66: interrupt scheduler jobs FIRST. Their turns
+			// are also in ActiveRequests; cancelling those before the
+			// scheduler context would let a job finish with a plain
+			// "context canceled" and be recorded as failed rather than
+			// interrupted (losing the heartbeat's post-restart re-run).
+			if sched != nil && len(jobs) > 0 {
+				for _, id := range jobs {
+					sm.logger.Warn("cancelling scheduler job: interrupted by shutdown", "job_id", id)
+				}
+				sched.InterruptRunning()
+			}
 			if gw != nil && gw.ws != nil {
 				gw.ws.ActiveRequestsMu.RLock()
 				for sessionKey, cancelFn := range gw.ws.ActiveRequests {
@@ -382,18 +377,41 @@ func (sm *ShutdownManager) drainActiveRequests() {
 				}
 				gw.ws.ActiveRequestsMu.RUnlock()
 			}
-			if sched != nil && len(jobs) > 0 {
-				for _, id := range jobs {
-					sm.logger.Warn("cancelling scheduler job: interrupted by shutdown", "job_id", id)
-				}
-				sched.InterruptRunning()
-			}
 			return
 		}
 
 		<-ticker.C
 		sm.logger.Debug("waiting for in-flight work to drain", "requests", active, "jobs", jobs)
 	}
+}
+
+// inFlight reports the drain's two counts: running turns in ActiveRequests
+// that the scheduler does not already account for, and running scheduler
+// jobs. A cron or heartbeat turn is registered in ActiveRequests
+// (conduit-31jg.66) AND covered by its job's running flag
+// (conduit-31jg.77); it is counted once, as a job.
+func (sm *ShutdownManager) inFlight(sched drainableScheduler) (requests int, jobs []string) {
+	if sched != nil {
+		jobs = sched.RunningJobs()
+	}
+	gw := sm.gateway
+	if gw == nil || gw.ws == nil {
+		return 0, jobs
+	}
+	// Snapshot before taking ActiveRequestsMu (runner lock order). Without
+	// a drainable scheduler nobody waits for those jobs: count them here.
+	var scheduled map[string]string
+	if sched != nil {
+		scheduled = gw.turns().scheduledTurnKeys()
+	}
+	gw.ws.ActiveRequestsMu.RLock()
+	defer gw.ws.ActiveRequestsMu.RUnlock()
+	for key := range gw.ws.ActiveRequests {
+		if _, ok := scheduled[key]; !ok {
+			requests++
+		}
+	}
+	return requests, jobs
 }
 
 func (sm *ShutdownManager) writeBreadcrumb() {

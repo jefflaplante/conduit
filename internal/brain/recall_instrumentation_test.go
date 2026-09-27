@@ -10,15 +10,11 @@ import (
 	"time"
 )
 
-// withTempEventsFile redirects recallEventsPath to a temp dir for the test's
-// duration and restores it after.
+// withTempEventsFile returns a temp recall-events path; pass it to New via
+// WithRecallEventsPath (conduit-31jg.40: the path is per-Brain now).
 func withTempEventsFile(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "recall-events.jsonl")
-	orig := recallEventsPath
-	recallEventsPath = path
-	t.Cleanup(func() { recallEventsPath = orig })
-	return path
+	return filepath.Join(t.TempDir(), "recall-events.jsonl")
 }
 
 func readEvents(t *testing.T, path string) []string {
@@ -37,7 +33,7 @@ func readEvents(t *testing.T, path string) []string {
 func TestLogRecallEvent(t *testing.T) {
 	path := withTempEventsFile(t)
 
-	b, err := New(":memory:")
+	b, err := New(":memory:", WithRecallEventsPath(path))
 	if err != nil {
 		t.Fatalf("Failed to create brain: %v", err)
 	}
@@ -78,7 +74,7 @@ func TestLogRecallEventBestEffort(t *testing.T) {
 	// nil/empty results write nothing; unwritable path must not panic
 	path := withTempEventsFile(t)
 
-	b, err := New(":memory:")
+	b, err := New(":memory:", WithRecallEventsPath(path))
 	if err != nil {
 		t.Fatalf("Failed to create brain: %v", err)
 	}
@@ -92,7 +88,7 @@ func TestLogRecallEventBestEffort(t *testing.T) {
 	}
 
 	// Unwritable path — must not panic, must not write
-	recallEventsPath = filepath.Join(t.TempDir(), "nonexistent-dir", "events.jsonl")
+	WithRecallEventsPath(filepath.Join(t.TempDir(), "nonexistent-dir", "events.jsonl"))(b)
 	b.logRecallEvent("test query", []*Entry{
 		{Key: "test.key1", Tier: TierLongTerm},
 	})
@@ -101,7 +97,7 @@ func TestLogRecallEventBestEffort(t *testing.T) {
 func TestRecallWithInstrumentation(t *testing.T) {
 	path := withTempEventsFile(t)
 
-	b, err := New(":memory:")
+	b, err := New(":memory:", WithRecallEventsPath(path))
 	if err != nil {
 		t.Fatalf("Failed to create brain: %v", err)
 	}
@@ -147,7 +143,7 @@ func TestRecallWithInstrumentation(t *testing.T) {
 func TestRecallEventTimestampFormat(t *testing.T) {
 	path := withTempEventsFile(t)
 
-	b, err := New(":memory:")
+	b, err := New(":memory:", WithRecallEventsPath(path))
 	if err != nil {
 		t.Fatalf("Failed to create brain: %v", err)
 	}
@@ -176,5 +172,49 @@ func TestRecallEventTimestampFormat(t *testing.T) {
 
 	if _, err := time.Parse(time.RFC3339, event.Timestamp); err != nil {
 		t.Errorf("Timestamp not in ISO8601/RFC3339 format: %s (error: %v)", event.Timestamp, err)
+	}
+}
+
+// TestRecallEventsDisabledByDefault: a Brain built without
+// WithRecallEventsPath logs nothing (no hardcoded fallback path).
+func TestRecallEventsDisabledByDefault(t *testing.T) {
+	b, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to create brain: %v", err)
+	}
+	defer b.Close()
+	if b.recallEvents != nil {
+		t.Fatal("recall events must be disabled without WithRecallEventsPath")
+	}
+	b.logRecallEvent("q", []*Entry{{Key: "k", Tier: TierLongTerm}}) // must not panic
+}
+
+func TestRecallEventsRotation(t *testing.T) {
+	path := withTempEventsFile(t)
+	b, err := New(":memory:", WithRecallEventsLog(path, 200, 2))
+	if err != nil {
+		t.Fatalf("Failed to create brain: %v", err)
+	}
+	defer b.Close()
+
+	for i := 0; i < 20; i++ {
+		b.logRecallEvent("rotation query", []*Entry{{Key: "rot.key", Tier: TierLongTerm}})
+	}
+	for _, p := range []string{path, path + ".1", path + ".2"} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("expected %s to exist: %v", p, err)
+		}
+		if fi.Size() > 200 {
+			t.Errorf("%s is %d bytes, want <= 200", p, fi.Size())
+		}
+	}
+	if _, err := os.Stat(path + ".3"); !os.IsNotExist(err) {
+		t.Errorf("expected only 2 backups, found %s.3", path)
+	}
+	for _, line := range readEvents(t, path) {
+		if !json.Valid([]byte(line)) {
+			t.Errorf("rotation split a line: %q", line)
+		}
 	}
 }

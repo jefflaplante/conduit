@@ -50,6 +50,12 @@ func NewManager(config SkillsConfig) *Manager {
 
 	discovery := NewSkillDiscovery(config.SearchPaths)
 	executor := NewExecutor(config.Execution)
+	if err := executor.ConfigureGog(config.Gog, config.WorkspaceDir); err != nil {
+		// Keep the built-in defaults rather than failing the whole skills
+		// system on a bad skills.gog block (conduit-31jg.40).
+		log.Printf("[skills] invalid skills.gog config, using defaults: %v", err)
+		_ = executor.ConfigureGog(nil, config.WorkspaceDir)
+	}
 	integrator := NewSkillIntegratorWithConfig(executor, &config)
 
 	return &Manager{

@@ -1,10 +1,12 @@
 package ai
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"conduit/internal/config"
+	"conduit/internal/models"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -82,7 +84,15 @@ func TestParseAnthropicUsage_WithCacheMetrics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			usage := provider.parseAnthropicUsage(tt.response)
+			raw, err := json.Marshal(tt.response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var resp models.MessagesResponse
+			if err := json.Unmarshal(raw, &resp); err != nil {
+				t.Fatal(err)
+			}
+			usage := provider.parseAnthropicUsage(resp.Usage)
 
 			assert.Equal(t, tt.expectedPromptTokens, usage.PromptTokens, "PromptTokens mismatch")
 			assert.Equal(t, tt.expectedCompletionTokens, usage.CompletionTokens, "CompletionTokens mismatch")
@@ -94,9 +104,9 @@ func TestParseAnthropicUsage_WithCacheMetrics(t *testing.T) {
 
 func TestAnthropicTimeoutConfiguration(t *testing.T) {
 	tests := []struct {
-		name                string
-		cfg                 config.ProviderConfig
-		expectedTimeout     time.Duration
+		name            string
+		cfg             config.ProviderConfig
+		expectedTimeout time.Duration
 	}{
 		{
 			name: "default timeout when not set",
@@ -110,9 +120,9 @@ func TestAnthropicTimeoutConfiguration(t *testing.T) {
 		{
 			name: "custom timeout is respected",
 			cfg: config.ProviderConfig{
-				Name:          "test",
-				Type:          "anthropic",
-				APIKey:        "test-key",
+				Name:           "test",
+				Type:           "anthropic",
+				APIKey:         "test-key",
 				TimeoutSeconds: 600,
 			},
 			expectedTimeout: 600 * time.Second,
@@ -120,9 +130,9 @@ func TestAnthropicTimeoutConfiguration(t *testing.T) {
 		{
 			name: "zero value uses default",
 			cfg: config.ProviderConfig{
-				Name:          "test",
-				Type:          "anthropic",
-				APIKey:        "test-key",
+				Name:           "test",
+				Type:           "anthropic",
+				APIKey:         "test-key",
 				TimeoutSeconds: 0,
 			},
 			expectedTimeout: 300 * time.Second,
@@ -130,9 +140,9 @@ func TestAnthropicTimeoutConfiguration(t *testing.T) {
 		{
 			name: "short timeout works",
 			cfg: config.ProviderConfig{
-				Name:          "test",
-				Type:          "anthropic",
-				APIKey:        "test-key",
+				Name:           "test",
+				Type:           "anthropic",
+				APIKey:         "test-key",
 				TimeoutSeconds: 45,
 			},
 			expectedTimeout: 45 * time.Second,
