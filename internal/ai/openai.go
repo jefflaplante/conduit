@@ -19,10 +19,16 @@ import (
 
 const defaultOpenAIURL = "https://api.openai.com/v1/chat/completions"
 
-const (
-	maxRetries     = 3
-	retryBaseDelay = 2 * time.Second
-)
+// defaultOpenAIRetryPolicy (conduit-31jg.68): the Anthropic retryPolicy
+// with the previous OpenAI schedule (3 retries, 2s base). Backoff is
+// jittered, retry-after(-ms) is honoured up to maxDelay, and no sleep runs
+// that would leave less than minAttemptBudget before the ctx deadline.
+var defaultOpenAIRetryPolicy = retryPolicy{
+	maxRetries:       3,
+	baseDelay:        2 * time.Second,
+	maxDelay:         30 * time.Second,
+	minAttemptBudget: 10 * time.Second,
+}
 
 // isRetryableStatus returns true for HTTP status codes that warrant a retry.
 func isRetryableStatus(code int) bool {
@@ -41,6 +47,78 @@ type OpenAIProvider struct {
 	baseURL  string
 	client   *http.Client
 	thinking *config.ThinkingConfig // conduit-15gt: optional reasoning control (z.ai etc.)
+	retry    retryPolicy            // conduit-31jg.68; zero value = defaultOpenAIRetryPolicy
+}
+
+func (o *OpenAIProvider) retryPolicy() retryPolicy {
+	if o.retry == (retryPolicy{}) {
+		return defaultOpenAIRetryPolicy
+	}
+	return o.retry
+}
+
+// postChat POSTs reqBody to the chat-completions endpoint with bounded
+// retry and returns the 200 response (body open) or the last error.
+//
+// conduit-31jg.68: the old loop slept a fixed 2s/4s/8s, ignored retry-after
+// and the ctx deadline, and retried every 429 — including z.ai quota codes
+// 1113/1308/1310, which no retry clears. Now:
+//   - 429/5xx retry through retryPolicy (retry-after honoured and capped,
+//     deadline-aware); x-should-retry: false is respected;
+//   - quota errors (IsQuotaError) are returned at once for the router's
+//     fallback_model path;
+//   - transport errors (connection reset, refused) still retry (bd-13p),
+//     but client TIMEOUTS do not: the router owns those (bd-13p retry,
+//     then the conduit-1w48 fallback handoff). Retrying them here too
+//     multiplied a 600s z-ai timeout up to 4x before the router saw it.
+func (o *OpenAIProvider) postChat(ctx context.Context, reqBody []byte, stream bool) (*http.Response, error) {
+	policy := o.retryPolicy()
+	for n := 1; ; n++ {
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", o.baseURL, bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		if stream {
+			httpReq.Header.Set("Accept", "text/event-stream")
+		}
+		if o.apiKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
+		}
+
+		var lastErr error
+		var retryAfter time.Duration
+		var hasRA bool
+		what := "transport error"
+		resp, err := o.client.Do(httpReq)
+		switch {
+		case err != nil:
+			lastErr = fmt.Errorf("request failed: %w", err)
+			// A caller that gave up is never retried; a client timeout
+			// goes to the router's timeout ladder.
+			if isCallerContextError(ctx, err) || IsTransientTimeoutError(err) {
+				return nil, lastErr
+			}
+		case resp.StatusCode == http.StatusOK:
+			return resp, nil
+		default:
+			bodyBytes, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
+			resp.Body.Close()
+			lastErr = fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
+			if !isRetryableStatus(resp.StatusCode) || IsQuotaError(lastErr) ||
+				strings.EqualFold(resp.Header.Get("x-should-retry"), "false") {
+				return nil, lastErr
+			}
+			retryAfter, hasRA = parseRetryAfter(resp.Header, time.Now())
+			what = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		if stream {
+			what = "stream " + what
+		}
+		if !policy.backoff(ctx, "[OpenAI:"+o.name+"]", n, lastErr, retryAfter, hasRA, what) {
+			return nil, lastErr
+		}
+	}
 }
 
 // NewOpenAIProvider creates a new OpenAI-compatible provider.
@@ -154,71 +232,9 @@ func (o *OpenAIProvider) GenerateResponse(ctx context.Context, req *GenerateRequ
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", o.baseURL, bytes.NewBuffer(reqBody))
+	resp, err := o.postChat(ctx, reqBody, false) // conduit-31jg.68
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	if o.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
-	}
-
-	var lastErr error
-	var resp *http.Response
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := retryBaseDelay * time.Duration(1<<(attempt-1))
-			log.Printf("[OpenAI] Retry %d/%d after %v for status error", attempt, maxRetries, delay)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			// Rebuild request body (previous Do consumed it)
-			httpReq, err = http.NewRequestWithContext(ctx, "POST", o.baseURL, bytes.NewBuffer(reqBody))
-			if err != nil {
-				return nil, fmt.Errorf("failed to create request: %w", err)
-			}
-			httpReq.Header.Set("Content-Type", "application/json")
-			if o.apiKey != "" {
-				httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
-			}
-		}
-
-		resp, err = o.client.Do(httpReq)
-		if err != nil {
-			// bd-13p: transport errors (timeouts, connection resets) are
-			// transient — enter the retry loop instead of failing fast.
-			// Only a caller that gave up (ctx cancelled) aborts immediately.
-			if isCallerContextError(ctx, err) {
-				return nil, fmt.Errorf("request failed: %w", err)
-			}
-			lastErr = fmt.Errorf("request failed: %w", err)
-			continue
-		}
-
-		if resp.StatusCode == http.StatusOK {
-			break // success
-		}
-
-		bodyBytes, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
-		resp.Body.Close()
-		lastErr = fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
-
-		if !isRetryableStatus(resp.StatusCode) {
-			return nil, lastErr // non-retryable, fail immediately
-		}
-		// retryable — loop continues
-	}
-
-	// Transport errors on every attempt leave resp nil — surface lastErr
-	// instead of dereferencing nil (bd-13p).
-	if resp == nil {
-		return nil, lastErr
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, lastErr
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -267,76 +283,11 @@ func (o *OpenAIProvider) GenerateResponseStreaming(ctx context.Context, req *Gen
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", o.baseURL, bytes.NewBuffer(reqBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-	if o.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
-	}
-
 	log.Printf("[OpenAI] Streaming request: model=%s, url=%s", model, o.baseURL)
 
-	var lastErr error
-	var resp *http.Response
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := retryBaseDelay * time.Duration(1<<(attempt-1))
-			log.Printf("[OpenAI] Streaming retry %d/%d after %v for status error", attempt, maxRetries, delay)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			// Rebuild request body (previous Do consumed it)
-			httpReq, err = http.NewRequestWithContext(ctx, "POST", o.baseURL, bytes.NewBuffer(reqBody))
-			if err != nil {
-				return nil, fmt.Errorf("failed to create request: %w", err)
-			}
-			httpReq.Header.Set("Content-Type", "application/json")
-			httpReq.Header.Set("Accept", "text/event-stream")
-			if o.apiKey != "" {
-				httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
-			}
-		}
-
-		resp, err = o.client.Do(httpReq)
-		if err != nil {
-			// bd-13p: transport errors (timeouts, connection resets) are
-			// transient — enter the retry loop instead of failing fast.
-			// Only a caller that gave up (ctx cancelled) aborts immediately.
-			if isCallerContextError(ctx, err) {
-				return nil, fmt.Errorf("request failed: %w", err)
-			}
-			lastErr = fmt.Errorf("request failed: %w", err)
-			continue
-		}
-
-		if resp.StatusCode == http.StatusOK {
-			break // success
-		}
-
-		bodyBytes, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
-		resp.Body.Close()
-		lastErr = fmt.Errorf("API error: %d - %s", resp.StatusCode, string(bodyBytes))
-
-		if !isRetryableStatus(resp.StatusCode) {
-			return nil, lastErr // non-retryable, fail immediately
-		}
-		log.Printf("[OpenAI] Streaming retryable error: %v", lastErr)
-		// retryable — loop continues
-	}
-
-	// Transport errors on every attempt leave resp nil — surface lastErr
-	// instead of dereferencing nil (bd-13p).
-	if resp == nil {
-		return nil, lastErr
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, lastErr
+	resp, err := o.postChat(ctx, reqBody, true) // conduit-31jg.68
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 

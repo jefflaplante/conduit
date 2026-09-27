@@ -290,28 +290,102 @@ func (s *streamTracker) callback() StreamCallback {
 // callWithRecovery meters the first call's attempts. Together they record
 // each provider call to the usage tracker (fuel gauge, TokenWindowTracker)
 // exactly once.
+//
+// conduit-31jg.68(2): it is also the quota-fallback point for those calls.
+// Only the first call had the bd-27ud fallback (callWithRecovery), so a
+// quota error in tool round N killed the turn. On a quota error the guard
+// retries the call on the route's fallback (own provider, own model, own
+// window) under the same ctx — turn lease and deadline unchanged — and
+// stays on that route for the rest of the turn, so later rounds don't burn
+// a failed call on the exhausted provider first. Each attempt is metered
+// once. Guards built for the EmptyGuard failover never fall back again.
 type contextGuardProvider struct {
 	Provider
 	window int
 	router *Router
 	name   string // route provider name, for metering
+
+	// quotaFallback enables the conduit-31jg.68 fallback.
+	quotaFallback bool
+	mu            sync.Mutex
+	switched      *providerRoute // sticky fallback route after a quota error
+	switchedWin   int
 }
 
 func (r *Router) guardedProvider(rt providerRoute) Provider {
+	return &contextGuardProvider{Provider: rt.provider, window: r.contextWindowForRoute(rt), router: r, name: rt.name, quotaFallback: true}
+}
+
+// failoverGuardedProvider is guardedProvider without the quota fallback, for
+// a call that already IS the failover (EmptyGuard, conduit-1z0g): it must
+// not chain to a third route (conduit-31jg.68).
+func (r *Router) failoverGuardedProvider(rt providerRoute) Provider {
 	return &contextGuardProvider{Provider: rt.provider, window: r.contextWindowForRoute(rt), router: r, name: rt.name}
 }
 
-func (g *contextGuardProvider) GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+// Name reports the provider currently serving the guard's calls — the
+// fallback's once a quota error switched routes, so the EmptyGuard asks
+// about the backend that actually failed.
+func (g *contextGuardProvider) Name() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.switched != nil {
+		return g.switched.name
+	}
+	return g.Provider.Name()
+}
+
+func (g *contextGuardProvider) call(ctx context.Context, name string, p Provider, window int, req *GenerateRequest) (*GenerateResponse, error) {
 	start := time.Now()
-	resp, err := g.Provider.GenerateResponse(ctx, fitRequestToWindow(req, g.window))
+	resp, err := p.GenerateResponse(ctx, fitRequestToWindow(req, window))
 	if g.router != nil {
 		model := ""
 		if req != nil {
 			model = req.Model
 		}
-		g.router.meterCall(g.name, model, resp, err, time.Since(start).Milliseconds())
+		g.router.meterCall(name, model, resp, err, time.Since(start).Milliseconds())
 	}
 	return resp, err
+}
+
+// onRoute returns a copy of req carrying rt's model.
+func onRoute(req *GenerateRequest, rt *providerRoute) *GenerateRequest {
+	out := *req
+	out.Model = rt.model
+	return &out
+}
+
+func (g *contextGuardProvider) GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+	g.mu.Lock()
+	sw, swWin := g.switched, g.switchedWin
+	g.mu.Unlock()
+	if sw != nil {
+		return g.call(ctx, sw.name, sw.provider, swWin, onRoute(req, sw))
+	}
+
+	resp, err := g.call(ctx, g.name, g.Provider, g.window, req)
+	// Same gate as the tool path in callWithRecovery: fall back only when
+	// the request names a model (quotaFallbackNeedsModel).
+	if err == nil || !g.quotaFallback || g.router == nil || req == nil || req.Model == "" ||
+		!IsQuotaError(err) || ctx.Err() != nil {
+		return resp, err
+	}
+	fb := g.router.distinctFallbackRoute(providerRoute{name: g.name, provider: g.Provider, model: req.Model})
+	if fb == nil {
+		return resp, err
+	}
+	fbWin := g.router.contextWindowForRoute(*fb)
+	log.Printf("[Router] (tool loop) quota error on %q model=%q, switching to fallback model %q on provider %q for the rest of the turn (conduit-31jg.68)",
+		g.name, req.Model, fb.model, fb.name)
+	fbResp, fbErr := g.call(ctx, fb.name, fb.provider, fbWin, onRoute(req, fb))
+	if fbErr != nil {
+		log.Printf("[Router] (tool loop) quota fallback failed: %v (conduit-31jg.68)", fbErr)
+		return fbResp, fbErr
+	}
+	g.mu.Lock()
+	g.switched, g.switchedWin = fb, fbWin
+	g.mu.Unlock()
+	return fbResp, nil
 }
 
 // meterCall records ONE provider call (conduit-31jg.64): an error to the

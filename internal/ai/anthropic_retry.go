@@ -190,18 +190,28 @@ func (a *AnthropicProvider) sendMessages(ctx context.Context, body map[string]in
 // sleeps accordingly. Returns false when the caller must give up and return
 // lastErr.
 func (a *AnthropicProvider) backoff(ctx context.Context, n int, lastErr error, retryAfter time.Duration, hasRA bool, what string) bool {
-	if n > a.retry.maxRetries {
-		log.Printf("[Anthropic] %s: retries exhausted (%d) — surfacing: %v (conduit-31jg.46)", what, a.retry.maxRetries, lastErr)
+	return a.retry.backoff(ctx, "[Anthropic]", n, lastErr, retryAfter, hasRA, what)
+}
+
+// backoff is the provider-agnostic retry gate (conduit-31jg.46; shared with
+// the OpenAI-compatible provider since conduit-31jg.68): it decides whether
+// retry number n (1-based) may run after lastErr and sleeps accordingly.
+// Returns false when the caller must give up and return lastErr — retries
+// exhausted, retry-after above the cap, or the ctx deadline would leave
+// less than minAttemptBudget for the retried call.
+func (p retryPolicy) backoff(ctx context.Context, tag string, n int, lastErr error, retryAfter time.Duration, hasRA bool, what string) bool {
+	if n > p.maxRetries {
+		log.Printf("%s %s: retries exhausted (%d) — surfacing: %v (conduit-31jg.46)", tag, what, p.maxRetries, lastErr)
 		return false
 	}
-	d, ok := a.retry.delay(n, retryAfter, hasRA)
+	d, ok := p.delay(n, retryAfter, hasRA)
 	if !ok {
-		log.Printf("[Anthropic] %s: retry-after %s exceeds cap %s — not waiting (conduit-31jg.46)", what, retryAfter, a.retry.maxDelay)
+		log.Printf("%s %s: retry-after %s exceeds cap %s — not waiting (conduit-31jg.46)", tag, what, retryAfter, p.maxDelay)
 		return false
 	}
-	log.Printf("[Anthropic] %s: retry %d/%d in %s (retry-after=%v) (conduit-31jg.46)", what, n, a.retry.maxRetries, d.Round(time.Millisecond), hasRA)
-	if err := a.retry.sleep(ctx, d); err != nil {
-		log.Printf("[Anthropic] %s: retry %d skipped: %v (conduit-31jg.46)", what, n, err)
+	log.Printf("%s %s: retry %d/%d in %s (retry-after=%v) (conduit-31jg.46)", tag, what, n, p.maxRetries, d.Round(time.Millisecond), hasRA)
+	if err := p.sleep(ctx, d); err != nil {
+		log.Printf("%s %s: retry %d skipped: %v (conduit-31jg.46)", tag, what, n, err)
 		return false
 	}
 	return true
