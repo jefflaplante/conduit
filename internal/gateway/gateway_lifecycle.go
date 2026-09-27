@@ -70,7 +70,9 @@ func (g *Gateway) buildHTTPServer() *http.Server {
 	mux.Handle("/prometheus", protect(http.HandlerFunc(g.handlePrometheusMetrics)))
 
 	// WebSocket endpoint with custom authentication and rate limiting.
-	mux.Handle("/ws", g.rateLimitMiddleware.Wrap(http.HandlerFunc(g.handleWebSocket)))
+	// conduit-31jg.73: pre-auth IP limiter too, so /ws auth failures (401/403
+	// before upgrade) charge the per-IP auth-failure budget.
+	mux.Handle("/ws", g.rateLimitMiddleware.WrapWebSocket(http.HandlerFunc(g.handleWebSocket)))
 
 	// Protected API endpoints - wrapped with auth middleware and rate limiting.
 	// Order (see protect): pre-auth IP limiter, auth (sets context),
