@@ -36,7 +36,7 @@ func (a *Adapter) handleVoiceMessage(ctx context.Context, b *bot.Bot, update *mo
 
 	// Check if STT is configured
 	if a.stt == nil {
-		a.bot.SendMessage(ctx, &bot.SendMessageParams{
+		a.getBot().SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "Voice messages are not supported (speech-to-text not configured).",
 		})
@@ -44,7 +44,7 @@ func (a *Adapter) handleVoiceMessage(ctx context.Context, b *bot.Bot, update *mo
 	}
 
 	// Send typing indicator while transcribing
-	a.bot.SendChatAction(ctx, &bot.SendChatActionParams{
+	a.getBot().SendChatAction(ctx, &bot.SendChatActionParams{
 		ChatID: chatID,
 		Action: models.ChatActionTyping,
 	})
@@ -54,7 +54,7 @@ func (a *Adapter) handleVoiceMessage(ctx context.Context, b *bot.Bot, update *mo
 	transcription, err := a.transcribeVoice(ctx, voice)
 	if err != nil {
 		log.Printf("[Telegram] Failed to transcribe voice message: %v", err)
-		a.bot.SendMessage(ctx, &bot.SendMessageParams{
+		a.getBot().SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "Sorry, I couldn't transcribe that voice message. Please try again or send text.",
 		})
@@ -104,7 +104,7 @@ func (a *Adapter) handleVoiceMessage(ctx context.Context, b *bot.Bot, update *mo
 // transcribeVoice downloads a voice message from Telegram and transcribes it using STT.
 func (a *Adapter) transcribeVoice(ctx context.Context, voice *models.Voice) (string, error) {
 	// Get file info from Telegram
-	file, err := a.bot.GetFile(ctx, &bot.GetFileParams{
+	file, err := a.getBot().GetFile(ctx, &bot.GetFileParams{
 		FileID: voice.FileID,
 	})
 	if err != nil {
@@ -112,7 +112,7 @@ func (a *Adapter) transcribeVoice(ctx context.Context, voice *models.Voice) (str
 	}
 
 	// Get download URL
-	downloadURL := a.bot.FileDownloadLink(file)
+	downloadURL := a.getBot().FileDownloadLink(file)
 
 	// Download the audio file (URL embeds the bot token; errors are scrubbed).
 	audioData, err := downloadTelegramFile(ctx, a.downloadClient(), downloadURL, "voice")

@@ -44,7 +44,7 @@ func (a *Adapter) handlePhotoMessage(ctx context.Context, b *bot.Bot, update *mo
 	}
 
 	// Send typing indicator while downloading
-	a.bot.SendChatAction(ctx, &bot.SendChatActionParams{
+	a.getBot().SendChatAction(ctx, &bot.SendChatActionParams{
 		ChatID: chatID,
 		Action: models.ChatActionTyping,
 	})
@@ -57,7 +57,7 @@ func (a *Adapter) handlePhotoMessage(ctx context.Context, b *bot.Bot, update *mo
 	imageData, err := a.downloadPhoto(ctx, &bestPhoto)
 	if err != nil {
 		log.Printf("[Telegram] Failed to download photo: %v", err)
-		a.bot.SendMessage(ctx, &bot.SendMessageParams{
+		a.getBot().SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "Sorry, I couldn't process that photo. Please try again.",
 		})
@@ -121,7 +121,7 @@ func (a *Adapter) handlePhotoMessage(ctx context.Context, b *bot.Bot, update *mo
 // downloadPhoto downloads a photo from Telegram's servers.
 func (a *Adapter) downloadPhoto(ctx context.Context, photo *models.PhotoSize) ([]byte, error) {
 	// Get file info from Telegram
-	file, err := a.bot.GetFile(ctx, &bot.GetFileParams{
+	file, err := a.getBot().GetFile(ctx, &bot.GetFileParams{
 		FileID: photo.FileID,
 	})
 	if err != nil {
@@ -129,7 +129,7 @@ func (a *Adapter) downloadPhoto(ctx context.Context, photo *models.PhotoSize) ([
 	}
 
 	// Get download URL
-	downloadURL := a.bot.FileDownloadLink(file)
+	downloadURL := a.getBot().FileDownloadLink(file)
 
 	// Download the image file (URL embeds the bot token; errors are scrubbed).
 	data, err := downloadTelegramFile(ctx, a.downloadClient(), downloadURL, "photo")

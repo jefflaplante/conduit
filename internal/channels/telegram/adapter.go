@@ -268,6 +268,26 @@ func (a *Adapter) Start(ctx context.Context) error {
 	return nil
 }
 
+// session returns the current bot client and run context under the adapter
+// lock. Start (via Manager.RestartAdapter) rewrites both fields, so senders
+// must never read a.bot / a.ctx directly (conduit-31jg.73). The context is
+// context.Background() before the first Start.
+func (a *Adapter) session() (botAPI, context.Context) {
+	a.mutex.RLock()
+	defer a.mutex.RUnlock()
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.bot, ctx
+}
+
+// getBot returns the current bot client under the adapter lock.
+func (a *Adapter) getBot() botAPI {
+	b, _ := a.session()
+	return b
+}
+
 // Stop gracefully shuts down the adapter.
 //
 // conduit-31jg.26: Stop no longer closes a.incoming. handleUpdate, photo.go
@@ -377,7 +397,8 @@ func convertToTelegramMarkdown(text string) string {
 
 // SendMessage sends an outgoing message through Telegram
 func (a *Adapter) SendMessage(msg *protocol.OutgoingMessage) error {
-	if a.bot == nil {
+	b, ctx := a.session()
+	if b == nil {
 		return fmt.Errorf("bot not initialized")
 	}
 
@@ -415,7 +436,7 @@ func (a *Adapter) SendMessage(msg *protocol.OutgoingMessage) error {
 			photoParams.ParseMode = models.ParseMode(parseMode)
 		}
 
-		_, err = a.bot.SendPhoto(a.ctx, photoParams)
+		_, err = b.SendPhoto(ctx, photoParams)
 		if err != nil {
 			return fmt.Errorf("failed to send photo: %w", err)
 		}
@@ -437,7 +458,7 @@ func (a *Adapter) SendMessage(msg *protocol.OutgoingMessage) error {
 	}
 
 	// Process MEDIA protocol lines in the response
-	mediaSender := NewMediaSender(a.bot, a.ctx)
+	mediaSender := NewMediaSender(b, ctx)
 	textAfterMedia, mediaErrors := mediaSender.ProcessAndSendMedia(chatID, msg.Text)
 
 	// If there were media errors, append them to the text
@@ -497,13 +518,13 @@ func (a *Adapter) SendMessage(msg *protocol.OutgoingMessage) error {
 			params.ParseMode = models.ParseMode(parseModeOverride)
 		}
 
-		_, err = a.bot.SendMessage(a.ctx, params)
+		_, err = b.SendMessage(ctx, params)
 		if err != nil {
 			if strings.Contains(err.Error(), "can't parse entities") || strings.Contains(err.Error(), "message is too long") {
 				log.Printf("[Telegram] chunk %d/%d markdown failed, retrying plain text: %v", i+1, len(chunks), err)
 				params.ParseMode = ""
 				params.Text = chunk
-				_, err = a.bot.SendMessage(a.ctx, params)
+				_, err = b.SendMessage(ctx, params)
 				if err != nil {
 					return fmt.Errorf("failed to send chunk %d/%d (plain text fallback): %w", i+1, len(chunks), err)
 				}
@@ -532,6 +553,10 @@ func (a *Adapter) SendMessage(msg *protocol.OutgoingMessage) error {
 // reply text ("YES <code>"), which is exactly what a typed reply would be
 // (conduit-31jg.43).
 func (a *Adapter) sendApprovalNotice(chatID int64, msg *protocol.OutgoingMessage) error {
+	b, ctx := a.session()
+	if b == nil {
+		return fmt.Errorf("bot not initialized")
+	}
 	var markup models.ReplyMarkup
 	if raw := msg.Metadata[approval.MetaChoices]; raw != "" {
 		var choices []approval.Choice
@@ -554,7 +579,7 @@ func (a *Adapter) sendApprovalNotice(chatID int64, msg *protocol.OutgoingMessage
 		if i == len(chunks)-1 && markup != nil {
 			params.ReplyMarkup = markup
 		}
-		if _, err := a.bot.SendMessage(a.ctx, params); err != nil {
+		if _, err := b.SendMessage(ctx, params); err != nil {
 			return fmt.Errorf("failed to send approval notice chunk %d/%d: %w", i+1, len(chunks), err)
 		}
 	}
@@ -566,7 +591,8 @@ func (a *Adapter) sendApprovalNotice(chatID int64, msg *protocol.OutgoingMessage
 
 // SendMessageWithID sends a message and returns the message ID (for later editing)
 func (a *Adapter) SendMessageWithID(chatID int64, text string) (int, error) {
-	if a.bot == nil {
+	b, ctx := a.session()
+	if b == nil {
 		return 0, fmt.Errorf("bot not initialized")
 	}
 
@@ -579,12 +605,12 @@ func (a *Adapter) SendMessageWithID(chatID int64, text string) (int, error) {
 		ParseMode: models.ParseModeMarkdownV1,
 	}
 
-	msg, err := a.bot.SendMessage(a.ctx, params)
+	msg, err := b.SendMessage(ctx, params)
 	if err != nil {
 		// Fallback to plain text
 		params.ParseMode = ""
 		params.Text = sanitizedText
-		msg, err = a.bot.SendMessage(a.ctx, params)
+		msg, err = b.SendMessage(ctx, params)
 		if err != nil {
 			return 0, err
 		}
@@ -597,7 +623,8 @@ func (a *Adapter) SendMessageWithID(chatID int64, text string) (int, error) {
 // When text exceeds TelegramMessageLimit the edit is refused so the caller can
 // fall back to sending a fresh (splittable) message via SendMessage.
 func (a *Adapter) EditMessageText(chatID int64, messageID int, text string) error {
-	if a.bot == nil {
+	b, ctx := a.session()
+	if b == nil {
 		return fmt.Errorf("bot not initialized")
 	}
 
@@ -615,13 +642,13 @@ func (a *Adapter) EditMessageText(chatID int64, messageID int, text string) erro
 		ParseMode: models.ParseModeMarkdownV1,
 	}
 
-	_, err := a.bot.EditMessageText(a.ctx, params)
+	_, err := b.EditMessageText(ctx, params)
 	if err != nil {
 		// Fallback to plain text if markdown fails
 		if strings.Contains(err.Error(), "can't parse entities") {
 			params.ParseMode = ""
 			params.Text = sanitizedText
-			_, err = a.bot.EditMessageText(a.ctx, params)
+			_, err = b.EditMessageText(ctx, params)
 		}
 		if err != nil {
 			// Ignore "message not modified" errors
@@ -637,7 +664,8 @@ func (a *Adapter) EditMessageText(chatID int64, messageID int, text string) erro
 
 // DeleteMessage deletes a message (used for silent response cleanup)
 func (a *Adapter) DeleteMessage(chatID int64, messageID int) error {
-	if a.bot == nil {
+	b, ctx := a.session()
+	if b == nil {
 		return fmt.Errorf("bot not initialized")
 	}
 
@@ -646,7 +674,7 @@ func (a *Adapter) DeleteMessage(chatID int64, messageID int) error {
 		MessageID: messageID,
 	}
 
-	_, err := a.bot.DeleteMessage(a.ctx, params)
+	_, err := b.DeleteMessage(ctx, params)
 	if err != nil {
 		// Ignore "message not found" errors
 		if strings.Contains(err.Error(), "message to delete not found") {
@@ -799,7 +827,7 @@ func (a *Adapter) handleUpdate(ctx context.Context, b *bot.Bot, update *models.U
 			if err != nil {
 				log.Printf("[Telegram] Error handling pairing for callback query user %s: %v", userID, err)
 				// Answer the callback query to remove loading state
-				a.bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				a.getBot().AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 					CallbackQueryID: update.CallbackQuery.ID,
 				})
 				return // Don't process the callback further
@@ -808,7 +836,7 @@ func (a *Adapter) handleUpdate(ctx context.Context, b *bot.Bot, update *models.U
 			if !isPaired {
 				log.Printf("[Telegram] User %s is not paired, callback query blocked", userID)
 				// Answer the callback query to remove loading state
-				a.bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				a.getBot().AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 					CallbackQueryID: update.CallbackQuery.ID,
 				})
 				return // User not paired, callback was handled by pairing system
@@ -846,7 +874,7 @@ func (a *Adapter) handleUpdate(ctx context.Context, b *bot.Bot, update *models.U
 		}
 
 		// Answer the callback query to remove loading state
-		a.bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		a.getBot().AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: update.CallbackQuery.ID,
 		})
 	}
@@ -869,7 +897,8 @@ func (a *Adapter) generateMessageID() string {
 
 // SendTypingIndicator sends a "typing" chat action to show the bot is thinking
 func (a *Adapter) SendTypingIndicator(chatID string) error {
-	if a.bot == nil {
+	b, ctx := a.session()
+	if b == nil {
 		return fmt.Errorf("bot not initialized")
 	}
 
@@ -878,7 +907,7 @@ func (a *Adapter) SendTypingIndicator(chatID string) error {
 		return fmt.Errorf("invalid chat ID: %s", chatID)
 	}
 
-	_, err = a.bot.SendChatAction(a.ctx, &bot.SendChatActionParams{
+	_, err = b.SendChatAction(ctx, &bot.SendChatActionParams{
 		ChatID: chatIDInt,
 		Action: models.ChatActionTyping,
 	})
@@ -915,9 +944,9 @@ func (a *Adapter) ApprovePairingCode(code string) error {
 		return nil
 	}
 
-	if a.bot != nil {
-		if concreteBot, ok := a.bot.(*bot.Bot); ok {
-			if err := a.pairingMgr.SendApprovalNotification(a.ctx, concreteBot, chatID); err != nil {
+	if b, ctx := a.session(); b != nil {
+		if concreteBot, ok := b.(*bot.Bot); ok {
+			if err := a.pairingMgr.SendApprovalNotification(ctx, concreteBot, chatID); err != nil {
 				log.Printf("[Telegram] Warning: Failed to send approval notification: %v", err)
 				// Pairing was approved successfully, just can't send notification
 			}
