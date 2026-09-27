@@ -72,7 +72,11 @@ func AdaptAllToolsToMCP(tools map[string]types.Tool) []*sdkmcp.Tool {
 }
 
 // AdaptToolResult converts a Conduit ToolResult to an MCP CallToolResult.
-func AdaptToolResult(result *types.ToolResult) *sdkmcp.CallToolResult {
+// includeData mirrors the execution engine's rule (conduit-31jg.39): Data is
+// appended as "Structured data: {json}" for tools that opt in via
+// IncludeDataInModelOutput, or when a successful result has no Content.
+// conduit-31jg.8: Data used to be dropped entirely over MCP.
+func AdaptToolResult(result *types.ToolResult, includeData bool) *sdkmcp.CallToolResult {
 	if result == nil {
 		return &sdkmcp.CallToolResult{
 			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "no result"}},
@@ -85,7 +89,13 @@ func AdaptToolResult(result *types.ToolResult) *sdkmcp.CallToolResult {
 	}
 
 	if result.Success {
-		mcpResult.Content = []sdkmcp.Content{&sdkmcp.TextContent{Text: result.Content}}
+		text := result.Content
+		if len(result.Data) > 0 && (includeData || strings.TrimSpace(text) == "") {
+			if dataJSON, err := json.Marshal(result.Data); err == nil {
+				text += "\n\nStructured data: " + string(dataJSON)
+			}
+		}
+		mcpResult.Content = []sdkmcp.Content{&sdkmcp.TextContent{Text: text}}
 	} else {
 		errMsg := result.Error
 		if errMsg == "" {

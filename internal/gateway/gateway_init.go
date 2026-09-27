@@ -284,6 +284,7 @@ func setupMCPForClaudeCode(
 	cfg *config.Config,
 	aiRouter *ai.Router,
 	toolsRegistry *tools.Registry,
+	executionEngine *tools.ExecutionEngine,
 	sessionStore *sessions.Store,
 	logger *slog.Logger,
 ) (*mcp.Server, *mcp.MCPConfigManager) {
@@ -306,13 +307,23 @@ func setupMCPForClaudeCode(
 			}
 		}
 
+		// conduit-31jg.8: bearer auth, and tool calls go through the
+		// execution engine (timeout, truncation, reflection, panic recovery).
+		authMode, authToken, ok := resolveMCPAuth(cfg, logger)
+		if !ok {
+			return nil, nil
+		}
+
 		// Create MCP server to expose Conduit tools to Claude Code.
-		mcpServer := mcp.NewServer(toolsRegistry, ccCfg.MCPPort)
+		mcpServer := mcp.NewServer(toolsRegistry, ccCfg.MCPPort,
+			mcp.WithExecutor(executionEngine),
+			mcp.WithAuth(authMode, authToken))
 
 		// Create MCP config manager for .mcp.json lifecycle.
 		var mcpConfigMgr *mcp.MCPConfigManager
 		if ccCfg.WorkingDir != "" {
 			mcpConfigMgr = mcp.NewMCPConfigManager(ccCfg.WorkingDir, ccCfg.MCPPort)
+			mcpConfigMgr.SetAuthHeader(authMode != mcp.AuthDisabled)
 		}
 
 		logger.Info("claude-code provider configured",

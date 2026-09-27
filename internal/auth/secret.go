@@ -116,6 +116,13 @@ func ResolveTokenStore(cfg *config.Config) (*TokenStoreSettings, error) {
 	return s, nil
 }
 
+// LoadOrCreateSecretFile reads a secret file (must be 0600-or-stricter and
+// non-empty), creating it atomically with 32 random bytes (hex, 0600) when it
+// does not exist. Used for the MCP bearer token (conduit-31jg.8).
+func LoadOrCreateSecretFile(path string) (secret string, generated bool, err error) {
+	return loadOrCreatePersistedSecret(path)
+}
+
 // loadOrCreatePersistedSecret reads the key at path, creating it atomically
 // with 0600 permissions if it does not exist. Concurrent first-time callers
 // (e.g. server and CLI) converge on a single key: the file is written to a
