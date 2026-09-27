@@ -55,8 +55,8 @@ func validatePort(me *multiError, port int) {
 //
 //   config.example.json uses:  "api_key": "${ANTHROPIC_API_KEY}"
 //
-// config.Load calls os.ExpandEnv on every cfg:"env"-tagged field.  When the
-// environment variable is absent, os.ExpandEnv("${ANTHROPIC_API_KEY}") returns
+// config.Load expands ${NAME} references (expandEnvBraced) in every
+// cfg:"env"-tagged field.  When the variable is absent, "${ANTHROPIC_API_KEY}" expands to
 // "" — an empty string, not the literal placeholder text.  So by the time
 // ValidateSemantic runs, a template config with an unset env var is
 // indistinguishable from a config that has no api_key at all.
@@ -100,7 +100,7 @@ func validateAICredentials(me *multiError, ai AIConfig) {
 // isUnexpandedPlaceholder returns true when a value still looks like an
 // unexpanded ${ENV_VAR} token.  This only occurs when ValidateSemantic is
 // called directly (e.g., in unit tests) without going through config.Load,
-// since Load expands all placeholders via os.ExpandEnv before validation.
+// since Load expands all ${NAME} placeholders (expandEnvBraced) before validation.
 func isUnexpandedPlaceholder(v string) bool {
 	return strings.HasPrefix(v, "${") && strings.HasSuffix(v, "}")
 }

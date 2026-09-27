@@ -224,6 +224,24 @@ func TestRedacted_URLPassword(t *testing.T) {
 	}
 }
 
+// conduit-31jg.73: identity labels and secret-file paths are diagnostics,
+// not credentials; they must survive redaction.
+func TestRedacted_NoOverMatch(t *testing.T) {
+	var cfg Config
+	cfg.SecretsFile = "/etc/conduit/secrets.env"
+	cfg.Agent.Identity.APIKeyIdentity = "Conduit (API key)"
+	red, err := Redacted(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(red)
+	for _, want := range []string{`"secrets_file":"/etc/conduit/secrets.env"`, `"api_key_identity":"Conduit (API key)"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("expected %s to survive redaction", want)
+		}
+	}
+}
+
 func TestIsSecretKey(t *testing.T) {
 	for _, k := range []string{"api_key", "apiKey", "APIKey", "oauth_token", "refresh_token", "token", "bot_token",
 		"client_secret", "token_secret", "password", "app_key", "api_token", "private_key", "client_key", "credentials"} {
@@ -232,7 +250,10 @@ func TestIsSecretKey(t *testing.T) {
 		}
 	}
 	for _, k := range []string{"max_tokens", "budget_tokens", "model", "base_url", "client_id", "type",
-		"preserve_keys", "strict_host_key_checking", "default_provider"} {
+		"preserve_keys", "strict_host_key_checking", "default_provider",
+		// conduit-31jg.73: mention a secret word but are identities, paths or switches.
+		"api_key_identity", "secrets_file", "token_file", "private_key_path", "redact_secrets",
+		"input_per_m_token", "chars_per_token"} {
 		if IsSecretKey(k) {
 			t.Errorf("IsSecretKey(%q) = true", k)
 		}
