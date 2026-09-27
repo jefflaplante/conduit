@@ -22,9 +22,12 @@ func shrinkRecoveryBudget(t *testing.T, minAttempt, reserve, minRetry time.Durat
 	t.Cleanup(func() { recoveryMinAttempt, recoveryFailoverReserve, recoveryMinRetry = pa, pr, pm })
 }
 
+// errHang scripts a ctxProvider call that blocks until its ctx ends.
+var errHang = fmt.Errorf("test: hang until ctx done")
+
 // ctxProvider records every call's remaining ctx budget, then either hangs
-// until ctx ends (hang=true) or returns the next scripted response, failing
-// with the ctx error when ctx is already done.
+// until ctx ends (hang=true, or a scripted errHang) or returns the next
+// scripted response, failing with the ctx error when ctx is already done.
 type ctxProvider struct {
 	name      string
 	hang      bool
@@ -50,7 +53,7 @@ func (p *ctxProvider) GenerateResponse(ctx context.Context, req *GenerateRequest
 	p.reqs = append(p.reqs, *req)
 	p.mu.Unlock()
 
-	if p.hang {
+	if p.hang || (i < len(p.responses) && p.responses[i].Error == errHang) {
 		<-ctx.Done()
 		return nil, fmt.Errorf("request failed: Post \"https://api.z.ai/api/coding/paas/v4/chat/completions\": %w", ctx.Err())
 	}

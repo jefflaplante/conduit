@@ -39,6 +39,35 @@ func (r *Router) contextWindowForRoute(rt providerRoute) int {
 	return ContextWindowForModel(model)
 }
 
+// routeModel returns the model a route actually runs: its explicit model,
+// else the provider's configured default.
+func (r *Router) routeModel(rt providerRoute) string {
+	if rt.model != "" {
+		return rt.model
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.providerMeta[rt.name].DefaultModel
+}
+
+// distinctFallbackRoute returns rt's configured fallback route, or nil when
+// none resolves or it would send the same model to the same provider
+// (z-ai's fallback_model "z-ai/glm-5.3" while already on glm-5.3 — a
+// "handoff" to the same backend and model is just a third attempt).
+// conduit-1w48.
+func (r *Router) distinctFallbackRoute(rt providerRoute) *providerRoute {
+	fbModel, fbProvider, ok := r.resolveFallbackRoute(rt.name)
+	if !ok {
+		return nil
+	}
+	fb := providerRoute{name: fbProvider.Name(), provider: fbProvider, model: fbModel}
+	if fb.name == rt.name &&
+		strings.EqualFold(stripProviderPrefix(r.routeModel(fb)), stripProviderPrefix(r.routeModel(rt))) {
+		return nil
+	}
+	return &fb
+}
+
 // recoveryOpts tunes callWithRecovery for a call site.
 type recoveryOpts struct {
 	// phase tags journal lines ("generate", "tool loop", "streaming").
@@ -58,6 +87,11 @@ type recoveryOpts struct {
 //  2. bd-6tb/bd-27ud: quota error → the fallback model on ITS OWN provider;
 //  3. bd-13p: transient timeout → retry once on the route that timed out
 //     (the fallback route if step 2 ran — conduit-31jg.18(a));
+//     conduit-1w48: if that retry also times out and step 2 did not run,
+//     hand off ONCE to the route's fallback (when it is a different
+//     route). Under a deadline the retry leaves the fallback
+//     recoveryFailoverReserve, or is skipped when it cannot
+//     (deadline_budget.go);
 //  4. conduit-31jg.46: streaming overload/rate-limit error AFTER text
 //     reached the client (providers only retry before first emission) →
 //     one muted retry on the same route.
@@ -68,7 +102,7 @@ type recoveryOpts struct {
 func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, req *GenerateRequest, opts recoveryOpts) (*GenerateResponse, providerRoute, int64, error) {
 	cur := primary
 	var served GenerateRequest
-	attempt := func(rt providerRoute) (*GenerateResponse, int64, error) {
+	attempt := func(ctx context.Context, rt providerRoute) (*GenerateResponse, int64, error) {
 		areq := *req
 		areq.Model = rt.model
 		trimRequestToFitContext(&areq, r.contextWindowForRoute(rt))
@@ -95,15 +129,19 @@ func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, re
 		return resp, latency, err
 	}
 
-	resp, latencyMs, err := attempt(cur)
+	resp, latencyMs, err := attempt(ctx, cur)
 
-	if err != nil && IsQuotaError(err) && !(opts.quotaFallbackNeedsModel && primary.model == "") {
+	fallbackAllowed := !(opts.quotaFallbackNeedsModel && primary.model == "")
+	handedOff := false // at most ONE move to the fallback route per call (conduit-1w48)
+
+	if err != nil && IsQuotaError(err) && fallbackAllowed {
 		if fbModel, fbProvider, ok := r.resolveFallbackRoute(primary.name); ok {
 			fb := providerRoute{name: fbProvider.Name(), provider: fbProvider, model: fbModel}
 			log.Printf("[Router] (%s) quota error on %q model=%q, retrying with fallback model %q on provider %q (bd-27ud)",
 				opts.phase, primary.name, primary.model, fb.model, fb.name)
 			cur = fb
-			resp, latencyMs, err = attempt(cur)
+			handedOff = true
+			resp, latencyMs, err = attempt(ctx, cur)
 			if err == nil {
 				log.Printf("[Router] (%s) fallback retry succeeded (bd-27ud): %q -> %q", opts.phase, primary.model, fb.model)
 			} else {
@@ -113,13 +151,50 @@ func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, re
 	}
 
 	if err != nil && IsTransientTimeoutError(err) && ctx.Err() == nil {
-		// conduit-31jg.18(a): retry the PAIR that timed out.
-		log.Printf("[Router] (%s) transient timeout on provider %q model=%q, retrying once (bd-13p)", opts.phase, cur.name, cur.model)
-		resp, latencyMs, err = attempt(cur)
-		if err == nil {
-			log.Printf("[Router] (%s) timeout retry succeeded (bd-13p)", opts.phase)
+		// conduit-1w48: a route whose timeout retry is exhausted hands off
+		// to its fallback route — once, and only when that is a genuinely
+		// different route and the quota step has not already moved there.
+		var timeoutFB *providerRoute
+		if fallbackAllowed && !handedOff {
+			timeoutFB = r.distinctFallbackRoute(cur)
+		}
+		// conduit-10ip/1w48: under a deadline the same-route retry leaves
+		// the fallback a reserved slice, or is skipped when it cannot.
+		reserve := time.Duration(0)
+		if _, hasDeadline := ctx.Deadline(); hasDeadline && timeoutFB != nil {
+			reserve = recoveryFailoverReserve
+		}
+		retryCtx, cancelRetry, retryOK := retryBudget(ctx, reserve)
+		if retryOK {
+			// conduit-31jg.18(a): retry the PAIR that timed out.
+			log.Printf("[Router] (%s) transient timeout on provider %q model=%q, retrying once (bd-13p)", opts.phase, cur.name, cur.model)
+			resp, latencyMs, err = attempt(retryCtx, cur)
+			if err == nil {
+				log.Printf("[Router] (%s) timeout retry succeeded (bd-13p)", opts.phase)
+			} else {
+				log.Printf("[Router] (%s) timeout retry failed: %v (bd-13p)", opts.phase, err)
+			}
 		} else {
-			log.Printf("[Router] (%s) timeout retry failed: %v (bd-13p)", opts.phase, err)
+			left, _ := timeLeft(ctx)
+			log.Printf("[Router] (%s) transient timeout on provider %q model=%q with %s left — skipping same-route retry (conduit-1w48)",
+				opts.phase, cur.name, cur.model, left.Round(time.Millisecond))
+		}
+		cancelRetry()
+
+		if err != nil && IsTransientTimeoutError(err) && timeoutFB != nil {
+			if hasAttemptBudget(ctx) {
+				log.Printf("[Router] (%s) timeout retries exhausted on provider %q model=%q, handing off to fallback model %q on provider %q (conduit-1w48)",
+					opts.phase, cur.name, cur.model, timeoutFB.model, timeoutFB.name)
+				cur = *timeoutFB
+				resp, latencyMs, err = attempt(ctx, cur)
+				if err == nil {
+					log.Printf("[Router] (%s) timeout fallback succeeded (conduit-1w48)", opts.phase)
+				} else {
+					log.Printf("[Router] (%s) timeout fallback failed: %v (conduit-1w48)", opts.phase, err)
+				}
+			} else {
+				log.Printf("[Router] (%s) no deadline budget left for the timeout fallback to %q (conduit-1w48)", opts.phase, timeoutFB.name)
+			}
 		}
 	}
 
@@ -130,7 +205,7 @@ func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, re
 	if err != nil && opts.stream != nil && opts.stream.emitted() && IsRetryableOverloadError(err) && ctx.Err() == nil {
 		log.Printf("[Router] (%s) overload after %d streamed bytes on provider %q model=%q — one muted retry (conduit-31jg.46)",
 			opts.phase, opts.stream.emittedBytes(), cur.name, cur.model)
-		resp, latencyMs, err = attempt(cur)
+		resp, latencyMs, err = attempt(ctx, cur)
 	}
 
 	if err == nil {
