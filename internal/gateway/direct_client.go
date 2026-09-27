@@ -348,11 +348,12 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 		}
 		// Clear persisted context usage so /context reflects the reset
 		_ = c.sessions.SetSessionContextBatch(sessionKey, map[string]string{
-			"last_prompt_tokens":     "",
-			"last_completion_tokens": "",
-			"last_total_tokens":      "",
-			"session_total_cost":     "",
-			"session_request_count":  "",
+			"last_prompt_tokens":        "",
+			"last_completion_tokens":    "",
+			"last_total_tokens":         "",
+			"session_total_cost":        "",
+			"session_request_count":     "",
+			"session_unpriced_requests": "", // conduit-31jg.57
 		})
 		sendResponse("Session reset. Fresh start!")
 

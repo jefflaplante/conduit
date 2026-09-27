@@ -7,34 +7,40 @@ import (
 
 // ProviderUsageRecord tracks usage metrics for a single provider.
 type ProviderUsageRecord struct {
-	Provider              string    `json:"provider"`
-	TotalRequests         int64     `json:"total_requests"`
-	TotalInputTokens      int64     `json:"total_input_tokens"`
-	TotalOutputTokens     int64     `json:"total_output_tokens"`
-	TotalCacheWriteTokens int64     `json:"total_cache_write_tokens"`
-	TotalCacheReadTokens  int64     `json:"total_cache_read_tokens"`
-	CacheSavings          float64   `json:"cache_savings"`
-	TotalCost             float64   `json:"total_cost"`
-	TotalLatencyMs        int64     `json:"total_latency_ms"`
-	LastUsed              time.Time `json:"last_used"`
-	ErrorCount            int64     `json:"error_count"`
+	Provider              string  `json:"provider"`
+	TotalRequests         int64   `json:"total_requests"`
+	TotalInputTokens      int64   `json:"total_input_tokens"`
+	TotalOutputTokens     int64   `json:"total_output_tokens"`
+	TotalCacheWriteTokens int64   `json:"total_cache_write_tokens"`
+	TotalCacheReadTokens  int64   `json:"total_cache_read_tokens"`
+	CacheSavings          float64 `json:"cache_savings"`
+	TotalCost             float64 `json:"total_cost"`
+	// UnpricedRequests counts calls on models with no known price: their
+	// cost is unknown and NOT included in TotalCost. conduit-31jg.57
+	UnpricedRequests int64     `json:"unpriced_requests,omitempty"`
+	TotalLatencyMs   int64     `json:"total_latency_ms"`
+	LastUsed         time.Time `json:"last_used"`
+	ErrorCount       int64     `json:"error_count"`
 }
 
 // ModelUsageRecord tracks usage metrics for a specific model.
 type ModelUsageRecord struct {
-	Model                 string    `json:"model"`
-	Provider              string    `json:"provider"`
-	TotalRequests         int64     `json:"total_requests"`
-	TotalInputTokens      int64     `json:"total_input_tokens"`
-	TotalOutputTokens     int64     `json:"total_output_tokens"`
-	TotalCacheWriteTokens int64     `json:"total_cache_write_tokens"`
-	TotalCacheReadTokens  int64     `json:"total_cache_read_tokens"`
-	CacheHitRate          float64   `json:"cache_hit_rate"`
-	TotalCost             float64   `json:"total_cost"`
-	TotalLatencyMs        int64     `json:"total_latency_ms"`
-	AvgLatencyMs          float64   `json:"avg_latency_ms"`
-	LastUsed              time.Time `json:"last_used"`
-	ErrorCount            int64     `json:"error_count"`
+	Model                 string  `json:"model"`
+	Provider              string  `json:"provider"`
+	TotalRequests         int64   `json:"total_requests"`
+	TotalInputTokens      int64   `json:"total_input_tokens"`
+	TotalOutputTokens     int64   `json:"total_output_tokens"`
+	TotalCacheWriteTokens int64   `json:"total_cache_write_tokens"`
+	TotalCacheReadTokens  int64   `json:"total_cache_read_tokens"`
+	CacheHitRate          float64 `json:"cache_hit_rate"`
+	TotalCost             float64 `json:"total_cost"`
+	// Unpriced is true when the model has no known price (TotalCost is then
+	// unknown, not $0). conduit-31jg.57
+	Unpriced       bool      `json:"unpriced,omitempty"`
+	TotalLatencyMs int64     `json:"total_latency_ms"`
+	AvgLatencyMs   float64   `json:"avg_latency_ms"`
+	LastUsed       time.Time `json:"last_used"`
+	ErrorCount     int64     `json:"error_count"`
 }
 
 // UsageSnapshot holds a point-in-time summary of all usage data.
@@ -65,6 +71,15 @@ type UsageTracker struct {
 	models    map[string]*ModelUsageRecord
 	startTime time.Time
 	observer  UsageObserver
+	pricing   *PricingResolver // nil = DefaultPricingResolver(); conduit-31jg.57
+}
+
+// SetPricingResolver installs the resolver used to price recorded calls.
+// conduit-31jg.57
+func (ut *UsageTracker) SetPricingResolver(pr *PricingResolver) {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	ut.pricing = pr
 }
 
 // NewUsageTracker creates a new usage tracker.
@@ -82,7 +97,15 @@ func (ut *UsageTracker) RecordUsage(provider, model string, inputTokens, outputT
 	defer ut.mu.Unlock()
 
 	now := time.Now()
-	cost := CalculateCost(model, inputTokens, outputTokens)
+	// conduit-31jg.57: price through the gateway resolver (config overrides,
+	// provider-prefixed IDs) with cache writes/reads billed at their rates.
+	pricer := ut.pricing
+	if pricer == nil {
+		pricer = DefaultPricingResolver()
+	}
+	usage := Usage{PromptTokens: inputTokens, CompletionTokens: outputTokens,
+		CacheCreationInputTokens: cacheWriteTokens, CacheReadInputTokens: cacheReadTokens}
+	cost, priced := pricer.Cost(provider, model, usage)
 
 	// Update provider record
 	pr, ok := ut.providers[provider]
@@ -94,6 +117,9 @@ func (ut *UsageTracker) RecordUsage(provider, model string, inputTokens, outputT
 	pr.TotalInputTokens += int64(inputTokens)
 	pr.TotalOutputTokens += int64(outputTokens)
 	pr.TotalCost += cost
+	if !priced {
+		pr.UnpricedRequests++
+	}
 	pr.TotalLatencyMs += latencyMs
 	pr.LastUsed = now
 
@@ -101,10 +127,12 @@ func (ut *UsageTracker) RecordUsage(provider, model string, inputTokens, outputT
 	pr.TotalCacheWriteTokens += int64(cacheWriteTokens)
 	pr.TotalCacheReadTokens += int64(cacheReadTokens)
 
-	// Calculate savings (cache reads are 0.1x cost vs normal input)
-	if cacheReadTokens > 0 {
-		baseCost := CalculateCost(model, cacheReadTokens, 0)
-		actualCost := baseCost * 0.1
+	// Savings: what the cache reads would have cost as uncached input,
+	// minus what they did cost.
+	if cacheReadTokens > 0 && priced {
+		p, _ := pricer.Resolve(provider, model)
+		baseCost := p.Cost(Usage{PromptTokens: cacheReadTokens}, 0)
+		actualCost := p.Cost(Usage{CacheReadInputTokens: cacheReadTokens}, 0)
 		pr.CacheSavings += (baseCost - actualCost)
 	}
 
@@ -118,6 +146,7 @@ func (ut *UsageTracker) RecordUsage(provider, model string, inputTokens, outputT
 	mr.TotalInputTokens += int64(inputTokens)
 	mr.TotalOutputTokens += int64(outputTokens)
 	mr.TotalCost += cost
+	mr.Unpriced = !priced
 	mr.TotalLatencyMs += latencyMs
 	mr.AvgLatencyMs = float64(mr.TotalLatencyMs) / float64(mr.TotalRequests)
 	mr.LastUsed = now

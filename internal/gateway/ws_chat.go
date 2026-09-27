@@ -317,11 +317,12 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 		}
 		// Clear persisted context usage so /context reflects the reset
 		_ = g.sessions.SetSessionContextBatch(sessionKey, map[string]string{
-			"last_prompt_tokens":     "",
-			"last_completion_tokens": "",
-			"last_total_tokens":      "",
-			"session_total_cost":     "",
-			"session_request_count":  "",
+			"last_prompt_tokens":        "",
+			"last_completion_tokens":    "",
+			"last_total_tokens":         "",
+			"session_total_cost":        "",
+			"session_request_count":     "",
+			"session_unpriced_requests": "", // conduit-31jg.57
 		})
 		sendResponse("Session reset. Fresh start!")
 
@@ -730,11 +731,12 @@ func (g *Gateway) handleReflectiveSessionEnd(ctx context.Context, client *Client
 		return
 	}
 	_ = g.sessions.SetSessionContextBatch(sessionKey, map[string]string{
-		"last_prompt_tokens":     "",
-		"last_completion_tokens": "",
-		"last_total_tokens":      "",
-		"session_total_cost":     "",
-		"session_request_count":  "",
+		"last_prompt_tokens":        "",
+		"last_completion_tokens":    "",
+		"last_total_tokens":         "",
+		"session_total_cost":        "",
+		"session_request_count":     "",
+		"session_unpriced_requests": "", // conduit-31jg.57
 	})
 	sendResponse("Session reflection complete. Goodbye!")
 }

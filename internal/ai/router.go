@@ -387,6 +387,9 @@ func NewRouter(cfg config.AIConfig, agentSystem AgentSystem) (*Router, error) {
 		usageTracker:      NewUsageTracker(),
 		maxTokensForChain: cfg.MaxTokens,
 	}
+	// conduit-31jg.57: one resolver (ai.pricing_overrides + built-ins) for
+	// every cost path the router owns.
+	router.SetPricingResolver(NewPricingResolverFromConfig(cfg))
 
 	return router, router.initializeProviders(cfg)
 }
@@ -402,6 +405,9 @@ func NewRouterWithExecution(cfg config.AIConfig, agentSystem AgentSystem, execut
 		usageTracker:      NewUsageTracker(),
 		maxTokensForChain: cfg.MaxTokens,
 	}
+	// conduit-31jg.57: one resolver (ai.pricing_overrides + built-ins) for
+	// every cost path the router owns.
+	router.SetPricingResolver(NewPricingResolverFromConfig(cfg))
 
 	return router, router.initializeProviders(cfg)
 }
@@ -443,18 +449,56 @@ func (r *Router) SetContextEngine(engine ContextEngine) {
 	r.contextEngine = engine
 }
 
-// SetPricingResolver sets the pricing resolver for dynamic model pricing.
+// SetPricingResolver sets the pricing resolver for dynamic model pricing and
+// hands it to the router's usage tracker (conduit-31jg.57).
 func (r *Router) SetPricingResolver(pr *PricingResolver) {
 	r.pricingResolver = pr
+	if r.usageTracker != nil {
+		r.usageTracker.SetPricingResolver(pr)
+	}
+}
+
+// PricingResolver returns the router's resolver, or the package default.
+func (r *Router) PricingResolver() *PricingResolver {
+	if r != nil && r.pricingResolver != nil {
+		return r.pricingResolver
+	}
+	return DefaultPricingResolver()
 }
 
 // ResolvePricing returns pricing for a model using the configured resolver,
 // or falls back to the default pricing matrix if no resolver is set.
 func (r *Router) ResolvePricing(model string) ModelPricing {
-	if r.pricingResolver != nil {
-		return r.pricingResolver.PricingForModel(model)
+	return r.PricingResolver().PricingForModel(model)
+}
+
+// effectiveRoute returns the (provider, model) a request with the given
+// provider/model overrides is served by: the provider inferred from the
+// model when none is named (or the default provider), and the provider's
+// configured default model when the model is empty. conduit-31jg.57
+func (r *Router) effectiveRoute(provider, model string) (string, string) {
+	if model != "" && (provider == "" || strings.Contains(model, "/")) {
+		if p := r.ResolveProviderForModel(model); p != "" {
+			provider = p
+		}
 	}
-	return PricingForModel(model)
+	if provider == "" {
+		provider = r.default_
+	}
+	if model == "" {
+		r.mu.RLock()
+		model = r.providerMeta[provider].DefaultModel
+		r.mu.RUnlock()
+	}
+	return provider, model
+}
+
+// TurnCost prices a turn's usage for the session cost counters.
+// priced=false means the model has no known price: the cost is unknown (the
+// returned 0 must not be read as free). conduit-31jg.57
+func (r *Router) TurnCost(provider, model string, u Usage) (cost float64, priced bool) {
+	provider, model = r.effectiveRoute(provider, model)
+	return r.PricingResolver().Cost(provider, model, u)
 }
 
 // IsSmartRoutingEnabled returns true if smart routing is configured and enabled.
