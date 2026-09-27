@@ -111,40 +111,50 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]interface{}) 
 	}
 }
 
+// sendErrorResult builds a failed send result. conduit-31jg.73: the
+// suggestions/examples go into ErrorDetails, which the execution engine
+// renders for failed results; Data (kept for API compatibility) is never
+// shown to the model on failure, so suggestions there were invisible.
+func sendErrorResult(errorType, msg, param string, value interface{}, examples, suggestions []string) *types.ToolResult {
+	r := types.NewErrorResult(errorType, msg).WithSuggestions(suggestions)
+	if len(examples) > 0 {
+		r.WithExamples(examples)
+	}
+	data := map[string]interface{}{"error_type": errorType, "suggestions": suggestions}
+	if param != "" {
+		r.WithParameter(param, value)
+		data["parameter"] = param
+		if value != nil {
+			data["provided_value"] = value
+		}
+	}
+	if len(examples) > 0 {
+		data["examples"] = examples
+	}
+	r.Data = data
+	return r
+}
+
 func (t *MessageTool) sendMessage(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
 	target := toolargs.GetString(args, "target", "")
 	message := toolargs.GetString(args, "message", "")
 
 	// Enhanced parameter validation with helpful error messages
 	if target == "" {
-		return &types.ToolResult{
-			Success: false,
-			Error:   "Target parameter is required for send action",
-			Data: map[string]interface{}{
-				"error_type": "missing_parameter",
-				"parameter":  "target",
-				"examples":   []string{"telegram", "discord", "123456789"},
-				"suggestions": []string{
-					"Use Message tool with action='status' to see available channels",
-					"Specify a valid channel ID or target",
-				},
-			},
-		}, nil
+		return sendErrorResult("missing_parameter", "Target parameter is required for send action",
+			"target", nil,
+			[]string{"telegram", "discord", "123456789"},
+			[]string{
+				"Use Message tool with action='status' to see available channels",
+				"Specify a valid channel ID or target",
+			}), nil
 	}
 
 	if message == "" {
-		return &types.ToolResult{
-			Success: false,
-			Error:   "Message parameter is required for send action",
-			Data: map[string]interface{}{
-				"error_type": "missing_parameter",
-				"parameter":  "message",
-				"examples":   []string{"Hello!", "Task completed successfully"},
-				"suggestions": []string{
-					"Provide message content to send",
-				},
-			},
-		}, nil
+		return sendErrorResult("missing_parameter", "Message parameter is required for send action",
+			"message", nil,
+			[]string{"Hello!", "Task completed successfully"},
+			[]string{"Provide message content to send"}), nil
 	}
 
 	// Build options
@@ -187,18 +197,13 @@ func (t *MessageTool) sendMessage(ctx context.Context, args map[string]interface
 	if t.services != nil && t.services.ChannelSender != nil {
 		err = t.services.ChannelSender.SendMessage(ctx, channelID, targetUserID, message, metadata)
 	} else {
-		return &types.ToolResult{
-			Success: false,
-			Error:   "Message service is not available",
-			Data: map[string]interface{}{
-				"error_type": "service_unavailable",
-				"suggestions": []string{
-					"Check if gateway is running",
-					"Verify channel configuration",
-					"Try again in a moment",
-				},
-			},
-		}, nil
+		return sendErrorResult("service_unavailable", "Message service is not available",
+			"", nil, nil,
+			[]string{
+				"Check if gateway is running",
+				"Verify channel configuration",
+				"Try again in a moment",
+			}), nil
 	}
 
 	if err != nil {
@@ -230,16 +235,8 @@ func (t *MessageTool) sendMessage(ctx context.Context, args map[string]interface
 			}
 		}
 
-		return &types.ToolResult{
-			Success: false,
-			Error:   fmt.Sprintf("Failed to send message: %v", err),
-			Data: map[string]interface{}{
-				"error_type":     errorType,
-				"parameter":      "target",
-				"provided_value": target,
-				"suggestions":    suggestions,
-			},
-		}, nil
+		return sendErrorResult(errorType, fmt.Sprintf("Failed to send message: %v", err),
+			"target", target, nil, suggestions), nil
 	}
 
 	return &types.ToolResult{
