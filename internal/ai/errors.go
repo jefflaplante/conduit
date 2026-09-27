@@ -156,4 +156,3 @@ func UserFriendlyError(err error) string {
 
 	return errStr
 }
-
