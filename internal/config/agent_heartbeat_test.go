@@ -520,8 +520,10 @@ func TestDefaultAgentHeartbeatConfig(t *testing.T) {
 		t.Errorf("expected default interval 5 minutes, got %d", config.IntervalMinutes)
 	}
 
-	if config.Timezone != "America/Los_Angeles" {
-		t.Errorf("expected default timezone America/Los_Angeles, got %s", config.Timezone)
+	// conduit-31jg.40: no owner-specific zone baked in; Load inherits the
+	// top-level timezone (see TestDerivedDefaults).
+	if config.Timezone != "" {
+		t.Errorf("expected empty default timezone (inherit), got %s", config.Timezone)
 	}
 
 	if !config.QuietEnabled {

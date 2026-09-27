@@ -1069,6 +1069,7 @@ func Load(path string) (*Config, error) {
 	// alias into ai.pricing_overrides.
 	cfg.AI.normalizePricingOverrides()
 	cfg.warnDeprecatedKeys()
+	cfg.applyDerivedDefaults() // conduit-31jg.40
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {

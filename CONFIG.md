@@ -832,7 +832,7 @@ Agent heartbeat — periodic task processing loop. Every N minutes, the agent re
 |-------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable the agent heartbeat loop |
 | `interval_minutes` | int | `5` | How often the agent checks for tasks. Range: 1–60 |
-| `timezone` | string | `"America/Los_Angeles"` | IANA timezone for quiet hours and scheduling |
+| `timezone` | string | `""` (inherits top-level `timezone`; UTC if both empty) | IANA timezone for quiet hours and scheduling |
 | `heartbeat_task_path` | string | `"HEARTBEAT.md"` | Path to task instructions file (relative to `workspace.context_dir`) |
 | `enabled_task_types` | string array | `["alerts", "checks", "reports"]` | Which task types to process. Options: `"alerts"`, `"checks"`, `"reports"`, `"maintenance"` |
 | `log_level` | string | `"info"` | Log level: `"debug"`, `"info"`, `"warn"`, `"error"` |
@@ -1140,7 +1140,7 @@ MQTT event ingest. Subscribes to topics and buffers events for the MQTT tool. Se
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable MQTT event ingest |
 | `broker_url` | string | — | MQTT broker URL. Required. Supports `${ENV_VAR}` |
-| `client_id` | string | `"conduit"` | MQTT client identifier |
+| `client_id` | string | unique `conduit-<host>-<random>` per process | MQTT client identifier. Set it explicitly only if it is unique per instance; two clients with the same ID disconnect each other |
 | `username` | string | `""` | MQTT username. Supports `${ENV_VAR}` |
 | `password` | string | `""` | MQTT password. Supports `${ENV_VAR}` |
 | `topics` | string array | — | Topic subscriptions (wildcards supported). Required |
@@ -1599,6 +1599,34 @@ Enable custom skills from SKILL.md files:
 ```
 
 Each skill directory must contain a `SKILL.md` file. The skills system discovers executable scripts (.sh, .py, .js) and reference files in each skill directory. Skills are exposed to the AI as additional tools.
+
+#### `skills.gog` (built-in gog/email skill)
+
+The `gog` / `email` skills build `gog gmail ...` commands in Go rather than from SKILL.md. Their settings are optional. Any field you leave unset keeps its legacy default, so existing configs behave the same. Owner-account sends need human approval in the originating channel, and `owner_aliases` decides which identities count as the owner. Changing that list changes what is gated.
+
+```json
+"skills": {
+  "gog": {
+    "binary": "/usr/local/bin/gog",
+    "owner_account_env": "GOG_ACCOUNT",
+    "agent_account_env": "AGENT_ACCOUNT",
+    "owner_aliases": ["owner", "owner@example.com"],
+    "agent_aliases": ["agent", "agent@example.com"],
+    "env_files": ["~/.conduit-secrets.env"],
+    "cleanup_script": "scripts/hygiene-junk-sweep.sh"
+  }
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `binary` | `gog` resolved on `PATH` at startup | gog executable |
+| `owner_account_env` | `GOG_ACCOUNT` | Env var holding the owner's account. Only this expansion and the agent's are ever passed to `--account` |
+| `agent_account_env` | `JULES_ACCOUNT` | Env var holding the agent's own account |
+| `owner_aliases` | legacy built-in list | `account`/`from`/`inbox` values that select the owner (sends are approval-gated) |
+| `agent_aliases` | legacy built-in list | Values that select the agent account. Sends default to the agent |
+| `env_files` | `~/ocgo/.ocgo-secrets.env`, `~/.conduit-secrets.env` | Shell env files sourced before each command. The first one that exists wins. Relative paths resolve against `workspace.context_dir` |
+| `cleanup_script` | `scripts/hygiene-junk-sweep.sh` | Script run by the `cleanup` action. Relative paths resolve against `workspace.context_dir` |
 
 Note: Skills integration is currently disabled in the tool registry pending a refactor (`registerAllTools` has the skill adapter registration commented out). The config infrastructure is in place for when it's re-enabled.
 

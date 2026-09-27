@@ -87,7 +87,7 @@ This document covers the **Agent Heartbeat** system.
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable/disable agent heartbeat |
 | `interval_minutes` | int | `5` | Minutes between heartbeat cycles (1-60) |
-| `timezone` | string | `"America/Los_Angeles"` | Timezone for quiet hours |
+| `timezone` | string | `""` (inherits top-level `timezone`; UTC if both empty) | Timezone for quiet hours |
 | `quiet_enabled` | bool | `true` | Enable quiet hours |
 | `quiet_hours.start_time` | string | `"22:00"` | Quiet period start (24h format) |
 | `quiet_hours.end_time` | string | `"08:00"` | Quiet period end (24h format) |

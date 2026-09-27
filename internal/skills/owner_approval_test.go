@@ -266,7 +266,7 @@ func TestJulesSend_NoApprovalNeeded(t *testing.T) {
 		{"account": "jules", "to": "bob@x.com"},
 		{"account": "agent@example.com", "to": "bob@x.com", "from": "agent@example.com"},
 	} {
-		if isOwnerEmailSend(Skill{Name: "email"}, "send", args) {
+		if NewExecutor(ExecutionConfig{}).isOwnerEmailSend(Skill{Name: "email"}, "send", args) {
 			t.Fatalf("agent-account send must not need approval: %v", args)
 		}
 		cmd := emailCommand(t, "send", args)

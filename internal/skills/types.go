@@ -109,6 +109,13 @@ type SkillsConfig struct {
 	// parent skill tool (skill_email, skill_solar). Each wrapper duplicates
 	// the parent's schema in every LLM request. Legacy default: true.
 	GenerateActionTools *bool `json:"generate_action_tools,omitempty"`
+	// Gog configures the built-in gog/email skill command builder: binary,
+	// account env vars, owner/agent aliases, env files, cleanup script.
+	// Unset fields keep the legacy defaults (conduit-31jg.40).
+	Gog *GogConfig `json:"gog,omitempty"`
+	// WorkspaceDir anchors workspace-relative skill paths. Not read from
+	// JSON: config.Load copies workspace.context_dir here.
+	WorkspaceDir string `json:"-"`
 }
 
 // ActionToolsEnabled reports whether per-action wrapper tools should be
