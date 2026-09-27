@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"conduit/internal/config"
 	"conduit/internal/tools/types"
 
 	"github.com/stretchr/testify/assert"
@@ -98,7 +99,7 @@ func TestImageTool_Execute_UsesVisionAnalyzer(t *testing.T) {
 
 	mock := &mockVisionAnalyzer{response: "Yes, there is a cat."}
 	services := &types.ToolServices{Vision: mock}
-	tool := NewImageTool(services)
+	tool := NewImageToolWithSandbox(services, config.SandboxConfig{WorkspaceDir: tmpDir})
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"image":  imagePath,

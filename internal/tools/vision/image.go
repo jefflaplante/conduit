@@ -4,16 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"conduit/internal/config"
+	"conduit/internal/httpsafe"
+	"conduit/internal/sandbox"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
+	"conduit/internal/tools/web"
 )
 
 // ImageAnalysisResult represents the result of image analysis
@@ -30,25 +34,49 @@ type ImageTool struct {
 	services     *types.ToolServices
 	httpClient   *http.Client
 	workspaceDir string
+	sandbox      *sandbox.Sandbox // conduit-31jg.62: file-path containment
 }
 
+// NewImageTool builds the Image tool with the sandbox taken from
+// services.ConfigMgr.Tools.Sandbox (no config → every file path is denied).
 func NewImageTool(services *types.ToolServices) *ImageTool {
+	var cfg config.SandboxConfig
+	if services != nil && services.ConfigMgr != nil {
+		cfg = services.ConfigMgr.Tools.Sandbox
+	}
+	return NewImageToolWithSandbox(services, cfg)
+}
+
+// NewImageToolWithSandbox builds the Image tool with an explicit sandbox
+// config (the registry passes its own, as for Read/Write/Edit).
+func NewImageToolWithSandbox(services *types.ToolServices, sandboxCfg config.SandboxConfig) *ImageTool {
 	tool := &ImageTool{services: services}
 
-	// Get HTTP client from services if available
-	if services != nil && services.WebClient != nil {
-		tool.httpClient = services.WebClient
-	}
+	// conduit-31jg.62: image URLs are model-controlled, so fetch through the
+	// same SSRF-guarded client/policy as WebFetch (tools.web config), never
+	// the shared unguarded WebClient. Only its timeout is inherited.
+	tool.httpClient = web.NewSafeClient(services, 60*time.Second)
 
-	// Fallback defaults
-	if tool.httpClient == nil {
-		tool.httpClient = &http.Client{
-			Timeout: 60 * time.Second,
-		}
+	tool.sandbox = sandbox.FromConfig(sandboxCfg)
+	tool.workspaceDir = sandboxCfg.WorkspaceDir
+	if tool.workspaceDir == "" {
+		tool.workspaceDir = "./workspace"
 	}
-	tool.workspaceDir = "./workspace"
 
 	return tool
+}
+
+// effectiveMaxBytes converts the maxBytesMb argument to a byte limit, never
+// above the shared media cap. conduit-31jg.62
+func effectiveMaxBytes(maxBytesMb float64) int64 {
+	if maxBytesMb <= 0 {
+		maxBytesMb = 5.0
+	}
+	maxBytes := int64(maxBytesMb * 1024 * 1024)
+	if maxBytes <= 0 || maxBytes > httpsafe.MediaBodyLimit {
+		maxBytes = httpsafe.MediaBodyLimit
+	}
+	return maxBytes
 }
 
 func (t *ImageTool) Name() string {
@@ -166,7 +194,7 @@ func (t *ImageTool) Execute(ctx context.Context, args map[string]interface{}) (*
 // loadImageData loads image data from various sources
 func (t *ImageTool) loadImageData(ctx context.Context, image string, maxBytesMb float64) ([]byte, map[string]interface{}, error) {
 	metadata := make(map[string]interface{})
-	maxBytes := int64(maxBytesMb * 1024 * 1024)
+	maxBytes := effectiveMaxBytes(maxBytesMb)
 
 	// Check if it's a base64 data URL
 	if strings.HasPrefix(image, "data:") {
@@ -239,15 +267,13 @@ func (t *ImageTool) loadFromURL(ctx context.Context, url string, maxBytes int64,
 		return nil, nil, fmt.Errorf("HTTP error %d: %s", resp.StatusCode, resp.Status)
 	}
 
-	// Read with size limit
-	limitedReader := io.LimitReader(resp.Body, maxBytes+1)
-	imageData, err := io.ReadAll(limitedReader)
+	// Read with size limit (maxBytes is capped at httpsafe.MediaBodyLimit).
+	imageData, err := httpsafe.ReadLimited(resp.Body, maxBytes) // conduit-31jg.62
+	if errors.Is(err, httpsafe.ErrBodyTooLarge) {
+		return nil, nil, fmt.Errorf("image size exceeds limit of %d bytes", maxBytes)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read image data: %w", err)
-	}
-
-	if int64(len(imageData)) > maxBytes {
-		return nil, nil, fmt.Errorf("image size exceeds limit of %d bytes", maxBytes)
 	}
 
 	// Extract metadata from headers
@@ -277,18 +303,38 @@ func (t *ImageTool) loadFromFile(path string, maxBytes int64, metadata map[strin
 		path = filepath.Join(t.workspaceDir, path)
 	}
 
-	// Check file exists and size
-	fileInfo, err := os.Stat(path)
+	// conduit-31jg.62: same symlink-aware containment check as Read/Write/
+	// Edit; all I/O below uses the canonical path that was checked.
+	realPath, err := t.sandbox.Resolve(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("path %q is not allowed in sandbox: %w", path, err)
+	}
+	path = realPath
+
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("file not found: %w", err)
+	}
+	defer f.Close()
+
+	// Check file exists and size
+	fileInfo, err := f.Stat()
+	if err != nil {
+		return nil, nil, fmt.Errorf("file not found: %w", err)
+	}
+	if !fileInfo.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("not a regular file: %s", path)
 	}
 
 	if fileInfo.Size() > maxBytes {
 		return nil, nil, fmt.Errorf("file size (%d bytes) exceeds limit (%d bytes)", fileInfo.Size(), maxBytes)
 	}
 
-	// Read file
-	imageData, err := os.ReadFile(path)
+	// Read file (bounded in case it grew after Stat)
+	imageData, err := httpsafe.ReadLimited(f, maxBytes)
+	if errors.Is(err, httpsafe.ErrBodyTooLarge) {
+		return nil, nil, fmt.Errorf("file size exceeds limit (%d bytes)", maxBytes)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -575,4 +621,3 @@ func (t *ImageTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *
 
 	return result
 }
-

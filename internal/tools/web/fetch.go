@@ -33,13 +33,22 @@ func NewWebFetchTool(services *types.ToolServices) *WebFetchTool {
 	// prompt injection), so it never uses the shared, unguarded WebClient.
 	// It builds its own client whose dialer checks the resolved IP of every
 	// connection, redirects included. Only the timeout is inherited.
-	timeout := 30 * time.Second
+	tool.httpClient = NewSafeClient(services, 30*time.Second)
+
+	return tool
+}
+
+// NewSafeClient returns an SSRF-guarded HTTP client for fetching
+// model-controlled URLs, using the tools.web policy (block_private_networks,
+// allowed_hosts). Only the timeout is inherited from the shared WebClient;
+// defaultTimeout applies when it has none. Shared by WebFetch and Image.
+// conduit-31jg.62
+func NewSafeClient(services *types.ToolServices, defaultTimeout time.Duration) *http.Client {
+	timeout := defaultTimeout
 	if services != nil && services.WebClient != nil && services.WebClient.Timeout > 0 {
 		timeout = services.WebClient.Timeout
 	}
-	tool.httpClient = httpsafe.NewClient(SSRFPolicy(services), timeout, nil)
-
-	return tool
+	return httpsafe.NewClient(SSRFPolicy(services), timeout, nil)
 }
 
 // SSRFPolicy builds the outbound-fetch policy from tools.web config.
