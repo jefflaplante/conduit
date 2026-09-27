@@ -311,8 +311,9 @@ func resolveBriefingsDir(cfg *config.Config) string {
 	return filepath.Join(workspace, "briefings")
 }
 
-// storeBriefingInBrain writes the briefing summary to Brain under sense.briefing.latest
-// so the Situation Awareness prompt section can surface it. This is best-effort:
+// storeBriefingInBrain writes the briefing summary to Brain LTM under
+// sense.briefing.latest so the gateway's Situation Awareness prompt section
+// can surface it. This is best-effort:
 // if Brain is not configured or unavailable, we log a warning and continue.
 func storeBriefingInBrain(cfg *config.Config, b *briefing.Briefing) {
 	if !cfg.Brain.Enabled {
@@ -324,22 +325,44 @@ func storeBriefingInBrain(cfg *config.Config, b *briefing.Briefing) {
 		brainDBPath = config.DeriveBrainDBPath(cfg.Database.Path)
 	}
 
-	brainSvc, err := brain.New(brainDBPath)
+	// conduit-31jg.61: capacity eviction is disabled in this short-lived CLI
+	// Brain. It doesn't carry the gateway's max_ltm_entries, so it must not
+	// trim the shared table; the gateway enforces the cap on its next LTM
+	// write. This command only ever upserts one fixed key.
+	brainSvc, err := brain.New(brainDBPath, brain.WithMaxLTMEntries(0))
 	if err != nil {
 		log.Printf("briefing: failed to open brain for briefing store: %v", err)
 		return
 	}
 	defer brainSvc.Close()
 
-	ctx := brain.WithUserID(context.Background(), "system")
 	value := b.FormatForBrain()
-
-	if err := brainSvc.Store(ctx, "sense.briefing.latest", value, brain.TierWorking, "system:briefing"); err != nil {
+	if err := writeBriefingToBrain(context.Background(), brainSvc, value); err != nil {
 		log.Printf("briefing: failed to store briefing in brain: %v", err)
 		return
 	}
 
-	log.Printf("briefing: stored in brain as sense.briefing.latest (%d bytes)", len(value))
+	log.Printf("briefing: stored in brain LTM as %s (%d bytes)", briefingBrainKey, len(value))
+}
+
+// briefingBrainKey is read by the Situation Awareness prompt section, which
+// lists the "sense.briefing." prefix (Brain.List covers WM and LTM).
+const briefingBrainKey = "sense.briefing.latest"
+
+// briefingBrainTTL keeps a stale briefing from lingering in the prompt when no
+// newer one overwrites it. conduit-31jg.61
+const briefingBrainTTL = 7 * 24 * time.Hour
+
+// writeBriefingToBrain upserts the briefing into long-term memory.
+//
+// conduit-31jg.61: this used TierWorking, which lives only in this CLI
+// process's Brain and vanished on exit, so the gateway never saw it. LTM is
+// the SQLite table shared with the gateway; Brain.List/Get read it for any
+// user. The fixed key is overwritten each run (one row, no growth).
+func writeBriefingToBrain(ctx context.Context, svc *brain.Brain, value string) error {
+	ctx = brain.WithUserID(ctx, "system")
+	return svc.Store(ctx, briefingBrainKey, value, brain.TierLongTerm, "system:briefing",
+		brain.WithTTL(briefingBrainTTL))
 }
 
 func printBriefingText(b *briefing.Briefing) {
