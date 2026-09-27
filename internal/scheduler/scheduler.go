@@ -169,10 +169,9 @@ func splitTZPrefix(schedule string) (prefix, rest string) {
 // system jobs need 5-field (standard crontab).
 func normalizeSchedule(schedule string, jobType JobType) (string, error) {
 	// conduit-31jg.34: allow an explicit per-job zone for Go jobs.
+	// conduit-31jg.74: and for system jobs, rendered DST-proof for vixie
+	// cron (see crontab_tz.go); validated below.
 	tzPrefix, schedule := splitTZPrefix(schedule)
-	if tzPrefix != "" && jobType != JobTypeGo {
-		return "", fmt.Errorf("invalid cron expression: %s prefix is only supported for go jobs", strings.TrimSpace(tzPrefix))
-	}
 	fields := strings.Fields(schedule)
 
 	switch len(fields) {
@@ -205,6 +204,11 @@ func normalizeSchedule(schedule string, jobType JobType) (string, error) {
 	}
 	if err != nil {
 		return "", fmt.Errorf("invalid cron expression: %v", err)
+	}
+	if tzPrefix != "" && jobType == JobTypeSystem {
+		if _, err := renderCrontabSchedule(schedule, crontabDaemonLocation(), time.Now()); err != nil {
+			return "", fmt.Errorf("invalid cron expression: %v", err)
+		}
 	}
 
 	return schedule, nil
@@ -626,9 +630,11 @@ func (s *Scheduler) addSystemCrontab(job *Job) error {
 	// Remove any existing entry for this job
 	entries = s.filterCrontabEntries(entries, job.ID)
 
-	// Add new entry
-	entry := fmt.Sprintf("%s %s %s "+CrontabJobIDFormat,
-		job.Schedule, job.Command, s.crontagMarker, job.ID)
+	// Add new entry (conduit-31jg.74: CRON_TZ schedules get a zone guard)
+	entry, err := s.crontabLine(job)
+	if err != nil {
+		return err
+	}
 	entries = append(entries, entry)
 
 	// Write back
