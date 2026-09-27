@@ -37,7 +37,6 @@ func (f *fakeBrainService) StoreWithTTL(ctx context.Context, key, value string, 
 	return nil
 }
 
-
 func (f *fakeBrainService) StoreBulk(ctx context.Context, entries []types.BrainBulkEntry) error {
 	if f.bulkErr != nil {
 		return f.bulkErr
@@ -67,7 +66,7 @@ func (f *fakeBrainService) List(ctx context.Context, prefix, sourcePrefix string
 func (f *fakeBrainService) ListGraph(ctx context.Context, opts types.BrainGraphOptions) (*types.BrainGraph, error) {
 	return &types.BrainGraph{}, nil
 }
-func (f *fakeBrainService) Delete(ctx context.Context, key string) error            { return nil }
+func (f *fakeBrainService) Delete(ctx context.Context, key string) error { return nil }
 func (f *fakeBrainService) Push(ctx context.Context, userID, value string) error {
 	f.scratchUIDs = append(f.scratchUIDs, userID)
 	return nil
@@ -80,7 +79,7 @@ func (f *fakeBrainService) Peek(ctx context.Context, userID string) (string, err
 	f.scratchUIDs = append(f.scratchUIDs, userID)
 	return "x", nil
 }
-func (f *fakeBrainService) Promote(ctx context.Context, key string) error           { return nil }
+func (f *fakeBrainService) Promote(ctx context.Context, key string) error { return nil }
 func (f *fakeBrainService) Consolidate(ctx context.Context, autoPromote bool) (*types.ConsolidationReport, error) {
 	return &types.ConsolidationReport{}, nil
 }

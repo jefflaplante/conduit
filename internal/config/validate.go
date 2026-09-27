@@ -53,7 +53,7 @@ func validatePort(me *multiError, port int) {
 // present.  That was softened (conduit-l4w0) after examining the real template
 // configs in configs/examples/:
 //
-//   config.example.json uses:  "api_key": "${ANTHROPIC_API_KEY}"
+//	config.example.json uses:  "api_key": "${ANTHROPIC_API_KEY}"
 //
 // config.Load expands ${NAME} references (expandEnvBraced) in every
 // cfg:"env"-tagged field.  When the variable is absent, "${ANTHROPIC_API_KEY}" expands to

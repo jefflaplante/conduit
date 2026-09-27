@@ -418,8 +418,8 @@ func TestValidateSemantic_OneEnabledTool(t *testing.T) {
 
 func TestValidateSemantic_MultipleErrors(t *testing.T) {
 	cfg := minimalValidConfig()
-	cfg.Port = 80                 // bad port
-	cfg.Tools.EnabledTools = nil  // no tools
+	cfg.Port = 80                // bad port
+	cfg.Tools.EnabledTools = nil // no tools
 
 	err := cfg.ValidateSemantic()
 	if err == nil {

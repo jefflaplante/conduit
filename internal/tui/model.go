@@ -350,7 +350,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.sidebar.SessionState = s.State
 					m.statusBar.SessionState = s.State
 				}
-	
+
 			} else {
 				info := ToolActivityInfo{
 					Name:     msg.ToolName,
