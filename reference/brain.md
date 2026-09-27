@@ -34,7 +34,7 @@ SQLite-persisted key-value store. Entries survive restarts and are shared across
 
 - Stored in a dedicated `brain.db` file (path derived from gateway DB or configured explicitly)
 - Indexed by salience and access time for efficient queries
-- Capped at `max_ltm_entries` (default 10,000) -- lowest-salience entries are evicted on insert when over the cap
+- Capped at `max_ltm_entries` (default 10,000). When an insert pushes the table over the cap, the lowest-scoring older rows are archived (`brain_archive`, reason `capacity`) and deleted. The score is Recall's query-independent blend: effective salience (with recency computed at query time) + warmth + decaying access bonus. Rows written or accessed within `ltm_eviction_grace_seconds` (default 1h) are never candidates, so the fact just stored is never the victim; if everything is that fresh the table briefly exceeds the cap (conduit-31jg.28, conduit-31jg.53).
 - Supports archive table for soft-deleted entries (used by REM pruning)
 - Supports relationship table for cross-entry links (used by REM integration)
 
@@ -48,7 +48,7 @@ In-process per-user key-value store. Scoped to the current user's session contex
 - WM lives only in process memory (`Brain.working`); nothing persists it, so a restart clears it
 - Auto-flushed periodically: entries not accessed for over 1 hour whose *eviction score* is below `evict_threshold` leave WM. The eviction score is salience without the constant tier term (`access_score*access_weight + recency_score*recency_weight`) — the tier term is identical for every WM entry, and including it made the default threshold unreachable (conduit-31jg.29). With defaults, an entry touched once is evictable after ~3.2h idle, one touched 10 times after ~5.7h.
 - Hot entries (access count >= heat promotion threshold, default 3) are never silently dropped: when they become evictable they are promoted to LTM first (if `auto_promote` is on; otherwise they stay in WM). Cold entries are dropped.
-- Per-user cap: each user's WM holds at most 1000 entries (`WithMaxWMEntriesPerUser`). Writing past the cap evicts the lowest-scoring entries (hot ones promoted to LTM first); the key being written is never the victim.
+- Per-user cap: each user's WM holds at most `max_wm_entries_per_user` entries (default 1000; negative = unbounded). Writing past the cap evicts the lowest-scoring entries (hot ones promoted to LTM first); the key being written is never the victim.
 - Promotion paths, in order of when they fire: explicit `promote`; `consolidate` (salience >= `consolidate_threshold`, or hot + evictable); auto-flush/cap rescue of hot entries; nightly REM consolidation (salience or heat) across every user's WM.
 - High-salience entries can be promoted to LTM via the `promote` or `consolidate` actions
 
@@ -190,6 +190,10 @@ Run the REM Sleep consolidation cycle (or a subset of phases). Requires `rem_ena
 
 Every entry has a salience score between 0.0 and 1.0 that determines its importance. Salience controls which entries are promoted, evicted, or pruned.
 
+**Recency is computed at query time (conduit-31jg.53).** `brain_ltm.salience` stores only the *base* salience -- `access_score*access_weight + 0.8*tier_weight`, plus REM boost/decay adjustments. Whenever an LTM row is scored (Recall, Get, List, Situation Awareness ordering, cluster expansion, graph export, spreading activation, capacity eviction) the *effective* salience is `clamp01(base + recency_score*recency_weight)`, with `recency_score` computed from `accessed_at` at that moment. Values returned by `get`/`recall`/`list` are effective salience. Working-memory salience is computed in-process the same way.
+
+REM's absolute thresholds were calibrated against the old stored value, which baked `recency_score = 1.0` in at every write. REM therefore compares against the *peak* salience, `base + recency_weight` (the effective value at the moment of access), which equals the old stored value exactly. Brain migration 9 converted existing rows once by subtracting `recency_weight` from every stored value.
+
 ### Formula
 
 ```
@@ -243,15 +247,15 @@ Promotes, merges, decays, and boosts entries.
 
 1. **Promote high-salience WM entries** to LTM (salience >= `consolidate_threshold`)
 2. **Merge duplicate keys** in LTM by normalized key comparison (lowercase, collapse whitespace). Keeps the higher-salience entry, archives the other.
-3. **Apply salience decay** to entries not accessed in 7+ days (subtracts `rem_salience_decay_rate` from salience, floored at 0.0). Skipped when LTM count is below `max_ltm_entries`.
-4. **Boost recently accessed entries** -- adds 0.05 salience to entries accessed in the last 24 hours (capped at 1.0).
+3. **Apply salience decay** to entries not accessed in 7+ days (subtracts `rem_salience_decay_rate` from salience, with peak salience floored at 0.0). Skipped when LTM count is below `max_ltm_entries`.
+4. **Boost recently accessed entries** -- adds 0.05 salience to entries accessed in the last 24 hours (peak salience capped at 1.0).
 
 ### Phase 3: Pruning
 
 Moves low-value entries to the archive. Two modes based on LTM size:
 
 - **Under `max_ltm_entries`**: Only detects orphaned entries (file-path sources where the source file no longer exists on disk)
-- **Over `max_ltm_entries`**: Full salience-based eviction (entries below evict threshold and older than `rem_prune_age_days`) plus orphan detection
+- **Over `max_ltm_entries`**: Full salience-based eviction (entries whose peak salience is below 0.1 and not accessed in `rem_prune_age_days`) plus orphan detection
 
 Pruned entries are moved to `brain_archive`, not deleted. This is a safe, reversible operation.
 
@@ -310,7 +314,9 @@ All fields live under the `brain` key in the config JSON.
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable the brain memory system |
 | `path` | string | derived | Path to brain.db file. If empty, derived from the gateway DB path (e.g. `config.telegram.brain.db`) |
-| `max_ltm_entries` | int | `10000` | Maximum LTM entries. Over this cap, lowest-salience entries are evicted on insert |
+| `max_ltm_entries` | int | `10000` | Maximum LTM entries. Over this cap, the lowest-scoring rows outside the grace window are archived and evicted on insert |
+| `ltm_eviction_grace_seconds` | int | `3600` | Rows written/accessed this recently are never capacity-evicted. Negative = only the write's own second is protected |
+| `max_wm_entries_per_user` | int | `1000` | Per-user working-memory cap. Negative = unbounded |
 | `wm_grace_period_seconds` | int | `300` | Seconds to keep working memory after session end |
 | `auto_flush_seconds` | int | `600` | Interval for background auto-flush of stale WM entries |
 | `consolidate_threshold` | float | `0.6` | Salience threshold for WM-to-LTM promotion |
@@ -387,7 +393,7 @@ Primary storage for long-term memory entries.
 | `created_at` | DATETIME | When the entry was created |
 | `accessed_at` | DATETIME | Last access time |
 | `access_count` | INTEGER | Total access count |
-| `salience` | REAL | Current salience score |
+| `salience` | REAL | Base salience (no recency term; see Salience Scoring) |
 | `stale` | INTEGER | 1 if marked stale by grooming, 0 otherwise |
 
 ### brain_archive
@@ -400,7 +406,7 @@ Soft-delete destination for pruned or merged entries.
 | `value` | TEXT | Original value |
 | `source` | TEXT | Original source |
 | `tier` | TEXT | Original tier |
-| `salience` | REAL | Salience at time of archival |
+| `salience` | REAL | Peak salience (base + `recency_weight`) at time of archival |
 | `archived_at` | DATETIME | When archived |
 | `reason` | TEXT | Why archived (`low_salience`, `orphaned`, `merged into <key>`) |
 
@@ -421,7 +427,8 @@ Cross-entry links discovered by the integration phase.
 ```
 internal/brain/
   brain.go            # Core Brain struct: Store, Get, Recall, List, Delete, Push/Pop/Peek, Promote, Consolidate, Status
-  migrations.go       # SQLite schema migrations (4 versions, includes brain_reflections)
+  migrations.go       # SQLite schema migrations (9 versions; 4 adds brain_reflections, 9 converts salience to base)
+  salience.go         # Base/effective/peak salience model (recency at query time)
   source.go           # Source provenance: prefix parsing, validation, staleness thresholds
   tokenize.go         # TokenizeQuery wrapper; tokenizer lives in internal/ftsquery (shared with every FTS5 MATCH builder)
   rem/

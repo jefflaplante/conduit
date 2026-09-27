@@ -23,9 +23,10 @@ func TestPrune_LowSalienceEntries(t *testing.T) {
 	err := b.Store(ctx, "old.key", "old value", brain.TierLongTerm, "")
 	require.NoError(t, err)
 
-	// Manually set low salience and old accessed_at
+	// Manually set low (peak) salience and old accessed_at. The column holds
+	// base salience = peak - recency weight (0.4). conduit-31jg.53
 	oldTime := time.Now().Add(-60 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
-	_, err = rem.db.Exec("UPDATE brain_ltm SET salience = 0.01, accessed_at = ?", oldTime)
+	_, err = rem.db.Exec("UPDATE brain_ltm SET salience = 0.01 - 0.4, accessed_at = ?", oldTime)
 	require.NoError(t, err)
 
 	// With default MaxLTMEntries=10000, table has 1 entry → under threshold → skip eviction
@@ -51,7 +52,7 @@ func TestPrune_LowSalienceEntries_OverThreshold(t *testing.T) {
 
 	// Make evict.key low-salience and old
 	oldTime := time.Now().Add(-60 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
-	_, err = rem.db.Exec("UPDATE brain_ltm SET salience = 0.01, accessed_at = ? WHERE key = 'evict.key'", oldTime)
+	_, err = rem.db.Exec("UPDATE brain_ltm SET salience = 0.01 - 0.4, accessed_at = ? WHERE key = 'evict.key'", oldTime)
 	require.NoError(t, err)
 
 	// keep.key stays recent — won't match the salience+age filter
@@ -129,7 +130,7 @@ func TestPrune_DryRun(t *testing.T) {
 	require.NoError(t, err)
 
 	oldTime := time.Now().Add(-60 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
-	_, err = rem.db.Exec("UPDATE brain_ltm SET salience = 0.01, accessed_at = ? WHERE key = 'dry.key2'", oldTime)
+	_, err = rem.db.Exec("UPDATE brain_ltm SET salience = 0.01 - 0.4, accessed_at = ? WHERE key = 'dry.key2'", oldTime)
 	require.NoError(t, err)
 
 	result, err := rem.Prune(ctx, true) // dry run
@@ -159,7 +160,7 @@ func TestPrune_RecentEntriesKept(t *testing.T) {
 	require.NoError(t, b.Store(ctx, "recent.key2", "value2", brain.TierLongTerm, ""))
 
 	// Make salience low but keep accessed_at recent (within PruneAgeDays)
-	_, err := rem.db.Exec("UPDATE brain_ltm SET salience = 0.01")
+	_, err := rem.db.Exec("UPDATE brain_ltm SET salience = 0.01 - 0.4")
 	require.NoError(t, err)
 
 	result, err := rem.Prune(ctx, false)
@@ -215,8 +216,9 @@ func TestPrune_ArchivePreservesMetadata(t *testing.T) {
 	require.NoError(t, os.WriteFile(testFile, []byte("content"), 0644))
 	require.NoError(t, b.Store(ctx, "archive.key", "archive value", brain.TierLongTerm, testFile))
 
-	// Set specific salience
-	_, err := rem.db.Exec("UPDATE brain_ltm SET salience = 0.05 WHERE key = 'archive.key'")
+	// Set specific salience (column = base; peak = base + 0.4 = 0.05, which is
+	// what brain_archive records). conduit-31jg.53
+	_, err := rem.db.Exec("UPDATE brain_ltm SET salience = 0.05 - 0.4 WHERE key = 'archive.key'")
 	require.NoError(t, err)
 
 	require.NoError(t, os.Remove(testFile))
@@ -237,7 +239,7 @@ func TestPrune_ArchivePreservesMetadata(t *testing.T) {
 	assert.Equal(t, "archive.key", key)
 	assert.Equal(t, "archive value", value)
 	assert.Equal(t, testFile, source)
-	assert.Equal(t, 0.05, salience)
+	assert.InDelta(t, 0.05, salience, 1e-9)
 }
 
 func TestIsFilePath(t *testing.T) {

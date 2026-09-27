@@ -439,7 +439,7 @@ func TestIntegrate_NamespacePairCap(t *testing.T) {
 		key := fmt.Sprintf("large.namespace.entry%03d", i)
 		_, err := rem.db.Exec(`
 			UPDATE brain_ltm
-			SET salience = 0.7
+			SET salience = 0.7 - 0.4 -- peak 0.7
 			WHERE key = ?
 		`, key)
 		require.NoError(t, err)
@@ -508,7 +508,7 @@ func TestIntegrate_NamespaceSalienceGate(t *testing.T) {
 	for _, key := range lowSalienceKeys {
 		_, err := rem.db.Exec(`
 			UPDATE brain_ltm
-			SET salience = 0.3
+			SET salience = 0.3 - 0.4 -- peak 0.3; column = base (conduit-31jg.53)
 			WHERE key = ?
 		`, key)
 		require.NoError(t, err)
@@ -518,7 +518,7 @@ func TestIntegrate_NamespaceSalienceGate(t *testing.T) {
 	for _, key := range highSalienceKeys {
 		_, err := rem.db.Exec(`
 			UPDATE brain_ltm
-			SET salience = 0.7
+			SET salience = 0.7 - 0.4 -- peak 0.7
 			WHERE key = ?
 		`, key)
 		require.NoError(t, err)

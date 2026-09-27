@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"conduit/internal/brain"
 )
 
 // Triage scans daily logs and working memory to identify what needs processing
@@ -33,17 +35,23 @@ func (r *REMCycle) Triage(ctx context.Context, dryRun bool) (*TriageResult, erro
 	result.NewFacts = newFacts
 	result.UpdatedFacts = updatedFacts
 
-	// 2. Scan working memory for unpromoted keys
-	wmEntries, err := r.brain.List(ctx, "", "")
-	if err != nil {
-		return result, fmt.Errorf("list working memory: %w", err)
+	// 2. Scan working memory for unpromoted keys.
+	//
+	// conduit-31jg.73: WM is per-user and REM runs from a system context
+	// whose own bucket is usually empty, so every user's bucket is scanned
+	// (as consolidation's promotion sweep does). This previously used
+	// List(ctx, "", ""), which saw only the caller's (plus shared) bucket and
+	// also counted every LTM row as a "WM key".
+	var wmEntries []*brain.Entry
+	for _, uid := range r.brain.WorkingMemoryUserIDs() {
+		wmEntries = append(wmEntries, r.brain.WorkingMemoryEntries(brain.WithUserID(ctx, uid))...)
 	}
 
 	result.WMKeysFound = len(wmEntries)
 
 	// Count entries that should be promoted (high salience/access count)
 	for _, entry := range wmEntries {
-		if entry.Tier == "working" {
+		if entry.Tier == brain.TierWorking {
 			// Check if this key is mentioned in the new/updated facts
 			mentioned := false
 			key := entry.Key

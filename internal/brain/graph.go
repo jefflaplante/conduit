@@ -52,16 +52,18 @@ type GraphOptions struct {
 func (b *Brain) ListGraph(ctx context.Context, opts GraphOptions) (*Graph, error) {
 	g := &Graph{Nodes: []*GraphNode{}, Edges: []*GraphEdge{}}
 
-	nodeQuery := `SELECT key, value, source, salience, warmth, access_count, created_at
+	// conduit-31jg.53: node salience is the query-time effective value.
+	eff := b.EffectiveSalienceSQL()
+	nodeQuery := `SELECT key, value, source, ` + eff + `, warmth, access_count, created_at
 		FROM brain_ltm
 		WHERE (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))
-		  AND salience >= ?`
+		  AND ` + eff + ` >= ?`
 	args := []interface{}{opts.MinSalience}
 	if opts.SourcePrefix != "" {
 		nodeQuery += " AND source LIKE ?"
 		args = append(args, opts.SourcePrefix+"%")
 	}
-	nodeQuery += " ORDER BY salience DESC"
+	nodeQuery += " ORDER BY " + eff + " DESC"
 	if opts.NodeLimit > 0 {
 		nodeQuery += " LIMIT ?"
 		args = append(args, opts.NodeLimit)

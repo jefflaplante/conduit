@@ -296,11 +296,6 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(0)
 
-	if err := runMigrations(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("brain migrations: %w", err)
-	}
-
 	b := &Brain{
 		working:                make(map[string]map[string]*Entry),
 		scratch:                make(map[string][]string),
@@ -340,6 +335,12 @@ func New(dbPath string, opts ...Option) (*Brain, error) {
 	}
 	for _, opt := range opts {
 		opt(b)
+	}
+	// Migrations run after options: migration 9 depends on the configured
+	// recency weight (conduit-31jg.53).
+	if err := runMigrations(db, migrationParams{recencyWeight: b.recencyWeight}); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("brain migrations: %w", err)
 	}
 	b.startAutoFlush()
 	log.Printf("Brain initialized at %s", dbPath)
@@ -457,19 +458,17 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 			if err != nil {
 				return err
 			}
+			// conduit-31jg.53: store base salience only (access + tier);
+			// recency is computed at query time.
 			stmt, err := tx.PrepareContext(ctx, `
 				INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
-				VALUES (?, ?, ?, ?, ?, 1, 0.5)
+				VALUES (?, ?, ?, ?, ?, 1, ?)
 				ON CONFLICT(key) DO UPDATE SET
 					value = excluded.value,
 					source = excluded.source,
 					accessed_at = excluded.accessed_at,
 					access_count = access_count + 1,
-					salience = COALESCE(
-						(MIN(CAST(access_count + 1 AS REAL) / CAST(? AS REAL), 1.0) * ?) +
-						(1.0 / (1.0 + 0.0)) * ? +
-						(0.8 * ?),
-						salience, 0.5)
+					salience = `+b.ltmBaseSalienceSQL("access_count + 1")+`
 			`)
 			if err != nil {
 				tx.Rollback()
@@ -478,7 +477,7 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 			defer stmt.Close()
 			for _, e := range ltmBatch {
 				if _, err := stmt.ExecContext(ctx, e.Key, e.Value, e.Source, nowStr, nowStr,
-					b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight); err != nil {
+					b.ltmBaseSalience(1)); err != nil {
 					tx.Rollback()
 					return err
 				}
@@ -544,25 +543,20 @@ func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *ti
 	} else {
 		expiresStr = nil
 	}
-	// Use a simple default salience for upsert; the exact salience is recomputed on access.
-	// The ON CONFLICT UPDATE preserves the existing salience bumped slightly for the access.
+	// conduit-31jg.53: the column holds base salience (access + tier) only;
+	// recency is computed at query time (see salience.go).
 	err := database.RetryOnBusy(5, func() error {
 		_, err := b.db.Exec(`
 			INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience, expires_at)
-			VALUES (?, ?, ?, ?, ?, 1, 0.5, ?)
+			VALUES (?, ?, ?, ?, ?, 1, ?, ?)
 			ON CONFLICT(key) DO UPDATE SET
 				value = excluded.value,
 				source = excluded.source,
 				accessed_at = excluded.accessed_at,
 				access_count = access_count + 1,
 				expires_at = excluded.expires_at,
-				salience = COALESCE(
-					(MIN(CAST(access_count + 1 AS REAL) / CAST(? AS REAL), 1.0) * ?) +
-					(1.0 / (1.0 + 0.0)) * ? +
-					(0.8 * ?),
-					salience, 0.5)
-		`, key, value, source, nowStr, nowStr, expiresStr,
-			b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight)
+				salience = `+b.ltmBaseSalienceSQL("access_count + 1")+`
+		`, key, value, source, nowStr, nowStr, b.ltmBaseSalience(1), expiresStr)
 		return err
 	})
 	if err != nil {
@@ -588,12 +582,17 @@ const DefaultLTMEvictionGrace = time.Hour
 // from accessed_at, never baked in). Lowest score is evicted first.
 // Placeholders: salienceWeight, warmthWeight, accessBonusCap, accessBonusAlpha,
 // accessBonusDecay, accessBonusWeight. conduit-31jg.28
-const ltmEvictionScoreSQL = `(
-	salience * ? +
+//
+// conduit-31jg.53: salience here is the query-time effective salience (base +
+// recency computed from accessed_at), matching what Recall ranks on.
+func (b *Brain) ltmEvictionScoreSQL() string {
+	return `(
+	` + b.EffectiveSalienceSQL() + ` * ? +
 	COALESCE(warmth, 0) * ? +
 	COALESCE(MIN(?, MAX(access_count, 0) * ? *
 		pow(?, MAX(0.0, julianday('now') - julianday(accessed_at)))), 0) * ?
 )`
+}
 
 // evictLTMOverCapacity trims brain_ltm down to maxLTMEntries.
 //
@@ -653,10 +652,10 @@ func (b *Brain) evictLTMOverCapacity(ctx context.Context, now time.Time) {
 		}
 
 		rows, err := tx.QueryContext(ctx, `
-			SELECT key, value, COALESCE(source, ''), salience
+			SELECT key, value, COALESCE(source, ''), `+b.PeakSalienceSQL()+`
 			FROM brain_ltm
 			WHERE accessed_at < ? AND created_at < ?
-			ORDER BY `+ltmEvictionScoreSQL+` ASC, accessed_at ASC
+			ORDER BY `+b.ltmEvictionScoreSQL()+` ASC, accessed_at ASC
 			LIMIT ?`,
 			cutoff, cutoff,
 			b.salienceWeight, b.warmthWeight,
@@ -773,18 +772,16 @@ func (b *Brain) Get(ctx context.Context, key string) (*Entry, error) {
 }
 
 func (b *Brain) getLTM(key string) (*Entry, error) {
+	// conduit-31jg.53: store base salience; return the effective value (just
+	// accessed, so recency = 1).
 	row := b.db.QueryRow(`
 		UPDATE brain_ltm SET
 			accessed_at = datetime('now'),
 			access_count = access_count + 1,
-			salience = COALESCE(
-				(MIN(CAST(access_count + 1 AS REAL) / CAST(? AS REAL), 1.0) * ?) +
-				(1.0 / (1.0 + 0.0)) * ? +
-				(0.8 * ?),
-				salience, 0.5)
+			salience = `+b.ltmBaseSalienceSQL("access_count + 1")+`
 		WHERE key = ? AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))
-		RETURNING key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at, warmth
-	`, b.accessCountCap, b.accessWeight, b.recencyWeight, b.tierWeight, key)
+		RETURNING key, value, created_at, accessed_at, access_count, `+b.EffectiveSalienceSQL()+`, source, stale, expires_at, warmth
+	`, key)
 	entry := &Entry{Tier: TierLongTerm}
 	var staleInt int
 	var expiresAt sql.NullTime
@@ -901,10 +898,11 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	}
 
 	sqlQuery := fmt.Sprintf(
-		`SELECT key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at, warmth,
+		`SELECT key, value, created_at, accessed_at, access_count, %s AS eff_salience, source, stale, expires_at, warmth,
 		(%s) AS match_count
 		FROM brain_ltm WHERE (%s) AND (expires_at IS NULL OR expires_at > strftime('%%Y-%%m-%%d %%H:%%M:%%f', 'now'))
-		ORDER BY match_count DESC, salience + warmth DESC LIMIT ?`,
+		ORDER BY match_count DESC, eff_salience + warmth DESC LIMIT ?`,
+		b.EffectiveSalienceSQL(), // conduit-31jg.53: recency at query time
 		strings.Join(matchExprs, " + "),
 		strings.Join(whereClauses, " OR "),
 	)
@@ -1063,7 +1061,7 @@ func (b *Brain) injectWarmEntries(ctx context.Context, results []*Entry, seen ma
 	// there's headroom. With the default floor of 0.7 and per-flush decay of
 	// 0.85, few entries qualify — the overfetch covers rows lost to `seen`.
 	rows, err := b.db.QueryContext(ctx, `
-		SELECT key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at, warmth
+		SELECT key, value, created_at, accessed_at, access_count, `+b.EffectiveSalienceSQL()+`, source, stale, expires_at, warmth
 		  FROM brain_ltm
 		 WHERE warmth >= ? AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f','now'))
 		 ORDER BY warmth DESC LIMIT ?`, b.warmthInjectFloor, b.warmthInjectLimit+len(results))
@@ -1203,7 +1201,7 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 	}
 	b.mu.RUnlock()
 
-	query := `SELECT key, value, created_at, accessed_at, access_count, salience, source, stale, expires_at
+	query := `SELECT key, value, created_at, accessed_at, access_count, ` + b.EffectiveSalienceSQL() + `, source, stale, expires_at
 		FROM brain_ltm WHERE key LIKE ? ESCAPE '\' AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))`
 	args := []interface{}{EscapeLike(prefix) + "%"}
 	if sourcePrefix != "" {
@@ -1440,7 +1438,7 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 	var ltmCount int
 	b.db.QueryRow(`SELECT COUNT(*) FROM brain_ltm WHERE expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now')`).Scan(&ltmCount)
 	var hottestKeys []string
-	rows, err := b.db.Query(`SELECT key FROM brain_ltm WHERE expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now') ORDER BY salience DESC LIMIT 5`)
+	rows, err := b.db.Query(`SELECT key FROM brain_ltm WHERE expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now') ORDER BY `+b.EffectiveSalienceSQL()+` DESC LIMIT 5`)
 	if err == nil {
 		for rows.Next() {
 			var key string

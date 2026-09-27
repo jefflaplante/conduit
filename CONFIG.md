@@ -1090,6 +1090,8 @@ Tiered cognitive memory: long-term memory (SQLite-persisted), working memory (in
 | `enabled` | bool | `false` | Enable the brain subsystem |
 | `path` | string | derived | Brain database path. Defaults to `<gateway-db>.brain.db` |
 | `max_ltm_entries` | int | `10000` | Maximum long-term memory entries |
+| `ltm_eviction_grace_seconds` | int | `3600` | LTM rows written/accessed this recently are never capacity-evicted (negative = only the write's own second) |
+| `max_wm_entries_per_user` | int | `1000` | Per-user working-memory cap; lowest-value entries evicted, hot ones promoted to LTM first (negative = unbounded) |
 | `wm_grace_period_seconds` | int | `300` | Seconds to keep working memory after session ends |
 | `auto_flush_seconds` | int | `600` | Auto-flush interval for WM to LTM |
 | `consolidate_threshold` | float | `0.6` | Salience threshold for auto-promoting WM to LTM |

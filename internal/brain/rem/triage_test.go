@@ -190,3 +190,25 @@ func TestTriage_NoStaleCandidates(t *testing.T) {
 	// Should not find any stale candidates
 	assert.Empty(t, result.StaleCandidates)
 }
+
+// conduit-31jg.73: WMKeysFound counts working memory across every user's
+// bucket (REM runs from a system context whose own bucket is empty) and
+// never counts LTM rows.
+func TestTriage_WMKeysFoundCountsAllUsers(t *testing.T) {
+	rem, b, _ := setupTestREMCycle(t)
+	defer b.Close()
+
+	alice := brain.WithUserID(context.Background(), "alice")
+	bob := brain.WithUserID(context.Background(), "bob")
+	require.NoError(t, b.Store(alice, "a.one", "1", brain.TierWorking, "test"))
+	require.NoError(t, b.Store(alice, "a.two", "2", brain.TierWorking, "test"))
+	require.NoError(t, b.Store(bob, "b.one", "1", brain.TierWorking, "test"))
+	require.NoError(t, b.Store(context.Background(), "shared.one", "1", brain.TierWorking, "system:test"))
+	require.NoError(t, b.Store(alice, "ltm.one", "1", brain.TierLongTerm, "test"))
+	require.NoError(t, b.Store(alice, "ltm.two", "2", brain.TierLongTerm, "test"))
+
+	// System context: no brain user attached.
+	result, err := rem.Triage(context.Background(), true)
+	require.NoError(t, err)
+	assert.Equal(t, 4, result.WMKeysFound)
+}

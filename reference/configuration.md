@@ -636,6 +636,8 @@ That's all you need. The database path auto-derives from your gateway DB (e.g., 
 | `enabled` | bool | `false` | Enable the Brain subsystem |
 | `path` | string | `""` | Path to brain.db file. Empty = derived from gateway DB path |
 | `max_ltm_entries` | int | `10000` | Maximum long-term memory entries. Lowest-salience entries evicted when exceeded |
+| `ltm_eviction_grace_seconds` | int | `3600` | LTM rows written/accessed this recently are never capacity-evicted (negative = only the write's own second) |
+| `max_wm_entries_per_user` | int | `1000` | Per-user working-memory cap; lowest-value entries evicted, hot ones promoted to LTM first (negative = unbounded) |
 | `wm_grace_period_seconds` | int | `300` | Seconds to keep working memory entries after session ends |
 | `auto_flush_seconds` | int | `600` | Interval for background working memory cleanup |
 | `consolidate_threshold` | float | `0.6` | Salience score above which working memory entries are auto-promoted to LTM |

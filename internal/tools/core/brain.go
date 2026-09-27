@@ -401,16 +401,17 @@ func (t *BrainTool) handlePush(ctx context.Context, args map[string]interface{},
 	if value == "" {
 		return &types.ToolResult{Success: false, Error: "value is required for push"}, nil
 	}
-	userID := types.RequestUserID(ctx)
-	if err := brain.Push(ctx, userID, value); err != nil {
+	// conduit-31jg.73: "" lets the brain scope on ctx pick the bucket (the
+	// adapter maps the request user, a sub-agent has its own bucket, an
+	// explicit brain.WithUserID wins) — the same rule as store/get/recall.
+	if err := brain.Push(ctx, "", value); err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("push failed: %v", err)}, nil
 	}
 	return &types.ToolResult{Success: true, Content: "Pushed value onto scratchpad"}, nil
 }
 
 func (t *BrainTool) handlePop(ctx context.Context, args map[string]interface{}, brain types.BrainService) (*types.ToolResult, error) {
-	userID := types.RequestUserID(ctx)
-	val, err := brain.Pop(ctx, userID)
+	val, err := brain.Pop(ctx, "") // conduit-31jg.73: context decides
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("pop failed: %v", err)}, nil
 	}
@@ -418,8 +419,7 @@ func (t *BrainTool) handlePop(ctx context.Context, args map[string]interface{}, 
 }
 
 func (t *BrainTool) handlePeek(ctx context.Context, args map[string]interface{}, brain types.BrainService) (*types.ToolResult, error) {
-	userID := types.RequestUserID(ctx)
-	val, err := brain.Peek(ctx, userID)
+	val, err := brain.Peek(ctx, "") // conduit-31jg.73: context decides
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("peek failed: %v", err)}, nil
 	}

@@ -16,6 +16,7 @@ type fakeBrainService struct {
 	bulkErr      error
 	singleStores []types.BrainBulkEntry
 	ttlCalls     []fakeTTLCall
+	scratchUIDs  []string // userID argument of every Push/Pop/Peek call
 }
 
 type fakeTTLCall struct {
@@ -67,9 +68,18 @@ func (f *fakeBrainService) ListGraph(ctx context.Context, opts types.BrainGraphO
 	return &types.BrainGraph{}, nil
 }
 func (f *fakeBrainService) Delete(ctx context.Context, key string) error            { return nil }
-func (f *fakeBrainService) Push(ctx context.Context, userID, value string) error    { return nil }
-func (f *fakeBrainService) Pop(ctx context.Context, userID string) (string, error)  { return "", nil }
-func (f *fakeBrainService) Peek(ctx context.Context, userID string) (string, error) { return "", nil }
+func (f *fakeBrainService) Push(ctx context.Context, userID, value string) error {
+	f.scratchUIDs = append(f.scratchUIDs, userID)
+	return nil
+}
+func (f *fakeBrainService) Pop(ctx context.Context, userID string) (string, error) {
+	f.scratchUIDs = append(f.scratchUIDs, userID)
+	return "x", nil
+}
+func (f *fakeBrainService) Peek(ctx context.Context, userID string) (string, error) {
+	f.scratchUIDs = append(f.scratchUIDs, userID)
+	return "x", nil
+}
 func (f *fakeBrainService) Promote(ctx context.Context, key string) error           { return nil }
 func (f *fakeBrainService) Consolidate(ctx context.Context, autoPromote bool) (*types.ConsolidationReport, error) {
 	return &types.ConsolidationReport{}, nil
@@ -258,5 +268,34 @@ func TestParseTTLString(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// conduit-31jg.73: push/pop/peek must not pin the scratchpad to the request
+// user. They pass "" so the brain scope on the context decides (a sub-agent's
+// own "subagent:<key>" bucket, or an explicit brain.WithUserID), exactly as
+// store/get/recall do.
+func TestBrainTool_ScratchpadDefersUserToContext(t *testing.T) {
+	fake := &fakeBrainService{}
+	tool := NewBrainTool(&types.ToolServices{Brain: fake})
+	ctx := types.WithRequestContext(context.Background(), "telegram", "user-42", "sess")
+
+	for _, args := range []map[string]interface{}{
+		{"action": "push", "value": "note"},
+		{"action": "peek"},
+		{"action": "pop"},
+	} {
+		res, err := tool.Execute(ctx, args)
+		if err != nil || !res.Success {
+			t.Fatalf("%v: err=%v res=%+v", args["action"], err, res)
+		}
+	}
+	if len(fake.scratchUIDs) != 3 {
+		t.Fatalf("expected 3 scratchpad calls, got %d", len(fake.scratchUIDs))
+	}
+	for i, uid := range fake.scratchUIDs {
+		if uid != "" {
+			t.Errorf("call %d passed explicit userID %q; want empty (context decides)", i, uid)
+		}
 	}
 }
