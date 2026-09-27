@@ -164,28 +164,54 @@ func (s *ReflectionStore) QueryUnprocessed(ctx context.Context) ([]*ReflectionEn
 	return scanEntries(rows)
 }
 
+// markProcessedChunk bounds the IDs bound per UPDATE: SQLite rejects
+// statements with more than 32766 variables. conduit-31jg.54
+const markProcessedChunk = 500
+
 // MarkProcessed sets rem_processed = 1 for the given entry IDs.
 // An empty slice is a no-op.
 func (s *ReflectionStore) MarkProcessed(ctx context.Context, ids []string) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	placeholders := make([]string, len(ids))
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-
-	_, err := s.db.ExecContext(ctx,
-		fmt.Sprintf("UPDATE brain_reflections SET rem_processed = 1 WHERE id IN (%s)",
-			strings.Join(placeholders, ",")),
-		args...)
-	if err != nil {
-		return fmt.Errorf("mark processed: %w", err)
+	for start := 0; start < len(ids); start += markProcessedChunk {
+		end := start + markProcessedChunk
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		err := database.RetryOnBusy(5, func() error {
+			_, err := s.db.ExecContext(ctx,
+				fmt.Sprintf("UPDATE brain_reflections SET rem_processed = 1 WHERE id IN (%s)",
+					strings.Join(placeholders, ",")),
+				args...)
+			return err
+		})
+		if err != nil {
+			return fmt.Errorf("mark processed: %w", err)
+		}
 	}
 	return nil
+}
+
+// QueryPatterns returns TypePattern entries (SPAR pivot / circular threshold
+// crossings) with a timestamp on or after since, processed or not, ordered by
+// timestamp ascending. conduit-31jg.54
+func (s *ReflectionStore) QueryPatterns(ctx context.Context, since time.Time) ([]*ReflectionEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, session_key, timestamp, source, type, tool, outcome,
+		       retry_count, duration_ms, insight, score, tags, related_keys, rem_processed
+		FROM brain_reflections
+		WHERE type = ? AND timestamp >= ?
+		ORDER BY timestamp ASC`, string(TypePattern), since.UTC().Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return nil, fmt.Errorf("query patterns: %w", err)
+	}
+	defer rows.Close()
+	return scanEntries(rows)
 }
 
 // Groom deletes entries that have been processed by REM and are older than
@@ -220,6 +246,7 @@ func (s *ReflectionStore) QueryToolStats(ctx context.Context, since time.Time) (
 		       AVG(retry_count) AS avg_retries
 		FROM brain_reflections
 		WHERE tool IS NOT NULL AND tool != '' AND timestamp >= ?
+		  AND type != 'pattern' -- threshold crossings, not executions (conduit-31jg.54)
 		GROUP BY tool, outcome
 		ORDER BY tool, outcome`, sinceStr)
 	if err != nil {
@@ -277,6 +304,7 @@ func scanEntries(rows *sql.Rows) ([]*ReflectionEntry, error) {
 		e.Type = ReflectionType(typeStr)
 		e.Outcome = Outcome(outcomeStr)
 		e.Duration = time.Duration(durationMs) * time.Millisecond
+		e.Processed = remProcessed != 0
 
 		if tool.Valid {
 			e.Tool = tool.String

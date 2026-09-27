@@ -123,7 +123,7 @@ var migrations = []migration{
 	// inflating confidence.
 	{
 		Version: 8,
-		SQL: `ALTER TABLE brain_relationships ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;`,
+		SQL:     `ALTER TABLE brain_relationships ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;`,
 	},
 	// Migration 9 (conduit-31jg.53): brain_ltm.salience becomes BASE salience
 	// (no recency term); recency is computed at query time. Every row written

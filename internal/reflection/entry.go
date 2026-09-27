@@ -29,19 +29,21 @@ const (
 // ReflectionEntry captures a single reflection data point from either the
 // system (Go auto-capture) or the model (prompt-driven reflection).
 type ReflectionEntry struct {
-	ID          string         `json:"id"`              // UUID
-	SessionKey  string         `json:"session_key"`     // Source session
+	ID          string         `json:"id"`          // UUID
+	SessionKey  string         `json:"session_key"` // Source session
 	Timestamp   time.Time      `json:"timestamp"`
-	Source      string         `json:"source"`          // "system" | "model"
-	Type        ReflectionType `json:"type"`            // tool_outcome, session_summary, pattern, learned
-	Tool        string         `json:"tool,omitempty"`  // Tool name (if tool-related)
-	Outcome     Outcome        `json:"outcome"`         // success, failure, partial, timeout
-	RetryCount  int            `json:"retry_count"`     // Retries before resolution
-	Duration    time.Duration  `json:"duration"`        // Execution time
-	Insight     string         `json:"insight"`         // Human-readable lesson
-	Score       int            `json:"score"`           // 1-5 outcome rating (0 = unscored)
-	Tags        []string       `json:"tags"`            // Free-form grouping tags
-	RelatedKeys []string       `json:"related_keys"`    // Connected Brain keys
+	Source      string         `json:"source"`         // "system" | "model"
+	Type        ReflectionType `json:"type"`           // tool_outcome, session_summary, pattern, learned
+	Tool        string         `json:"tool,omitempty"` // Tool name (if tool-related)
+	Outcome     Outcome        `json:"outcome"`        // success, failure, partial, timeout
+	RetryCount  int            `json:"retry_count"`    // Retries before resolution
+	Duration    time.Duration  `json:"duration"`       // Execution time
+	Insight     string         `json:"insight"`        // Human-readable lesson
+	Score       int            `json:"score"`          // 1-5 outcome rating (0 = unscored)
+	Tags        []string       `json:"tags"`           // Free-form grouping tags
+	RelatedKeys []string       `json:"related_keys"`   // Connected Brain keys
+	// Processed reports rem_processed (set when read back from the store).
+	Processed bool `json:"rem_processed,omitempty"`
 }
 
 // NewEntry creates a ReflectionEntry with a generated UUID and current timestamp.

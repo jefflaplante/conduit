@@ -103,15 +103,33 @@ The REM Sleep cycle (documented in [brain.md](brain.md#rem-sleep-cycle)) include
 
 ### What It Does
 
-1. **Query** all unprocessed entries from `brain_reflections` (where `rem_processed = 0`)
-2. **Aggregate** tool stats grouped by `tool + outcome` (e.g., "WebFetch + failure", "Bash + success")
+Reflect is part of the default cycle, including the nightly `rem_cycle` job (the Brain tool's default phase list omitted it until conduit-31jg.54, so the live store had never been processed).
+
+1. **Snapshot** the unprocessed entries (`rem_processed = 0`) by rowid high-water mark. Everything below uses aggregate SQL, so a large backlog is never loaded into memory or bound as one giant `IN (...)` list. Rows that arrive during the phase wait for the next cycle.
+2. **Aggregate** tool stats grouped by `tool + outcome` (e.g., "WebFetch + failure", "Bash + success"), counting from the earliest unprocessed entry but no further back than `rem_prune_age_days` (default 30). `pattern` rows are excluded because they record threshold crossings, not executions.
 3. **Cluster** groups with 3+ occurrences — these represent real patterns, not noise
 4. **Write** cluster summaries to Brain LTM under `reflect.clusters.<tool>.<outcome>` keys
-5. **Mark** all processed entries as `rem_processed = 1`
+5. **Consolidate SPAR patterns** into `reflect.tools.*` (see below)
 6. **Backfill** heuristic scores on unscored session summaries:
    - 0 failures → score 4
    - Some failures → score 2
    - All failures → score 1
+7. **Mark** the snapshot `rem_processed = 1` in one statement. Pruning later grooms processed rows older than the retention window.
+
+### Pattern Promotion (`reflect.tools.*`)
+
+The execution engine's per-turn trackers fire two SPAR hooks. **Pivot** fires when a tool fails 3 times in a row within one turn, and **circular** fires when the same 2-3 call sequence repeats 3 times. Each hook writes a `pattern` row to `brain_reflections` whose related key is `reflect.tools.<tool>.consecutive_failure` or `reflect.tools.circular.<signature-hash>`. The hooks never write to LTM directly, because one bad turn is noise.
+
+Reflect consolidates these rows (conduit-31jg.54):
+
+- Rows are grouped by their related key. Occurrences, distinct sessions, first/last seen and the latest error are recomputed each run over every pattern row in the window (`rem_prune_age_days`), processed or not. Each pattern therefore stays **one** LTM entry that is refreshed in place, with counts that are never appended.
+- A key is written only when the current snapshot has new evidence for it **and** it recurred in **≥ 2 distinct sessions** and **≥ 2 turns**. A single occurrence, or a repeat confined to one session, never reaches LTM.
+- The value is one Situation Awareness line of at most 200 bytes, with source `system:rem-reflect` (grooming marks it stale after 14 days without refresh). For example:
+
+```
+Key:   reflect.tools.WebFetch.consecutive_failure
+Value: WebFetch failed 3+ times in a row in 4 turns across 3 sessions (Sep 20–27). Last error: dial tcp: i/o timeout
+```
 
 ### Example Cluster Output
 
@@ -142,10 +160,11 @@ The prompt builder queries Brain LTM for these prefixes, in priority order:
 | 2 | `sense.tasks.*` | Active Work | Beads task summaries (auto-refreshed) |
 | 3 | `sense.alerts.*` | Recent Alerts | Heartbeat alert context |
 | 4 | `reflect.learned.*` | Learned Patterns | Model-written insights from reflection |
-| 5 | `reflect.clusters.*` | Pattern Clusters | REM-discovered tool outcome clusters |
-| 6 | `sense.briefing.*` | Daily Briefing | Daily briefing context |
+| 5 | `reflect.tools.*` | Tool Pitfalls | Cross-session SPAR pivot/circular patterns promoted by REM Reflect |
+| 6 | `reflect.clusters.*` | Pattern Clusters | REM-discovered tool outcome clusters |
+| 7 | `sense.briefing.*` | Daily Briefing | Daily briefing context |
 
-Entries are sorted by salience within each category. The entire section is capped at ~500 tokens (~2000 chars). Categories are rendered in priority order; if budget runs out, later categories are truncated or dropped.
+Entries are sorted by effective salience (recency computed at query time, see [brain.md](brain.md#salience-scoring)) within each category. The entire section is capped at ~500 tokens (~2000 chars). Categories are rendered in priority order; if budget runs out, later categories are truncated or dropped.
 
 ### Example System Prompt Section
 
@@ -262,14 +281,17 @@ Session End (idle/farewell/context budget)
   → SessionReflector.ComputeMetrics()
   → brain_reflections (TypeSessionSummary)
 
+Pivot / circular detection (per turn)
+  → SPAR hooks → brain_reflections (TypePattern, related key reflect.tools.*)
+
 REM Cycle (nightly)
-  → Reflect phase reads unprocessed entries
-  → Clusters tool+outcome groups (≥3 occurrences)
-  → Writes reflect.clusters.* to Brain LTM
+  → Reflect phase snapshots unprocessed entries
+  → Clusters tool+outcome groups (≥3 occurrences) → reflect.clusters.*
+  → Consolidates patterns recurring in ≥2 sessions → reflect.tools.*
   → Marks entries as processed
 
 Next Session
   → PromptBuilder.buildSituationAwareness()
-  → Queries reflect.clusters.*, reflect.patterns.*, sense.*
+  → Queries reflect.patterns.*, reflect.tools.*, reflect.clusters.*, sense.*
   → Injects into system prompt as Situation Awareness section
 ```

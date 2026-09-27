@@ -1438,7 +1438,7 @@ func (b *Brain) Status(ctx context.Context) (*Status, error) {
 	var ltmCount int
 	b.db.QueryRow(`SELECT COUNT(*) FROM brain_ltm WHERE expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now')`).Scan(&ltmCount)
 	var hottestKeys []string
-	rows, err := b.db.Query(`SELECT key FROM brain_ltm WHERE expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now') ORDER BY `+b.EffectiveSalienceSQL()+` DESC LIMIT 5`)
+	rows, err := b.db.Query(`SELECT key FROM brain_ltm WHERE expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now') ORDER BY ` + b.EffectiveSalienceSQL() + ` DESC LIMIT 5`)
 	if err == nil {
 		for rows.Next() {
 			var key string

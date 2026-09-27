@@ -127,6 +127,10 @@ func (r *REMReport) WriteLog(logPath string) error {
 		sb.WriteString("## Phase 1b: Reflect\n\n")
 		sb.WriteString(fmt.Sprintf("- Entries processed: %d\n", r.Reflect.EntriesProcessed))
 		sb.WriteString(fmt.Sprintf("- Clusters found: %d\n", r.Reflect.ClustersFound))
+		sb.WriteString(fmt.Sprintf("- Patterns promoted: %d\n", r.Reflect.PatternsPromoted))
+		for _, k := range r.Reflect.PromotedKeys {
+			sb.WriteString(fmt.Sprintf("  - %s\n", k))
+		}
 		sb.WriteString(fmt.Sprintf("- Scores backfilled: %d\n\n", r.Reflect.ScoresBackfilled))
 	}
 

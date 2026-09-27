@@ -62,7 +62,7 @@ Actions:
 - promote: Move a working-memory key to long-term storage
 - consolidate: Sweep working memory — auto-promote high-salience keys, evict stale ones
 - status: Report entry counts, scratchpad depth, and both the hottest keys (by salience) and the coldest keys (by access_count)
-- rem_cycle: Run REM sleep consolidation phases (triage, consolidate, prune, integrate, groom)
+- rem_cycle: Run REM sleep consolidation phases (triage, reflect, consolidate, prune, integrate, groom)
 
 Auto-extraction from files:
 Files read via the Read tool are scanned for HTML comment blocks of the form
@@ -130,7 +130,7 @@ func (t *BrainTool) Parameters() map[string]interface{} {
 			"phases": map[string]interface{}{
 				"type":        "array",
 				"items":       map[string]interface{}{"type": "string"},
-				"description": "REM cycle phases to run (default: [\"triage\", \"consolidate\", \"prune\", \"integrate\", \"groom\"])",
+				"description": "REM cycle phases to run (default: [\"triage\", \"reflect\", \"consolidate\", \"prune\", \"integrate\", \"groom\"])",
 			},
 			"dry_run": map[string]interface{}{
 				"type":        "boolean",
@@ -460,9 +460,12 @@ func (t *BrainTool) handleStatus(ctx context.Context, brain types.BrainService) 
 }
 
 func (t *BrainTool) handleREMCycle(ctx context.Context, args map[string]interface{}, brain types.BrainService) (*types.ToolResult, error) {
-	// Parse phases parameter — accept both short forms (triage, consolidate, prune, integrate, groom)
-	// and full forms (triage, consolidation, pruning, integration, grooming)
-	defaultPhases := []string{"triage", "consolidation", "pruning", "integration", "grooming"}
+	// Parse phases parameter — accept both short forms (triage, reflect, consolidate, prune, integrate, groom)
+	// and full forms (triage, reflect, consolidation, pruning, integration, grooming).
+	// conduit-31jg.54: the default now includes reflect (it was missing, so the
+	// nightly job never clustered tool outcomes, promoted SPAR patterns, or
+	// marked brain_reflections processed for grooming).
+	defaultPhases := []string{"triage", "reflect", "consolidation", "pruning", "integration", "grooming"}
 	phases := defaultPhases
 	if p, ok := args["phases"].([]interface{}); ok {
 		phases = make([]string, len(p))
@@ -507,6 +510,8 @@ func normalizePhase(phase string) string {
 		return "grooming"
 	case "triage":
 		return "triage"
+	case "reflect", "reflection":
+		return "reflect"
 	default:
 		return phase // pass through — REMCycle.Run will error on unknown phases
 	}

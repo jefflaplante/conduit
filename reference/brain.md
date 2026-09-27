@@ -183,7 +183,7 @@ Run the REM Sleep consolidation cycle (or a subset of phases). Requires `rem_ena
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `action` | string | Yes | `"rem_cycle"` |
-| `phases` | string[] | No | Phases to run (default: all five). Accepts short forms: `triage`, `consolidate`, `prune`, `integrate`, `groom` |
+| `phases` | string[] | No | Phases to run (default: all six: triage, reflect, consolidation, pruning, integration, grooming). Accepts short forms: `triage`, `reflect`, `consolidate`, `prune`, `integrate`, `groom` |
 | `dry_run` | bool | No | Preview changes without applying (default `false`) |
 
 ## Salience Scoring
