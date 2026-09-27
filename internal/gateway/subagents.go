@@ -145,6 +145,10 @@ func (s *subAgentTurnSink) Finish(_ context.Context, res *TurnResult) {
 	switch {
 	case res.Dropped:
 		s.outcome.err = fmt.Errorf("sub-agent did not start: %v", res.Err)
+	case res.Cancelled && s.g.isDraining():
+		// conduit-31jg.88: tell the parent (via finishSubAgent's failure
+		// wake/transcript row) why; sub-agents get no restart notice.
+		s.outcome.err = fmt.Errorf("sub-agent interrupted by gateway restart: %v", res.Err)
 	case res.Cancelled:
 		s.outcome.err = fmt.Errorf("sub-agent stopped: %v", res.Err)
 	case res.Err != nil:

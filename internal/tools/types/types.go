@@ -207,18 +207,18 @@ const (
 
 // BrainEntry represents a single fact stored in the brain.
 type BrainEntry struct {
-	Key             string     `json:"key"`
-	Value           string     `json:"value"`
-	Tier            BrainTier  `json:"tier"`
-	CreatedAt       time.Time  `json:"created_at"`
-	AccessedAt      time.Time  `json:"accessed_at"`
-	AccessCount     int        `json:"access_count"`
-	Salience        float64    `json:"salience"`
-	Warmth          float64    `json:"warmth,omitempty"`
-	Source          string     `json:"source,omitempty"`
-	Stale           bool       `json:"stale,omitempty"`
-	ClusterHit      bool       `json:"cluster_hit,omitempty"`
-	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	Key         string     `json:"key"`
+	Value       string     `json:"value"`
+	Tier        BrainTier  `json:"tier"`
+	CreatedAt   time.Time  `json:"created_at"`
+	AccessedAt  time.Time  `json:"accessed_at"`
+	AccessCount int        `json:"access_count"`
+	Salience    float64    `json:"salience"`
+	Warmth      float64    `json:"warmth,omitempty"`
+	Source      string     `json:"source,omitempty"`
+	Stale       bool       `json:"stale,omitempty"`
+	ClusterHit  bool       `json:"cluster_hit,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 }
 
 // BrainStatus reports the current state of the brain service.
@@ -504,6 +504,36 @@ func WakeSource(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// WakeSourceRestartResume tags the wake that auto-resumes a turn interrupted
+// by a gateway restart (conduit-31jg.88, restart_resume: "auto").
+const WakeSourceRestartResume = "restart_resume"
+
+type ctxKeyDrainDeadline struct{}
+
+// WithDrainDeadline attaches fn, which reports the end of the gateway's
+// shutdown drain once one has begun (ok=false while running normally). The
+// TurnRunner sets it on every turn so tools can see a drain that starts
+// mid-turn without importing the gateway (conduit-31jg.88).
+func WithDrainDeadline(ctx context.Context, fn func() (time.Time, bool)) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyDrainDeadline{}, fn)
+}
+
+// DrainDeadline reports the shutdown drain deadline, if the gateway is
+// draining. ok is false when not draining or when ctx carries no drain hook.
+func DrainDeadline(ctx context.Context) (time.Time, bool) {
+	if ctx == nil {
+		return time.Time{}, false
+	}
+	fn, ok := ctx.Value(ctxKeyDrainDeadline{}).(func() (time.Time, bool))
+	if !ok || fn == nil {
+		return time.Time{}, false
+	}
+	return fn()
 }
 
 // ToolResult represents the result of a tool execution

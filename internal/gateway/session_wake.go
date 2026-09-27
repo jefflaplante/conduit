@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"conduit/internal/ai"
+	"conduit/internal/approval"
 	"conduit/internal/protocol"
 	"conduit/internal/sessions"
 	"conduit/internal/tools"
@@ -58,6 +59,7 @@ func (g *Gateway) wakeSession(sessionKey string) {
 	}
 	var wakeMessage, wakeMessageID string
 	var wakeSource string
+	resumeInteractive := false
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
 			wakeMessage, wakeMessageID = messages[i].Content, messages[i].ID
@@ -66,6 +68,10 @@ func (g *Gateway) wakeSession(sessionKey string) {
 			} else if src, ok := messages[i].Metadata["source"]; ok && src == "inter_session" {
 				wakeSource = types.WakeSourceInterSession
 			}
+			// conduit-31jg.88: auto-resume of a turn cut off by a restart
+			// keeps the interactive origin of the turn it continues.
+			resumeInteractive = wakeSource == types.WakeSourceRestartResume &&
+				messages[i].Metadata[metaResumeInteractive] == "true"
 			break
 		}
 	}
@@ -88,7 +94,7 @@ func (g *Gateway) wakeSession(sessionKey string) {
 	// (conduit-31jg.22). /stop registration happens only once the turn lock
 	// is held, so a wake queued behind a live turn no longer overwrites the
 	// live turn's cancel func (conduit-31jg.23).
-	g.turns().Run(wakeCtx, TurnRequest{
+	req := TurnRequest{
 		Session:                session,
 		ChannelID:              session.ChannelID,
 		UserID:                 session.UserID,
@@ -100,7 +106,17 @@ func (g *Gateway) wakeSession(sessionKey string) {
 		Decorate: func(ctx context.Context) context.Context {
 			return types.WithWakeSource(ctx, wakeSource)
 		},
-	}, &wakeTurnSink{g: g, session: session, wakeSource: wakeSource, wakeMessageChars: len(wakeMessage)})
+	}
+	if resumeInteractive {
+		// conduit-31jg.88: the owner started the interrupted turn; its
+		// resumption may prompt them on the same channel.
+		req.NonInteractiveSource = ""
+		req.Origin = &approval.Origin{
+			Source: types.WakeSourceRestartResume, ChannelID: session.ChannelID, UserID: session.UserID,
+			SessionKey: sessionKey, Notify: g.channelApprovalNotifier(session.ChannelID, session.UserID, sessionKey),
+		}
+	}
+	g.turns().Run(wakeCtx, req, &wakeTurnSink{g: g, session: session, wakeSource: wakeSource, wakeMessageChars: len(wakeMessage)})
 
 	// Always reset wake depth when done (success or failure).
 	_ = g.sessions.SetSessionContext(sessionKey, "wake_depth", "0")

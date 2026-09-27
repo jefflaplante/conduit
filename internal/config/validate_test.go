@@ -453,3 +453,28 @@ func assertSemanticError(t *testing.T, cfg *Config, wantSubstr string) {
 		t.Errorf("expected error containing %q, got: %v", wantSubstr, err)
 	}
 }
+
+// conduit-31jg.88: restart_resume accepts notice/auto/off (any case), empty
+// means notice; anything else is rejected.
+func TestValidateSemantic_RestartResume(t *testing.T) {
+	for _, v := range []string{"", "notice", "auto", "off", "AUTO"} {
+		cfg := minimalValidConfig()
+		cfg.RestartResume = v
+		if err := cfg.ValidateSemantic(); err != nil {
+			t.Errorf("restart_resume=%q: unexpected error %v", v, err)
+		}
+	}
+	cfg := minimalValidConfig()
+	cfg.RestartResume = "resume"
+	assertSemanticError(t, cfg, "restart_resume")
+
+	modes := map[string]string{"": RestartResumeNotice, "Auto": RestartResumeAuto, " off ": RestartResumeOff, "bogus": RestartResumeNotice}
+	for in, want := range modes {
+		if got := (&Config{RestartResume: in}).RestartResumeMode(); got != want {
+			t.Errorf("RestartResumeMode(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := (*Config)(nil).RestartResumeMode(); got != RestartResumeNotice {
+		t.Errorf("nil config mode = %q", got)
+	}
+}
