@@ -2,7 +2,9 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -60,8 +62,8 @@ func (t *GatewayTool) Parameters() map[string]interface{} {
 func (t *GatewayTool) GetActionDocs() map[string]types.ActionDoc {
 	return map[string]types.ActionDoc{
 		"status": {
-			Description: "Get gateway health, uptime, connection count, and message stats",
-			Returns:     "uptime, health, active_connections, total_messages, memory_usage",
+			Description: "Get gateway run state and version",
+			Returns:     "status, version (plus any other fields the gateway reports)",
 		},
 		"restart": {
 			Description: "Restart the gateway (requires confirmation from user)",
@@ -69,7 +71,7 @@ func (t *GatewayTool) GetActionDocs() map[string]types.ActionDoc {
 		},
 		"channels": {
 			Description: "List all configured channels with their status",
-			Returns:     "per-channel status, enabled state, last activity, message count",
+			Returns:     "per-channel status, status message, message count and other adapter details",
 		},
 		"enable_channel": {
 			Description:    "Enable a disabled channel",
@@ -83,7 +85,7 @@ func (t *GatewayTool) GetActionDocs() map[string]types.ActionDoc {
 		},
 		"config": {
 			Description: "Get current gateway configuration",
-			Returns:     "port, AI config, tools config, channels count",
+			Returns:     "AI providers/models and workspace settings, secrets redacted",
 		},
 		"update_config": {
 			Description:    "Update gateway configuration fields",
@@ -92,7 +94,7 @@ func (t *GatewayTool) GetActionDocs() map[string]types.ActionDoc {
 		},
 		"metrics": {
 			Description: "Get gateway performance metrics",
-			Returns:     "requests/min, avg response time, error rate, total tokens, cost",
+			Returns:     "whatever metrics the gateway reports, as key: value lines",
 		},
 		"version": {
 			Description: "Get Conduit version string",
@@ -351,88 +353,116 @@ func (t *GatewayTool) getVersion(ctx context.Context) (*types.ToolResult, error)
 }
 
 // Formatting methods
+//
+// conduit-31jg.71: these used to type-assert shapes the gateway never
+// produces (uptime as time.Duration, channel info as a map, config
+// "providers" count only, ...), so Content came out as little more than a
+// heading and the model had to read the Data JSON. They now render the real
+// shapes returned by internal/gateway/status_ops.go.
+
 func (t *GatewayTool) formatGatewayStatus(status map[string]interface{}) string {
 	var builder strings.Builder
-	builder.WriteString("Gateway Status:\n\n")
-
-	if uptime, ok := status["uptime"].(time.Duration); ok {
-		builder.WriteString(fmt.Sprintf("Uptime: %s\n", uptime))
-	}
-	if health, ok := status["health"].(string); ok {
-		builder.WriteString(fmt.Sprintf("Health: %s\n", health))
-	}
-	if activeConnections, ok := status["active_connections"].(int); ok {
-		builder.WriteString(fmt.Sprintf("Active Connections: %d\n", activeConnections))
-	}
-	if totalMessages, ok := status["total_messages"].(int64); ok {
-		builder.WriteString(fmt.Sprintf("Total Messages: %d\n", totalMessages))
-	}
-	if memoryUsage, ok := status["memory_usage"].(string); ok {
-		builder.WriteString(fmt.Sprintf("Memory Usage: %s\n", memoryUsage))
-	}
-
+	builder.WriteString("Gateway Status:\n")
+	writeKeyValues(&builder, status, "  ", 0)
 	return builder.String()
 }
 
+// formatChannelStatus renders map[channelID]channels.ChannelStatus (a
+// struct: status, message, details, timestamp) or plain maps of the same
+// fields; values are normalized through JSON so either shape works.
 func (t *GatewayTool) formatChannelStatus(channels map[string]interface{}) string {
 	if len(channels) == 0 {
 		return "No channels configured."
 	}
 
 	var builder strings.Builder
-	builder.WriteString("Channel Status:\n\n")
+	builder.WriteString(fmt.Sprintf("Channel Status (%d):\n", len(channels)))
 
-	for channelId, info := range channels {
-		builder.WriteString(fmt.Sprintf("**%s**\n", channelId))
-
-		if channelInfo, ok := info.(map[string]interface{}); ok {
-			if status, ok := channelInfo["status"].(string); ok {
-				builder.WriteString(fmt.Sprintf("  Status: %s\n", status))
-			}
-			if enabled, ok := channelInfo["enabled"].(bool); ok {
-				builder.WriteString(fmt.Sprintf("  Enabled: %t\n", enabled))
-			}
-			if lastActivity, ok := channelInfo["last_activity"].(time.Time); ok {
-				builder.WriteString(fmt.Sprintf("  Last Activity: %s\n", lastActivity.Format("2006-01-02 15:04:05")))
-			}
-			if messageCount, ok := channelInfo["message_count"].(int64); ok {
-				builder.WriteString(fmt.Sprintf("  Messages: %d\n", messageCount))
-			}
+	for _, channelID := range sortedKeys(channels) {
+		info := toGenericMap(channels[channelID])
+		line := fmt.Sprintf("- %s", channelID)
+		if st := scalarString(info["status"]); st != "" {
+			line += ": " + st
 		}
-		builder.WriteString("\n")
+		if msg := scalarString(info["message"]); msg != "" {
+			line += " (" + msg + ")"
+		}
+		builder.WriteString(line + "\n")
+		if details, ok := info["details"].(map[string]interface{}); ok && len(details) > 0 {
+			writeKeyValues(&builder, details, "    ", 1)
+		}
 	}
 
 	return builder.String()
 }
 
+// formatConfiguration renders the redacted config (conduit-31jg.56:
+// {"ai": ..., "workspace": ...} after config.Redacted). It must only ever be
+// given redacted data: after a summary it appends the full redacted JSON so
+// the model does not need Data for details.
 func (t *GatewayTool) formatConfiguration(config map[string]interface{}) string {
 	var builder strings.Builder
-	builder.WriteString("Gateway Configuration:\n\n")
-
-	// Format key configuration sections
-	if port, ok := config["port"].(int); ok {
-		builder.WriteString(fmt.Sprintf("Port: %d\n", port))
-	}
+	builder.WriteString("Gateway Configuration (secrets redacted):\n")
 
 	if ai, ok := config["ai"].(map[string]interface{}); ok {
-		builder.WriteString("AI Configuration:\n")
-		if defaultProvider, ok := ai["default_provider"].(string); ok {
-			builder.WriteString(fmt.Sprintf("  Default Provider: %s\n", defaultProvider))
+		builder.WriteString("AI:\n")
+		if v := scalarString(ai["default_provider"]); v != "" {
+			builder.WriteString(fmt.Sprintf("  Default provider: %s\n", v))
 		}
 		if providers, ok := ai["providers"].([]interface{}); ok {
-			builder.WriteString(fmt.Sprintf("  Providers: %d configured\n", len(providers)))
+			builder.WriteString(fmt.Sprintf("  Providers (%d):\n", len(providers)))
+			for _, p := range providers {
+				pm, ok := p.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				line := fmt.Sprintf("    - %s", scalarString(pm["name"]))
+				if typ := scalarString(pm["type"]); typ != "" {
+					line += " (" + typ + ")"
+				}
+				if model := scalarString(pm["model"]); model != "" {
+					line += " model=" + model
+				}
+				if fb := scalarString(pm["fallback_model"]); fb != "" {
+					line += " fallback=" + fb
+				}
+				if cw := scalarString(pm["context_window"]); cw != "" && cw != "0" {
+					line += " context_window=" + cw
+				}
+				if auth, ok := pm["auth"].(map[string]interface{}); ok {
+					if at := scalarString(auth["type"]); at != "" {
+						line += " auth=" + at
+					}
+				}
+				builder.WriteString(line + "\n")
+			}
+		}
+		if v := scalarString(ai["subagent_default_model"]); v != "" {
+			builder.WriteString(fmt.Sprintf("  Sub-agent default model: %s\n", v))
+		}
+		if v := scalarString(ai["max_tokens"]); v != "" && v != "0" {
+			builder.WriteString(fmt.Sprintf("  Max output tokens: %s\n", v))
+		}
+		if aliases, ok := ai["model_aliases"].(map[string]interface{}); ok && len(aliases) > 0 {
+			parts := make([]string, 0, len(aliases))
+			for _, k := range sortedKeys(aliases) {
+				parts = append(parts, k+"="+scalarString(aliases[k]))
+			}
+			builder.WriteString(fmt.Sprintf("  Model aliases: %s\n", strings.Join(parts, ", ")))
 		}
 	}
 
-	if tools, ok := config["tools"].(map[string]interface{}); ok {
-		builder.WriteString("Tools Configuration:\n")
-		if enabledTools, ok := tools["enabled_tools"].([]interface{}); ok {
-			builder.WriteString(fmt.Sprintf("  Enabled Tools: %d\n", len(enabledTools)))
+	if ws, ok := config["workspace"].(map[string]interface{}); ok {
+		builder.WriteString("Workspace:\n")
+		if v := scalarString(ws["context_dir"]); v != "" {
+			builder.WriteString(fmt.Sprintf("  Context dir: %s\n", v))
 		}
 	}
 
-	if channels, ok := config["channels"].([]interface{}); ok {
-		builder.WriteString(fmt.Sprintf("Channels: %d configured\n", len(channels)))
+	if raw, err := json.Marshal(config); err == nil {
+		builder.WriteString("\nFull configuration (redacted JSON): ")
+		builder.Write(raw)
+		builder.WriteString("\n")
 	}
 
 	return builder.String()
@@ -440,25 +470,111 @@ func (t *GatewayTool) formatConfiguration(config map[string]interface{}) string 
 
 func (t *GatewayTool) formatMetrics(metrics map[string]interface{}) string {
 	var builder strings.Builder
-	builder.WriteString("Gateway Metrics:\n\n")
-
-	if requestsPerMinute, ok := metrics["requests_per_minute"].(float64); ok {
-		builder.WriteString(fmt.Sprintf("Requests/min: %.1f\n", requestsPerMinute))
+	builder.WriteString("Gateway Metrics:\n")
+	if len(metrics) == 0 {
+		builder.WriteString("  (none reported)\n")
+		return builder.String()
 	}
-	if avgResponseTime, ok := metrics["avg_response_time"].(time.Duration); ok {
-		builder.WriteString(fmt.Sprintf("Avg Response Time: %s\n", avgResponseTime))
-	}
-	if errorRate, ok := metrics["error_rate"].(float64); ok {
-		builder.WriteString(fmt.Sprintf("Error Rate: %.2f%%\n", errorRate*100))
-	}
-	if totalTokens, ok := metrics["total_tokens"].(int64); ok {
-		builder.WriteString(fmt.Sprintf("Total Tokens: %d\n", totalTokens))
-	}
-	if estimatedCost, ok := metrics["estimated_cost"].(float64); ok {
-		builder.WriteString(fmt.Sprintf("Estimated Cost: $%.4f\n", estimatedCost))
-	}
-
+	writeKeyValues(&builder, metrics, "  ", 0)
 	return builder.String()
+}
+
+// writeKeyValues writes m as sorted "key: value" lines. Nested maps are
+// indented (up to maxNestedDepth); lists of scalars are joined, longer or
+// structured lists are summarized by length. conduit-31jg.71
+func writeKeyValues(b *strings.Builder, m map[string]interface{}, indent string, depth int) {
+	const maxNestedDepth = 2
+	for _, k := range sortedKeys(m) {
+		v := m[k]
+		switch val := normalizeValue(v).(type) {
+		case map[string]interface{}:
+			if depth >= maxNestedDepth || len(val) == 0 {
+				b.WriteString(fmt.Sprintf("%s%s: {%d fields}\n", indent, k, len(val)))
+				continue
+			}
+			b.WriteString(fmt.Sprintf("%s%s:\n", indent, k))
+			writeKeyValues(b, val, indent+"  ", depth+1)
+		case []interface{}:
+			b.WriteString(fmt.Sprintf("%s%s: %s\n", indent, k, summarizeList(val)))
+		default:
+			b.WriteString(fmt.Sprintf("%s%s: %s\n", indent, k, scalarString(val)))
+		}
+	}
+}
+
+// normalizeValue converts structs and typed maps/slices to the generic
+// map/slice shapes via JSON; scalars and time values pass through.
+func normalizeValue(v interface{}) interface{} {
+	switch v.(type) {
+	case nil, string, bool, int, int32, int64, uint, uint32, uint64, float32, float64,
+		time.Time, time.Duration, map[string]interface{}, []interface{}:
+		return v
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	var out interface{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return string(raw)
+	}
+	return out
+}
+
+// toGenericMap returns v as map[string]interface{} (via JSON for structs),
+// or nil.
+func toGenericMap(v interface{}) map[string]interface{} {
+	m, _ := normalizeValue(v).(map[string]interface{})
+	return m
+}
+
+func summarizeList(list []interface{}) string {
+	const maxItems = 10
+	parts := make([]string, 0, len(list))
+	for i, item := range list {
+		switch item.(type) {
+		case map[string]interface{}, []interface{}:
+			return fmt.Sprintf("[%d items]", len(list))
+		}
+		if i == maxItems {
+			parts = append(parts, fmt.Sprintf("... (+%d more)", len(list)-maxItems))
+			break
+		}
+		parts = append(parts, scalarString(item))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// scalarString formats a scalar for display; JSON numbers that are whole
+// render without a decimal point.
+func scalarString(v interface{}) string {
+	switch val := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return val
+	case float64:
+		if val == float64(int64(val)) {
+			return fmt.Sprintf("%d", int64(val))
+		}
+		return fmt.Sprintf("%g", val)
+	case time.Time:
+		if val.IsZero() {
+			return ""
+		}
+		return val.Format(time.RFC3339)
+	default:
+		return fmt.Sprintf("%v", val)
+	}
+}
+
+func sortedKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (t *GatewayTool) debugPrompt(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
@@ -525,6 +641,8 @@ func (t *GatewayTool) formatPromptDebug(data map[string]interface{}) string {
 	if dropped, ok := data["dropped_sections"].([]string); ok && len(dropped) > 0 {
 		builder.WriteString(fmt.Sprintf("\nDropped sections: %s\n", strings.Join(dropped, ", ")))
 	}
+	// The full prompt_text stays in Data only (it can be tens of KB and is
+	// not needed to judge the budget). conduit-31jg.71
 
 	return builder.String()
 }
@@ -700,7 +818,9 @@ func (t *GatewayTool) GetUsageExamples() []types.ToolExample {
 	}
 }
 
-// IncludeDataInModelOutput opts this tool into having ToolResult.Data
-// rendered for the model: ids and lists needed for follow-up calls live
-// only in Data (conduit-31jg.39).
-func (t *GatewayTool) IncludeDataInModelOutput() bool { return true }
+// IncludeDataInModelOutput: conduit-31jg.39 opted this tool in because its
+// formatters produced near-empty Content. conduit-31jg.71 fixed the
+// formatters so Content carries every field (the config action appends the
+// full redacted JSON), which made Data a duplicate — and for debug_prompt it
+// re-sent the whole system prompt text. Opted out to save tokens.
+func (t *GatewayTool) IncludeDataInModelOutput() bool { return false }
