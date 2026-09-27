@@ -73,11 +73,15 @@ func buildMsgUnits(msgs []ChatMessage) []msgUnit {
 // window, otherwise a shallow copy with a trimmed Messages slice (the
 // caller's request and backing array are never mutated). Trim order:
 //
-//  1. drop whole units of prior history (before the turn's user message),
-//     oldest first;
+//  1. drop whole user turns of prior history (before the turn's user
+//     message), oldest first;
 //  2. drop whole middle tool rounds (after the user message, before the
 //     latest round), oldest first — tool_use/tool_result pairs stay intact;
 //  3. truncate the largest remaining tool results to a floor.
+//
+// Steps 1 and 2 trim with hysteresis (conduit-31jg.63, history_trim.go):
+// they drop past the overflow to the next chunk boundary, so the prefix
+// stays byte-stable across calls until another chunk is needed.
 //
 // System messages, the turn's user message, and the latest tool round with
 // everything after it are always kept.
@@ -134,31 +138,58 @@ func fitRequestToWindow(req *GenerateRequest, window int) *GenerateRequest {
 		}
 	}
 
-	// Droppable units in priority order: history before the anchor, then
-	// middle units between the anchor and the tail.
-	var order []int
-	for i := 0; i < tailStart; i++ {
-		if units[i].system || i == anchor || (anchor >= 0 && i > anchor) {
+	// Droppable groups in priority order: history before the anchor (whole
+	// user turns), then middle units between the anchor and the tail (each
+	// tool round on its own). conduit-31jg.63: within each region the drop
+	// point snaps to hysteresis chunks, so successive calls with the same
+	// prefix drop the same units instead of one more per call, keeping the
+	// cached prefix stable.
+	priorEnd := tailStart
+	if anchor >= 0 {
+		priorEnd = anchor
+	}
+	var prior, middle [][]int
+	for i := 0; i < priorEnd; i++ {
+		if units[i].system {
 			continue
 		}
-		order = append(order, i)
+		if len(prior) == 0 || req.Messages[units[i].start].Role == "user" {
+			prior = append(prior, nil)
+		}
+		prior[len(prior)-1] = append(prior[len(prior)-1], i)
 	}
 	for i := anchor + 1; anchor >= 0 && i < tailStart; i++ {
 		if !units[i].system {
-			order = append(order, i)
+			middle = append(middle, []int{i})
 		}
 	}
 
 	dropped := make(map[int]bool)
 	droppedMsgs := 0
-	for _, i := range order {
-		if total <= budget {
-			break
+	chunk := hysteresisChunk(budget)
+	dropLeading := func(groups [][]int) {
+		if total <= budget || len(groups) == 0 {
+			return
 		}
-		dropped[i] = true
-		total -= units[i].chars
-		droppedMsgs += units[i].end - units[i].start
+		chars := make([]int, len(groups))
+		regionChars := 0
+		for gi, g := range groups {
+			for _, i := range g {
+				chars[gi] += units[i].chars
+			}
+			regionChars += chars[gi]
+		}
+		n := snappedDropCount(chars, budget-(total-regionChars), chunk)
+		for _, g := range groups[:n] {
+			for _, i := range g {
+				dropped[i] = true
+				total -= units[i].chars
+				droppedMsgs += units[i].end - units[i].start
+			}
+		}
 	}
+	dropLeading(prior)
+	dropLeading(middle)
 
 	kept := make([]ChatMessage, 0, len(req.Messages)-droppedMsgs)
 	for i, u := range units {

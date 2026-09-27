@@ -213,44 +213,35 @@ func (r *Router) getRecentMessagesTokenAware(session *sessions.Session) ([]sessi
 		return messages, nil
 	}
 
-	// Calculate token budget and select messages newest-first
-	tokenBudget := cfg.MaxTokens
 	charsPerToken := cfg.CharsPerToken
 	if charsPerToken <= 0 {
 		charsPerToken = 4
 	}
+	charBudget := cfg.MaxTokens * charsPerToken
 
-	charBudget := tokenBudget * charsPerToken
+	// conduit-31jg.63: keep the previous cut while it fits; when over budget
+	// re-cut down to the low-water mark (whole user turns) so the history
+	// prefix — and its cache breakpoints — stays stable for many turns.
+	fetchLimit := cfg.MaxMessages
+	if fetchLimit <= 0 {
+		fetchLimit = sessions.DefaultMessageLimit
+	}
+	prevCut, _ := r.historyCuts.get(session.Key)
+	start := selectHistoryWindow(messages, prevCut, charBudget, fetchLimit, cfg.MinMessages,
+		historyLowWater(cfg.LowWaterFraction), len(messages) < fetchLimit)
+	selected := messages[start:]
+	if id := selected[0].ID; id != "" {
+		r.historyCuts.set(session.Key, id)
+	}
+	if id := selected[0].ID; start > 0 && id != prevCut {
+		log.Printf("[Router] History trim: session %s cut to %d of %d messages (low-water, conduit-31jg.63)",
+			session.Key, len(selected), len(messages))
+	}
+
 	usedChars := 0
-
-	// Messages are returned chronologically (oldest first), so iterate from end
-	selected := make([]sessions.Message, 0, len(messages))
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		msgChars := len(msg.Content) + len(msg.Role) + 10 // overhead for role/structure
-
-		// Always include minimum messages
-		if len(selected) < cfg.MinMessages {
-			selected = append(selected, msg)
-			usedChars += msgChars
-			continue
-		}
-
-		// Check if we have budget for more
-		if usedChars+msgChars <= charBudget {
-			selected = append(selected, msg)
-			usedChars += msgChars
-		} else {
-			// Budget exhausted
-			break
-		}
+	for _, m := range selected {
+		usedChars += historyMsgChars(m)
 	}
-
-	// Reverse to restore chronological order
-	for i, j := 0, len(selected)-1; i < j; i, j = i+1, j-1 {
-		selected[i], selected[j] = selected[j], selected[i]
-	}
-
 	estimatedTokens := usedChars / charsPerToken
 	fmt.Printf("[Router] Token-aware retrieval: %d messages (~%d tokens) from session %s\n",
 		len(selected), estimatedTokens, session.Key)
@@ -259,8 +250,8 @@ func (r *Router) getRecentMessagesTokenAware(session *sessions.Session) ([]sessi
 }
 
 // trimRequestToFitContext estimates total token usage for a GenerateRequest and
-// drops the oldest conversation history messages until the request fits within
-// the model's context window. The system prompt (first message) and the current
+// drops the oldest conversation history (whole user turns, with hysteresis —
+// conduit-31jg.63) until the request fits within the model's context window. The system prompt (first message) and the current
 // user message (last message) are always preserved.
 // If contextWindowOverride > 0, it takes precedence over model-based detection.
 func trimRequestToFitContext(req *GenerateRequest, contextWindowOverride int) {
@@ -324,16 +315,25 @@ func trimRequestToFitContext(req *GenerateRequest, contextWindowOverride int) {
 		return
 	}
 
-	// Keep history messages from newest end
-	keptChars := 0
-	keepFrom := len(history)
-	for i := len(history) - 1; i >= 0; i-- {
-		msgChars := len(history[i].Role) + len(history[i].Content) + 10
-		if keptChars+msgChars > availableChars {
-			break
+	// conduit-31jg.63: drop whole user turns, oldest first, snapped to
+	// hysteresis chunks from the start of history, so the next turns (same
+	// prefix, longer tail) keep the same first message instead of dropping
+	// one more message each turn.
+	groups := turnGroups(history, 0, len(history))
+	groupChars := make([]int, len(groups))
+	for gi, g := range groups {
+		for _, m := range history[g[0]:g[1]] {
+			groupChars[gi] += len(m.Role) + len(m.Content) + 10
 		}
-		keptChars += msgChars
-		keepFrom = i
+	}
+	dropGroups := snappedDropCount(groupChars, availableChars, hysteresisChunk(budgetChars))
+	keepFrom := len(history)
+	if dropGroups < len(groups) {
+		keepFrom = groups[dropGroups][0]
+	}
+	keptChars := 0
+	for _, c := range groupChars[dropGroups:] {
+		keptChars += c
 	}
 
 	dropped := keepFrom

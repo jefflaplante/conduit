@@ -18,10 +18,15 @@ import (
 // DefaultPromptCacheTTL is the default time-to-live for cached system prompts.
 const DefaultPromptCacheTTL = 5 * time.Minute
 
-// promptCacheEntry holds a cached system prompt with its expiration time.
+// promptCacheEntry holds the cached STATIC part of a system prompt with its
+// expiration time. conduit-31jg.65: the dynamic block (timestamp, wake
+// context, situation awareness) is never cached — caching it made the
+// clock up to a TTL stale. dynamicSections records which dynamic sections
+// the budget pass included so each turn re-renders exactly those.
 type promptCacheEntry struct {
-	blocks    []ai.SystemBlock
-	expiresAt time.Time
+	static          []ai.SystemBlock
+	dynamicSections []string
+	expiresAt       time.Time
 }
 
 // ConduitAgentWithIntegration implements the Conduit agent system with full integration
@@ -49,6 +54,9 @@ type ConduitAgentWithIntegration struct {
 	// System prompt cache: keyed by "sessionKey:model:isOAuth"
 	promptCache    sync.Map
 	promptCacheTTL time.Duration
+	// now is the clock for cache expiry and time-dependent prompt sections;
+	// nil = time.Now (conduit-31jg.65, tests).
+	now func() time.Time
 }
 
 // NewConduitAgentWithIntegration creates a new Conduit agent instance with full integration.
@@ -109,6 +117,9 @@ func (a *ConduitAgentWithIntegration) newPromptBuilder() *PromptBuilder {
 		a.brainService,
 	)
 	pb.sectionParams.QuietHours = a.quietHours // conduit-31jg.60
+	if a.now != nil {
+		pb.SetClock(a.now) // conduit-31jg.65: every rebuild keeps the injected clock
+	}
 	return pb
 }
 
@@ -149,40 +160,67 @@ func (a *ConduitAgentWithIntegration) BuildSystemPrompt(ctx context.Context, ses
 	// Build cache key from factors that affect prompt content
 	cacheKey := a.buildPromptCacheKey(session, isOAuth)
 
-	// Check cache for valid entry
+	a.mu.RLock()
+	pb := a.promptBuilder
+	ttl := a.promptCacheTTL
+	now := a.clock()
+	a.mu.RUnlock()
+
+	// conduit-31jg.65: a cache hit reuses the static block and re-renders the
+	// dynamic block (cheap: clock, wake source, situation awareness) so the
+	// timestamp is never stale.
 	if cached, ok := a.promptCache.Load(cacheKey); ok {
 		entry := cached.(promptCacheEntry)
-		if time.Now().Before(entry.expiresAt) {
-			// Return a copy to prevent callers from modifying cached data
-			return copySystemBlocks(entry.blocks), nil
+		if now().Before(entry.expiresAt) {
+			// Copy so callers cannot modify cached data.
+			blocks := copySystemBlocks(entry.static)
+			if dyn := pb.BuildDynamic(ctx, session, isOAuth, entry.dynamicSections); dyn != "" {
+				blocks = append(blocks, ai.SystemBlock{Type: "text", Text: dyn, Dynamic: true})
+			}
+			return blocks, nil
 		}
 		// Entry expired, delete it
 		a.promptCache.Delete(cacheKey)
 	}
 
-	// Build new prompt (read-lock promptBuilder)
-	a.mu.RLock()
-	pb := a.promptBuilder
-	a.mu.RUnlock()
+	split := pb.buildSplit(ctx, session, isOAuth)
+	blocks := split.blocks()
 
-	blocks, err := pb.Build(ctx, session, isOAuth)
-	if err != nil {
-		return nil, err
-	}
-
-	// Cache the result
-	a.mu.RLock()
-	ttl := a.promptCacheTTL
-	a.mu.RUnlock()
 	if ttl == 0 {
 		ttl = DefaultPromptCacheTTL
 	}
+	var static []ai.SystemBlock
+	for _, b := range blocks {
+		if !b.Dynamic {
+			static = append(static, b)
+		}
+	}
 	a.promptCache.Store(cacheKey, promptCacheEntry{
-		blocks:    copySystemBlocks(blocks),
-		expiresAt: time.Now().Add(ttl),
+		static:          copySystemBlocks(static),
+		dynamicSections: split.dynamicSections,
+		expiresAt:       now().Add(ttl),
 	})
 
 	return blocks, nil
+}
+
+// clock returns the agent's time source. Callers hold a.mu.
+func (a *ConduitAgentWithIntegration) clock() func() time.Time {
+	if a.now != nil {
+		return a.now
+	}
+	return time.Now
+}
+
+// SetClock overrides the time source for prompt-cache expiry and the
+// time-dependent prompt sections (tests). conduit-31jg.65.
+func (a *ConduitAgentWithIntegration) SetClock(now func() time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.now = now
+	if a.promptBuilder != nil {
+		a.promptBuilder.SetClock(now)
+	}
 }
 
 // BuildSystemPromptDebug builds the system prompt with full debug info, bypassing cache.
