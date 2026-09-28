@@ -30,6 +30,89 @@ Config (remote_ssh)
           shells)       forwarding)   redaction)
 ```
 
+## Enabling Remote Execution
+
+The tool runs real commands on real hosts (conduit-enf0), so it is off
+unless all of the following are true:
+
+1. **Tagged build.** The tool is only compiled with the `with_ssh` build tag:
+   `make build-custom TOOLS="ssh"` (just SSH), `make build-full` (all
+   optional tools), or `go build -tags with_ssh ./cmd/gateway`. A default
+   `make build` binary contains no SSH tool at all.
+2. **Tool enabled.** `"Ssh"` is in `tools.enabled_tools`.
+3. **Config enabled.** A top-level `remote_ssh` block (not under `tools`)
+   with `"enabled": true`, a `security.default_tier`, and at least one host.
+4. **Host keys known.** Every host (and jump host) key is in the known_hosts
+   file (`pool.known_hosts_file`, default `~/.ssh/known_hosts`) with the
+   default `strict_host_key_checking: "yes"`. Verify fingerprints out of
+   band, then e.g. `ssh-keyscan -p 22 10.0.1.10 >> ~/.ssh/known_hosts`.
+   `"accept-new"` trusts a first-seen key (and still refuses a changed one);
+   `"no"` is refused, since host keys are always verified.
+5. **Credentials.** Unencrypted private key files (`identity_file`, or
+   `~/.ssh/id_ed25519`/`id_rsa`/`id_ecdsa`) and/or keys in the ssh-agent at
+   `SSH_AUTH_SOCK`. Passphrase-protected keys are not supported; use the
+   agent for those. Keep host names, users and key paths out of the checked-in
+   config with `${ENV_VAR}` expansion if you prefer.
+6. **An approval channel.** Dangerous-tier operations wait for the owner's
+   `YES <code>` on an interactive channel (Telegram, TUI, WebSocket); without
+   one they are refused (see [Human Approval](#human-approval)).
+
+Minimal enablement (durations omitted so defaults apply; see the note below):
+
+```json
+{
+  "tools": { "enabled_tools": ["Ssh"] },
+  "remote_ssh": {
+    "enabled": true,
+    "hosts": [
+      {
+        "name": "nas",
+        "hostname": "${NAS_SSH_HOST}",
+        "user": "${NAS_SSH_USER}",
+        "identity_file": "${CONDUIT_SSH_KEY}",
+        "security_tier": "dangerous"
+      }
+    ],
+    "security": {
+      "default_tier": "dangerous",
+      "require_approval": ["dangerous", "blocked"],
+      "approval_timeout": 600000000000
+    },
+    "pool": {
+      "known_hosts_file": "~/.conduit/ssh_known_hosts",
+      "strict_host_key_checking": "yes"
+    },
+    "audit": {
+      "enabled": true,
+      "log_path": "logs/ssh_audit.jsonl",
+      "log_commands": true,
+      "log_output": true,
+      "redact_secrets": true
+    }
+  }
+}
+```
+
+The `remote_ssh` block is decoded onto zero values, not merged with the
+built-in defaults, so anything you omit is empty. Two safety defaults are
+re-applied when absent (`null`): `require_approval` (`["dangerous",
+"blocked"]`) and the hard blocks (`blocked_patterns` and
+`allowed_commands.blocked`); an explicit `[]` still means none. Omitting
+`allowed_commands.read`/`modify` makes every command fall to `default_tier`
+(so even `ls` needs approval) — copy the lists below to relax that.
+
+> **Durations are nanoseconds.** Duration fields (`approval_timeout`,
+> `idle_timeout`, `connect_timeout`, `session_idle_timeout`, ...) are Go
+> `time.Duration` values and must be JSON integers in nanoseconds
+> (`600000000000` = 10m). The config loader rejects strings like `"5m"`
+> today; the examples on this page that show strings are illustrative only.
+
+Connections are dialled lazily on first use (nothing connects at startup),
+pooled per host (`pool.*` limits) and closed when the gateway shuts down.
+`status` shows pool usage; the tool's SelfTest with `CheckDependencies`
+dials each enabled host once (no command runs) to report reachability and
+host-key problems.
+
 ## Configuration
 
 Add a `remote_ssh` section to your config JSON:
@@ -158,7 +241,7 @@ Hosts belong to a group if they list the group name in their `groups` array or m
 | `allow_subshells` | bool | `false` | Permit `$()` and backtick command substitution |
 | `allow_pipes` | bool | `true` | Permit pipe chains |
 | `max_command_length` | int | `10000` | Maximum command string length |
-| `approval_timeout` | duration | `5m` | Not yet honored: approvals use the gateway-wide 5 minute TTL |
+| `approval_timeout` | duration (ns) | `0` = gateway default (5m) | How long an SSH approval prompt stays valid; capped at 1h |
 
 ### Pool Configuration
 
@@ -169,8 +252,8 @@ Hosts belong to a group if they list the group name in their `groups` array or m
 | `idle_timeout` | duration | `5m` | Close idle connections after this |
 | `connect_timeout` | duration | `30s` | Default connection timeout |
 | `health_check_interval` | duration | `1m` | Connection health check interval |
-| `known_hosts_file` | string | — | Path to SSH known_hosts file |
-| `strict_host_key_checking` | string | `"yes"` | Host key verification: `yes`, `no`, `accept-new` |
+| `known_hosts_file` | string | `~/.ssh/known_hosts` | Path to SSH known_hosts file (must exist for `yes`) |
+| `strict_host_key_checking` | string | `"yes"` | `yes` (known hosts only) or `accept-new` (trust on first use, refuse changed keys); `no` is refused |
 
 ### Audit Configuration
 
@@ -312,6 +395,10 @@ List all active persistent sessions.
 ### tunnel_create
 
 Create a local port forwarding tunnel through an SSH host. Tunnels bind only to `127.0.0.1` for security.
+A tunnel exposes the remote network to every local process, so it is
+**dangerous-tier**: refused on hosts whose `security_tier` is `read` or
+`modify`, and approval-gated under the default `require_approval`. The
+tunnel holds one pooled connection until it is closed.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -355,7 +442,12 @@ List all active tunnels with connection stats.
 
 ### scp_upload
 
-Upload a local file to a remote host. Classified as modify-tier.
+Upload a local file to a remote host. Classified as **dangerous-tier**
+(it writes arbitrary content to an arbitrary remote path, e.g.
+`authorized_keys` or a cron file): approval-gated under the default
+`require_approval`, and refused on hosts whose `security_tier` is `read` or
+`modify`. `local_path` must be inside the tools sandbox; the approval is
+bound to the resolved file and its size. The remote path is shell-quoted.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -372,7 +464,10 @@ Only single files are supported (no directories).
 
 ### scp_download
 
-Download a file from a remote host. Classified as read-tier.
+Download a file from a remote host. Classified as read-tier (allowed on any
+host tier; gated only if `read` is in `require_approval`). `remote_path` is
+checked against `blocked_patterns` (so `/etc/shadow` is refused) and
+shell-quoted; `local_path` must be inside the tools sandbox.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -402,11 +497,13 @@ Unknown commands default to the `default_tier` setting, which must be `dangerous
 
 ### Human Approval
 
-Commands in a `require_approval` tier (`exec`, `exec_group`, `session_send`,
-and gated `scp_upload`) never run inside the tool call (conduit-w3l7). The
-exact operation is frozen (host or resolved host list, session, command,
-timeout) and an approval prompt goes to the owner in the chat the turn came
-from:
+Operations in a `require_approval` tier (`exec`, `exec_group`,
+`session_send`, `scp_upload`, `scp_download`, `tunnel_create`) never run
+inside the tool call (conduit-w3l7, conduit-enf0). The exact operation is
+frozen (host or resolved host list, session, command, timeout, paths,
+forward target) and an approval prompt goes to the owner in the chat the
+turn came from. It stays valid for `security.approval_timeout` (default:
+the gateway's 5 minutes; capped at 1 hour):
 
 ```
 APPROVAL NEEDED [K7M2QX]
@@ -446,6 +543,20 @@ masked in the prompt; the real command still runs.
 Each host can set a `security_tier` that caps the maximum command tier allowed. For example, a host with `"security_tier": "read"` will only accept read-tier commands -- any modify, dangerous, or blocked command is rejected regardless of classification.
 
 For group execution, the strictest tier across all hosts in the group is applied.
+
+Non-command operations have fixed tiers and follow the same cap and
+approval rules: `scp_upload` and `tunnel_create` are dangerous,
+`scp_download` is read. A host that should accept uploads or tunnels needs
+`"security_tier": "dangerous"` (or no tier).
+
+### Host Key Verification
+
+Every connection (pool, persistent sessions, jump hosts, and therefore SCP
+and tunnels) verifies the server's host key against `pool.known_hosts_file`.
+An unknown host fails with the key's SHA256 fingerprint and an `ssh-keyscan`
+hint; a changed key fails with `HOST KEY MISMATCH`. There is no insecure
+mode: `strict_host_key_checking: "no"` makes every connection fail (and the
+tool's SelfTest report `failed`).
 
 ### Audit Logging
 
