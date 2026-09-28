@@ -113,7 +113,13 @@ func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, re
 		areq.Model = rt.model
 		trimRequestToFitContext(&areq, r.contextWindowForRoute(rt))
 		// conduit-38cz: take the slot before the latency clock starts; an
-		// abandoned wait makes no call and is neither metered nor logged.
+		// abandoned wait makes no call and is not metered, only written to
+		// the call log as a queue_* record (conduit-3j08).
+		if opts.stream != nil {
+			if _, ok := rt.provider.(StreamingProvider); ok {
+				obs.streaming = true // a queue_* record reports the attempt as streaming
+			}
+		}
 		release, werr := r.acquireProviderSlotObserved(ctx, rt.name, areq.Model, obs)
 		if werr != nil {
 			return nil, 0, werr

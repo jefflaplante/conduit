@@ -28,7 +28,10 @@ import (
 // One JSON line per provider call, written at the single point every call
 // passes through (Router.meterCall): each callWithRecovery attempt, every
 // guarded call (tool-loop depths, EmptyGuard retry/failover, length
-// auto-continue, their timeout retries and handoffs) and side calls.
+// auto-continue, their timeout retries and handoffs) and side calls. An
+// attempt whose concurrency-slot wait was abandoned (conduit-3j08) makes no
+// provider call and is not metered, but still gets one line, written by
+// acquireProviderSlotObserved with error_class queue_timeout/queue_cancel.
 //
 // METADATA ONLY: a record carries routing, token, cost, latency and error
 // classification fields. It never carries prompt text, response text or tool
@@ -66,6 +69,12 @@ const (
 	ErrClassContextCancel = "context_cancel"
 	ErrClassContextLength = "context_length"
 	ErrClassOther         = "other"
+
+	// Throttle waits abandoned before any provider call (conduit-3j08):
+	// the attempt's deadline expired (queue_timeout) or its ctx was
+	// canceled — /stop, sub-agent cancel, shutdown (queue_cancel).
+	ErrClassQueueTimeout = "queue_timeout"
+	ErrClassQueueCancel  = "queue_cancel"
 )
 
 // CallRecord is one line of the call log. Every field is metadata; there is
@@ -99,7 +108,7 @@ type CallRecord struct {
 	CacheReadTokens     int     `json:"cache_read_tokens"`
 	CostUSD             float64 `json:"cost_usd"`
 	Priced              *bool   `json:"priced,omitempty"`        // nil on error
-	LatencyMs           int64   `json:"latency_ms"`              // provider call only; excludes queue_wait_ms
+	LatencyMs           int64   `json:"latency_ms"`              // provider call only; excludes queue_wait_ms (0 for queue_* records)
 	QueueWaitMs         int64   `json:"queue_wait_ms,omitempty"` // time waiting for a concurrency slot (conduit-38cz)
 	TTFTMs              *int64  `json:"ttft_ms,omitempty"`       // streaming calls that emitted text
 	ErrorClass          string  `json:"error_class"`
@@ -573,6 +582,15 @@ func classifyCallError(err error) string {
 	switch {
 	case err == nil:
 		return ErrClassNone
+	}
+	var we *ThrottleWaitError
+	if errors.As(err, &we) { // conduit-3j08: no provider call was made
+		if errors.Is(we.Err, context.Canceled) {
+			return ErrClassQueueCancel
+		}
+		return ErrClassQueueTimeout
+	}
+	switch {
 	case errors.Is(err, context.Canceled):
 		return ErrClassContextCancel
 	case IsTransientTimeoutError(err):
