@@ -14,11 +14,27 @@ func init() {
 		if cfg == nil || !cfg.RemoteSSH.Enabled {
 			return nil, nil
 		}
-		tool, err := NewSSHTool(services, &cfg.RemoteSSH)
+		tool, err := newRegisteredTool(services, cfg)
 		if err != nil {
 			return nil, err
 		}
-		tool.SetSandbox(sandbox.FromConfig(cfg.Tools.Sandbox)) // conduit-31jg.69
 		return tool, nil
 	})
+}
+
+// newRegisteredTool builds the SSH tool exactly as the gateway registers it:
+// sandboxed SCP paths and the real pool-backed client, so exec, exec_group,
+// session_send, SCP and tunnels all reach configured hosts (conduit-enf0).
+// Connections are dialled lazily on first use, verified against known_hosts
+// (see buildHostKeyCallback) and closed by SSHTool.Close, which the registry
+// calls on gateway shutdown. Every remote operation still goes through the
+// security engine and the approval gate first.
+func newRegisteredTool(services *types.ToolServices, cfg *config.Config) (*SSHTool, error) {
+	tool, err := NewSSHTool(services, &cfg.RemoteSSH)
+	if err != nil {
+		return nil, err
+	}
+	tool.SetSandbox(sandbox.FromConfig(cfg.Tools.Sandbox)) // conduit-31jg.69
+	tool.SetClient(NewPoolClient(tool.pool))
+	return tool, nil
 }

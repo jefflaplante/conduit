@@ -6,6 +6,7 @@ package ssh
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"conduit/internal/config"
 	"conduit/internal/sandbox"
@@ -29,6 +30,8 @@ type SSHTool struct {
 	// sandbox confines SCP local paths (upload source, download destination)
 	// to tools.sandbox roots. nil denies all local paths. conduit-31jg.69
 	sandbox *sandbox.Sandbox
+
+	closeOnce sync.Once
 }
 
 // NewSSHTool creates a new SSH tool with the given services and configuration
@@ -76,7 +79,8 @@ func NewSSHTool(services *types.ToolServices, cfg *config.RemoteSSHConfig) (*SSH
 		pool:             pool,
 		fanoutExecutor:   fanoutExecutor,
 		inventoryManager: inventoryManager,
-		// client will be set via SetClient when the real implementation is available
+		// client is set via SetClient; the registered tool uses
+		// NewPoolClient(pool) (register.go, conduit-enf0).
 	}, nil
 }
 
@@ -85,8 +89,14 @@ func (t *SSHTool) SetClient(client Client) {
 	t.client = client
 }
 
-// Close cleans up the SSH tool resources
+// Close cleans up the SSH tool resources. It is idempotent: the registry
+// calls it on gateway shutdown and tests may call it again. Tunnels close
+// first so their pooled connections are released before the pool closes.
 func (t *SSHTool) Close() {
+	t.closeOnce.Do(t.close)
+}
+
+func (t *SSHTool) close() {
 	if t.sessionManager != nil {
 		t.sessionManager.Close()
 	}

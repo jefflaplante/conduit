@@ -596,18 +596,52 @@ func normalizeWhitespace(s string) string {
 // ValidateCommandForHost checks if a command is allowed for a specific host's security tier
 func (e *SecurityEngine) ValidateCommandForHost(command string, hostTier string) *ClassificationResult {
 	result := e.ClassifyCommand(command)
+	applyHostTier(result, "command", hostTier)
+	return result
+}
 
-	// If host has a security tier restriction, enforce it
-	if hostTier != "" {
-		hostTierSeverity := tierSeverity(SecurityTier(hostTier))
-		commandSeverity := tierSeverity(result.Tier)
+// applyHostTier blocks result when its tier exceeds the host's (or group's)
+// maximum security_tier.
+func applyHostTier(result *ClassificationResult, what, hostTier string) {
+	if hostTier == "" {
+		return
+	}
+	if tierSeverity(result.Tier) > tierSeverity(SecurityTier(hostTier)) {
+		result.Blocked = true
+		result.Reason = fmt.Sprintf("%s tier %s exceeds host maximum tier %s", what, result.Tier, hostTier)
+	}
+}
 
-		if commandSeverity > hostTierSeverity {
-			result.Blocked = true
-			result.Reason = fmt.Sprintf("command tier %s exceeds host maximum tier %s", result.Tier, hostTier)
+// ClassifyOperationForHost classifies a non-command operation (an SCP
+// transfer or a tunnel) that has a fixed tier, e.g. scp_upload at
+// TierDangerous. It applies the same policy as ValidateCommandForHost:
+// require_approval decides RequiresApproval, and the host's security_tier
+// caps what is allowed. Each subject (a remote path, a forward target) is
+// checked against blocked_patterns, so e.g. a download of /etc/shadow is
+// refused exactly like `cat /etc/shadow` (conduit-enf0). Previously SCP
+// classified the literal string "scp upload to <path>" and ignored the host
+// tier entirely.
+func (e *SecurityEngine) ClassifyOperationForHost(operation string, tier SecurityTier, reason, hostTier string, subjects ...string) *ClassificationResult {
+	result := &ClassificationResult{
+		Tier:        tier,
+		Command:     strings.TrimSpace(operation + " " + strings.Join(subjects, " ")),
+		BaseCommand: operation,
+		Reason:      reason,
+		Warnings:    []string{},
+	}
+	for _, subject := range subjects {
+		for _, pattern := range e.blockedPatterns {
+			if pattern.MatchString(subject) {
+				result.Tier = TierBlocked
+				result.Blocked = true
+				result.Reason = fmt.Sprintf("%s matches blocked pattern: %s", subject, pattern.String())
+				return result
+			}
 		}
 	}
-
+	result.RequiresApproval = e.requiresApproval(result.Tier)
+	result.Blocked = result.Tier == TierBlocked
+	applyHostTier(result, operation, hostTier)
 	return result
 }
 

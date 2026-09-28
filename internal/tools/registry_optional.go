@@ -68,7 +68,7 @@ func (r *Registry) warnMismatchedOptionalTools() {
 		{"DatadogMonitor", cfg.Datadog.Enabled},
 		{"Kubernetes", cfg.Kubernetes.Enabled},
 		{"PagerDuty", cfg.PagerDuty.Enabled},
-		{"SSH", cfg.RemoteSSH.Enabled},
+		{"Ssh", cfg.RemoteSSH.Enabled}, // SSHTool.Name(); "SSH" never matched (conduit-enf0)
 		// MQTT is checked via service, not config
 		// UniFi has no config enable flag
 	}
@@ -76,6 +76,36 @@ func (r *Registry) warnMismatchedOptionalTools() {
 	for _, check := range checks {
 		if check.enabled && !r.HasTool(check.name) {
 			log.Printf("Warning: %s is enabled in config but not compiled (missing build tag)", check.name)
+		}
+	}
+}
+
+// CloseTools releases resources held by registered tools that implement
+// Close() or Close() error (e.g. the SSH tool's connection pool, persistent
+// sessions and tunnels). The gateway calls it once during shutdown, after
+// in-flight approved actions have finished (conduit-enf0). Tools are closed
+// outside r.mu; errors are logged, not returned.
+func (r *Registry) CloseTools() {
+	r.mu.RLock()
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	list := make([]types.Tool, 0, len(names))
+	for _, name := range names {
+		list = append(list, r.tools[name])
+	}
+	r.mu.RUnlock()
+
+	for _, tool := range list {
+		switch c := tool.(type) {
+		case interface{ Close() error }:
+			if err := c.Close(); err != nil {
+				log.Printf("Failed to close tool %s: %v", tool.Name(), err)
+			}
+		case interface{ Close() }:
+			c.Close()
 		}
 	}
 }

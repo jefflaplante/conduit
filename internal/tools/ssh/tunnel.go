@@ -31,6 +31,9 @@ type Tunnel struct {
 	bytesOut    atomic.Int64
 	activeConns atomic.Int32
 	closed      atomic.Bool
+	// release, if set, runs once after the tunnel has fully closed; the
+	// SSH tool uses it to return the pooled connection (conduit-enf0).
+	release func()
 }
 
 // TunnelInfo contains information about a tunnel for external reporting
@@ -66,6 +69,13 @@ func NewTunnelManager() *TunnelManager {
 // CreateTunnel creates a new local port forwarding tunnel
 // The tunnel binds to 127.0.0.1:localPort and forwards to remoteHost:remotePort via the SSH connection
 func (m *TunnelManager) CreateTunnel(client *SSHClient, localPort int, remoteHost string, remotePort int) (*Tunnel, error) {
+	return m.CreateTunnelWithRelease(client, localPort, remoteHost, remotePort, nil)
+}
+
+// CreateTunnelWithRelease is CreateTunnel plus a release hook that runs once
+// after the tunnel closes (via CloseTunnel, CloseHostTunnels or CloseAll).
+// On error the tunnel was not created and release is not called.
+func (m *TunnelManager) CreateTunnelWithRelease(client *SSHClient, localPort int, remoteHost string, remotePort int, release func()) (*Tunnel, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -108,6 +118,7 @@ func (m *TunnelManager) CreateTunnel(client *SSHClient, localPort int, remoteHos
 		listener:   listener,
 		ctx:        ctx,
 		cancel:     cancel,
+		release:    release,
 	}
 
 	// Start accepting connections
@@ -288,6 +299,9 @@ func (t *Tunnel) Close() error {
 	// Wait for all goroutines to complete
 	t.wg.Wait()
 
+	if t.release != nil {
+		t.release()
+	}
 	return nil
 }
 
