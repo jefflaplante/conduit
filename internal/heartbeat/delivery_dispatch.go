@@ -123,6 +123,7 @@ func (g *GatewayIntegration) deliveryRegistry() *DeliveryRegistry {
 // conduit-31jg.81). It waits at most closeWait for the goroutines to exit.
 // Safe to call more than once.
 func (g *GatewayIntegration) Close() error {
+	g.stopDeferredFlush() // conduit-31jg.87
 	g.retries.mu.Lock()
 	if !g.retries.closed {
 		g.retries.closed = true
