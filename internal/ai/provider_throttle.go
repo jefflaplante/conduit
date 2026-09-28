@@ -44,7 +44,8 @@ import (
 // A wait that ends on ctx returns a *ThrottleWaitError wrapping ctx.Err():
 // DeadlineExceeded stays a transient timeout for the recovery ladder,
 // Canceled stays a cancel. Such an attempt made no provider call, so it is
-// not metered.
+// not metered; it is written to the call log with error_class
+// queue_timeout / queue_cancel (conduit-3j08).
 
 // knownModelConcurrency is the built-in per-model limit table for providers
 // whose limits are documented (conduit-38cz). Keys are lower-case model
@@ -363,15 +364,39 @@ func (r *Router) acquireProviderSlot(ctx context.Context, providerName, model st
 // points that also feed the call log (conduit-2lzv): it records the time
 // spent waiting for the slot on obs (queue_wait_ms). Callers take the slot
 // BEFORE starting their latency clock, so latency_ms excludes queue wait.
+//
 // An abandoned wait returns the error before any provider call; the caller
-// returns without metering, so it is neither metered nor logged.
+// returns without metering it (no usage, no cost), but it is written to the
+// call log here as one record with error_class queue_timeout or
+// queue_cancel, queue_wait_ms set and latency_ms 0 (conduit-3j08). ctx must
+// carry the same call-log scope the caller's meterCall would use, so the
+// record gets the same phase/attempt/session fields.
 func (r *Router) acquireProviderSlotObserved(ctx context.Context, providerName, model string, obs *callObs) (func(), error) {
 	t0 := time.Now()
 	release, err := r.acquireProviderSlot(ctx, providerName, model)
 	if obs != nil {
 		obs.queueWait = time.Since(t0)
 	}
+	if err != nil {
+		r.logQueueAbandon(ctx, providerName, model, err, obs)
+	}
 	return release, err
+}
+
+// logQueueAbandon writes the call-log record for a throttle wait that ended
+// on ctx before the provider was called (conduit-3j08): zero tokens and
+// cost, no ttft, latency_ms 0 (no provider call ran), the wait in
+// queue_wait_ms.
+func (r *Router) logQueueAbandon(ctx context.Context, providerName, model string, err error, obs *callObs) {
+	if r == nil || r.CallLog() == nil {
+		return
+	}
+	if model == "" {
+		r.mu.RLock()
+		model = r.providerMeta[providerName].DefaultModel
+		r.mu.RUnlock()
+	}
+	r.logCall(ctx, providerName, model, nil, err, 0, obs)
 }
 
 // ProviderSlots returns the throttle pools' in-flight / waiting counts for

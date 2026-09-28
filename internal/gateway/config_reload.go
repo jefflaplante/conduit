@@ -15,6 +15,7 @@ import (
 	"conduit/internal/ai"
 	"conduit/internal/approval"
 	"conduit/internal/config"
+	"conduit/internal/monitoring"
 	toolstypes "conduit/internal/tools/types"
 )
 
@@ -51,6 +52,64 @@ type configReloader struct {
 	path string     // config file the gateway was loaded from; "" = reload unavailable
 	// live is the effective config after live updates; nil = g.config.
 	live atomic.Pointer[config.Config]
+	// metrics counts plans and applies by outcome (conduit-2qes).
+	metrics monitoring.ConfigUpdateMetrics
+	// beforePersist, if set, runs just before the file is replaced (tests).
+	beforePersist func()
+}
+
+// configRejectedError marks an update rejected because the patch itself is
+// invalid (malformed, literal secret, fails validation), as opposed to an
+// I/O or build failure. It only classifies; the message is unchanged.
+type configRejectedError struct{ err error }
+
+func (e *configRejectedError) Error() string { return e.err.Error() }
+func (e *configRejectedError) Unwrap() error { return e.err }
+
+func rejectInvalid(err error) error { return &configRejectedError{err: err} }
+
+// configUpdateOutcome classifies a failed plan or apply for the metrics.
+func configUpdateOutcome(err error) monitoring.ConfigUpdateOutcome {
+	var rej *configRejectedError
+	switch {
+	case errors.As(err, &rej):
+		return monitoring.ConfigUpdateRejectedInvalid
+	case errors.Is(err, config.ErrConfigChangedOnDisk):
+		return monitoring.ConfigUpdateRejectedConflict
+	default:
+		return monitoring.ConfigUpdateFailed
+	}
+}
+
+// appliedOutcome classifies a successful apply for the metrics.
+func appliedOutcome(res *toolstypes.ConfigUpdateResult) monitoring.ConfigUpdateOutcome {
+	switch {
+	case len(res.Changes) == 0:
+		return monitoring.ConfigUpdateUnchanged
+	case len(res.RestartKeys()) > 0:
+		return monitoring.ConfigUpdateAppliedRestartRequired
+	default:
+		return monitoring.ConfigUpdateAppliedLive
+	}
+}
+
+// ConfigUpdateMetrics returns the update_config counters (conduit-2qes).
+func (g *Gateway) ConfigUpdateMetrics() monitoring.ConfigUpdateSnapshot {
+	return g.reload.metrics.Snapshot()
+}
+
+// recordConfigApproval counts a denied or expired update_config approval.
+// Approved ones are counted by the apply they trigger.
+func (g *Gateway) recordConfigApproval(r approval.Resolution) {
+	if r.Action.Kind != toolstypes.ConfigUpdateApprovalKind {
+		return
+	}
+	switch r.Decision {
+	case approval.DecisionDenied:
+		g.reload.metrics.Record(monitoring.ConfigUpdateApprovalDenied)
+	case approval.DecisionExpired:
+		g.reload.metrics.Record(monitoring.ConfigUpdateApprovalExpired)
+	}
 }
 
 // errConfigReloadUnavailable is returned when the gateway does not know its
@@ -104,7 +163,13 @@ func (g *Gateway) PlanConfigUpdate(ctx context.Context, patch map[string]interfa
 	defer g.reload.mu.Unlock()
 	plan, err := g.planConfigUpdate(patch)
 	if err != nil {
+		g.reload.metrics.Record(configUpdateOutcome(err))
 		return nil, err
+	}
+	if len(plan.result.Changes) == 0 {
+		g.reload.metrics.Record(monitoring.ConfigUpdateUnchanged)
+	} else {
+		g.reload.metrics.Record(monitoring.ConfigUpdatePlanned)
 	}
 	o, _ := approval.OriginFrom(ctx)
 	g.log().Info("config update planned", "component", "config_reload",
@@ -122,18 +187,35 @@ func (g *Gateway) UpdateConfiguration(ctx context.Context, patch map[string]inte
 }
 
 // ApplyConfigUpdate validates patch, saves it to the config file and applies
-// its live part (types.ConfigUpdater). On error nothing changed.
+// its live part (types.ConfigUpdater). On error nothing changed. Every call
+// counts exactly one outcome in the config update metrics.
 func (g *Gateway) ApplyConfigUpdate(ctx context.Context, patch map[string]interface{}) (*toolstypes.ConfigUpdateResult, error) {
 	g.reload.mu.Lock()
 	defer g.reload.mu.Unlock()
 
+	res, rebuilt, err := g.applyConfigUpdate(ctx, patch)
+	if err != nil {
+		g.reload.metrics.Record(configUpdateOutcome(err))
+		return nil, err
+	}
+	if o := appliedOutcome(res); o == monitoring.ConfigUpdateUnchanged {
+		g.reload.metrics.Record(o)
+	} else {
+		g.reload.metrics.RecordApplied(o, rebuilt, time.Now())
+	}
+	return res, nil
+}
+
+// applyConfigUpdate does the work of ApplyConfigUpdate and also returns the
+// number of provider instances rebuilt. Caller holds g.reload.mu.
+func (g *Gateway) applyConfigUpdate(ctx context.Context, patch map[string]interface{}) (*toolstypes.ConfigUpdateResult, int, error) {
 	plan, err := g.planConfigUpdate(patch)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	res := plan.result
 	if len(res.Changes) == 0 {
-		return res, nil
+		return res, 0, nil
 	}
 
 	// Phase 1: build everything that can fail.
@@ -143,7 +225,7 @@ func (g *Gateway) ApplyConfigUpdate(ctx context.Context, patch map[string]interf
 	var prep *ai.ProviderReload
 	if len(plan.live.providers) > 0 {
 		if g.ai == nil {
-			return nil, errors.New("config update: no AI router to reload providers on")
+			return nil, 0, errors.New("config update: no AI router to reload providers on")
 		}
 		for i, p := range next.AI.Providers {
 			if plan.live.providers[p.Name] {
@@ -151,7 +233,7 @@ func (g *Gateway) ApplyConfigUpdate(ctx context.Context, patch map[string]interf
 			}
 		}
 		if prep, err = g.ai.PrepareProviderReload(next.AI); err != nil {
-			return nil, fmt.Errorf("config update: %w", err)
+			return nil, 0, fmt.Errorf("config update: %w", err)
 		}
 	}
 	if plan.live.pricing {
@@ -162,7 +244,7 @@ func (g *Gateway) ApplyConfigUpdate(ctx context.Context, patch map[string]interf
 	if plan.live.callLog {
 		next.AI.CallLog = plan.candidate.AI.CallLog
 		if newCallLog, err = ai.OpenCallLog(next.AI.CallLog, running.DataDir); err != nil {
-			return nil, fmt.Errorf("config update: %w", err)
+			return nil, 0, fmt.Errorf("config update: %w", err)
 		}
 	}
 	if plan.live.subagentModel {
@@ -170,12 +252,15 @@ func (g *Gateway) ApplyConfigUpdate(ctx context.Context, patch map[string]interf
 	}
 
 	// Phase 2: persist. The file must still hold what the plan was built on.
+	if g.reload.beforePersist != nil {
+		g.reload.beforePersist()
+	}
 	backup, err := config.ReplaceFile(plan.path, plan.newData, plan.oldData)
 	if err != nil {
 		if newCallLog != nil {
 			_ = newCallLog.Close(ctx)
 		}
-		return nil, fmt.Errorf("config update: save %s: %w", plan.path, err)
+		return nil, 0, fmt.Errorf("config update: save %s: %w", plan.path, err)
 	}
 
 	// Phase 3: commit (cannot fail).
@@ -210,7 +295,7 @@ func (g *Gateway) ApplyConfigUpdate(ctx context.Context, patch map[string]interf
 		"live_keys", res.LiveKeys(), "restart_keys", res.RestartKeys(),
 		"security_keys", res.SecurityKeys(), "providers_rebuilt", prep.Changed(),
 		"config_path", plan.path, "backup_path", backup)
-	return res, nil
+	return res, len(prep.Changed()), nil
 }
 
 func (g *Gateway) log() *slog.Logger {
@@ -228,11 +313,11 @@ func (g *Gateway) planConfigUpdate(patch map[string]interface{}) (*configPlan, e
 	}
 	ops, err := config.FlattenPatch(patch)
 	if err != nil {
-		return nil, err
+		return nil, rejectInvalid(err)
 	}
 	for _, op := range ops {
 		if err := config.CheckPatchSecrets(op); err != nil {
-			return nil, err
+			return nil, rejectInvalid(err)
 		}
 	}
 	oldData, err := os.ReadFile(path)
@@ -253,7 +338,7 @@ func (g *Gateway) planConfigUpdate(patch map[string]interface{}) (*configPlan, e
 	for _, op := range ops {
 		canonical, changed, err := doc.Set(op.Path, op.Value, op.Delete)
 		if err != nil {
-			return nil, err
+			return nil, rejectInvalid(err)
 		}
 		if !changed {
 			res.Unchanged = append(res.Unchanged, config.JoinPath(canonical))
@@ -269,7 +354,7 @@ func (g *Gateway) planConfigUpdate(patch map[string]interface{}) (*configPlan, e
 	plan.newData = doc.Bytes()
 	candidate, err := config.Parse(plan.newData)
 	if err != nil {
-		return nil, fmt.Errorf("rejected, nothing changed: %w", err)
+		return nil, rejectInvalid(fmt.Errorf("rejected, nothing changed: %w", err))
 	}
 	plan.candidate = candidate
 

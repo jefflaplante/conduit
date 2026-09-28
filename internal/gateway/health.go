@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -43,6 +44,9 @@ type MetricsResponse struct {
 	} `json:"heartbeat"`
 	LastActivity time.Time `json:"last_activity"`
 	IsIdle       bool      `json:"is_idle"`
+	// ConfigUpdates counts Gateway update_config plans/applies by outcome
+	// (conduit-2qes). Counts only; never key paths or values.
+	ConfigUpdates monitoring.ConfigUpdateSnapshot `json:"config_updates"`
 }
 
 // DiagnosticEvent represents a real-time diagnostic event for the diagnostics endpoint
@@ -140,6 +144,8 @@ func (g *Gateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			QueueBacklog:   metrics.QueueDepth > 100,      // Alert if queue depth >100
 		},
 	}
+
+	response.ConfigUpdates = g.ConfigUpdateMetrics()
 
 	// Check database health
 	response.Database.Connected = true
@@ -360,4 +366,26 @@ func (g *Gateway) handlePrometheusMetrics(w http.ResponseWriter, r *http.Request
 	fmt.Fprintf(w, "# HELP conduit_status Gateway status (1=healthy, 0=unhealthy)\n")
 	fmt.Fprintf(w, "# TYPE conduit_status gauge\n")
 	fmt.Fprintf(w, "conduit_status{status=\"%s\"} %d\n", metrics.Status, statusValue)
+
+	writePrometheusConfigUpdates(w, g.ConfigUpdateMetrics())
+}
+
+// writePrometheusConfigUpdates writes the update_config counters
+// (conduit-2qes). The only label is the bounded outcome enum.
+func writePrometheusConfigUpdates(w io.Writer, s monitoring.ConfigUpdateSnapshot) {
+	fmt.Fprintf(w, "# HELP conduit_config_updates_total Gateway update_config plans and applies by outcome\n")
+	fmt.Fprintf(w, "# TYPE conduit_config_updates_total counter\n")
+	for _, o := range monitoring.ConfigUpdateOutcomes {
+		fmt.Fprintf(w, "conduit_config_updates_total{outcome=\"%s\"} %d\n", o, s.Count(o))
+	}
+	fmt.Fprintf(w, "# HELP conduit_config_update_providers_rebuilt_total Provider instances rebuilt by live config updates\n")
+	fmt.Fprintf(w, "# TYPE conduit_config_update_providers_rebuilt_total counter\n")
+	fmt.Fprintf(w, "conduit_config_update_providers_rebuilt_total %d\n", s.ProvidersRebuilt)
+	var last int64
+	if s.LastApplied != nil {
+		last = s.LastApplied.Unix()
+	}
+	fmt.Fprintf(w, "# HELP conduit_config_update_last_applied_timestamp_seconds Unix time of the last applied config update (0 = none)\n")
+	fmt.Fprintf(w, "# TYPE conduit_config_update_last_applied_timestamp_seconds gauge\n")
+	fmt.Fprintf(w, "conduit_config_update_last_applied_timestamp_seconds %d\n", last)
 }

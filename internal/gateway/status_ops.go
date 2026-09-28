@@ -39,6 +39,8 @@ func (g *Gateway) GetGatewayStatus() (map[string]interface{}, error) {
 	return map[string]interface{}{
 		"status":  "running",
 		"version": version.Info(),
+		// conduit-2qes: update_config outcomes (counts only, no keys/values).
+		"config_updates": g.ConfigUpdateMetrics().ToMap(),
 	}, nil
 }
 
