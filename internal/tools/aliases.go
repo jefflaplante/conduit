@@ -169,7 +169,7 @@ func ValidateToolConfig(config *ToolConfig) error {
 	}
 
 	if config.IsAnthropicTool && config.Version == "" {
-		return fmt.Errorf("Anthropic tool missing version")
+		return fmt.Errorf("tool version is empty (required for Anthropic tools)")
 	}
 
 	return nil
