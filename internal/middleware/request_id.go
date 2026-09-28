@@ -26,8 +26,3 @@ func (m *RequestIDMiddleware) Wrap(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
-
-// Handler is an alias for Wrap to satisfy common middleware chain conventions.
-func (m *RequestIDMiddleware) Handler(next http.Handler) http.Handler {
-	return m.Wrap(next)
-}

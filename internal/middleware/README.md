@@ -171,11 +171,6 @@ authInfo := middleware.GetAuthInfo(r.Context())
 if authInfo != nil {
     // Use authInfo.ClientName, authInfo.TokenID, etc.
 }
-
-// Or check boolean
-if middleware.IsAuthenticated(r.Context()) {
-    // Request is authenticated
-}
 ```
 
 ## Integration with Gateway

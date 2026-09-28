@@ -166,25 +166,29 @@ func TestEndToEndAuthenticationFlow(t *testing.T) {
 
 	// Step 4: Test WebSocket authentication
 	t.Run("WebSocketAuthentication", func(t *testing.T) {
-		// Create authenticated upgrader
 		upgrader := &websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		}
-		authUpgrader := middleware.NewAuthenticatedUpgrader(authStorage, upgrader)
+		wsAuth := middleware.NewWebSocketAuthenticator(authStorage)
 
-		// WebSocket handler
+		// WebSocket handler: authenticate before upgrading, the same way the
+		// gateway's /ws handler does (internal/gateway/ws_client.go).
 		wsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			conn, authInfo, err := authUpgrader.UpgradeWithAuth(w, r)
+			result := wsAuth.Authenticate(r)
+			if !result.Authenticated {
+				wsAuth.RejectUpgrade(w, result.Error)
+				return
+			}
+			var responseHeader http.Header
+			if result.ResponseProtocol != "" {
+				responseHeader = http.Header{"Sec-WebSocket-Protocol": []string{result.ResponseProtocol}}
+			}
+			conn, err := upgrader.Upgrade(w, r, responseHeader)
 			if err != nil {
-				http.Error(w, "Upgrade failed", http.StatusInternalServerError)
 				return
 			}
 			defer conn.Close()
-
-			if authInfo == nil {
-				conn.Close()
-				return
-			}
+			authInfo := result.AuthInfo
 
 			// Send confirmation message
 			msg := map[string]string{
