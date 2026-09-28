@@ -214,7 +214,7 @@ func TestPairingStorage_ListPendingPairings_ExcludesExpired(t *testing.T) {
 	// Insert pairings (in UTC)
 	now := time.Now().UTC()
 	insertPairing(t, db, "code1", "user1", now.Add(-2*time.Hour), now.Add(-1*time.Hour), true) // expired
-	insertPairing(t, db, "code2", "user2", now, now.Add(1*time.Hour), true)                   // active
+	insertPairing(t, db, "code2", "user2", now, now.Add(1*time.Hour), true)                    // active
 
 	// Should only list the non-expired one
 	pairings, err := storage.ListPendingPairings()

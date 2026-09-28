@@ -13,19 +13,19 @@ import (
 // TestGenerateResponseWithTools_QuotaFallback tests the quota fallback retry logic (bd-6tb)
 func TestGenerateResponseWithTools_QuotaFallback(t *testing.T) {
 	tests := []struct {
-		name               string
-		modelOverride      string
-		expectFallback     bool
-		expectSuccess      bool
-		expectSecondModel  string
-		setupMockProvider  func(*mockProviderWithRetry)
-		setupFallback      func(*MockProvider)
+		name              string
+		modelOverride     string
+		expectFallback    bool
+		expectSuccess     bool
+		expectSecondModel string
+		setupMockProvider func(*mockProviderWithRetry)
+		setupFallback     func(*MockProvider)
 	}{
 		{
-			name:          "quota error - retries on fallback provider with correct model (bd-27ud)",
-			modelOverride: "sonnet",
-			expectFallback: true,
-			expectSuccess:  true,
+			name:              "quota error - retries on fallback provider with correct model (bd-27ud)",
+			modelOverride:     "sonnet",
+			expectFallback:    true,
+			expectSuccess:     true,
 			expectSecondModel: "z-ai/glm-5.3",
 			setupMockProvider: func(mp *mockProviderWithRetry) {
 				mp.errorOnFirstCall = true
@@ -33,10 +33,10 @@ func TestGenerateResponseWithTools_QuotaFallback(t *testing.T) {
 			},
 		},
 		{
-			name:           "quota error - fallback provider also fails, original error surfaces (bd-27ud)",
-			modelOverride:  "sonnet",
-			expectFallback: true,
-			expectSuccess:  false,
+			name:              "quota error - fallback provider also fails, original error surfaces (bd-27ud)",
+			modelOverride:     "sonnet",
+			expectFallback:    true,
+			expectSuccess:     false,
 			expectSecondModel: "z-ai/glm-5.3",
 			setupMockProvider: func(mp *mockProviderWithRetry) {
 				mp.errorOnFirstCall = true
@@ -89,8 +89,8 @@ func TestGenerateResponseWithTools_QuotaFallback(t *testing.T) {
 					return &GenerateResponse{
 						Content: "test response",
 						Usage: Usage{
-							PromptTokens:      100,
-							CompletionTokens:  50,
+							PromptTokens:     100,
+							CompletionTokens: 50,
 						},
 					}, nil
 				},
@@ -149,16 +149,16 @@ func TestGenerateResponseWithTools_QuotaFallback(t *testing.T) {
 
 // mockProviderWithRetry is a mock provider that tracks retry behavior for testing bd-6tb
 type mockProviderWithRetry struct {
-	generateFunc       func(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error)
-	errorOnFirstCall   bool
-	errorOnSecondCall  bool
-	firstError         error
-	secondError        error
-	firstCallMade      bool
-	secondCallMade     bool
-	firstCallModel     string
-	secondCallModel    string
-	callCount          int
+	generateFunc      func(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error)
+	errorOnFirstCall  bool
+	errorOnSecondCall bool
+	firstError        error
+	secondError       error
+	firstCallMade     bool
+	secondCallMade    bool
+	firstCallModel    string
+	secondCallModel   string
+	callCount         int
 }
 
 func (m *mockProviderWithRetry) Name() string {

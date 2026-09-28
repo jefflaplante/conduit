@@ -2,9 +2,9 @@ package reflection
 
 // ReflectionConfig holds configuration for the reflection subsystem.
 type ReflectionConfig struct {
-	Enabled      bool   `json:"enabled"`       // Master switch (default true)
-	CaptureLevel string `json:"capture_level"` // "all" | "failures" | "anomalies"
-	RetentionDays int   `json:"retention_days"` // Days before REM grooms old entries
+	Enabled       bool   `json:"enabled"`        // Master switch (default true)
+	CaptureLevel  string `json:"capture_level"`  // "all" | "failures" | "anomalies"
+	RetentionDays int    `json:"retention_days"` // Days before REM grooms old entries
 }
 
 // DefaultConfig returns sensible defaults for reflection.

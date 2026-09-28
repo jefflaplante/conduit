@@ -530,10 +530,10 @@ func (t *GoogleWorkspaceTool) SelfTest(ctx context.Context, opts *types.SelfTest
 			if agentEmail.Address != "" {
 				if opts.Verbose {
 					result.Details = map[string]interface{}{
-						"gws_path":       gwsPath,
-						"user_id":        t.getUserID(),
-						"email_address":  agentEmail.Address,
-						"email_aliases":  agentEmail.Aliases,
+						"gws_path":      gwsPath,
+						"user_id":       t.getUserID(),
+						"email_address": agentEmail.Address,
+						"email_aliases": agentEmail.Aliases,
 					}
 				}
 			}

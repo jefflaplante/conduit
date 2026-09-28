@@ -55,18 +55,18 @@ func newTestStore(t *testing.T) *ReflectionStore {
 
 func makeEntry(id, session, tool string, outcome Outcome, ts time.Time) *ReflectionEntry {
 	return &ReflectionEntry{
-		ID:         id,
-		SessionKey: session,
-		Timestamp:  ts,
-		Source:     "system",
-		Type:       TypeToolOutcome,
-		Tool:       tool,
-		Outcome:    outcome,
-		RetryCount: 0,
-		Duration:   150 * time.Millisecond,
-		Insight:    "test insight",
-		Score:      0,
-		Tags:       []string{"test"},
+		ID:          id,
+		SessionKey:  session,
+		Timestamp:   ts,
+		Source:      "system",
+		Type:        TypeToolOutcome,
+		Tool:        tool,
+		Outcome:     outcome,
+		RetryCount:  0,
+		Duration:    150 * time.Millisecond,
+		Insight:     "test insight",
+		Score:       0,
+		Tags:        []string{"test"},
 		RelatedKeys: []string{"brain.key1"},
 	}
 }

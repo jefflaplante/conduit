@@ -434,4 +434,3 @@ func (t *FactsTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *
 
 	return result
 }
-

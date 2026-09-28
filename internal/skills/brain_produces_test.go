@@ -7,7 +7,7 @@ import (
 
 func TestSkillConduitMetaProduces(t *testing.T) {
 	meta := SkillConduitMeta{
-		Emoji: "☀️",
+		Emoji:    "☀️",
 		Produces: []string{"solar.production", "solar.consumption"},
 	}
 
@@ -82,7 +82,7 @@ type mockSkillToolWithProduces struct {
 }
 
 func (m *mockSkillToolWithProduces) Name() string        { return m.name }
-func (m *mockSkillToolWithProduces) Description() string  { return "mock skill" }
+func (m *mockSkillToolWithProduces) Description() string { return "mock skill" }
 func (m *mockSkillToolWithProduces) Parameters() map[string]interface{} {
 	return map[string]interface{}{}
 }
@@ -97,7 +97,7 @@ func (m *mockSkillToolWithProduces) BrainProduces() []string {
 type mockSkillToolNoProduces struct{}
 
 func (m *mockSkillToolNoProduces) Name() string        { return "noproducer" }
-func (m *mockSkillToolNoProduces) Description() string  { return "mock skill" }
+func (m *mockSkillToolNoProduces) Description() string { return "mock skill" }
 func (m *mockSkillToolNoProduces) Parameters() map[string]interface{} {
 	return map[string]interface{}{}
 }

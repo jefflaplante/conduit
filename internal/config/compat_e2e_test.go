@@ -50,7 +50,7 @@ func TestConfigLoadE2E_EnvAndTildeExpansion(t *testing.T) {
 			},
 		},
 		"tools": map[string]interface{}{
-			"enabled_tools":  []interface{}{"read_file"},
+			"enabled_tools":   []interface{}{"read_file"},
 			"max_tool_chains": 25,
 			"sandbox": map[string]interface{}{
 				"workspace_dir": "./workspace",
@@ -87,9 +87,9 @@ func TestConfigLoadE2E_EnvAndTildeExpansion(t *testing.T) {
 			"authorized_keys_path": "~/ssh/authorized_keys",
 		},
 		"remote_ssh": map[string]interface{}{
-			"enabled": false,
-			"audit":   map[string]interface{}{"log_path": "~/logs/ssh_audit.jsonl"},
-			"pool":    map[string]interface{}{"known_hosts_file": "~/.ssh/known_hosts"},
+			"enabled":  false,
+			"audit":    map[string]interface{}{"log_path": "~/logs/ssh_audit.jsonl"},
+			"pool":     map[string]interface{}{"known_hosts_file": "~/.ssh/known_hosts"},
 			"defaults": map[string]interface{}{"identity_file": "~/.ssh/id_rsa"},
 			"hosts": []interface{}{
 				map[string]interface{}{

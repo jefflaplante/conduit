@@ -504,9 +504,9 @@ func TestOpenAITimeoutConfiguration(t *testing.T) {
 		{
 			name: "custom timeout is respected",
 			cfg: config.ProviderConfig{
-				Name:          "test",
-				Type:          "openai",
-				APIKey:        "test-key",
+				Name:           "test",
+				Type:           "openai",
+				APIKey:         "test-key",
 				TimeoutSeconds: 600,
 			},
 			expectedTimeout: 600 * time.Second,
@@ -514,9 +514,9 @@ func TestOpenAITimeoutConfiguration(t *testing.T) {
 		{
 			name: "zero value uses default",
 			cfg: config.ProviderConfig{
-				Name:          "test",
-				Type:          "openai",
-				APIKey:        "test-key",
+				Name:           "test",
+				Type:           "openai",
+				APIKey:         "test-key",
 				TimeoutSeconds: 0,
 			},
 			expectedTimeout: 300 * time.Second,
@@ -524,9 +524,9 @@ func TestOpenAITimeoutConfiguration(t *testing.T) {
 		{
 			name: "short timeout works",
 			cfg: config.ProviderConfig{
-				Name:          "test",
-				Type:          "openai",
-				APIKey:        "test-key",
+				Name:           "test",
+				Type:           "openai",
+				APIKey:         "test-key",
 				TimeoutSeconds: 45,
 			},
 			expectedTimeout: 45 * time.Second,

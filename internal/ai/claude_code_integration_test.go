@@ -466,9 +466,9 @@ esac
 // from the claude CLI get classified into the correct error categories.
 func TestIntegration_ErrorClassification(t *testing.T) {
 	tests := []struct {
-		name     string
-		stderr   string
-		wantCat  AIErrorCategory
+		name    string
+		stderr  string
+		wantCat AIErrorCategory
 	}{
 		{
 			name:    "authentication_error",

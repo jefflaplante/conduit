@@ -47,7 +47,7 @@ func newCachingTestServer(t *testing.T) (*httptest.Server, *[]byte) {
 // history large enough to clear the smallest cache min-token threshold.
 func cachingTestRequest(sys string, history int) *GenerateRequest {
 	req := &GenerateRequest{
-		Model:    "claude-sonnet-4-6",
+		Model:     "claude-sonnet-4-6",
 		MaxTokens: 100,
 	}
 	for i := 0; i < history; i++ {

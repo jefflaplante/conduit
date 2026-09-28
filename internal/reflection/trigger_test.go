@@ -149,12 +149,12 @@ func TestIsSessionEndCommand_Positive(t *testing.T) {
 func TestIsSessionEndCommand_Negative(t *testing.T) {
 	d := NewFarewellDetector()
 
-	assert.False(t, d.IsSessionEndCommand("goodbye"))     // missing slash
+	assert.False(t, d.IsSessionEndCommand("goodbye")) // missing slash
 	assert.False(t, d.IsSessionEndCommand(""))
 	assert.False(t, d.IsSessionEndCommand("/help"))
 	assert.False(t, d.IsSessionEndCommand("/status"))
 	assert.False(t, d.IsSessionEndCommand("please /end")) // not the whole message
-	assert.False(t, d.IsSessionEndCommand("/ender"))       // not a valid command
+	assert.False(t, d.IsSessionEndCommand("/ender"))      // not a valid command
 }
 
 // ---------------------------------------------------------------------------

@@ -48,7 +48,7 @@ func TestSSHConfig_Fields(t *testing.T) {
 		Location:           loc,
 		ClientFactory:      factory,
 		ShellSecurity: tui.ShellSecurityConfig{
-			Enabled: true,
+			Enabled:          true,
 			CommandAllowlist: []string{"ls", "cat"},
 		},
 	}
@@ -398,19 +398,19 @@ func (m *mockContext) User() string {
 }
 
 // Implement other required methods from charmssh.Context interface
-func (m *mockContext) SessionID() string                        { return "test-session" }
-func (m *mockContext) ClientVersion() string                    { return "SSH-2.0-Test" }
-func (m *mockContext) ServerVersion() string                    { return "SSH-2.0-Wish" }
-func (m *mockContext) RemoteAddr() net.Addr                     { return nil }
-func (m *mockContext) LocalAddr() net.Addr                      { return nil }
-func (m *mockContext) Permissions() *charmssh.Permissions       { return nil }
-func (m *mockContext) SetValue(key, value interface{})          {}
-func (m *mockContext) Value(key interface{}) interface{}        { return nil }
-func (m *mockContext) Deadline() (time.Time, bool)              { return time.Time{}, false }
-func (m *mockContext) Done() <-chan struct{}                    { return nil }
-func (m *mockContext) Err() error                               { return nil }
-func (m *mockContext) Lock()                                    { m.mu.Lock() }
-func (m *mockContext) Unlock()                                  { m.mu.Unlock() }
+func (m *mockContext) SessionID() string                  { return "test-session" }
+func (m *mockContext) ClientVersion() string              { return "SSH-2.0-Test" }
+func (m *mockContext) ServerVersion() string              { return "SSH-2.0-Wish" }
+func (m *mockContext) RemoteAddr() net.Addr               { return nil }
+func (m *mockContext) LocalAddr() net.Addr                { return nil }
+func (m *mockContext) Permissions() *charmssh.Permissions { return nil }
+func (m *mockContext) SetValue(key, value interface{})    {}
+func (m *mockContext) Value(key interface{}) interface{}  { return nil }
+func (m *mockContext) Deadline() (time.Time, bool)        { return time.Time{}, false }
+func (m *mockContext) Done() <-chan struct{}              { return nil }
+func (m *mockContext) Err() error                         { return nil }
+func (m *mockContext) Lock()                              { m.mu.Lock() }
+func (m *mockContext) Unlock()                            { m.mu.Unlock() }
 
 // TestNewServer_WithShellSecurity tests server with shell security config
 func TestNewServer_WithShellSecurity(t *testing.T) {

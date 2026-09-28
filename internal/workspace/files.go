@@ -170,4 +170,3 @@ func (fc *FileCache) Stats() map[string]interface{} {
 		"ttl_seconds":     int(fc.ttl.Seconds()),
 	}
 }
-
