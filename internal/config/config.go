@@ -817,6 +817,10 @@ type SandboxConfig struct {
 	WorkspaceDir    string   `json:"workspace_dir"`
 	AllowedPaths    []string `json:"allowed_paths"`
 	CommandDenylist []string `json:"command_denylist,omitempty"`
+	// conduit-23hg: how CommandDenylist is matched ("legacy" | "command_position")
+	// and whether autonomous sessions keep literal matching. See bash_policy.go.
+	DenylistMode     string `json:"denylist_mode,omitempty"`
+	StrictAutonomous *bool  `json:"strict_autonomous,omitempty"`
 }
 
 // WebToolsConfig controls the SSRF guard on WebFetch/Image URL fetches

@@ -104,6 +104,44 @@ WARNING: rejected workspace/link.conf: symlink entry not allowed: workspace/link
 
 > **This sandbox is defense-in-depth, not a security boundary, whenever the Bash tool is enabled.** A shell can read or write anything the gateway's OS user can reach, including creating new symlinks. The file sandbox stops an agent from wandering by accident through the structured file tools, and it blocks escapes planted through symlinks in cloned repos or unpacked archives. It cannot contain an agent that has shell access. For a hard boundary, run the gateway as a dedicated low-privilege user (the systemd units already set `UMask=0077`), or disable Bash.
 
+### Bash Command Policy (conduit-23hg)
+
+Before running a command, the Bash tool checks it against `tools.sandbox.command_denylist`, or the built-in list when that key is unset. The check only reads the command string; it never runs anything. Like the file sandbox above, **the denylist is defense-in-depth, not a security boundary.** It catches obvious mistakes and careless commands. An agent that wants to get around it can always find a way, for example with a script file or an interpreter other than a shell.
+
+`tools.sandbox.denylist_mode` picks one of two matchers:
+
+| Mode | How entries match | Trade-off |
+|---|---|---|
+| `legacy` (**default**) | Case-insensitive substring anywhere in the command, with runs of spaces collapsed. | False positives on text: `grep asphalt` matches `halt`, `ls \|shuf` matches `\|sh`, `echo "rm -rf /"` is blocked. Easy to get around: `/bin/rm -r -f /` is not caught. |
+| `command_position` | The command is tokenized and entries match only what the shell would execute. | Quoted text, heredoc bodies and ordinary arguments are not checked. |
+
+How `command_position` works (`internal/tools/shell_lexer.go`, `internal/tools/bash_policy.go`):
+
+- **Splitting.** The command line is split into simple commands at `;`, `&&`, `||`, `|`, `&`, newlines, `( )`, `$( )`, backticks and `<( )`. Substitutions inside double quotes count as commands too.
+- **Command word.** For each simple command, the lexer finds the command word. It skips `VAR=value` prefixes, shell reserved words (`if`, `then`, `do`, `{`, `!`, …) and wrappers with their options (`sudo`, `doas`, `env`, `nice`, `ionice`, `nohup`, `timeout`, `command`, `builtin`, `exec`, `xargs`, `stdbuf`, `time`, `busybox`, `setsid`, `chroot`). It then strips quotes and takes the basename, so `"shutdown"`, `/sbin/shutdown` and `sudo shutdown` all match `shutdown`.
+- **Entries with arguments.** An entry such as `rm -rf /` or `chown -R` matches when the command word matches and the simple command contains every listed flag and argument. Short flags are compared as a set, so `-rf`, `-r -f` and `-fr` are the same. `--recursive` and `--force` count as `-r` and `-f`. Path arguments are cleaned, so `//` equals `/`. The match on arguments is exact, which means `rm -rf /tmp/x` does **not** match `rm -rf /`, although legacy mode blocks it.
+- **Entry name prefixes.** An entry ending in `.` (such as `mkfs.`) matches command words that start with it (`mkfs.ext4`).
+- **`|sh`-style entries.** These match when the command after a pipe is that interpreter: `curl … | sh` and `… | sudo bash`.
+- **`> target` entries.** These match a redirection to that target. Targets under `/dev/` also match by prefix.
+- **Nested commands.** Strings passed to `sh`/`bash`/`zsh`/… `-c`, the arguments of `eval`, and `env -S` strings are parsed and checked the same way, recursively.
+- **Entries with no command shape** (for example the built-in fork-bomb string) keep literal substring matching.
+- **Fail closed.** In each of these cases the legacy substring check runs over the affected text:
+  - The command, or a nested `-c` string, cannot be tokenized (unbalanced quotes, an unterminated `$(`, or nesting deeper than 16 levels).
+  - A command word is itself an expansion (`$CMD`, `$(…)`).
+  - An unquoted heredoc body or a `${…}` expansion contains a command substitution.
+
+**`strict_autonomous`** (default `true`) applies only in `command_position` mode. When a session has no live human, the legacy substring check runs **in addition to** command-position matching. That covers heartbeat, cron and sub-agent sessions (session keys `heartbeat_`, `cron_`, `subagent_`), any wake (`types.WakeSource`) and turns marked non-interactive by `approval.WithNonInteractive`. Nobody is watching those sessions, so they keep the stricter behavior, including its false positives. Set it to `false` to use command-position matching everywhere.
+
+A denied command returns `command_denied` with the matched entry, the mode and the reason (for example `command word "rm" in command position`). The same details go to the `[Exec] DENIED` log line, which helps the agent understand the block instead of rephrasing the command to get past it.
+
+**Opting in.** Set the mode in config and restart the gateway:
+
+```json
+{ "tools": { "sandbox": { "denylist_mode": "command_position" } } }
+```
+
+To revert, remove the key or set it to `"legacy"`.
+
 ### Outbound HTTP: WebFetch SSRF Guard and Bounded Bodies (conduit-31jg.7)
 
 **SSRF guard.** WebFetch uses its own HTTP client, built in `internal/httpsafe`. That client resolves each hostname itself and checks every **resolved IP** at connect time, then dials only the IP it checked. A socket-level `Control` hook checks the final address again. Every redirect hop goes through the same dialer. Because the check runs on the connect-time IP, DNS rebinding cannot bypass it. The client ignores environment proxies, because routing through a proxy would skip the per-IP check.
