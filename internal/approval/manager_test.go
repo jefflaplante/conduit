@@ -343,6 +343,59 @@ func TestTTLTimerExpires(t *testing.T) {
 	}
 }
 
+// conduit-enf0: Action.TTL overrides the manager TTL (capped at MaxTTL);
+// zero keeps the manager default.
+func TestActionTTLOverride(t *testing.T) {
+	clk := &clock{now: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)}
+	m := newTestManager(t, Config{TTL: 5 * time.Minute, Now: clk.Now})
+	for _, tc := range []struct {
+		ttl, want time.Duration
+	}{
+		{0, 5 * time.Minute},
+		{-time.Second, 5 * time.Minute},
+		{90 * time.Second, 90 * time.Second},
+		{30 * time.Minute, 30 * time.Minute},
+		{48 * time.Hour, MaxTTL},
+	} {
+		ch := &fakeChannel{}
+		a := testAction("a@x")
+		a.TTL = tc.ttl
+		tk, err := m.Request(interactiveCtx(ch), a, newCounter().exec("A"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := tk.ExpiresAt.Sub(clk.Now()); got != tc.want {
+			t.Errorf("TTL %v: expires in %v, want %v", tc.ttl, got, tc.want)
+		}
+		if want := "Expires in " + tc.want.String(); !strings.Contains(ch.last().Text, want) {
+			t.Errorf("TTL %v: prompt %q lacks %q", tc.ttl, ch.last().Text, want)
+		}
+	}
+}
+
+func TestActionTTLExpiresEarly(t *testing.T) {
+	ch := &fakeChannel{}
+	expired := make(chan Resolution, 1)
+	m := newTestManager(t, Config{OnResolved: func(r Resolution) { expired <- r }}) // default 5m
+	a := testAction("a@x")
+	a.TTL = 30 * time.Millisecond
+	c := newCounter()
+	tk, _ := m.Request(interactiveCtx(ch), a, c.exec("A"))
+	select {
+	case r := <-expired:
+		if r.Decision != DecisionExpired {
+			t.Fatalf("want expired, got %v", r.Decision)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("per-action TTL did not expire the approval")
+	}
+	m.HandleReply(context.Background(), inbound(ch, "YES "+tk.Code))
+	m.Wait()
+	if len(c.get()) != 0 {
+		t.Fatal("expired approval ran")
+	}
+}
+
 func TestApprovalForAParamsDoesNotAuthorizeB(t *testing.T) {
 	ch := &fakeChannel{}
 	m := newTestManager(t, Config{})

@@ -44,6 +44,10 @@ type Operation struct {
 	// Data is merged into the pending/refused result's Data for the model
 	// (e.g. tier, requires_approval). Must be redacted.
 	Data map[string]interface{}
+	// TTL optionally overrides how long the approval stays valid (the
+	// tool's configured approval timeout). Zero uses the manager default;
+	// the manager caps it at approval.MaxTTL (conduit-enf0).
+	TTL time.Duration
 }
 
 // Run performs the approved operation with the values frozen at request
@@ -77,6 +81,7 @@ func Request(ctx context.Context, r approval.Requester, op Operation, run Run) *
 		Fields:      op.Fields,
 		Audit:       op.Audit,
 		Fingerprint: fp,
+		TTL:         op.TTL,
 	}
 
 	exec := func(execCtx context.Context, t approval.Ticket) (string, error) {
