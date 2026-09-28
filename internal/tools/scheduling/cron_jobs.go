@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
@@ -170,6 +172,14 @@ func (t *CronTool) listJobs(ctx context.Context, args map[string]interface{}) (*
 		if job.OneShot {
 			builder.WriteString("   (runs once)\n")
 		}
+		// conduit-2six: surface failing jobs.
+		if job.ConsecutiveFailures > 0 {
+			builder.WriteString(fmt.Sprintf("   FAILING: %d consecutive failed run(s)", job.ConsecutiveFailures))
+			if job.LastError != "" {
+				builder.WriteString(" - last error: " + truncateForList(job.LastError, 160))
+			}
+			builder.WriteString("\n")
+		}
 	}
 
 	return &types.ToolResult{
@@ -318,10 +328,44 @@ func (t *CronTool) getStatus(ctx context.Context, args map[string]interface{}) (
 	content += fmt.Sprintf("Go Jobs: %v\n", status["go_jobs"])
 	content += fmt.Sprintf("System Jobs: %v\n", status["system_jobs"])
 	content += fmt.Sprintf("Active Cron Entries: %v\n", status["cron_entries"])
+	content += formatFailingJobs(status["failing_jobs"])
 
 	return &types.ToolResult{
 		Success: true,
 		Content: content,
 		Data:    status,
 	}, nil
+}
+
+// formatFailingJobs renders the scheduler status "failing_jobs" map (job ID
+// -> consecutive failures, conduit-2six) as a status line.
+func formatFailingJobs(v interface{}) string {
+	failing, ok := v.(map[string]int)
+	if !ok {
+		return ""
+	}
+	if len(failing) == 0 {
+		return "Failing Jobs: none\n"
+	}
+	ids := make([]string, 0, len(failing))
+	for id := range failing {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = fmt.Sprintf("%s (%d consecutive)", id, failing[id])
+	}
+	return "Failing Jobs: " + strings.Join(parts, ", ") + "\n"
+}
+
+// truncateForList shortens s to at most n bytes on a rune boundary.
+func truncateForList(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
 }

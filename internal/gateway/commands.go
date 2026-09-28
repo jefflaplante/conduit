@@ -172,6 +172,10 @@ func (g *Gateway) handleStatusCommand(msg *protocol.IncomingMessage, session *se
 		currentProvider,
 		version.Info(),
 	)
+	// conduit-2six: surface scheduled jobs on a failure streak.
+	if failing := g.failingJobsSummary(); failing != "" {
+		status += "\n\n*Failing jobs (consecutive failures):* " + failing
+	}
 
 	g.sendCommandResponse(msg, status)
 }

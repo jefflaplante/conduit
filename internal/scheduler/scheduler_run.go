@@ -123,6 +123,10 @@ func snapshotJob(job *Job) *Job {
 		t := *job.NextRun
 		c.NextRun = &t
 	}
+	if job.FailureStreak != nil {
+		st := *job.FailureStreak
+		c.FailureStreak = &st
+	}
 	return &c
 }
 
@@ -181,6 +185,16 @@ func (s *Scheduler) runSnapshot(snap *Job) {
 		log.Printf("[Scheduler] Warning: executeJob called for system job %s", snap.ID)
 	}
 
+	// conduit-2six: the failure log and job-health notice go out after the
+	// lock is released (file I/O, channel delivery).
+	ev, rec := s.finishRun(snap, err, started)
+	s.appendFailureLog(rec)
+	s.emitHealthEvent(ev)
+}
+
+// finishRun records a run's outcome on the live job (if it still exists)
+// under s.mu and returns the job-health event and failure-log record to emit.
+func (s *Scheduler) finishRun(snap *Job, err error, started time.Time) (*JobHealthEvent, *failureLogRecord) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.running, snap.ID)
@@ -200,9 +214,18 @@ func (s *Scheduler) runSnapshot(snap *Job) {
 		log.Printf("[Scheduler] Job %s completed", snap.ID)
 	}
 
+	now := time.Now()
 	job, exists := s.jobs[snap.ID]
+	var rec *failureLogRecord
+	if err != nil {
+		streak := 0
+		if exists && !interrupted {
+			streak = job.ConsecutiveFailures() + 1
+		}
+		rec = newFailureLogRecord(snap, err, interrupted, streak, time.Since(started), now)
+	}
 	if !exists {
-		return // removed while running
+		return nil, rec // removed while running
 	}
 	switch {
 	case interrupted:
@@ -216,6 +239,11 @@ func (s *Scheduler) runSnapshot(snap *Job) {
 	default:
 		job.LastError = ""
 	}
+	// conduit-2six: interrupted runs neither extend nor reset the streak.
+	var ev *JobHealthEvent
+	if !interrupted {
+		ev = s.updateStreakLocked(job, err, now)
+	}
 
 	// Handle one-shot jobs. conduit-31jg.77: an interrupted one-shot that is
 	// opted into re-run is kept so the next Start can run it.
@@ -226,7 +254,7 @@ func (s *Scheduler) runSnapshot(snap *Job) {
 		delete(s.jobs, job.ID)
 		s.saveJobs()
 		log.Printf("[Scheduler] One-shot job %s removed", job.ID)
-		return
+		return ev, rec
 	}
 
 	// Update next run time
@@ -237,4 +265,5 @@ func (s *Scheduler) runSnapshot(snap *Job) {
 		}
 	}
 	s.saveJobs()
+	return ev, rec
 }

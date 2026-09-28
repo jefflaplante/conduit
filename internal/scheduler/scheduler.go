@@ -47,6 +47,10 @@ type Job struct {
 	LastError string                 `json:"last_error,omitempty"`
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 
+	// FailureStreak is the current run of consecutive failed runs (nil when
+	// the last run succeeded); runtime state like LastError (conduit-2six).
+	FailureStreak *FailureStreak `json:"failure_streak,omitempty"`
+
 	// Internal: cron entry ID for Go jobs
 	entryID cron.EntryID
 }
@@ -96,6 +100,14 @@ type Scheduler struct {
 	rerunDelay  time.Duration
 	rerunTimers []*time.Timer
 	stopRunWait time.Duration
+
+	// conduit-2six: failure observability (see scheduler_health.go).
+	// notifier/failureThreshold/failureLog are set by options before Start
+	// and read-only afterwards; logMu serializes failure-log appends.
+	notifier         FailureNotifier
+	failureThreshold int
+	failureLog       string
+	logMu            sync.Mutex
 }
 
 // ErrJobRunning is returned by RunNow when the job is already executing.
@@ -248,5 +260,6 @@ func (s *Scheduler) Status() map[string]interface{} {
 		"go_jobs":      s.countByType(JobTypeGo),
 		"system_jobs":  s.countByType(JobTypeSystem),
 		"cron_entries": len(s.cron.Entries()),
+		"failing_jobs": s.failingJobsLocked(), // conduit-2six: job ID -> consecutive failures
 	}
 }
