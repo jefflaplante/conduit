@@ -110,6 +110,11 @@ func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, re
 		areq := *req
 		areq.Model = rt.model
 		trimRequestToFitContext(&areq, r.contextWindowForRoute(rt))
+		release, werr := r.acquireProviderSlot(ctx, rt.name, areq.Model) // conduit-38cz
+		if werr != nil {
+			return nil, 0, werr
+		}
+		defer release()
 		start := time.Now()
 		var resp *GenerateResponse
 		var err error
@@ -376,6 +381,11 @@ func (g *contextGuardProvider) servingModel(reqModel string) string {
 }
 
 func (g *contextGuardProvider) call(ctx context.Context, name string, p Provider, window int, req *GenerateRequest) (*GenerateResponse, error) {
+	release, werr := g.router.acquireProviderSlot(ctx, name, reqModel(req)) // conduit-38cz
+	if werr != nil {
+		return nil, werr
+	}
+	defer release()
 	start := time.Now()
 	resp, err := p.GenerateResponse(ctx, fitRequestToWindow(req, window))
 	if g.router != nil {

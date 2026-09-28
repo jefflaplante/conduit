@@ -289,6 +289,11 @@ React appropriately: if the result requires follow-up action or is worth reporti
 This turn was triggered by another session sending a message to this one. Treat the "user" message as an inter-session callback, not a direct human request.
 If follow-up is warranted, respond. Otherwise reply with %s.
 `, SILENT_REPLY_TOKEN)
+	case "sub_agent_canceled":
+		// conduit-38cz: SessionsCancel ended a sub-agent this session spawned.
+		return fmt.Sprintf(`## Wake Context
+This turn was triggered because a sub-agent this session spawned was CANCELED (the "user" message says by whom). Its task did not complete. Do not respawn it unless the cancel was clearly not intended; if the human is waiting on that work, tell them it was stopped. Otherwise reply with %s.
+`, SILENT_REPLY_TOKEN)
 	case "heartbeat":
 		return `## Wake Context
 This turn was triggered by a heartbeat. Follow heartbeat response rules below.

@@ -15,6 +15,10 @@ const (
 	SessionStateProcessing SessionState = "processing" // Currently processing a request
 	SessionStateWaiting    SessionState = "waiting"    // Waiting for external resources/response
 	SessionStateError      SessionState = "error"      // Session encountered an error
+	// SessionStateCanceled is terminal for a sub-agent session canceled by
+	// its parent, the owner or a /stop cascade (conduit-38cz). Not counted
+	// in the per-state metrics; cleaned up like idle sessions.
+	SessionStateCanceled SessionState = "canceled"
 )
 
 // String returns the string representation of the session state
@@ -25,7 +29,7 @@ func (s SessionState) String() string {
 // IsValid returns true if the session state is a valid state
 func (s SessionState) IsValid() bool {
 	switch s {
-	case SessionStateIdle, SessionStateProcessing, SessionStateWaiting, SessionStateError:
+	case SessionStateIdle, SessionStateProcessing, SessionStateWaiting, SessionStateError, SessionStateCanceled:
 		return true
 	default:
 		return false
@@ -139,24 +143,29 @@ func (t *SessionStateTracker) cleanupIdleSessions(idleTimeout time.Duration) {
 
 	now := time.Now()
 	var toRemove []string
+	var idleRemoved int64
 
 	for sessionKey, info := range t.sessionStates {
 		info.mutex.RLock()
 		isIdle := info.State == SessionStateIdle
+		isCanceled := info.State == SessionStateCanceled // conduit-38cz: terminal
 		lastActivity := info.LastActivity
 		info.mutex.RUnlock()
 
-		// Only clean up idle sessions that haven't been active recently
-		if isIdle && now.Sub(lastActivity) > idleTimeout {
+		// Only clean up idle (or canceled) sessions that haven't been active recently
+		if (isIdle || isCanceled) && now.Sub(lastActivity) > idleTimeout {
 			toRemove = append(toRemove, sessionKey)
+			if isIdle {
+				idleRemoved++
+			}
 		}
 	}
 
 	for _, sessionKey := range toRemove {
-		// Update counter before removing
-		atomic.AddInt64(&t.idleCount, -1)
 		delete(t.sessionStates, sessionKey)
 	}
+	// Update counter for the removed idle sessions (canceled ones are not counted).
+	atomic.AddInt64(&t.idleCount, -idleRemoved)
 
 	if len(toRemove) > 0 {
 		// Log cleanup (would use proper logger in production)

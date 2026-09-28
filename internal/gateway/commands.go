@@ -116,7 +116,7 @@ func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessa
 	if text == "/stop" {
 		// conduit-31jg.23: cancels the RUNNING turn and drops turns queued
 		// behind it (see TurnRunner.Stop).
-		resp, stopped := stopResponse(g.turns().Stop(session.Key))
+		resp, stopped := stopResponse(g.turns().StopTree(session.Key)) // conduit-31jg.84: + sub-agents
 		if stopped {
 			g.sendCommandResponse(msg, "🛑 "+resp)
 			log.Printf("Cancelled active request for session: %s", session.Key)

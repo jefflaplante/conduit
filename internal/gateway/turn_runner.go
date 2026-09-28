@@ -84,6 +84,10 @@ type TurnRunner struct {
 	// Both guarded by mu (conduit-31jg.88).
 	inflight map[*turnState]struct{}
 	drainLog []TurnSnapshot
+
+	// subagents tracks parent→child sub-agent sessions for SessionsCancel
+	// and the /stop cascade (conduit-38cz, conduit-31jg.84). Own lock.
+	subagents *subAgentRegistry
 }
 
 // TurnOutcome is how a turn in flight during a shutdown drain ended
@@ -122,6 +126,9 @@ type TurnSnapshot struct {
 	Source string `json:"source,omitempty"`
 	// ScheduledJob is the owning scheduler job, if any.
 	ScheduledJob string `json:"scheduled_job,omitempty"`
+	// ParentSessionKey is the session that spawned this sub-agent turn
+	// (conduit-38cz); "" for other turns.
+	ParentSessionKey string `json:"parent_session_key,omitempty"`
 	// UserMessageID is the persisted user row ("" while queued).
 	UserMessageID string `json:"user_message_id,omitempty"`
 	// Preview is the first line of the request, at most turnPreviewMax runes.
@@ -164,6 +171,8 @@ func newTurnState(req TurnRequest) *turnState {
 		ScheduledJob: req.ScheduledJob,
 		StartedAt:    time.Now(),
 		Source:       req.NonInteractiveSource,
+
+		ParentSessionKey: req.ParentSessionKey,
 	}
 	text := req.Text
 	if strings.TrimSpace(text) == "" {
@@ -314,6 +323,10 @@ type TurnRequest struct {
 	// SkipReflection disables SPAR farewell / context-budget prompt
 	// injection for this turn (the /goodbye turn already is the reflection).
 	SkipReflection bool
+
+	// ParentSessionKey links a sub-agent turn to the session that spawned
+	// it (TurnSnapshot, conduit-38cz).
+	ParentSessionKey string
 }
 
 // TurnResult is what the runner hands to TurnSink.Finish.
@@ -393,6 +406,7 @@ func NewTurnRunner(store *sessions.Store, router *ai.Router, compactor turnCompa
 		queued:    make(map[string][]*queuedTurn),
 		scheduled: make(map[string]string),
 		inflight:  make(map[*turnState]struct{}),
+		subagents: newSubAgentRegistry(),
 	}
 }
 
@@ -451,15 +465,19 @@ func (r *TurnRunner) Stop(sessionKey string) (stoppedRunning bool, droppedQueued
 	return stoppedRunning, droppedQueued
 }
 
-// stopResponse renders Stop's outcome for the /stop commands.
-func stopResponse(stoppedRunning bool, droppedQueued int) (string, bool) {
+// stopResponse renders StopTree's outcome for the /stop commands,
+// including how many sub-agents the cascade stopped (conduit-31jg.84).
+func stopResponse(res StopResult) (string, bool) {
+	sub := subAgentsLine(res.SubAgents)
 	switch {
-	case stoppedRunning && droppedQueued > 0:
-		return fmt.Sprintf("Stopping current operation... (%d queued message(s) dropped)", droppedQueued), true
-	case stoppedRunning:
-		return "Stopping current operation...", true
-	case droppedQueued > 0:
-		return fmt.Sprintf("Dropped %d queued message(s).", droppedQueued), true
+	case res.StoppedRunning && res.DroppedQueued > 0:
+		return fmt.Sprintf("Stopping current operation... (%d queued message(s) dropped)", res.DroppedQueued) + sub, true
+	case res.StoppedRunning:
+		return "Stopping current operation..." + sub, true
+	case res.DroppedQueued > 0:
+		return fmt.Sprintf("Dropped %d queued message(s).", res.DroppedQueued) + sub, true
+	case res.SubAgents > 0:
+		return fmt.Sprintf("Stopped %d sub-agent(s).", res.SubAgents), true
 	}
 	return "No active operation to stop.", false
 }
