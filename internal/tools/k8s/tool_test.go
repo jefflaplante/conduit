@@ -93,6 +93,9 @@ func setupTestTool(t *testing.T) *K8sTool {
 			Namespace:   "default",
 			SafetyLevel: "read",
 		},
+		// Explicitly no approval tiers: these tests exercise the raw
+		// operations. Approval gating is covered in approval_test.go.
+		RequireApproval: []string{},
 	}
 
 	tool, err := NewK8sTool(nil, cfg)

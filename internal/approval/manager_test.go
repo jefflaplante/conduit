@@ -478,3 +478,19 @@ func TestAuditNeverLogsFields(t *testing.T) {
 type writerFunc func([]byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+// Multi-line values (commands, bodies) render on their own indented lines
+// so the human reads exactly what will run (conduit-c8ct, conduit-w3l7).
+func TestPromptNotice_MultiLineFields(t *testing.T) {
+	n := promptNotice(Ticket{Code: "ABC234", ExpiresAt: time.Now()}, Action{
+		Title: "Run SSH command on web-1",
+		Fields: []Field{
+			{Name: "Host", Value: "web-1"},
+			{Name: "Command", Value: "systemctl stop app\nrm -rf /srv/app/cache\n"},
+		},
+	}, time.Minute)
+	want := "\nHost: web-1\nCommand:\n    systemctl stop app\n    rm -rf /srv/app/cache\n\nReply"
+	if !strings.Contains(n.Text, want) {
+		t.Fatalf("prompt layout mismatch:\n%s", n.Text)
+	}
+}

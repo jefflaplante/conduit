@@ -16,6 +16,12 @@ type KubernetesConfig struct {
 
 	// Defaults provides fallback values for cluster settings
 	Defaults KubernetesDefaults `json:"defaults,omitempty"`
+
+	// RequireApproval lists security tiers ("read", "modify", "dangerous")
+	// whose operations need a human "YES <code>" approval on the
+	// originating chat before they run; non-interactive turns fail closed
+	// (conduit-c8ct). Default: ["dangerous"]. Set [] to disable.
+	RequireApproval []string `json:"require_approval,omitempty"`
 }
 
 // KubernetesCluster defines a known Kubernetes cluster
@@ -58,6 +64,7 @@ func DefaultKubernetesConfig() KubernetesConfig {
 			Namespace:   "default",
 			SafetyLevel: "read",
 		},
+		RequireApproval: []string{"dangerous"},
 	}
 }
 
@@ -69,6 +76,14 @@ func (c *KubernetesConfig) Validate() error {
 
 	if err := validateEnumTags(c); err != nil {
 		return err
+	}
+
+	for _, tier := range c.RequireApproval {
+		switch tier {
+		case "read", "modify", "dangerous":
+		default:
+			return fmt.Errorf("invalid tier in kubernetes.require_approval: %q (valid: read, modify, dangerous)", tier)
+		}
 	}
 
 	// Validate clusters
