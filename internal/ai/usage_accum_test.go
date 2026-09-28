@@ -79,3 +79,23 @@ func TestContinueLengthTruncated_SumsContinuations(t *testing.T) {
 		t.Errorf("Context() = %d, want last call 300+50", u.Context())
 	}
 }
+
+// TestContinueLengthTruncated_MarksContinueInjected covers conduit-31jg.87:
+// the synthetic "continue" user turn is flagged Injected so goal extraction
+// in the tool loop skips it.
+func TestContinueLengthTruncated_MarksContinueInjected(t *testing.T) {
+	p := NewMockProvider("m")
+	p.SetResponses([]MockResponse{{Content: "b", FinishReason: "stop"}})
+	req := &GenerateRequest{Messages: []ChatMessage{{Role: "user", Content: "write an essay"}}}
+	first := &GenerateResponse{Content: "a", FinishReason: "length"}
+	ContinueLengthTruncated(context.Background(), p, req, first, "t")
+	if len(req.Messages) != 3 {
+		t.Fatalf("messages = %d, want 3", len(req.Messages))
+	}
+	if req.Messages[0].Injected {
+		t.Error("user's own message must not be marked Injected")
+	}
+	if c := req.Messages[2]; c.Role != "user" || c.Content != autoContinuePrompt || !c.Injected {
+		t.Errorf("continue turn = %+v, want injected user %q", c, autoContinuePrompt)
+	}
+}

@@ -97,6 +97,11 @@ type ChatMessage struct {
 	// providers without block support; Anthropic sends the blocks so the
 	// cache breakpoint lands on the static one. conduit-31jg.14
 	SystemBlocks []SystemBlock `json:"system_blocks,omitempty"`
+	// Injected marks a user-role message the gateway synthesized mid-turn
+	// (the length auto-continue "continue", tool-loop guidance) rather than
+	// one the user typed. In-memory only; providers ignore it. Used so goal
+	// extraction never mistakes one for the user's request (conduit-31jg.87).
+	Injected bool `json:"-"`
 }
 
 // Attachment represents media content attached to a message (e.g., images from Telegram).

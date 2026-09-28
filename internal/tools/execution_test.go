@@ -710,6 +710,29 @@ func TestExtractOriginalGoal(t *testing.T) {
 			expected: "",
 		},
 		{
+			// conduit-31jg.87: the length auto-continue and tool-loop
+			// guidance are injected user-role messages, not the goal.
+			name: "skips injected auto-continue and guidance",
+			messages: []ai.ChatMessage{
+				{Role: "user", Content: "Refactor the parser"},
+				{Role: "assistant", Content: "Part one..."},
+				{Role: "user", Content: "continue", Injected: true},
+				{Role: "assistant", ToolCalls: []ai.ToolCall{{ID: "t1", Name: "Read"}}},
+				{Role: "tool", Content: "ok", ToolCallID: "t1"},
+				{Role: "user", Content: "Tool X keeps failing; try another approach", Injected: true},
+			},
+			expected: "Refactor the parser",
+		},
+		{
+			name: "user-typed continue is still a goal",
+			messages: []ai.ChatMessage{
+				{Role: "user", Content: "Refactor the parser"},
+				{Role: "assistant", Content: "Done with step 1"},
+				{Role: "user", Content: "continue"},
+			},
+			expected: "continue",
+		},
+		{
 			name: "truncates long goals",
 			messages: []ai.ChatMessage{
 				{Role: "user", Content: strings.Repeat("X", 250)},
