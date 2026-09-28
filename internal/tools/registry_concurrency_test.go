@@ -38,9 +38,7 @@ func panicTool(name string) *MockTool {
 	return &MockTool{
 		name: name,
 		executeFunc: func(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-			var m map[string]int
-			m["boom"] = 1 // nil map write -> panic
-			return nil, nil
+			panic("simulated tool panic")
 		},
 	}
 }
