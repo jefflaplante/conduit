@@ -188,13 +188,6 @@ func (pt *PatternTracker) Reset() {
 	pt.recentCalls = pt.recentCalls[:0]
 }
 
-// InjectWarning creates a warning message for detected circular patterns.
-// Deprecated: Use InjectThinkStep for better intervention.
-func InjectWarning(pattern string) string {
-	return fmt.Sprintf("Warning: Detected circular tool call pattern (%s). "+
-		"This pattern has repeated 3+ times. Try a different approach to avoid wasting tokens.", pattern)
-}
-
 // InjectThinkStep creates a directive that forces the LLM to pause and reflect
 // before continuing. This is more effective than a passive warning.
 func InjectThinkStep(pattern string) string {

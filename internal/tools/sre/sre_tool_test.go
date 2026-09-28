@@ -549,29 +549,6 @@ func TestInferIncidentType(t *testing.T) {
 	}
 }
 
-func TestParseTimeRange(t *testing.T) {
-	testCases := []struct {
-		input    string
-		expected string // Duration string
-	}{
-		{"1h", "1h0m0s"},
-		{"30m", "30m0s"},
-		{"6h", "6h0m0s"},
-		{"1d", "24h0m0s"},
-		{"", "1h0m0s"},        // Default
-		{"invalid", "1h0m0s"}, // Default on error
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.input, func(t *testing.T) {
-			result := parseTimeRange(tc.input)
-			if result.String() != tc.expected {
-				t.Errorf("For '%s': expected %s, got %s", tc.input, tc.expected, result.String())
-			}
-		})
-	}
-}
-
 // === SelfTest Tests ===
 
 func TestSRETool_SelfTest_OK(t *testing.T) {
