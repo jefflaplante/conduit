@@ -271,9 +271,13 @@ func (g *Gateway) handleRingCommand(msg *protocol.IncomingMessage, text string) 
 			case debuglog.EntryThinking:
 				sb.WriteString(fmt.Sprintf("`%s` 💭 thinking...\n", ts))
 			case debuglog.EntryLLMRequest:
-				sb.WriteString(fmt.Sprintf("`%s` → LLM request\n", ts))
+				sb.WriteString(fmt.Sprintf("`%s` → LLM request (depth %s, %s msgs)\n", ts, e.Meta["depth"], e.Meta["messages"]))
 			case debuglog.EntryLLMResponse:
-				sb.WriteString(fmt.Sprintf("`%s` ← LLM response (%s)\n", ts, e.Duration))
+				if e.Error != "" {
+					sb.WriteString(fmt.Sprintf("`%s` ← LLM ERROR (%s)\n", ts, e.Duration))
+				} else {
+					sb.WriteString(fmt.Sprintf("`%s` ← LLM response (%s, %s tool calls)\n", ts, e.Duration, e.Meta["tool_calls"]))
+				}
 			}
 		}
 
@@ -319,19 +323,6 @@ func formatAliasKeys(aliases map[string]string) string {
 		keys = append(keys, k)
 	}
 	return strings.Join(keys, ", ")
-}
-
-// formatAliasDisplay returns a multi-line display string of aliases and their targets.
-func formatAliasDisplay(aliases map[string]string, prefix, arrow string) string {
-	var lines []string
-	for alias, model := range aliases {
-		display := model
-		if display == "" {
-			display = "reset to default"
-		}
-		lines = append(lines, fmt.Sprintf("%s%s %s %s", prefix, alias, arrow, display))
-	}
-	return strings.Join(lines, "\n")
 }
 
 // formatAliasDisplayWithProvider returns a multi-line display string of aliases,

@@ -82,8 +82,7 @@ func (b *Brain) spreadActivation(accessedKeys []string) error {
 				return fmt.Errorf("spread activation scan: %w", err)
 			}
 			// Usage-weighted confidence: frequently-traversed edges get a boost.
-			// effective_confidence = base_confidence * (1 + alpha * log1p(access_count))
-			effectiveConf := confidence * (1 + b.edgeAccessAlpha*math.Log1p(float64(accessCount)))
+			effectiveConf := EffectiveEdgeConfidence(confidence, accessCount, b.edgeAccessAlpha)
 			boost := b.spreadingDecay * srcSalience * effectiveConf
 			// Cap at 1.0 to keep warmth in [0, 1].
 			boost = math.Min(boost, 1.0)

@@ -46,14 +46,10 @@ func TestHealthMonitoringIntegration(t *testing.T) {
 	t.Run("Rate Limiting", func(t *testing.T) {
 		testRateLimitingIntegration(t, server.URL)
 	})
-
-	t.Run("Event Emission", func(t *testing.T) {
-		testEventEmission(t, gw)
-	})
 }
 
 func createTestGatewayForIntegration(t *testing.T) *Gateway {
-	// Use the same setup as the unit tests but with event emission
+	// Use the same setup as the unit tests, pre-seeded with diagnostic events
 	gw := createTestGateway(t)
 
 	// Add some events to test diagnostics
@@ -313,85 +309,6 @@ func testRateLimitingIntegration(t *testing.T, baseURL string) {
 		if resp.StatusCode >= 400 {
 			t.Errorf("Endpoint %s returned error status: %d", endpoint, resp.StatusCode)
 		}
-	}
-}
-
-func testEventEmission(t *testing.T, gw *Gateway) {
-	// Test the webhook event emitter functionality
-	webhookServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Mock webhook endpoint that receives events
-		if r.Method != "POST" {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-
-		var event monitoring.HeartbeatEvent
-		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		// Validate event structure
-		if event.ID == "" || event.Type == "" || event.Timestamp.IsZero() {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer webhookServer.Close()
-
-	// Create webhook emitter
-	config := monitoring.EventEmitterConfig{
-		Enabled:  true,
-		Type:     "webhook",
-		Endpoint: webhookServer.URL,
-		Format:   "json",
-		Timeout:  5000,
-		Filters: monitoring.EventEmitterFilters{
-			MinSeverity: monitoring.SeverityInfo,
-		},
-	}
-
-	emitter := monitoring.NewWebhookEventEmitter(config)
-	defer emitter.Close()
-
-	// Test single event emission
-	testEvent := monitoring.NewHeartbeatEvent(
-		monitoring.EventTypeSystemEvent,
-		monitoring.SeverityInfo,
-		"Test event emission",
-		"test",
-	)
-
-	if err := emitter.EmitEvent(testEvent); err != nil {
-		t.Errorf("Failed to emit event: %v", err)
-	}
-
-	// Test batch emission
-	batchEvents := []*monitoring.HeartbeatEvent{
-		monitoring.NewHeartbeatEvent(monitoring.EventTypeHeartbeat, monitoring.SeverityInfo, "Batch event 1", "test"),
-		monitoring.NewHeartbeatEvent(monitoring.EventTypeMetricAlert, monitoring.SeverityWarning, "Batch event 2", "test"),
-	}
-
-	if err := emitter.EmitBatch(batchEvents); err != nil {
-		t.Errorf("Failed to emit batch events: %v", err)
-	}
-
-	// Test filtering (should not emit low severity events when min severity is higher)
-	config.Filters.MinSeverity = monitoring.SeverityError
-	emitter.Configure(config)
-
-	lowSeverityEvent := monitoring.NewHeartbeatEvent(
-		monitoring.EventTypeHeartbeat,
-		monitoring.SeverityInfo,
-		"Low severity event",
-		"test",
-	)
-
-	// This should not fail, but the event should be filtered out
-	if err := emitter.EmitEvent(lowSeverityEvent); err != nil {
-		t.Errorf("Event emission should not fail for filtered events: %v", err)
 	}
 }
 

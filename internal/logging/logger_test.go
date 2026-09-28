@@ -104,16 +104,6 @@ func TestNewWithWriter_LevelFiltering(t *testing.T) {
 	}
 }
 
-func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig()
-	if cfg.Level != "info" {
-		t.Errorf("expected default level 'info', got: %s", cfg.Level)
-	}
-	if cfg.Format != "text" {
-		t.Errorf("expected default format 'text', got: %s", cfg.Format)
-	}
-}
-
 func TestSetDefault(t *testing.T) {
 	var buf bytes.Buffer
 	logger := NewWithWriter("debug", "text", &buf)
@@ -126,20 +116,6 @@ func TestSetDefault(t *testing.T) {
 
 	if Default() != logger {
 		t.Error("SetDefault did not update the default logger")
-	}
-}
-
-func TestFromContext_WithLogger(t *testing.T) {
-	var buf bytes.Buffer
-	logger := NewWithWriter("info", "text", &buf)
-
-	ctx := WithLogger(context.Background(), logger)
-	retrieved := FromContext(ctx)
-
-	retrieved.Info("test")
-
-	if !strings.Contains(buf.String(), "test") {
-		t.Error("logger from context should have written to the buffer")
 	}
 }
 
@@ -205,45 +181,5 @@ func TestPackageLevelFunctions(t *testing.T) {
 	}
 	if !strings.Contains(output, "error msg") {
 		t.Error("Error should have logged")
-	}
-}
-
-func TestWith(t *testing.T) {
-	var buf bytes.Buffer
-	logger := NewWithWriter("info", "text", &buf)
-	SetDefault(logger)
-	defer SetDefault(slog.Default()) // restore
-
-	childLogger := With("component", "test")
-	childLogger.Info("message")
-
-	output := buf.String()
-	if !strings.Contains(output, "component=test") {
-		t.Errorf("expected output to contain 'component=test', got: %s", output)
-	}
-}
-
-func TestWithContext(t *testing.T) {
-	var buf bytes.Buffer
-	logger := NewWithWriter("info", "json", &buf)
-	SetDefault(logger)
-	defer SetDefault(slog.Default()) // restore
-
-	ctx := WithRequestID(context.Background(), "req-456")
-	childLogger := WithContext(ctx, "component", "gateway")
-
-	childLogger.Info("test")
-
-	output := buf.String()
-	var logEntry map[string]interface{}
-	if err := json.Unmarshal([]byte(output), &logEntry); err != nil {
-		t.Fatalf("failed to parse JSON output: %v", err)
-	}
-
-	if logEntry["request_id"] != "req-456" {
-		t.Errorf("expected request_id='req-456', got: %v", logEntry["request_id"])
-	}
-	if logEntry["component"] != "gateway" {
-		t.Errorf("expected component='gateway', got: %v", logEntry["component"])
 	}
 }

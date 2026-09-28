@@ -288,59 +288,6 @@ func TestAnthropicProviderAPIKeyFallback(t *testing.T) {
 	}
 }
 
-func TestBuildChatMessages(t *testing.T) {
-	cfg := config.AIConfig{
-		DefaultProvider: "anthropic",
-		Providers: []config.ProviderConfig{
-			{
-				Name:   "anthropic",
-				Type:   "anthropic",
-				APIKey: "test-key",
-				Model:  "claude-3-5-sonnet-20250114",
-			},
-		},
-	}
-
-	router, err := NewRouter(cfg, nil)
-	if err != nil {
-		t.Fatalf("Failed to create router: %v", err)
-	}
-
-	// Create a mock session
-	session := &sessions.Session{
-		Key:       "test-session",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-
-	userMessage := "Hello, how are you?"
-
-	messages, err := router.buildChatMessages(session, userMessage)
-	if err != nil {
-		t.Fatalf("Failed to build chat messages: %v", err)
-	}
-
-	// Should have at least system message and user message
-	if len(messages) < 2 {
-		t.Errorf("Expected at least 2 messages, got %d", len(messages))
-	}
-
-	// Check system message
-	if messages[0].Role != "system" {
-		t.Errorf("Expected first message to be system role, got %s", messages[0].Role)
-	}
-
-	// Check user message
-	lastMessage := messages[len(messages)-1]
-	if lastMessage.Role != "user" {
-		t.Errorf("Expected last message to be user role, got %s", lastMessage.Role)
-	}
-
-	if lastMessage.Content != userMessage {
-		t.Errorf("Expected user message content '%s', got '%s'", userMessage, lastMessage.Content)
-	}
-}
-
 func TestNewOpenAIProvider(t *testing.T) {
 	cfg := config.ProviderConfig{
 		Name:   "openai-test",

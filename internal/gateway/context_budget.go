@@ -192,35 +192,6 @@ func resolveContextWindow(model string) (int, bool) {
 	return size, !known
 }
 
-// recordTokenUsage updates the running cumulative totals plus the
-// last_* snapshot and an updated-at timestamp. It is the single place that
-// writes budget-related keys so call sites stay consistent. Callers should
-// merge the returned map into their own context-batch write.
-//
-// Safe to call with nil session: returns nil.
-func recordTokenUsage(session *sessions.Session, promptTokens, completionTokens, totalTokens int) map[string]string {
-	if session == nil {
-		return nil
-	}
-	if totalTokens == 0 {
-		totalTokens = promptTokens + completionTokens
-	}
-	prevPrompt := 0
-	prevCompletion := 0
-	if session.Context != nil {
-		prevPrompt = atoiOr(session.Context[ctxKeySessionPromptTokensTotal], 0)
-		prevCompletion = atoiOr(session.Context[ctxKeySessionCompletionTokensTotal], 0)
-	}
-	return map[string]string{
-		"last_prompt_tokens":               strconv.Itoa(promptTokens),
-		"last_completion_tokens":           strconv.Itoa(completionTokens),
-		"last_total_tokens":                strconv.Itoa(totalTokens),
-		ctxKeySessionPromptTokensTotal:     strconv.Itoa(prevPrompt + promptTokens),
-		ctxKeySessionCompletionTokensTotal: strconv.Itoa(prevCompletion + completionTokens),
-		ctxKeyContextBudgetUpdatedAt:       time.Now().UTC().Format(time.RFC3339Nano),
-	}
-}
-
 // atoiOr parses s as an int, returning fallback on error or empty input.
 func atoiOr(s string, fallback int) int {
 	if s == "" {

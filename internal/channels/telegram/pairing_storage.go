@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
@@ -178,56 +177,6 @@ func (ps *PairingStorage) ApprovePairing(code string) error {
 	}
 
 	return nil
-}
-
-// CreatePairing creates a new pairing entry (utility function for future use)
-func (ps *PairingStorage) CreatePairing(userID string, expirationDuration time.Duration) (*PairingInfo, error) {
-	code := uuid.New().String()
-	now := time.Now()
-	expiresAt := now.Add(expirationDuration)
-
-	metadata := make(map[string]string)
-	metadataJSON, _ := json.Marshal(metadata)
-
-	query := `
-		INSERT INTO telegram_pairings (code, user_id, created_at, expires_at, is_active, metadata)
-		VALUES (?, ?, ?, ?, 1, ?)
-	`
-
-	_, err := ps.db.Exec(query, code, userID, now.Format("2006-01-02 15:04:05"),
-		expiresAt.Format("2006-01-02 15:04:05"), string(metadataJSON))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create pairing: %w", err)
-	}
-
-	return &PairingInfo{
-		Code:      code,
-		UserID:    userID,
-		CreatedAt: now,
-		ExpiresAt: expiresAt,
-		IsActive:  true,
-		Metadata:  metadata,
-	}, nil
-}
-
-// CleanupExpiredPairings removes expired pairing codes (utility function for future use)
-func (ps *PairingStorage) CleanupExpiredPairings() (int64, error) {
-	query := `
-		DELETE FROM telegram_pairings
-		WHERE expires_at <= datetime('now')
-	`
-
-	result, err := ps.db.Exec(query)
-	if err != nil {
-		return 0, fmt.Errorf("failed to cleanup expired pairings: %w", err)
-	}
-
-	rowsDeleted, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	return rowsDeleted, nil
 }
 
 // findPairingByCodePrefix finds a pairing by matching a code prefix (for partial code matching)

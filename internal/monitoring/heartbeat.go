@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	"conduit/internal/sessions"
 )
 
 // MetricsCollectorInterface defines the methods needed by HeartbeatService and Gateway.
@@ -259,8 +260,11 @@ func (h *HeartbeatService) emitHeartbeatEvent(ctx context.Context, metrics *Gate
 }
 
 // checkStuckSessions looks for sessions that have been processing too long
+// (and, via the collector's defaults, waiting too long or failing
+// repeatedly). Session states are driven by the gateway TurnRunner
+// (conduit-3kgo).
 func (h *HeartbeatService) checkStuckSessions(ctx context.Context) error {
-	stuckThreshold := 2 * time.Minute
+	stuckThreshold := sessions.DefaultStuckSessionConfig().ProcessingTimeout
 	stuckSessions, err := h.collector.DetectStuckSessions(ctx, stuckThreshold)
 	if err != nil {
 		return err
@@ -269,7 +273,7 @@ func (h *HeartbeatService) checkStuckSessions(ctx context.Context) error {
 	// Emit alerts for stuck sessions
 	for _, sessionKey := range stuckSessions {
 		h.emitSystemEvent("warning",
-			fmt.Sprintf("Session %s appears stuck (processing >%v)", sessionKey, stuckThreshold))
+			fmt.Sprintf("Session %s appears stuck (processing >%v or repeated errors)", sessionKey, stuckThreshold))
 	}
 
 	return nil

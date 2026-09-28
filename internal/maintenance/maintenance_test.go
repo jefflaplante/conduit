@@ -3,6 +3,7 @@ package maintenance
 import (
 	"context"
 	"database/sql"
+	"io"
 	"log"
 	"os"
 	"testing"
@@ -102,11 +103,7 @@ func TestScheduler(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Create test config with no maintenance window restrictions
 	config := DefaultConfig()
-	config.Schedule = "* * * * * *" // Every second for testing
-	config.Window.StartHour = 0
-	config.Window.EndHour = 0 // Same start/end hour = no restrictions
 
 	// Create scheduler
 	scheduler := NewScheduler(db, config, log.New(os.Stdout, "[Test] ", log.LstdFlags))
@@ -141,22 +138,44 @@ func TestScheduler(t *testing.T) {
 	}
 }
 
-func TestMaintenanceWindow(t *testing.T) {
-	// Test maintenance window logic
-	config := DefaultConfig()
-	config.Window.StartHour = 2
-	config.Window.EndHour = 6
-	config.Window.TimeZone = "UTC"
-
-	db, _ := sql.Open("sqlite", ":memory:")
+// conduit-3kgo: manual runs used to be skipped outside 02:00-06:00 UTC.
+// RunNow and RunTask now always execute every task, whatever the hour.
+func TestScheduler_ManualRunsAlwaysExecute(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer db.Close()
 
-	scheduler := NewScheduler(db, config, nil)
+	s := NewScheduler(db, DefaultConfig(), log.New(io.Discard, "", 0))
+	a, b := &TestTask{name: "a"}, &TestTask{name: "b"}
+	for _, task := range []*TestTask{a, b} {
+		if err := s.RegisterTask(task); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	// This is a basic test - in a real implementation you'd mock time
-	// For now, just verify the scheduler was created successfully
-	if scheduler == nil {
-		t.Error("Scheduler should not be nil")
+	if err := s.RunNow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !a.executed || !b.executed {
+		t.Fatalf("RunNow skipped tasks: a=%v b=%v", a.executed, b.executed)
+	}
+	for name, st := range s.GetStatus() {
+		if st.LastRun.IsZero() || !st.LastResult.Success {
+			t.Errorf("task %s status not recorded: %+v", name, st)
+		}
+	}
+
+	a.executed = false
+	if err := s.RunTask(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.executed {
+		t.Fatal("RunTask skipped the task")
+	}
+	if err := s.RunTask(context.Background(), "missing"); err == nil {
+		t.Fatal("RunTask of an unknown task should fail")
 	}
 }
 

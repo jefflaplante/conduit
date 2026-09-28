@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewFactory(t *testing.T) {
-	factory := NewFactory()
+func TestNewFactoryZeroDeps(t *testing.T) {
+	factory := NewFactoryWithDB(nil, nil)
 	assert.NotNil(t, factory)
 	assert.Nil(t, factory.db)
 }
@@ -27,7 +27,7 @@ func TestNewFactoryWithDB(t *testing.T) {
 }
 
 func TestFactory_SupportsType(t *testing.T) {
-	factory := NewFactory()
+	factory := NewFactoryWithDB(nil, nil)
 
 	tests := []struct {
 		adapterType string
@@ -48,7 +48,7 @@ func TestFactory_SupportsType(t *testing.T) {
 }
 
 func TestFactory_GetSupportedTypes(t *testing.T) {
-	factory := NewFactory()
+	factory := NewFactoryWithDB(nil, nil)
 
 	types := factory.GetSupportedTypes()
 	assert.Len(t, types, 1)
@@ -56,7 +56,7 @@ func TestFactory_GetSupportedTypes(t *testing.T) {
 }
 
 func TestFactory_CreateAdapter_MissingToken(t *testing.T) {
-	factory := NewFactory()
+	factory := NewFactoryWithDB(nil, nil)
 
 	config := channels.ChannelConfig{
 		ID:      "test",
@@ -73,7 +73,7 @@ func TestFactory_CreateAdapter_MissingToken(t *testing.T) {
 }
 
 func TestFactory_CreateAdapter_WithToken(t *testing.T) {
-	factory := NewFactory()
+	factory := NewFactoryWithDB(nil, nil)
 
 	config := channels.ChannelConfig{
 		ID:      "test-tg",
@@ -95,7 +95,7 @@ func TestFactory_CreateAdapter_WithToken(t *testing.T) {
 }
 
 func TestFactory_CreateAdapter_WithAllOptions(t *testing.T) {
-	factory := NewFactory()
+	factory := NewFactoryWithDB(nil, nil)
 
 	config := channels.ChannelConfig{
 		ID:      "test-tg",

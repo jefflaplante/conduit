@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,7 +26,7 @@ func NewDebugLogTool(services *types.ToolServices, buffer *debuglog.RingBuffer) 
 func (t *DebugLogTool) Name() string { return "DebugLog" }
 
 func (t *DebugLogTool) Description() string {
-	return "Inspect the in-memory debug log of recent tool calls, LLM requests, and model thinking. " +
+	return "Inspect the in-memory debug log of recent tool calls and LLM round trips (metadata and short redacted previews). " +
 		"Entries are kept in a rolling buffer and never written to disk logs."
 }
 
@@ -142,9 +144,13 @@ func (t *DebugLogTool) dump(args map[string]interface{}) (*types.ToolResult, err
 		case debuglog.EntryThinking:
 			sb.WriteString(fmt.Sprintf("[%s] 💭 %s\n", ts, e.Result))
 		case debuglog.EntryLLMRequest:
-			sb.WriteString(fmt.Sprintf("[%s] → LLM %s\n", ts, e.Result))
+			sb.WriteString(fmt.Sprintf("[%s] → LLM %s%s\n", ts, e.Result, summarizeMeta(e.Meta)))
 		case debuglog.EntryLLMResponse:
-			sb.WriteString(fmt.Sprintf("[%s] ← LLM %s (%s)\n", ts, e.Result, e.Duration))
+			line := fmt.Sprintf("[%s] ← LLM %s (%s)%s", ts, e.Result, e.Duration, summarizeMeta(e.Meta))
+			if e.Error != "" {
+				line += " ERROR: " + e.Error
+			}
+			sb.WriteString(line + "\n")
 		default:
 			sb.WriteString(fmt.Sprintf("[%s] ? %s %s\n", ts, e.Type, e.Result))
 		}
@@ -200,6 +206,28 @@ func summarizeArgs(args map[string]interface{}) string {
 		parts = append(parts, fmt.Sprintf("%s=%s", k, vs))
 	}
 	return "(" + strings.Join(parts, ", ") + ")"
+}
+
+// summarizeMeta renders entry metadata as " k=v ..." in key order.
+// Preview values are already redacted and bounded by the producer.
+func summarizeMeta(meta map[string]string) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(meta))
+	for k := range meta {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for _, k := range keys {
+		v := meta[k]
+		if strings.ContainsAny(v, " \"") {
+			v = strconv.Quote(v)
+		}
+		sb.WriteString(" " + k + "=" + v)
+	}
+	return sb.String()
 }
 
 func truncateStr(s string, maxLen int) string {

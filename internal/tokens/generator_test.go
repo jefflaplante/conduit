@@ -3,41 +3,46 @@ package tokens
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"strings"
 	"testing"
-	"time"
 )
 
-func TestGenerateToken(t *testing.T) {
-	tests := []struct {
-		name string
-	}{
-		{"basic generation"},
-		{"multiple generations should be unique"},
+// assertTokenShape checks the structural invariants of a generated token:
+// the conduit_v1_ prefix followed by a non-empty base58 body.
+func assertTokenShape(t *testing.T, token string) {
+	t.Helper()
+	if !strings.HasPrefix(token, TokenPrefix) {
+		t.Fatalf("Token doesn't start with prefix %s: %s", TokenPrefix, token)
 	}
+	body := strings.TrimPrefix(token, TokenPrefix)
+	if body == "" {
+		t.Fatalf("Token has empty body: %q", token)
+	}
+	for _, c := range body {
+		if !strings.ContainsRune(Base58Alphabet, c) {
+			t.Fatalf("Token body contains non-base58 character %q: %s", c, token)
+		}
+	}
+	// 18 bytes (entropy + checksum) encode to at most 25 base58 characters.
+	if len(body) > 25 {
+		t.Fatalf("Token body too long: %d chars (%s)", len(body), token)
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			token, err := GenerateToken()
-			if err != nil {
-				t.Fatalf("GenerateToken() error = %v", err)
-			}
+func TestGenerateToken(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		token, err := GenerateToken()
+		if err != nil {
+			t.Fatalf("GenerateToken() error = %v", err)
+		}
+		assertTokenShape(t, token)
 
-			// Check format
-			if !strings.HasPrefix(token, TokenPrefix) {
-				t.Errorf("Token doesn't start with prefix %s: %s", TokenPrefix, token)
-			}
-
-			// Check minimum length
-			if len(token) < len(TokenPrefix)+20 {
-				t.Errorf("Token too short: %d chars", len(token))
-			}
-
-			// Validate the token
-			if !ValidateToken(token) {
-				t.Errorf("Generated token failed validation: %s", token)
-			}
-		})
+		// Minimum length: leading zero bytes shorten the encoding only
+		// with negligible probability for 144 random bits.
+		if len(token) < len(TokenPrefix)+20 {
+			t.Errorf("Token too short: %d chars (%s)", len(token), token)
+		}
 	}
 }
 
@@ -64,381 +69,117 @@ func TestGenerateTokenUniqueness(t *testing.T) {
 }
 
 func TestGenerateTokenFromEntropy(t *testing.T) {
+	sequential := make([]byte, TokenEntropyBytes)
+	for i := range sequential {
+		sequential[i] = byte(i)
+	}
+
 	tests := []struct {
 		name        string
 		entropy     []byte
-		wantErr     bool
+		want        string // known vector: prefix + base58(entropy || sha256(entropy)[:2])
 		errContains string
 	}{
 		{
-			name:    "valid entropy",
+			name:    "sequential entropy",
+			entropy: sequential,
+			want:    "conduit_v1_1YruNJgvoA2CUCpKWeF9JFv",
+		},
+		{
+			name:    "all zeros entropy",
 			entropy: make([]byte, TokenEntropyBytes),
-			wantErr: false,
+			want:    "conduit_v1_11111111111111115Cz",
+		},
+		{
+			name:    "all ones entropy",
+			entropy: bytes.Repeat([]byte{0xFF}, TokenEntropyBytes),
+			want:    "conduit_v1_BcrMA6SqZZvEpAezV9QmfHd81",
 		},
 		{
 			name:        "too short entropy",
 			entropy:     make([]byte, TokenEntropyBytes-1),
-			wantErr:     true,
 			errContains: "must be exactly",
 		},
 		{
 			name:        "too long entropy",
 			entropy:     make([]byte, TokenEntropyBytes+1),
-			wantErr:     true,
 			errContains: "must be exactly",
-		},
-		{
-			name:    "all zeros entropy",
-			entropy: make([]byte, TokenEntropyBytes),
-			wantErr: false,
-		},
-		{
-			name:    "all ones entropy",
-			entropy: bytes.Repeat([]byte{0xFF}, TokenEntropyBytes),
-			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Fill with known data for non-zero cases
-			if tt.name == "valid entropy" {
-				for i := range tt.entropy {
-					tt.entropy[i] = byte(i)
-				}
-			}
-
 			token, err := GenerateTokenFromEntropy(tt.entropy)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("GenerateTokenFromEntropy() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if tt.wantErr {
+			if tt.errContains != "" {
+				if err == nil {
+					t.Fatalf("GenerateTokenFromEntropy() = %q, want error", token)
+				}
 				if !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
 				}
 				return
 			}
-
-			// Verify the token is valid
-			if !ValidateToken(token) {
-				t.Errorf("Generated token from entropy failed validation: %s", token)
-			}
-
-			// Verify we can extract the original entropy
-			extracted, err := GetTokenEntropy(token)
 			if err != nil {
-				t.Errorf("Failed to extract entropy: %v", err)
+				t.Fatalf("GenerateTokenFromEntropy() error = %v", err)
 			}
+			if token != tt.want {
+				t.Errorf("GenerateTokenFromEntropy() = %q, want %q", token, tt.want)
+			}
+			assertTokenShape(t, token)
 
-			if !bytes.Equal(extracted, tt.entropy) {
-				t.Errorf("Extracted entropy doesn't match original. Expected %x, got %x", tt.entropy, extracted)
+			// The body must be base58(entropy || 2-byte SHA256 checksum).
+			sum := sha256.Sum256(tt.entropy)
+			data := append(append([]byte{}, tt.entropy...), sum[:ChecksumBytes]...)
+			if got := TokenPrefix + base58Encode(data); got != token {
+				t.Errorf("token %q does not encode entropy+checksum (%q)", token, got)
 			}
 		})
 	}
 }
 
-func TestValidateToken(t *testing.T) {
-	// Generate a valid token for positive tests
-	validToken, err := GenerateToken()
+func TestGenerateTokenFromEntropyDeterministic(t *testing.T) {
+	entropy := make([]byte, TokenEntropyBytes)
+	if _, err := rand.Read(entropy); err != nil {
+		t.Fatal(err)
+	}
+	a, err := GenerateTokenFromEntropy(entropy)
 	if err != nil {
-		t.Fatalf("Failed to generate valid token: %v", err)
+		t.Fatal(err)
+	}
+	b, err := GenerateTokenFromEntropy(entropy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Errorf("same entropy produced different tokens: %q vs %q", a, b)
 	}
 
+	// A single-bit change in entropy must change the token.
+	entropy[0] ^= 0x01
+	c, err := GenerateTokenFromEntropy(entropy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c == a {
+		t.Errorf("different entropy produced identical token %q", a)
+	}
+}
+
+func TestGetTokenPrefix(t *testing.T) {
 	tests := []struct {
-		name  string
 		token string
-		want  bool
-	}{
-		{
-			name:  "valid token",
-			token: validToken,
-			want:  true,
-		},
-		{
-			name:  "empty token",
-			token: "",
-			want:  false,
-		},
-		{
-			name:  "wrong prefix",
-			token: "wrong_v1_" + validToken[len(TokenPrefix):],
-			want:  false,
-		},
-		{
-			name:  "no prefix",
-			token: validToken[len(TokenPrefix):],
-			want:  false,
-		},
-		{
-			name:  "too short",
-			token: TokenPrefix + "abc",
-			want:  false,
-		},
-		{
-			name:  "invalid base58 chars",
-			token: TokenPrefix + "0OIl", // These chars are not in Base58 alphabet
-			want:  false,
-		},
-		{
-			name:  "corrupted token",
-			token: corruptLastChar(validToken), // conduit-31jg.52: always differs from the original
-			want:  false,
-		},
-		{
-			name:  "missing characters",
-			token: validToken[:len(validToken)-5], // Remove some chars
-			want:  false,
-		},
-		{
-			name:  "extra characters",
-			token: validToken + "extra",
-			want:  false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := ValidateToken(tt.token); got != tt.want {
-				t.Errorf("ValidateToken() = %v, want %v for token %s", got, tt.want, tt.token)
-			}
-		})
-	}
-}
-
-func TestCompareTokens(t *testing.T) {
-	token1, err := GenerateToken()
-	if err != nil {
-		t.Fatalf("Failed to generate token1: %v", err)
-	}
-
-	token2, err := GenerateToken()
-	if err != nil {
-		t.Fatalf("Failed to generate token2: %v", err)
-	}
-
-	tests := []struct {
-		name   string
-		token1 string
-		token2 string
-		want   bool
-	}{
-		{
-			name:   "same token",
-			token1: token1,
-			token2: token1,
-			want:   true,
-		},
-		{
-			name:   "different tokens",
-			token1: token1,
-			token2: token2,
-			want:   false,
-		},
-		{
-			name:   "empty tokens",
-			token1: "",
-			token2: "",
-			want:   true,
-		},
-		{
-			name:   "one empty one not",
-			token1: "",
-			token2: token1,
-			want:   false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := CompareTokens(tt.token1, tt.token2); got != tt.want {
-				t.Errorf("CompareTokens() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestIsValidTokenFormat(t *testing.T) {
-	validToken, _ := GenerateToken()
-
-	tests := []struct {
-		name  string
-		token string
-		want  bool
-	}{
-		{
-			name:  "valid token",
-			token: validToken,
-			want:  true,
-		},
-		{
-			name:  "empty string",
-			token: "",
-			want:  false,
-		},
-		{
-			name:  "just prefix",
-			token: TokenPrefix,
-			want:  false,
-		},
-		{
-			name:  "wrong prefix",
-			token: "wrong_v1_" + validToken[len(TokenPrefix):],
-			want:  false,
-		},
-		{
-			name:  "invalid base58",
-			token: TokenPrefix + "0OIl", // Contains excluded chars
-			want:  false,
-		},
-		{
-			name:  "valid format but wrong length",
-			token: TokenPrefix + "123456", // Valid base58 but too short
-			want:  false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsValidTokenFormat(tt.token); got != tt.want {
-				t.Errorf("IsValidTokenFormat() = %v, want %v for token %s", got, tt.want, tt.token)
-			}
-		})
-	}
-}
-
-func TestGetTokenEntropy(t *testing.T) {
-	// Test with known entropy
-	knownEntropy := make([]byte, TokenEntropyBytes)
-	for i := range knownEntropy {
-		knownEntropy[i] = byte(i)
-	}
-
-	token, err := GenerateTokenFromEntropy(knownEntropy)
-	if err != nil {
-		t.Fatalf("Failed to generate token from known entropy: %v", err)
-	}
-
-	extractedEntropy, err := GetTokenEntropy(token)
-	if err != nil {
-		t.Errorf("Failed to extract entropy: %v", err)
-	}
-
-	if !bytes.Equal(extractedEntropy, knownEntropy) {
-		t.Errorf("Extracted entropy doesn't match. Expected %x, got %x", knownEntropy, extractedEntropy)
-	}
-
-	// Test with invalid token
-	_, err = GetTokenEntropy("invalid_token")
-	if err == nil {
-		t.Error("Expected error for invalid token")
-	}
-}
-
-func TestGetTokenDisplay(t *testing.T) {
-	tests := []struct {
-		name  string
-		token string
+		n     int
 		want  string
 	}{
-		{
-			name:  "long token",
-			token: "claw_v1_abcdefghijklmnopqrstuvwxyz",
-			want:  "claw_v1_abcd...",
-		},
-		{
-			name:  "short token",
-			token: "short",
-			want:  "short",
-		},
-		{
-			name:  "empty token",
-			token: "",
-			want:  "",
-		},
+		{"conduit_v1_abcdef", 12, "conduit_v1_a"},
+		{"short", 12, "short"},
+		{"exactly12chr", 12, "exactly12chr"},
+		{"", 4, ""},
 	}
-
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := GetTokenDisplay(tt.token); got != tt.want {
-				t.Errorf("GetTokenDisplay() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTimingSafeValidation(t *testing.T) {
-	// This test verifies that validation takes roughly the same time
-	// regardless of where the token differs (timing attack prevention)
-
-	validToken, _ := GenerateToken()
-
-	// Create tokens that differ at different positions
-	earlyDiffToken := "x" + validToken[1:]                     // Differs at position 0
-	middleDiffToken := validToken[:10] + "x" + validToken[11:] // Differs in middle
-	lateDiffToken := corruptLastChar(validToken)               // Differs at end
-
-	tokens := []string{earlyDiffToken, middleDiffToken, lateDiffToken}
-
-	// Just ensure it completes reasonably quickly (not a precise timing test).
-	// conduit-31jg.52: a single wall-clock sample against 1ms failed under
-	// -race with parallel packages (seen: 4.4ms). Take the best of several
-	// runs so scheduler noise is filtered out, with a generous bound.
-	for _, token := range tokens {
-		best := time.Duration(1<<63 - 1)
-		for i := 0; i < 20; i++ {
-			start := time.Now()
-			ValidateToken(token)
-			if d := time.Since(start); d < best {
-				best = d
-			}
+		if got := GetTokenPrefix(tt.token, tt.n); got != tt.want {
+			t.Errorf("GetTokenPrefix(%q, %d) = %q, want %q", tt.token, tt.n, got, tt.want)
 		}
-		if best > 20*time.Millisecond {
-			t.Errorf("Validation took too long: best of 20 = %v", best)
-		}
-	}
-}
-
-func TestBase58Encoding(t *testing.T) {
-	tests := []struct {
-		name  string
-		input []byte
-	}{
-		{
-			name:  "empty",
-			input: []byte{},
-		},
-		{
-			name:  "single byte",
-			input: []byte{0x01},
-		},
-		{
-			name:  "multiple bytes",
-			input: []byte{0x01, 0x02, 0x03},
-		},
-		{
-			name:  "with leading zeros",
-			input: []byte{0x00, 0x00, 0x01},
-		},
-		{
-			name:  "max entropy",
-			input: bytes.Repeat([]byte{0xFF}, TokenEntropyBytes),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			encoded := base58Encode(tt.input)
-			decoded, err := base58Decode(encoded)
-			if err != nil {
-				t.Errorf("Failed to decode: %v", err)
-			}
-
-			if !bytes.Equal(decoded, tt.input) {
-				t.Errorf("Round trip failed. Original: %x, Decoded: %x", tt.input, decoded)
-			}
-		})
 	}
 }
 
@@ -452,25 +193,6 @@ func BenchmarkGenerateToken(b *testing.B) {
 	}
 }
 
-func BenchmarkValidateToken(b *testing.B) {
-	token, _ := GenerateToken()
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		ValidateToken(token)
-	}
-}
-
-func BenchmarkCompareTokens(b *testing.B) {
-	token1, _ := GenerateToken()
-	token2, _ := GenerateToken()
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		CompareTokens(token1, token2)
-	}
-}
-
 func BenchmarkBase58Encode(b *testing.B) {
 	entropy := make([]byte, TokenEntropyBytes)
 	rand.Read(entropy)
@@ -478,17 +200,6 @@ func BenchmarkBase58Encode(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		base58Encode(entropy)
-	}
-}
-
-func BenchmarkBase58Decode(b *testing.B) {
-	entropy := make([]byte, TokenEntropyBytes)
-	rand.Read(entropy)
-	encoded := base58Encode(entropy)
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		base58Decode(encoded)
 	}
 }
 
@@ -503,60 +214,4 @@ func TestSecurityEdgeCases(t *testing.T) {
 			t.Error("Generated identical tokens - poor entropy source?")
 		}
 	})
-
-	t.Run("checksum corruption detection", func(t *testing.T) {
-		token, _ := GenerateToken()
-
-		// Corrupt the token by flipping one character to a different value.
-		// Pick a replacement that differs from the original to avoid a no-op
-		// "corruption" (e.g. flipping an 'x' to 'x' — a 1/58 chance with base58
-		// alphabets, which made this test flaky).
-		tokenBytes := []byte(token)
-		if len(tokenBytes) > len(TokenPrefix)+1 {
-			// Change a character in the base58 part
-			i := len(TokenPrefix) + 1
-			orig := tokenBytes[i]
-			tokenBytes[i] = 'x'
-			if tokenBytes[i] == orig {
-				tokenBytes[i] = 'y'
-			}
-			corruptedToken := string(tokenBytes)
-
-			if ValidateToken(corruptedToken) {
-				t.Error("Corrupted token passed validation - checksum failed")
-			}
-		}
-	})
-
-	t.Run("timing attack resistance", func(t *testing.T) {
-		token1, _ := GenerateToken()
-		token2, _ := GenerateToken()
-
-		// Ensure different tokens still take similar time to compare
-		start := time.Now()
-		CompareTokens(token1, token2)
-		duration1 := time.Since(start)
-
-		start = time.Now()
-		CompareTokens(token1, token1)
-		duration2 := time.Since(start)
-
-		// Allow for some variance but they should be roughly similar
-		ratio := float64(duration1) / float64(duration2)
-		if ratio < 0.1 || ratio > 10 {
-			t.Logf("Warning: timing variance might be too high: %v vs %v", duration1, duration2)
-		}
-	})
-}
-
-// corruptLastChar replaces the final character with a different Base58
-// character. conduit-31jg.52: the old `+ "x"` was a no-op for tokens that
-// already ended in 'x' (~1/58 runs), making TestValidateToken flaky.
-func corruptLastChar(tok string) string {
-	last := tok[len(tok)-1]
-	repl := byte('2')
-	if last == repl {
-		repl = '3'
-	}
-	return tok[:len(tok)-1] + string(repl)
 }

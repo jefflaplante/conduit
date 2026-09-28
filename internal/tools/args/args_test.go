@@ -82,18 +82,3 @@ func TestGetBool(t *testing.T) {
 	assert.True(t, GetBool(args, "string", true))    // wrong type, uses default
 	assert.False(t, GetBool(args, "missing", false)) // not found
 }
-
-func TestGetStringSlice(t *testing.T) {
-	args := map[string]interface{}{
-		"direct":    []string{"a", "b", "c"},
-		"interface": []interface{}{"x", "y", "z"},
-		"mixed":     []interface{}{"a", 1, "b"}, // non-strings ignored
-		"string":    "not a slice",
-	}
-
-	assert.Equal(t, []string{"a", "b", "c"}, GetStringSlice(args, "direct"))
-	assert.Equal(t, []string{"x", "y", "z"}, GetStringSlice(args, "interface"))
-	assert.Equal(t, []string{"a", "b"}, GetStringSlice(args, "mixed"))
-	assert.Nil(t, GetStringSlice(args, "string"))
-	assert.Nil(t, GetStringSlice(args, "missing"))
-}

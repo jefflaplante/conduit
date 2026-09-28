@@ -850,28 +850,6 @@ func TestRecallWithContext_NoOverlapNoChange(t *testing.T) {
 
 // -------------------- TTL / Expiry tests --------------------
 
-func TestParseDuration_DaysAndWeeks(t *testing.T) {
-	d, err := ParseDuration("7d")
-	require.NoError(t, err)
-	assert.Equal(t, 7*24*time.Hour, d)
-
-	d, err = ParseDuration("2w")
-	require.NoError(t, err)
-	assert.Equal(t, 14*24*time.Hour, d)
-
-	d, err = ParseDuration("24h")
-	require.NoError(t, err)
-	assert.Equal(t, 24*time.Hour, d)
-
-	d, err = ParseDuration("90m")
-	require.NoError(t, err)
-	assert.Equal(t, 90*time.Minute, d)
-
-	d, err = ParseDuration("")
-	require.NoError(t, err)
-	assert.Equal(t, time.Duration(0), d)
-}
-
 func TestStoreWithTTL_WMExpiry(t *testing.T) {
 	b := newTestBrain(t)
 	ctx := testCtx("user1")

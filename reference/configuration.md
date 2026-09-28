@@ -265,7 +265,7 @@ call releases it at stream end. The wait uses the call's own context, so
 The wait counts toward the turn's deadline. A same-model timeout retry that
 is still queued gives up in time to leave the fallback handoff its reserved
 slice, because the handoff goes to a different pool. A wait that is given up
-makes no provider call, so it isn't metered or written to the [LLM call log](#llm-call-log). A call that did wait records the wait as `queue_wait_ms` in the call log, separate from its `latency_ms`.
+makes no provider call, so it isn't metered (no usage or cost). It still gets one line in the [LLM call log](#llm-call-log), with `error_class` `queue_timeout` (the deadline ran out) or `queue_cancel` (`/stop`, a sub-agent cancel or shutdown), the wait in `queue_wait_ms` and `latency_ms` 0. A call that did wait records the wait as `queue_wait_ms` in the call log, separate from its `latency_ms`.
 
 The fuel gauge (`Gateway` tool status, `SessionStatus` → `fuel_gauge`) lists
 every pool under `provider_slots`: `limit`, `source`
@@ -292,7 +292,7 @@ Keys are bare model IDs or provider-prefixed IDs; values are USD per million tok
 
 ### LLM Call Log
 
-A persistent JSONL record of every LLM provider call (conduit-2lzv): one line per call, including each recovery retry, fallback handoff, EmptyGuard retry, length auto-continue, tool-loop depth and side call (vision). It's there so you can diagnose provider incidents (timeouts, fallbacks, stalled sub-agents) after the fact without digging through journalctl.
+A persistent JSONL record of every LLM provider call (conduit-2lzv): one line per call, including each recovery retry, fallback handoff, EmptyGuard retry, length auto-continue, tool-loop depth and side call (vision). An attempt that gave up waiting for a [concurrency slot](#concurrency-limits-max_concurrent-model_max_concurrent) also gets a line (`error_class` `queue_timeout` or `queue_cancel`), even though no provider call was made (conduit-3j08). It's there so you can diagnose provider incidents (timeouts, fallbacks, stalled sub-agents) after the fact without digging through journalctl.
 
 ```json
 {
@@ -339,9 +339,9 @@ Example line:
 | `stop_reason`, `finish_reason`, `tool_calls`, `empty` | Provider stop condition, the number of tool calls (count only) and a flag for a raw-empty response. |
 | `prompt_tokens`, `completion_tokens`, `total_tokens`, `cache_creation_tokens`, `cache_read_tokens` | Token usage. |
 | `cost_usd`, `priced` | Per-call cost. `priced` is false when the model has no known price, and absent on errors. |
-| `latency_ms` | Wall time of the provider call. It excludes any wait for a concurrency slot. |
+| `latency_ms` | Wall time of the provider call. It excludes any wait for a concurrency slot, and is 0 on a `queue_timeout`/`queue_cancel` line (no provider call ran). |
 | `queue_wait_ms` | Time spent waiting for a provider concurrency slot before the call (see [Concurrency limits](#concurrency-limits-max_concurrent-model_max_concurrent)). Omitted when there was no measurable wait. |
-| `error_class`, `http_status`, `error` | `error_class` is one of `none`, `timeout`, `rate_limit`, `quota`, `auth`, `server`, `context_cancel`, `context_length` or `other`. `error` is the redacted, truncated message. |
+| `error_class`, `http_status`, `error` | `error_class` is one of `none`, `timeout`, `rate_limit`, `quota`, `auth`, `server`, `context_cancel`, `context_length`, `queue_timeout`, `queue_cancel` or `other`. `queue_timeout` and `queue_cancel` mark an attempt whose wait for a concurrency slot ended on its deadline or on a cancel before any provider call: zero tokens and cost, no `priced`/`ttft_ms`, the wait in `queue_wait_ms`. A wait that got its slot is logged once, as a normal line for the call. `error` is the redacted, truncated message. |
 
 Diagnosis recipes:
 
@@ -353,6 +353,8 @@ jq -c 'select(.error_class=="timeout" and (.ts|startswith("2026-09-28")))' $LOG 
 jq -r .error_class $LOG | sort | uniq -c
 # Every call of one turn, in order
 jq -c 'select(.turn_id=="9f2c41d07a3e") | [.phase,.attempt,.provider,.model,.error_class,.latency_ms]' $LOG
+# Attempts that gave up in the concurrency queue, by route
+jq -r 'select(.error_class|startswith("queue_")) | [.provider,.model,.error_class,.queue_wait_ms] | @tsv' $LOG
 ```
 
 ### Context Compaction
@@ -1108,6 +1110,44 @@ the rebuilt providers, the config path and the backup path, never values.
 The approval system logs its own request/approve/deny events with the same
 key lists. The tool result shows the redacted value of each changed key as
 saved.
+
+### Metrics
+
+Plans and applies are also counted by outcome (conduit-2qes). The counters
+hold counts only: no key paths, values or secrets, and the only Prometheus
+label is the fixed `outcome` set below. They are in-memory and reset on
+restart.
+
+| Outcome | Counted when |
+|---------|--------------|
+| `planned` | A valid plan with changes was built and sent for approval (not terminal: the apply after approval is counted separately) |
+| `applied_live` | Saved, and every changed key was applied to the running gateway |
+| `applied_restart_required` | Saved; at least one changed key only takes effect after a restart |
+| `unchanged` | Every requested key already had the requested value (plan or apply) |
+| `rejected_invalid` | Malformed patch, literal secret, unknown path, or `config.Parse`/`Validate` failure (plan or apply); nothing changed |
+| `rejected_conflict` | The file changed on disk between read and write; nothing changed |
+| `failed` | No config file known, the file could not be read/parsed, a provider or the call log could not be built, or the write failed; nothing changed |
+| `approval_denied` | The owner denied the approval prompt (or it was revoked after too many wrong codes) |
+| `approval_expired` | The approval prompt expired, or was answered after expiry |
+
+An approved update counts once as `planned` and then once as its apply
+outcome. Requests refused before a prompt is sent (non-interactive turn, no
+approval channel) are not counted here; they only appear in the approval log.
+The counters also include `providers_rebuilt_total` (provider instances rebuilt
+by live applies) and `last_applied` (time of the last successful apply).
+
+They are exposed in three places:
+
+- `GET /metrics`: `config_updates` object (`planned_total`,
+  `applied_live_total`, `applied_restart_required_total`, `unchanged_total`,
+  `rejected_invalid_total`, `rejected_conflict_total`, `failed_total`,
+  `approval_denied_total`, `approval_expired_total`,
+  `providers_rebuilt_total`, `last_applied`).
+- `GET /prometheus`: `conduit_config_updates_total{outcome="..."}` (one series
+  per outcome, always present), `conduit_config_update_providers_rebuilt_total`
+  and `conduit_config_update_last_applied_timestamp_seconds` (0 = none yet).
+- `Gateway` tool `status`: `config_updates` map with the same keys as
+  `/metrics`.
 
 ## Environment Variables
 

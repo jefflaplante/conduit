@@ -63,15 +63,6 @@ func AdaptToolToMCP(tool types.Tool) *sdkmcp.Tool {
 	}
 }
 
-// AdaptAllToolsToMCP converts a map of Conduit tools to MCP SDK tools.
-func AdaptAllToolsToMCP(tools map[string]types.Tool) []*sdkmcp.Tool {
-	result := make([]*sdkmcp.Tool, 0, len(tools))
-	for _, tool := range tools {
-		result = append(result, AdaptToolToMCP(tool))
-	}
-	return result
-}
-
 // AdaptToolResult converts a Conduit ToolResult to an MCP CallToolResult.
 // includeData mirrors the execution engine's rule (conduit-31jg.39): Data is
 // appended as "Structured data: {json}" for tools that opt in via

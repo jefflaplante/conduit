@@ -308,7 +308,7 @@ func TestSkillIntegrator_GenerateTools(t *testing.T) {
 
 	config := ExecutionConfig{TimeoutSeconds: 30}
 	executor := NewExecutor(config)
-	integrator := NewSkillIntegrator(executor)
+	integrator := NewSkillIntegratorWithConfig(executor, nil)
 
 	tools := integrator.GenerateToolsFromSkills([]Skill{skill})
 

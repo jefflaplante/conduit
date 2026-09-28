@@ -85,7 +85,7 @@ All endpoints are publicly accessible (no authentication required) but are rate-
 **Content-Type:** application/json
 
 **Query Parameters:**
-- `type` - Filter by event type (`heartbeat`, `status_change`, `metric_alert`, `system_event`)
+- `type` - Filter by event type (`heartbeat`, `system_event`)
 - `severity` - Filter by severity (`info`, `warning`, `error`, `critical`)
 - `source` - Filter by event source
 - `since` - Filter events since timestamp (RFC3339 format)
@@ -127,8 +127,6 @@ All endpoints are publicly accessible (no authentication required) but are rate-
 
 **Event Types:**
 - `heartbeat` - Regular system health reports
-- `status_change` - Gateway status transitions
-- `metric_alert` - Metric threshold violations
 - `system_event` - Significant system events
 
 **Severity Levels:**
@@ -223,31 +221,6 @@ if (( $(echo "$memory_mb > 1024" | bc -l) )); then
 fi
 
 echo "Gateway is healthy"
-```
-
-### Event Webhook Integration
-
-Configure external event emission in your gateway config:
-
-```json
-{
-  "monitoring": {
-    "event_emission": {
-      "enabled": true,
-      "type": "webhook",
-      "endpoint": "https://your-monitoring-system.com/webhooks/conduit",
-      "format": "json",
-      "timeout_ms": 5000,
-      "headers": {
-        "Authorization": "Bearer your-token"
-      },
-      "filters": {
-        "min_severity": "warning",
-        "types": ["status_change", "metric_alert", "system_event"]
-      }
-    }
-  }
-}
 ```
 
 ### Grafana Dashboard

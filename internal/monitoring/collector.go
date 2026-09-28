@@ -316,10 +316,11 @@ func (c *MetricsCollector) DetectStuckSessions(ctx context.Context, threshold ti
 	}
 
 	// Use the state tracker's stuck session detection
-	config := sessions.StuckSessionConfig{
-		ProcessingTimeout: threshold,
-		WaitingTimeout:    5 * time.Minute,
-		ErrorRetryLimit:   3,
+	// Defaults for the waiting/error thresholds; the caller's threshold
+	// (heartbeat stuck-session check) overrides the processing timeout.
+	config := sessions.DefaultStuckSessionConfig()
+	if threshold > 0 {
+		config.ProcessingTimeout = threshold
 	}
 
 	stuckSessions := c.sessionStore.DetectStuckSessions(config)

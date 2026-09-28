@@ -42,18 +42,6 @@ func TestConvertToolsToAIFormat_EmptyRegistry(t *testing.T) {
 	}
 }
 
-// TestCreateInternalToken uses a minimal auth-wired gateway.
-func TestCreateInternalToken_Simple(t *testing.T) {
-	gw, _ := createTestGatewayWithAuth(t)
-	tok, err := gw.createInternalToken("test-internal")
-	if err != nil {
-		t.Fatalf("createInternalToken: %v", err)
-	}
-	if tok == "" {
-		t.Error("expected non-empty token")
-	}
-}
-
 func TestResolveEmbedder_TfidfDeprecated(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	emb, name := resolveEmbedder(config.VectorConfig{EmbedProvider: "tfidf"}, logger)

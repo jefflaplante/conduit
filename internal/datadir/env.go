@@ -36,19 +36,6 @@ func LoadEnv(dataRoot string, dirs ...string) error {
 	return nil
 }
 
-// FindEnvFiles returns all .env file paths that would be loaded, in order.
-// Files that don't exist on disk are excluded.
-func FindEnvFiles(dataRoot string, dirs ...string) []string {
-	candidates := findEnvPaths(dataRoot, dirs...)
-	var found []string
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			found = append(found, p)
-		}
-	}
-	return found
-}
-
 // findEnvPaths builds the candidate list of .env file paths.
 func findEnvPaths(dataRoot string, dirs ...string) []string {
 	// If CONDUIT_ENV_FILE is set, it is the sole source.

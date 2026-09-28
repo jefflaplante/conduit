@@ -59,7 +59,7 @@ Incoming messages flow: Channel Adapter → Channel Manager → Gateway → AI R
 - types.BrainService (internal/tools/types/types.go) — Tiered cognitive memory: Store, Get, Recall, List, Delete, Push/Pop/Peek (scratchpad), Promote, Consolidate, Status, Close.
 - types.BrainFTSSearcher (internal/tools/types/types.go) — FTS5-backed search over brain LTM entries.
 - types.VisionAnalyzer (internal/tools/types/types.go) — Narrow single-method interface (`AnalyzeImage`) wiring ImageTool to a multimodal LLM backend.
-- agent.AgentSystem (internal/agent/interface.go) — Concrete agent system interface with Name(), BuildSystemPrompt, SetTools, ProcessResponse. (interface.go also declares SessionStateManager, which is currently unwired — no production implementation or caller.)
+- agent.AgentSystem (internal/agent/interface.go) — Concrete agent system interface with Name(), BuildSystemPrompt, SetTools, ProcessResponse.
 
 ### Dependency Injection Pattern
 
@@ -121,7 +121,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/channels/ — Channel adapter interface + manager; subdirectories:
   - telegram/ — Native Telegram adapter with pairing system (pairing storage, CLI, photo support)
   - tui/ — TUI channel adapter with factory for in-process BubbleTea connections
-- internal/sessions/ — SQLite session store with state tracking
+- internal/sessions/ — SQLite session store with in-memory processing-state tracking (SessionStateTracker: idle/processing/waiting/error/canceled, metrics, stuck-session detection). The gateway TurnRunner is the only writer of turn states (turn_runner_state.go: Processing at turn start, Idle on success/cancel, Error on failure/panic); sub-agent cancel sets terminal Canceled; Waiting is currently never set (approvals are non-blocking).
 - internal/mqtt/ — MQTT event ingest: paho client wrapper, per-topic ring buffers, service with background pruning, adapter to tool-layer interface
 - internal/brain/ — Tiered cognitive memory: LTM (SQLite-persisted brain.db), working memory (in-process per-user), scratchpad (LIFO stack). Salience-scored entries with configurable weights: brain_ltm stores base salience and recency is computed at query time (salience.go). Recall-events log with rotation (recall_events.go). Own migration system (migrations.go, brain_migrations table, 9 migrations; runs in brain.New after options are applied). rem/ implements the nightly REM cycle (triage, consolidate, integrate, prune, reflect). Sub-agent WM sharing via parent context.
 - internal/reflection/ — SPAR Reflect subsystem: per-tool outcome capture (ReflectionMiddleware), session metrics (SessionReflector), farewell detection (FarewellDetector), ReflectionStore (brain_reflections table). See reference/spar.md.
@@ -137,7 +137,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/monitoring/ — Gateway metrics, event tracking, metric aggregation, heartbeat metrics. TokenWindowTracker (token_usage.go) records API token usage in rolling hour/day windows.
 - internal/heartbeat/ — HEARTBEAT.md task execution, result processing, task types, quiet-hours deferral (deferred.go, SharedAlertQueue-backed deferred.json). All delivery goes through DeliveryRegistry (delivery.go: CircuitBreaker + AlertAuditor → alert_history) with a ChannelSenderDeliverer (delivery_channel.go) and bounded background retries per alert_retry_policy (delivery_dispatch.go).
 - internal/skills/ — Skill discovery from SKILL.md files, loading, validation, tool adaptation, manager
-- internal/maintenance/ — Database cleanup and maintenance scheduling
+- internal/maintenance/ — On-demand database cleanup/optimization tasks behind `conduit maintenance` (no background schedule or maintenance window)
 - internal/scheduler/ — Cron job scheduling with interfaces
 - internal/ssh/ — SSH server via Wish with key management (server.go, keys.go)
 - internal/tui/ — BubbleTea terminal UI: chat view, sidebar, tab bar, status bar, tool activity display, Lipgloss styling, client interface

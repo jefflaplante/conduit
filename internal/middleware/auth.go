@@ -45,11 +45,6 @@ func GetAuthInfo(ctx context.Context) *AuthInfo {
 	return nil
 }
 
-// IsAuthenticated checks if the request context contains valid auth info
-func IsAuthenticated(ctx context.Context) bool {
-	return GetAuthInfo(ctx) != nil
-}
-
 // AuthError represents an authentication error
 type AuthError struct {
 	// Code is the HTTP status code
@@ -237,18 +232,6 @@ func (m *AuthMiddleware) sendError(w http.ResponseWriter, r *http.Request, authE
 		// If JSON encoding fails, we've already written the status code
 		m.logger.Error("failed to encode auth error response", "error", err)
 	}
-}
-
-// RequireAuth is a standalone middleware function for simple use cases
-func RequireAuth(storage *auth.TokenStorage, next http.Handler) http.Handler {
-	m := NewAuthMiddleware(storage, AuthMiddlewareConfig{})
-	return m.Wrap(next)
-}
-
-// RequireAuthFunc is a standalone middleware function for http.HandlerFunc
-func RequireAuthFunc(storage *auth.TokenStorage, next http.HandlerFunc) http.HandlerFunc {
-	m := NewAuthMiddleware(storage, AuthMiddlewareConfig{})
-	return m.WrapFunc(next)
 }
 
 // sanitizeError removes any token-related information from error messages

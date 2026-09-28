@@ -1,15 +1,15 @@
-package brain
+package tools
 
 import (
 	"strings"
 	"testing"
 )
 
-func TestExtractBulkEntries(t *testing.T) {
+func TestParseBrainExtractBlocks(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
-		want    []BulkExtract
+		want    []extractedEntry
 	}{
 		{
 			name:    "empty content",
@@ -28,7 +28,7 @@ func TestExtractBulkEntries(t *testing.T) {
 panel_count: "30"
 /brain-extract -->
 more text`,
-			want: []BulkExtract{
+			want: []extractedEntry{
 				{Key: "panel_count", Value: "30"},
 			},
 		},
@@ -39,7 +39,7 @@ solar.panels: "30"
 solar.inverter: "Enphase IQ8+"
 home.sqft: "2400"
 /brain-extract -->`,
-			want: []BulkExtract{
+			want: []extractedEntry{
 				{Key: "solar.panels", Value: "30"},
 				{Key: "solar.inverter", Value: "Enphase IQ8+"},
 				{Key: "home.sqft", Value: "2400"},
@@ -55,7 +55,7 @@ also_ok: "yes"
 malformed: no quotes here
 bad-format: "unterminated
 /brain-extract -->`,
-			want: []BulkExtract{
+			want: []extractedEntry{
 				{Key: "good.key", Value: "ok"},
 				{Key: "also_ok", Value: "yes"},
 			},
@@ -72,7 +72,7 @@ Middle prose here.
 c: "3"
 /brain-extract -->
 End.`,
-			want: []BulkExtract{
+			want: []extractedEntry{
 				{Key: "a", Value: "1"},
 				{Key: "b", Value: "2"},
 				{Key: "c", Value: "3"},
@@ -88,7 +88,7 @@ key.one: "alpha"
 # another comment
 key.two: "beta"
 /brain-extract -->`,
-			want: []BulkExtract{
+			want: []extractedEntry{
 				{Key: "key.one", Value: "alpha"},
 				{Key: "key.two", Value: "beta"},
 			},
@@ -99,7 +99,7 @@ key.two: "beta"
 brain-extract-ignore: skip
 real.key: "value"
 /brain-extract -->`,
-			want: []BulkExtract{
+			want: []extractedEntry{
 				// brain-extract-ignore line has a hyphenated key — the key regex
 				// permits hyphens but the value lacks quotes, so it is skipped.
 				{Key: "real.key", Value: "value"},
@@ -117,7 +117,7 @@ real.key: "value"
 path: "/etc/config.json"
 regex: "^[a-z]+$"
 /brain-extract -->`,
-			want: []BulkExtract{
+			want: []extractedEntry{
 				{Key: "path", Value: "/etc/config.json"},
 				{Key: "regex", Value: "^[a-z]+$"},
 			},
@@ -126,7 +126,7 @@ regex: "^[a-z]+$"
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ExtractBulkEntries(tc.content)
+			got := parseBrainExtractBlocks(tc.content)
 			if len(got) != len(tc.want) {
 				t.Fatalf("got %d entries, want %d: got=%+v", len(got), len(tc.want), got)
 			}
@@ -139,8 +139,8 @@ regex: "^[a-z]+$"
 	}
 }
 
-// TestExtractBulkEntriesNoPanic proves the parser never panics on bizarre input.
-func TestExtractBulkEntriesNoPanic(t *testing.T) {
+// TestParseBrainExtractBlocksNoPanic proves the parser never panics on bizarre input.
+func TestParseBrainExtractBlocksNoPanic(t *testing.T) {
 	inputs := []string{
 		"<!-- brain-extract",       // unterminated opening
 		"/brain-extract -->",       // orphan closer
@@ -152,15 +152,15 @@ func TestExtractBulkEntriesNoPanic(t *testing.T) {
 	}
 	for _, in := range inputs {
 		// Must not panic
-		_ = ExtractBulkEntries(in)
+		_ = parseBrainExtractBlocks(in)
 	}
 }
 
-// TestExtractBulkEntriesFastPath verifies that content lacking the marker
-// bypasses regex work entirely.
-func TestExtractBulkEntriesFastPath(t *testing.T) {
+// TestParseBrainExtractBlocksNoMarker verifies that content lacking the
+// marker yields no entries.
+func TestParseBrainExtractBlocksNoMarker(t *testing.T) {
 	content := strings.Repeat("no marker here\n", 1000)
-	got := ExtractBulkEntries(content)
+	got := parseBrainExtractBlocks(content)
 	if got != nil {
 		t.Fatalf("expected nil for content without marker, got %+v", got)
 	}

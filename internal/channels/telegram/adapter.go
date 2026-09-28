@@ -63,6 +63,10 @@ type Adapter struct {
 	// fileClient overrides the HTTP client used for photo/voice downloads
 	// (tests); nil uses a redacting client with fileDownloadTimeout.
 	fileClient bot.HttpClient
+
+	// extraBotOptions are appended to the bot options in Start (tests:
+	// fake server URL, skip getMe).
+	extraBotOptions []bot.Option
 }
 
 // stopWaitTimeout bounds how long Stop waits for the poller goroutine.
@@ -81,11 +85,6 @@ type TelegramConfig struct {
 type Factory struct {
 	db  *sql.DB
 	stt stt.Transcriber
-}
-
-// NewFactory creates a new Telegram adapter factory
-func NewFactory() *Factory {
-	return &Factory{}
 }
 
 // NewFactoryWithDB creates a new Telegram adapter factory with database support
@@ -189,6 +188,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 	if a.config.Debug {
 		opts = append(opts, bot.WithDebug())
 	}
+	opts = append(opts, a.extraBotOptions...)
 
 	// Create bot instance
 	telegramBot, err := bot.New(a.config.BotToken, opts...)
@@ -203,6 +203,11 @@ func (a *Adapter) Start(ctx context.Context) error {
 
 	// Register slash commands with Telegram
 	a.registerCommands(ctx)
+
+	// Drop pairing codes that expired while the adapter was down
+	// (conduit-3kgo). Hygiene only: lookups already ignore expired codes,
+	// so a failure is logged and never blocks the start.
+	a.cleanupExpiredPairingCodesOnStart()
 
 	// Start bot in background. The goroutine uses the locals captured here,
 	// never a.bot/a.ctx: a concurrent Stop+Start (Manager.RestartAdapter)

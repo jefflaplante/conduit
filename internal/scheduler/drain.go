@@ -69,15 +69,6 @@ func DefaultRerunPolicy(job *Job) bool {
 	return job.Command == "heartbeat"
 }
 
-// WithRerunPolicy overrides DefaultRerunPolicy.
-func WithRerunPolicy(p RerunPolicy) Option {
-	return func(s *Scheduler) {
-		if p != nil {
-			s.rerunPolicy = p
-		}
-	}
-}
-
 // withRerunDelay shortens the post-restart re-run delay (tests).
 func withRerunDelay(d time.Duration) Option {
 	return func(s *Scheduler) { s.rerunDelay = d }

@@ -19,10 +19,9 @@ import (
 // Provider selection (bd-1820): the adapter previously used the router's
 // default provider unconditionally, which 400s when the default is a
 // text-only endpoint ("messages.content.type is invalid, allowed values
-// [text]" — glm-5.3 via the OpenAI shim on z-ai). It now prefers, in order:
-//  1. an explicitly configured vision provider (NewVisionAdapterWithModel),
-//  2. any configured anthropic-type provider (vision-capable by default),
-//  3. the router default.
+// [text]" — glm-5.3 via the OpenAI shim on z-ai). It now uses the router
+// default when that is anthropic/claude-code, else any configured
+// anthropic-type provider (vision-capable by default), else the default.
 type visionAdapter struct {
 	router       *ai.Router
 	providerName string
@@ -36,15 +35,6 @@ func newVisionAdapter(router *ai.Router) *visionAdapter {
 		router:       router,
 		providerName: selectVisionProvider(router),
 	}
-}
-
-// NewVisionAdapterWithModel returns a vision adapter pinned to a specific
-// provider, bypassing auto-selection.
-func NewVisionAdapterWithModel(router *ai.Router, providerName string) *visionAdapter {
-	if router == nil {
-		return nil
-	}
-	return &visionAdapter{router: router, providerName: providerName}
 }
 
 // selectVisionProvider picks the provider used for image analysis.

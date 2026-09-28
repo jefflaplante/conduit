@@ -15,12 +15,6 @@ import (
 // ReplyTagRe matches [[reply_to_current]] and [[reply_to:<id>]] with optional whitespace
 var ReplyTagRe = regexp.MustCompile(`\[\[\s*reply_to(?:_current|:\s*(\d+))\s*\]\]`)
 
-// StripReplyTags removes all [[reply_to_current]] and [[reply_to:<id>]] tags from text.
-// Use this for channels (like TUI) that don't support reply threading.
-func StripReplyTags(text string) string {
-	return strings.TrimSpace(ReplyTagRe.ReplaceAllString(text, ""))
-}
-
 // Manager manages all channel adapters (native Go)
 type Manager struct {
 	adapters     map[string]ChannelAdapter

@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -186,82 +185,4 @@ func (a *WebSocketAuthenticator) RejectUpgrade(w http.ResponseWriter, authErr *A
 	w.Header().Set("Content-Type", "text/plain")
 	w.Header().Set("WWW-Authenticate", `Bearer realm="conduit"`)
 	http.Error(w, authErr.Message, authErr.Code)
-}
-
-// AuthenticatedUpgrader wraps websocket.Upgrader with authentication
-type AuthenticatedUpgrader struct {
-	*websocket.Upgrader
-	auth *WebSocketAuthenticator
-}
-
-// NewAuthenticatedUpgrader creates an upgrader that requires authentication
-func NewAuthenticatedUpgrader(storage *auth.TokenStorage, upgrader *websocket.Upgrader) *AuthenticatedUpgrader {
-	return &AuthenticatedUpgrader{
-		Upgrader: upgrader,
-		auth:     NewWebSocketAuthenticator(storage),
-	}
-}
-
-// UpgradeWithAuth upgrades an HTTP connection to WebSocket with authentication
-// Returns the connection, auth info, and any error
-// If authentication fails, the connection is nil and error describes the failure
-func (u *AuthenticatedUpgrader) UpgradeWithAuth(w http.ResponseWriter, r *http.Request) (*websocket.Conn, *AuthInfo, error) {
-	// Authenticate first
-	result := u.auth.Authenticate(r)
-	if !result.Authenticated {
-		u.auth.RejectUpgrade(w, result.Error)
-		return nil, nil, &AuthenticationError{AuthError: *result.Error}
-	}
-
-	// Build response header for protocol negotiation
-	var responseHeader http.Header
-	if result.ResponseProtocol != "" {
-		responseHeader = http.Header{
-			"Sec-WebSocket-Protocol": []string{result.ResponseProtocol},
-		}
-	}
-
-	// Upgrade the connection
-	conn, err := u.Upgrader.Upgrade(w, r, responseHeader)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return conn, result.AuthInfo, nil
-}
-
-// AuthenticationError wraps AuthError as an error interface
-type AuthenticationError struct {
-	AuthError
-}
-
-func (e *AuthenticationError) Error() string {
-	return e.Message
-}
-
-// GetRequestedProtocols extracts the list of requested WebSocket subprotocols
-func GetRequestedProtocols(r *http.Request) []string {
-	header := r.Header.Get("Sec-WebSocket-Protocol")
-	if header == "" {
-		return nil
-	}
-
-	var protocols []string
-	for _, p := range strings.Split(header, ",") {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			protocols = append(protocols, p)
-		}
-	}
-	return protocols
-}
-
-// HasAuthProtocol checks if the request includes the conduit-auth protocol
-func HasAuthProtocol(r *http.Request) bool {
-	for _, p := range GetRequestedProtocols(r) {
-		if p == "conduit-auth" {
-			return true
-		}
-	}
-	return false
 }

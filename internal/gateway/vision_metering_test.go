@@ -121,7 +121,7 @@ func newVisionMeterGateway(t *testing.T) (*Gateway, *sessions.Store, *ai.Router,
 
 func TestVisionAdapter_MeteredOnceWithCost(t *testing.T) {
 	_, _, router, obs := newVisionMeterGateway(t)
-	adapter := NewVisionAdapterWithModel(router, "vision")
+	adapter := &visionAdapter{router: router, providerName: "vision"}
 
 	ctx, ledger := ai.WithSideCallLedger(context.Background())
 	if _, err := adapter.AnalyzeImage(ctx, []byte{0xFF, 0xD8, 0xFF}, "image/jpeg", "what?"); err != nil {
@@ -148,7 +148,7 @@ func TestVisionAdapter_MeteredOnceWithCost(t *testing.T) {
 
 func TestVisionAdapter_CostIncludedInTurnAndSession(t *testing.T) {
 	gw, store, router, obs := newVisionMeterGateway(t)
-	adapter := NewVisionAdapterWithModel(router, "vision")
+	adapter := &visionAdapter{router: router, providerName: "vision"}
 
 	// The chat provider stands in for a tool loop: while generating, it runs
 	// the Image tool's analysis with the ctx the turn handed it (tools run
@@ -191,7 +191,7 @@ func TestVisionAdapter_UnpricedVisionMarksTurnUnpriced(t *testing.T) {
 	gw, store, router, _ := newVisionMeterGateway(t)
 	// A provider with no configured model and no override has no price.
 	router.RegisterProvider("vision-unpriced", &usageProvider{name: "vision-unpriced", usage: visionUsage})
-	adapter := NewVisionAdapterWithModel(router, "vision-unpriced")
+	adapter := &visionAdapter{router: router, providerName: "vision-unpriced"}
 
 	router.RegisterProvider("testprov", &usageProvider{name: "testprov", usage: ai.Usage{PromptTokens: 10, CompletionTokens: 1}, onGen: func(ctx context.Context) {
 		_, _ = adapter.AnalyzeImage(ctx, []byte{0xFF}, "image/jpeg", "")
