@@ -207,8 +207,9 @@ func mapEntryToDestination(name string, m *BackupManifest, opts RestoreOptions) 
 func validateTarEntry(hdr *tar.Header, targetDir, dest string) error {
 	// Reject symlinks and hard links
 	switch hdr.Typeflag {
-	case tar.TypeReg, tar.TypeRegA, tar.TypeDir, tar.TypeGNUSparse:
-		// These are safe entry types
+	case tar.TypeReg, tar.TypeDir, tar.TypeGNUSparse:
+		// These are safe entry types. Legacy TypeRegA ('\x00') never reaches
+		// here: tar.Reader.Next normalizes it to TypeReg/TypeDir.
 	case tar.TypeSymlink:
 		return fmt.Errorf("symlink entry not allowed: %s -> %s", hdr.Name, hdr.Linkname)
 	case tar.TypeLink:
