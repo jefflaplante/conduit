@@ -305,32 +305,50 @@ func (t *K8sTool) executeDelete(ctx context.Context, args map[string]interface{}
 	})
 }
 
+// executeNamespaces lists namespaces. Listing is a cluster-scoped read, so
+// it is checked with checkClusterScopedSecurity; when the cluster has
+// allowed_namespaces configured the result is filtered to those namespaces,
+// so the tool never reveals namespaces it may not act on (conduit-39lm).
 func (t *K8sTool) executeNamespaces(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	clusterName, _, err := t.resolveCluster(args)
+	clusterName, clusterCfg, err := t.resolveCluster(args)
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	client, err := t.clients.GetClient(clusterName)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+	cls, denied := t.checkClusterScopedSecurity("namespaces", "namespaces", clusterCfg)
+	if denied != nil {
+		return denied, nil
 	}
 
-	namespaces, err := client.ListNamespaces(ctx)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to list namespaces: %v", err)}, nil
-	}
+	op := k8sOp{Cluster: clusterName, Namespace: "(cluster-scoped)", Verb: "list", Resource: "namespaces"}
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		client, err := t.clients.GetClient(clusterName)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+		}
 
-	nsInterfaces := make([]interface{}, len(namespaces))
-	for i, ns := range namespaces {
-		nsInterfaces[i] = ns
-	}
+		namespaces, err := client.ListNamespaces(ctx)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to list namespaces: %v", err)}, nil
+		}
 
-	return &types.ToolResult{
-		Success: true,
-		Content: fmt.Sprintf("Found %d namespaces on cluster %s", len(namespaces), clusterName),
-		Data:    map[string]interface{}{"namespaces": nsInterfaces, "count": len(namespaces)},
-	}, nil
+		nsInterfaces := make([]interface{}, 0, len(namespaces))
+		for _, ns := range namespaces {
+			if len(clusterCfg.AllowedNamespaces) > 0 &&
+				t.security.ValidateNamespace(clusterCfg.AllowedNamespaces, ns) != nil {
+				continue
+			}
+			nsInterfaces = append(nsInterfaces, ns)
+		}
+
+		data := map[string]interface{}{"namespaces": nsInterfaces, "count": len(nsInterfaces)}
+		content := fmt.Sprintf("Found %d namespaces on cluster %s", len(nsInterfaces), clusterName)
+		if len(clusterCfg.AllowedNamespaces) > 0 {
+			data["filtered_by_allowed_namespaces"] = true
+			content += " (filtered to allowed_namespaces)"
+		}
+		return &types.ToolResult{Success: true, Content: content, Data: data}, nil
+	})
 }
 
 func (t *K8sTool) executeEvents(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
@@ -342,29 +360,39 @@ func (t *K8sTool) executeEvents(ctx context.Context, args map[string]interface{}
 	namespace := t.resolveNamespace(args, clusterCfg)
 	name := toolargs.GetString(args, "name", "")
 
-	client, err := t.clients.GetClient(clusterName)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+	// Events are a namespace-scoped read (conduit-39lm).
+	cls, denied := t.checkSecurity("events", "events", namespace, clusterCfg)
+	if denied != nil {
+		return denied, nil
 	}
 
-	fieldSelector := ""
-	if name != "" {
-		fieldSelector = fmt.Sprintf("involvedObject.name=%s", name)
-	}
+	op := k8sOp{Cluster: clusterName, Namespace: namespace, Verb: "events", Resource: "events",
+		Extra: []opField{{"involved_object", "Involved object", name}}}
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		client, err := t.clients.GetClient(clusterName)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+		}
 
-	events, err := client.GetEvents(ctx, namespace, fieldSelector)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to get events: %v", err)}, nil
-	}
+		fieldSelector := ""
+		if name != "" {
+			fieldSelector = fmt.Sprintf("involvedObject.name=%s", name)
+		}
 
-	items := make([]interface{}, len(events))
-	for i, e := range events {
-		items[i] = e
-	}
+		events, err := client.GetEvents(ctx, namespace, fieldSelector)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to get events: %v", err)}, nil
+		}
 
-	return &types.ToolResult{
-		Success: true,
-		Content: fmt.Sprintf("Found %d events in namespace %s on cluster %s", len(events), namespace, clusterName),
-		Data:    map[string]interface{}{"events": items, "count": len(events)},
-	}, nil
+		items := make([]interface{}, len(events))
+		for i, e := range events {
+			items[i] = e
+		}
+
+		return &types.ToolResult{
+			Success: true,
+			Content: fmt.Sprintf("Found %d events in namespace %s on cluster %s", len(events), namespace, clusterName),
+			Data:    map[string]interface{}{"events": items, "count": len(events)},
+		}, nil
+	})
 }
