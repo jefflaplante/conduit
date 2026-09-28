@@ -109,7 +109,10 @@ type activeTurnRegistry struct {
 	get func() map[string]context.CancelFunc
 }
 
-var errTurnDraining = errors.New("gateway is shutting down")
+var (
+	errTurnDraining = errors.New("gateway is shutting down")
+	errTurnPanicked = errors.New("turn panicked")
+)
 
 type queuedTurn struct {
 	cancel context.CancelFunc
@@ -369,10 +372,14 @@ func (r *TurnRunner) Run(ctx context.Context, req TurnRequest, sink TurnSink) *T
 		return rec.res
 	}
 	r.updateActiveMetric(running)
+	r.setTurnState(key, sessions.SessionStateProcessing, nil) // conduit-3kgo
 
 	var afterUnlock func()
 	func() {
+		completed := false
 		defer func() {
+			// Runs on panic too: never leave the session in Processing.
+			r.endTurnState(key, rec.res, completed)
 			outcome := TurnCompleted
 			if rec.res != nil && rec.res.Cancelled {
 				outcome = TurnStopped
@@ -389,6 +396,7 @@ func (r *TurnRunner) Run(ctx context.Context, req TurnRequest, sink TurnSink) *T
 			release()
 		}()
 		afterUnlock = r.runLocked(lockedCtx, ctx, req, rec, ts)
+		completed = true
 	}()
 	if afterUnlock != nil {
 		afterUnlock()

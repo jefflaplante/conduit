@@ -181,8 +181,8 @@ Database maintenance operations.
 conduit maintenance run
 
 # Run specific task
-conduit maintenance run-task vacuum
-conduit maintenance run-task cleanup
+conduit maintenance run-task session_cleanup
+conduit maintenance run-task database_maintenance
 
 # Check maintenance status
 conduit maintenance status
@@ -190,6 +190,8 @@ conduit maintenance status
 # View maintenance configuration
 conduit maintenance config
 ```
+
+Tasks run only when invoked: there is no background schedule and no maintenance window (use a system timer to run `conduit maintenance run` periodically). Settings are the built-in defaults (`maintenance.DefaultConfig`); the config file has no maintenance section. `--force` is deprecated and has no effect. Note: `run` and `run-task` do not yet open the gateway database (`initDatabase` in cmd/gateway/maintenance.go is unimplemented), so they currently exit with an error.
 
 ### tools
 

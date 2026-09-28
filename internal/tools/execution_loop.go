@@ -87,6 +87,7 @@ func (e *ExecutionEngine) HandleToolCallFlow(
 	// conduit-31jg.15: the router's first round trip (with its own guard
 	// retries / auto-continues folded in) opens the turn's usage.
 	tb.usage.Add(initialResp.Usage)
+	e.recordLLMResponse(provider, initialReq.Model, "initial", 0, initialResp, nil, 0) // conduit-3kgo
 
 	// The caller's slice is copied once, with room to grow, so appends
 	// never write into the caller's backing array.
@@ -202,10 +203,12 @@ func (e *ExecutionEngine) runToolLoop(ctx context.Context, ts *turnState) (*Conv
 // each return the sum of the calls they made).
 func (e *ExecutionEngine) roundTrip(ctx context.Context, provider ai.Provider, req *ai.GenerateRequest, depth int, tb *turnBudget) (*ai.GenerateResponse, error) {
 	stopThinking := startThinkingIndicator(ctx, depth)
+	e.recordLLMRequest(provider, req, depth) // conduit-3kgo
 	rtStart := time.Now()
 	resp, err := provider.GenerateResponse(ctx, req)
 	stopThinking()
 	if err != nil {
+		e.recordLLMResponse(provider, req.Model, "post_tools", depth, nil, err, time.Since(rtStart))
 		return nil, fmt.Errorf("AI response after tool execution failed: %w", err)
 	}
 
@@ -214,6 +217,7 @@ func (e *ExecutionEngine) roundTrip(ctx context.Context, provider ai.Provider, r
 	label := fmt.Sprintf("depth%d", depth)
 	resp, err = ai.GuardEmptyResponse(ctx, provider, req, resp, err, label)
 	if err != nil {
+		e.recordLLMResponse(provider, req.Model, "post_tools", depth, nil, err, time.Since(rtStart))
 		return nil, fmt.Errorf("AI response after tool execution failed: %w", err)
 	}
 
@@ -232,7 +236,8 @@ func (e *ExecutionEngine) roundTrip(ctx context.Context, provider ai.Provider, r
 	// already in req.Messages, which becomes the next round's history. The
 	// helper folds every continuation's usage into resp.Usage.
 	resp = ai.ContinueLengthTruncated(ctx, provider, req, resp, label)
-	tb.usage.Add(resp.Usage) // conduit-31jg.15: this round's calls, exactly once
+	tb.usage.Add(resp.Usage)                                                                      // conduit-31jg.15: this round's calls, exactly once
+	e.recordLLMResponse(provider, req.Model, "post_tools", depth, resp, nil, time.Since(rtStart)) // conduit-3kgo
 	return resp, nil
 }
 

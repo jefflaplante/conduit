@@ -13,6 +13,7 @@ import (
 	"conduit/internal/httpsafe"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
+	"conduit/internal/version"
 	"github.com/PuerkitoBio/goquery"
 )
 
@@ -154,7 +155,7 @@ func (t *WebFetchTool) fetchAndExtract(ctx context.Context, urlStr, extractMode 
 	}
 
 	// Set realistic headers
-	req.Header.Set("User-Agent", "Conduit-Gateway/1.0 (Web Content Fetcher)")
+	req.Header.Set("User-Agent", version.UserAgent()+" (web fetch)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 	// conduit-31jg.7: no explicit Accept-Encoding. Setting it disables Go's

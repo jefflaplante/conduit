@@ -6,7 +6,6 @@ import (
 	"log"
 	"time"
 
-	"conduit/internal/agent"
 	"conduit/internal/monitoring"
 	"conduit/internal/sessions"
 )
@@ -67,33 +66,25 @@ func main() {
 		log.Printf("Failed to complete processing: %v", err)
 	}
 
-	// Example 2: Using the agent state manager for cleaner integration
-	fmt.Println("\n=== Agent State Manager Usage ===")
+	// Example 2: A failed turn. In the gateway, TurnRunner.Run drives these
+	// transitions for every turn (internal/gateway/turn_runner_state.go):
+	// Processing when the turn starts, Idle on success or cancellation,
+	// Error on failure or panic.
+	fmt.Println("\n=== Failed Turn ===")
 
-	stateManager := agent.NewSessionStateManager(store)
-
-	// Begin processing with the state manager
-	err = stateManager.BeginProcessing(session.Key, map[string]interface{}{
-		"tool":  "web_search",
-		"query": "Conduit documentation",
-	})
-	if err != nil {
+	if err := store.UpdateSessionState(session.Key, sessions.SessionStateProcessing, nil); err != nil {
 		log.Printf("Failed to begin processing: %v", err)
 	}
-
-	// Simulate waiting for external API
-	err = stateManager.BeginWaiting(session.Key, "external_api_response")
-	if err != nil {
-		log.Printf("Failed to begin waiting: %v", err)
+	if err := store.UpdateSessionState(session.Key, sessions.SessionStateError, map[string]interface{}{
+		"error": "provider timeout",
+	}); err != nil {
+		log.Printf("Failed to record error: %v", err)
 	}
-
-	// Complete processing
-	err = stateManager.CompleteProcessing(session.Key, map[string]interface{}{
-		"tool_result":      "success",
-		"response_time_ms": 1500,
-	})
-	if err != nil {
-		log.Printf("Failed to complete processing: %v", err)
+	if info, ok := store.GetSessionStateInfo(session.Key); ok {
+		fmt.Printf("State=%s ErrorCount=%d\n", info.State, info.ErrorCount)
+	}
+	if err := store.UpdateSessionState(session.Key, sessions.SessionStateIdle, nil); err != nil {
+		log.Printf("Failed to return to idle: %v", err)
 	}
 
 	// Example 3: Monitoring and metrics
@@ -144,11 +135,7 @@ func main() {
 	// Example 4: Stuck session detection
 	fmt.Println("\n=== Stuck Session Detection ===")
 
-	config := sessions.StuckSessionConfig{
-		ProcessingTimeout: 2 * time.Minute,
-		WaitingTimeout:    5 * time.Minute,
-		ErrorRetryLimit:   3,
-	}
+	config := sessions.DefaultStuckSessionConfig()
 
 	stuckSessions := store.DetectStuckSessions(config)
 	fmt.Printf("Found %d stuck sessions\n", len(stuckSessions))

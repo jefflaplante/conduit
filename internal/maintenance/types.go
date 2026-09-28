@@ -44,22 +44,17 @@ type TaskStatus struct {
 	NextRun     time.Time  `json:"next_run"`
 	LastResult  TaskResult `json:"last_result"`
 	Enabled     bool       `json:"enabled"`
-	Schedule    string     `json:"schedule"`
 }
 
-// Config represents maintenance configuration
+// Config represents maintenance configuration. There is no schedule or
+// maintenance window: tasks run when `conduit maintenance run` is invoked
+// (conduit-3kgo).
 type Config struct {
-	Enabled  bool   `json:"enabled"`
-	Schedule string `json:"schedule"` // cron expression, default "0 2 * * *" (daily 2 AM)
-
 	// Session cleanup configuration
 	Sessions SessionConfig `json:"sessions"`
 
 	// Database maintenance configuration
 	Database DatabaseConfig `json:"database"`
-
-	// Maintenance window configuration
-	Window WindowConfig `json:"window"`
 }
 
 // SessionConfig configures session cleanup and summarization
@@ -78,18 +73,9 @@ type DatabaseConfig struct {
 	OptimizeIndexes    bool  `json:"optimize_indexes"`     // default true
 }
 
-// WindowConfig defines maintenance windows to avoid peak usage
-type WindowConfig struct {
-	StartHour int    `json:"start_hour"` // default 2 (2 AM)
-	EndHour   int    `json:"end_hour"`   // default 6 (6 AM)
-	TimeZone  string `json:"time_zone"`  // default "UTC"
-}
-
 // DefaultConfig returns the default maintenance configuration
 func DefaultConfig() Config {
 	return Config{
-		Enabled:  true,
-		Schedule: "0 2 * * *", // Daily at 2 AM
 		Sessions: SessionConfig{
 			RetentionDays:        30,
 			SummarizeOld:         true,
@@ -101,11 +87,6 @@ func DefaultConfig() Config {
 			VacuumThreshold:    100, // 100 MB
 			BackupBeforeVacuum: true,
 			OptimizeIndexes:    true,
-		},
-		Window: WindowConfig{
-			StartHour: 2,
-			EndHour:   6,
-			TimeZone:  "UTC",
 		},
 	}
 }

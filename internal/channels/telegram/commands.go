@@ -71,6 +71,17 @@ func (a *Adapter) CleanupExpiredPairingCodes() error {
 	return a.pairingMgr.CleanupExpiredCodes()
 }
 
+// cleanupExpiredPairingCodesOnStart runs CleanupExpiredPairingCodes when
+// pairing is enabled, logging (never returning) a failure.
+func (a *Adapter) cleanupExpiredPairingCodesOnStart() {
+	if a.pairingMgr == nil {
+		return
+	}
+	if err := a.CleanupExpiredPairingCodes(); err != nil {
+		log.Printf("[Telegram] Adapter %s: expired pairing code cleanup failed: %v", a.Name(), err)
+	}
+}
+
 // IsPairingEnabled returns whether pairing is enabled for this adapter
 func (a *Adapter) IsPairingEnabled() bool {
 	return a.pairingMgr != nil

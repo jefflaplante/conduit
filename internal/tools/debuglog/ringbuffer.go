@@ -3,8 +3,11 @@ package debuglog
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
+
+	"conduit/internal/redact"
 )
 
 // EntryType identifies what kind of event was captured.
@@ -206,4 +209,25 @@ func LLMResponse(model string, stopReason string, duration time.Duration) Entry 
 		Duration:  duration,
 		Result:    fmt.Sprintf("model=%s stop=%s", model, stopReason),
 	}
+}
+
+// PreviewLen is the default size, in runes, of a text preview stored in an
+// entry (LLM request/response content). Entries never hold full prompts.
+const PreviewLen = 200
+
+// Preview returns s scrubbed of known credentials (internal/redact), with
+// whitespace runs collapsed to single spaces and cut to at most max runes
+// (an ellipsis marks the cut). max <= 0 uses PreviewLen.
+func Preview(s string, max int) string {
+	if max <= 0 {
+		max = PreviewLen
+	}
+	// Redact before cutting so a secret straddling the cut is never left
+	// half-visible.
+	s = strings.Join(strings.Fields(redact.String(s)), " ")
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }

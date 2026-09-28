@@ -18,6 +18,7 @@ import (
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 	"conduit/internal/tools/web"
+	"conduit/internal/version"
 )
 
 // ImageAnalysisResult represents the result of image analysis
@@ -254,7 +255,7 @@ func (t *ImageTool) loadFromURL(ctx context.Context, url string, maxBytes int64,
 	}
 
 	// Set headers
-	req.Header.Set("User-Agent", "Conduit-Gateway/1.0 (Image Analyzer)")
+	req.Header.Set("User-Agent", version.UserAgent()+" (image fetch)")
 	req.Header.Set("Accept", "image/*")
 
 	resp, err := t.httpClient.Do(req)
