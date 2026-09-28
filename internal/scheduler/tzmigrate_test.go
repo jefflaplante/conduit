@@ -165,7 +165,7 @@ const sampleJobs = `[
     ],
     "created_at": "2026-08-31T14:57:12.963525126Z",
     "last_run": "2026-09-25T13:05:00.001131976Z",
-    "next_run": "2026-09-28T13:05:00Z",
+    "next_run": "2099-09-28T13:05:00Z",
     "run_count": 7,
     "metadata": {"schedule": "not this one", "n": 1.50}
   },
