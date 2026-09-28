@@ -141,6 +141,17 @@ func TestResolveStatusPort(t *testing.T) {
 		}
 	})
 
+	t.Run("missing config: default port, no file written", func(t *testing.T) {
+		cfgFile = filepath.Join(t.TempDir(), "config.json")
+		cmd := newCmd()
+		if got := resolveStatusPort(cmd); got != defaultStatusPort {
+			t.Errorf("resolveStatusPort() = %d, want %d", got, defaultStatusPort)
+		}
+		if _, err := os.Stat(cfgFile); err == nil {
+			t.Error("status wrote a default config file")
+		}
+	})
+
 	t.Run("explicit flag overrides config", func(t *testing.T) {
 		cfgFile = writeTestConfig(t, 18789)
 		cmd := newCmd()

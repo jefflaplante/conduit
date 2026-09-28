@@ -11,6 +11,7 @@ Global Flags:
   --config string     Config file path (default "config.json")
   --database string   Database file path (auto-detected if not specified)
   -v, --verbose       Enable verbose logging
+  --pidfile string    PID file path (default: $RUNTIME_DIRECTORY/conduit.pid, else {data_dir}/conduit.pid)
   --version           Show version information
 ```
 
@@ -246,6 +247,8 @@ conduit brain export [--db <brain.db>] [--out <file>]
 ### restart / stop / status
 
 Signal a running gateway (found through its PID file) instead of going through an HTTP endpoint.
+
+The gateway writes its PID file to `--pidfile` if given, else `$RUNTIME_DIRECTORY/conduit.pid` (systemd `RuntimeDirectory=conduit`, i.e. `/run/conduit/conduit.pid`), else `{data_dir}/conduit.pid` (`CONDUIT_DATA_DIR`, then config `data_dir`, then `~/.conduit`). These commands and `backup restore` run outside the unit's environment, so without `--pidfile` they search `$RUNTIME_DIRECTORY/conduit.pid`, `/run/conduit/conduit.pid`, `{data_dir}/conduit.pid`, then the legacy `/tmp/conduit.pid`, using the first file that names a live process. An explicit `--pidfile` disables the search.
 
 ```bash
 conduit restart   # graceful restart (SIGHUP)
