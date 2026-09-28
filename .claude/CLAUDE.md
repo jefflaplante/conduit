@@ -96,12 +96,12 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/ai/ — AI provider routing, conversation management, tool execution loops, streaming, pricing (PricingResolver in pricing.go)
 - internal/agent/ — Agent personality system: interface definition, Conduit agent implementation, prompt builder with section-based prompt construction
 - internal/models/ — Anthropic API models: typed Messages API request/response structs (messages.go) and the request builder (anthropic.go)
-- internal/tools/ — Tool registry (registry.go ~31KB), execution engine with parallel support, plus top-level tool files:
+- internal/tools/ — Tool registry (registry*.go: registration, lookup, enable/sandbox, execute, skills bridge, optional tools, selftest), execution engine with parallel support, plus top-level tool files:
   - aliases.go — Anthropic tool alias resolution (unversioned name → versioned name) with env override
   - anthropic.go — Anthropic versioned tool name constants (web_search, web_fetch)
-  - execution.go, execution_single.go, execution_adapter.go — Tool execution engine and adapter. HandleToolCallFlow is a for-loop over rounds with an explicit turnState (runToolLoop/roundTrip/advance); golden trace in testdata/toolloop_golden.json
+  - execution*.go, execution_adapter.go — Tool execution engine and adapter (dispatch, parallel/same-path grouping, loop, format, timeout/drain, middleware, events). HandleToolCallFlow is a for-loop over rounds with an explicit turnState (runToolLoop/roundTrip/advance); golden trace in testdata/toolloop_golden.json
   - chain_state.go, failure_tracker.go, pattern_tracker.go, watchdog.go — Per-turn chain state, failure/pattern tracking, stall watchdog
-  - exec.go (Bash), fileops.go (Read/Write/Glob), google_workspace.go — Top-level tool implementations
+  - exec.go (Bash; bash_policy.go + shell_lexer.go denylist), fileops*.go (Read/Write/Glob/List), google_workspace.go — Top-level tool implementations
   - Tool subdirectories:
     - core/ — Context management, file editing, find, facts, gateway control, memory search, session management, chain, debug log, brain (tiered cognitive memory)
     - web/ — Web search (Brave), web fetch with HTML parsing
@@ -314,3 +314,7 @@ When you `Edit` or `Write` a file, you may later see a system-reminder like:
 ### Parallel subagents share the repo but not worktrees
 
 During orchestrated swarms, each subagent runs in its own git worktree under `.claude/worktrees/agent-*/`. The worktrees share the same `.git/` object store but have independent working trees. Files like `internal/tools/types/types.go`, `internal/gateway/gateway.go`, and `internal/config/validate.go` are frequently edited by multiple Wave agents — if your ticket touches one of these, expect system-reminders when other agents merge.
+
+### File organization convention (conduit-2clx)
+
+Large files are split within the same package into focused domain files named `<primary>_<aspect>.go` (e.g. `router_turn_lock.go`, `store_messages.go`, `tool_session.go`), with the primary type and constructor kept in the original file. Aim for ~150–500 LOC per file; nothing exceeds ~750. Split files keep the source file's `//go:build` line. When splitting, prove it's a pure move by comparing per-declaration normalized-source fingerprints before/after (the refactor used a small go/ast `declsig` tool); keep structural changes in separate commits. The full system prompt is pinned by `internal/agent/prompt_golden_test.go` (regenerate with `-update-prompt-golden` only for intentional prompt changes).
