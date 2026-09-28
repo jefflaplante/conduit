@@ -14,45 +14,6 @@ import (
 // This is copied from config to avoid circular imports in some contexts.
 type HistoryConfig = config.HistoryConfig
 
-// buildChatMessages constructs the message history for AI context (legacy method)
-func (r *Router) buildChatMessages(session *sessions.Session, userMessage string) ([]ChatMessage, error) {
-	messages := []ChatMessage{
-		{
-			Role:    "system",
-			Content: "You are a helpful AI assistant. Be concise and direct in your responses.",
-		},
-	}
-
-	// Add recent message history with token-aware retrieval
-	recentMessages, err := r.getRecentMessagesTokenAware(session)
-	if err != nil {
-		return nil, err
-	}
-	// conduit-z7hu: history already contains the just-stored current user
-	// message (store-before-call); drop the trailing duplicate so the current
-	// message is not appended a second time below.
-	recentMessages = dropTrailingCurrentUserDup(recentMessages, userMessage)
-
-	for _, msg := range recentMessages {
-		// Skip messages with empty content - Anthropic API requires non-empty content
-		if msg.Content == "" {
-			continue
-		}
-		messages = append(messages, ChatMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
-	}
-
-	// Add current user message
-	messages = append(messages, ChatMessage{
-		Role:    "user",
-		Content: userMessage,
-	})
-
-	return messages, nil
-}
-
 // dropTrailingCurrentUserDup removes the last history message when it is an
 // exact duplicate of the current user message. conduit-z7hu: the gateway
 // stores the incoming user message BEFORE calling the AI, then passes the
