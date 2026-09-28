@@ -41,6 +41,9 @@ type Operation struct {
 	// Summary names the operation for the model, e.g.
 	// "Kubernetes delete of deployments/api". It is redacted text.
 	Summary string
+	// Data is merged into the pending/refused result's Data for the model
+	// (e.g. tier, requires_approval). Must be redacted.
+	Data map[string]interface{}
 }
 
 // Run performs the approved operation with the values frozen at request
@@ -51,12 +54,12 @@ type Run func(ctx context.Context) (*types.ToolResult, error)
 // model sees. run is invoked at most once, only after approval.
 func Request(ctx context.Context, r approval.Requester, op Operation, run Run) *types.ToolResult {
 	if op.Kind == "" || run == nil {
-		return refused("internal error: gated operation is missing a kind or runner", "refused", "")
+		return op.refused("internal error: gated operation is missing a kind or runner", "refused", "")
 	}
 	if r == nil {
 		slog.Warn("gated tool operation refused: no approver configured",
 			"component", "approval", "event", "approval.refused_no_approver", "kind", op.Kind)
-		return refused(fmt.Sprintf("NOT RUN: %s requires human approval, but no approval channel is configured.", op.Summary),
+		return op.refused(fmt.Sprintf("NOT RUN: %s requires human approval, but no approval channel is configured.", op.Summary),
 			"refused_no_approver", "")
 	}
 
@@ -103,31 +106,40 @@ func Request(ctx context.Context, r approval.Requester, op Operation, run Run) *
 	if err != nil {
 		var ni *approval.NonInteractiveError
 		if errors.As(err, &ni) {
-			return refused(fmt.Sprintf("NOT RUN: %s needs live human approval, but this turn is non-interactive (origin: %s). "+
+			return op.refused(fmt.Sprintf("NOT RUN: %s needs live human approval, but this turn is non-interactive (origin: %s). "+
 				"A human must request it from an interactive chat (Telegram/TUI/WebSocket). Do not retry from this context.",
 				op.Summary, ni.Source), "refused_noninteractive", ni.Source)
 		}
-		return refused(fmt.Sprintf("NOT RUN: %s needs human approval, which could not be requested: %v", op.Summary, err),
+		return op.refused(fmt.Sprintf("NOT RUN: %s needs human approval, which could not be requested: %v", op.Summary, err),
 			"refused", "")
 	}
 
 	// The approval code is deliberately withheld from the model.
+	data := op.data()
+	data["approval_status"] = "pending"
+	data["approval_id"] = ticket.ID
+	data["expires_at"] = ticket.ExpiresAt.Format(time.RFC3339)
 	return &types.ToolResult{
 		Success: true,
 		Content: fmt.Sprintf("NOT RUN YET, awaiting the owner's approval. An approval prompt for %s was sent to the owner in this chat. "+
 			"It will run automatically only if the owner approves within %s; otherwise nothing runs. "+
 			"Do not retry or re-issue it; tell the owner you are waiting for their approval.",
 			op.Summary, time.Until(ticket.ExpiresAt).Round(time.Second)),
-		Data: map[string]interface{}{
-			"approval_status": "pending",
-			"approval_id":     ticket.ID,
-			"expires_at":      ticket.ExpiresAt.Format(time.RFC3339),
-		},
+		Data: data,
 	}
 }
 
-func refused(msg, status, origin string) *types.ToolResult {
-	data := map[string]interface{}{"approval_status": status}
+func (op Operation) data() map[string]interface{} {
+	data := make(map[string]interface{}, len(op.Data)+3)
+	for k, v := range op.Data {
+		data[k] = v
+	}
+	return data
+}
+
+func (op Operation) refused(msg, status, origin string) *types.ToolResult {
+	data := op.data()
+	data["approval_status"] = status
 	if origin != "" {
 		data["origin"] = origin
 	}

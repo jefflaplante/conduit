@@ -474,8 +474,12 @@ func TestSSHTool_Exec_DangerousCommand_RequiresApproval(t *testing.T) {
 		t.Error("Execute() should fail for dangerous command requiring approval")
 	}
 
-	if !contains(result.Error, "requires approval") {
+	// No approval channel is wired (empty ToolServices): fail closed.
+	if !contains(result.Error, "requires human approval") {
 		t.Errorf("Error should mention approval requirement, got: %s", result.Error)
+	}
+	if result.Data["approval_status"] != "refused_no_approver" {
+		t.Errorf("approval_status = %v, want refused_no_approver", result.Data["approval_status"])
 	}
 
 	// Check that approval is required
