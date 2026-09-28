@@ -289,7 +289,7 @@ func TestOCGO033And034Implementation(t *testing.T) {
 
 				if enhancedTool, ok := tool.(types.EnhancedSchemaProvider); ok {
 					hints := enhancedTool.GetSchemaHints()
-					if hints == nil || len(hints) == 0 {
+					if len(hints) == 0 {
 						t.Errorf("Tool %s implements EnhancedSchemaProvider but returns no hints", toolName)
 					} else {
 						t.Logf("✅ Tool %s provides %d enhanced schema hints", toolName, len(hints))

@@ -741,7 +741,7 @@ func (r *Registry) GetToolSchemasWithContext(ctx context.Context) []map[string]i
 		if r.services != nil && r.services.SchemaBuilder != nil {
 			if enhancedTool, ok := tool.(types.EnhancedSchemaProvider); ok {
 				hints := enhancedTool.GetSchemaHints()
-				if hints != nil && len(hints) > 0 {
+				if len(hints) > 0 {
 					params = r.services.SchemaBuilder.EnhanceSchema(ctx, params, hints)
 				}
 			}
@@ -781,7 +781,7 @@ func (r *Registry) GetToolHelp(toolName string) map[string]interface{} {
 	if r.services != nil && r.services.SchemaBuilder != nil {
 		if enhancedTool, ok := tool.(types.EnhancedSchemaProvider); ok {
 			hints := enhancedTool.GetSchemaHints()
-			if hints != nil && len(hints) > 0 {
+			if len(hints) > 0 {
 				help["schema_hints"] = hints
 			}
 		}

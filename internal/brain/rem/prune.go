@@ -428,10 +428,7 @@ func (r *REMCycle) pruneOrphansOnly(ctx context.Context, result *PruneResult, dr
 		}
 
 		// Resolve the actual path to stat.
-		pathToCheck := o.source
-		if strings.HasPrefix(pathToCheck, "file:") {
-			pathToCheck = strings.TrimPrefix(pathToCheck, "file:")
-		}
+		pathToCheck := strings.TrimPrefix(o.source, "file:")
 
 		if _, err := os.Stat(pathToCheck); os.IsNotExist(err) {
 			orphans = append(orphans, o)

@@ -591,28 +591,26 @@ func executeBackgroundCmd(sessionKey, cmdLine, workDir string, jobs *JobManager)
 // watchBackgroundJobs returns a tea.Cmd that waits for background job completion notifications
 func watchBackgroundJobs(sessionKey string, jobs *JobManager) tea.Cmd {
 	return func() tea.Msg {
-		select {
-		case jobID := <-jobs.jobsDone:
-			job := jobs.GetJob(jobID)
-			if job == nil {
-				return nil
-			}
-			output := job.Output.String()
-			job.mu.Lock()
-			status := job.Status
-			err := job.Error
-			job.mu.Unlock()
+		jobID := <-jobs.jobsDone
+		job := jobs.GetJob(jobID)
+		if job == nil {
+			return nil
+		}
+		output := job.Output.String()
+		job.mu.Lock()
+		status := job.Status
+		err := job.Error
+		job.mu.Unlock()
 
-			// Truncate output if needed
-			truncated, _ := TruncateOutput(output, MaxOutputLines)
+		// Truncate output if needed
+		truncated, _ := TruncateOutput(output, MaxOutputLines)
 
-			return BackgroundJobCompletedMsg{
-				SessionKey: sessionKey,
-				JobID:      jobID,
-				Status:     status,
-				Output:     truncated,
-				Error:      err,
-			}
+		return BackgroundJobCompletedMsg{
+			SessionKey: sessionKey,
+			JobID:      jobID,
+			Status:     status,
+			Output:     truncated,
+			Error:      err,
 		}
 	}
 }

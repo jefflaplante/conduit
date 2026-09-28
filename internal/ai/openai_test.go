@@ -3,7 +3,6 @@ package ai
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -339,7 +338,7 @@ func TestParseOpenAISSEStream_Done(t *testing.T) {
 func TestParseOpenAISSEStream_Usage(t *testing.T) {
 	chunks := []string{
 		`data: {"choices":[{"delta":{"content":"hi"},"index":0}]}`,
-		fmt.Sprintf(`data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`),
+		`data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
 		`data: [DONE]`,
 	}
 	body := strings.NewReader(strings.Join(chunks, "\n"))
