@@ -97,7 +97,8 @@ var backupRestoreCmd = &cobra.Command{
 			// conduit-31jg.9: refuse to restore under a running gateway.
 			// conduit-31jg.73: --pidfile (global) / --gateway-port point
 			// the check at a non-default gateway.
-			PidfilePath: resolvePidfilePath(),
+			// conduit-1qcg: same pidfile search as stop/status.
+			PidfilePath: findPidfile(),
 			GatewayAddr: restoreGatewayAddr(restoreGatewayPort, restoreConfigPath, cfgFile),
 		}
 

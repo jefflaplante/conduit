@@ -6,6 +6,8 @@ This directory contains configuration files for different purposes.
 
 ```
 configs/
+├── container/
+│   └── conduit.json            # Container image default (/etc/conduit/config.json)
 ├── examples/          # Template and example configurations
 │   ├── config.example.json     # Full example config with comments
 │   └── config-minimal.json     # Minimal working config
@@ -37,6 +39,14 @@ Use test-specific configs from `test/configs/` for testing scenarios.
 - `config.skills.json` - Test skills system in isolation
 - `config.telegram.json` - Test Telegram integration only
 - `config.tools.json` - Test tool execution without channels
+
+## Container
+
+`container/conduit.json` is baked into the image as `/etc/conduit/config.json`:
+port 18789, `data_dir` and the database under the `/data` volume, workspace
+and sandbox at `/workspace`, and the API key from `${ANTHROPIC_API_KEY}`. It
+is named `conduit.json` because `.gitignore` ignores every `config.json`. See
+DEPLOYMENT.md, "Container".
 
 ## Configuration Schema
 

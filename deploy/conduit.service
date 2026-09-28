@@ -3,6 +3,9 @@ Description=Conduit Gateway
 Documentation=https://github.com/jefflaplante/conduit
 After=network-online.target
 Wants=network-online.target
+# Start-rate limits are [Unit] settings; systemd ignores them in [Service].
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -36,8 +39,6 @@ TimeoutStopSec=30
 # Restart policy — always so clean drain-exit (SIGHUP reload) also brings us back.
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=3
 
 # Security hardening
 NoNewPrivileges=true
@@ -45,6 +46,13 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/conduit/
 PrivateTmp=true
+# PID file: systemd creates /run/conduit (owned by User=, writable despite
+# ProtectSystem=strict, removed on stop) and sets $RUNTIME_DIRECTORY, so the
+# gateway writes /run/conduit/conduit.pid. The CLI (stop/status/restart,
+# backup restore) finds it there without --pidfile; PrivateTmp hides /tmp.
+# (conduit-1qcg)
+RuntimeDirectory=conduit
+RuntimeDirectoryMode=0755
 
 # Logging
 StandardOutput=journal

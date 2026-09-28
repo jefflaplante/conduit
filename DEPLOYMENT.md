@@ -92,6 +92,20 @@ sudo systemctl daemon-reload
 sudo systemctl restart conduit.service
 ```
 
+### PID File
+
+`conduit stop|restart|status` and `conduit backup restore` find the running gateway through its PID file. The gateway writes it to `--pidfile` if given, else `$RUNTIME_DIRECTORY/conduit.pid`, else `{data_dir}/conduit.pid` (`CONDUIT_DATA_DIR`, then config `data_dir`, then `~/.conduit`). It no longer uses `/tmp/conduit.pid`: with `PrivateTmp=true` that file was invisible to the CLI.
+
+The service templates set `RuntimeDirectory=conduit`, so systemd creates `/run/conduit` (owned by the service user, removed on stop) and the gateway writes `/run/conduit/conduit.pid`. The CLI runs outside the unit and has no `$RUNTIME_DIRECTORY`, so without `--pidfile` it searches `/run/conduit/conduit.pid`, `{data_dir}/conduit.pid`, then the legacy `/tmp/conduit.pid`, and acts on the first one naming a live process.
+
+For an existing unit, add a drop-in instead of replacing the file:
+```bash
+sudo mkdir -p /etc/systemd/system/conduit.service.d
+printf '[Service]\nRuntimeDirectory=conduit\nRuntimeDirectoryMode=0755\n' | \
+  sudo tee /etc/systemd/system/conduit.service.d/runtime-dir.conf
+sudo systemctl daemon-reload && sudo systemctl restart conduit.service
+```
+
 ### Automation Commands
 
 #### Full Deploy (Code + Restart)
@@ -180,8 +194,85 @@ $PROJECT_DIR/
 - No system-wide file pollution
 - Systemd security hardening enabled
 
+## Container
+
+The `Containerfile` builds a static binary into an Alpine image that runs as uid/gid 1000 (`conduit`). `.github/workflows/container.yml` publishes multi-arch (amd64/arm64) images to `ghcr.io/jefflaplante/conduit`:
+
+| Tag | Build tags |
+|---|---|
+| `latest` | core |
+| `full` | datadog, k8s, pagerduty, sre, mqtt, ssh, unifi |
+| `sre` | datadog, pagerduty, sre |
+| `iot` | mqtt, unifi |
+
+Before pushing, CI runs each variant with a throwaway env and requires `/health` to return 200, the DB and token secret to be created on `/data`, and `conduit status` to find the process.
+
+### Image Layout
+
+| Path | Purpose |
+|---|---|
+| `/usr/local/bin/conduit` | Binary (entrypoint) |
+| `/etc/conduit/config.json` | Default config from `configs/container/conduit.json` (read-only) |
+| `/data` (volume) | `data_dir` (`CONDUIT_DATA_DIR=/data`) and working directory: `gateway.db` with its search/brain DBs, `auth/token_secret`, `auth/mcp_token`, `.env`, `conduit.pid` |
+| `/workspace` (volume) | Agent workspace and tool sandbox root |
+
+The default config listens on 18789 (the port the image EXPOSEs and health-checks), reads `${ANTHROPIC_API_KEY}`, and enables file, search and web-fetch tools but not `Bash`. Only the braced `${VAR}` form is expanded (see `reference/guides/ENV_AND_SECRETS.md`). Secrets can also go in `/data/.env`.
+
+### Run
+
+```bash
+podman run -d --name conduit \
+  -p 127.0.0.1:18789:18789 \
+  -e ANTHROPIC_API_KEY \
+  -v conduit-data:/data -v conduit-workspace:/workspace \
+  ghcr.io/jefflaplante/conduit:latest
+
+curl -fsS http://localhost:18789/health
+podman exec conduit conduit status
+podman exec conduit conduit --config /etc/conduit/config.json token create --client-name my-client
+```
+
+Pass `--config /etc/conduit/config.json` to CLI commands run with `exec` that read the config (`token`, `pairing`, `backup`); the working directory is `/data`, and the default `--config config.json` would otherwise create a fresh default config there.
+
+Named volumes inherit the image's ownership on first use. For a bind mount, the host directory must be writable by uid 1000: `chown 1000:1000 ./data`, or with rootless podman use `-v ./data:/data:U`.
+
+To use your own config, mount it over the default and keep `"port": 18789`, `data_dir`/`database.path` under `/data`, and the workspace under `/workspace`:
+
+```bash
+-v ./config.json:/etc/conduit/config.json:ro
+```
+
+If you change the port, also change the published port and override the health check (`--health-cmd`, or `healthcheck:` in compose).
+
+### Compose
+
+`deploy/compose.yaml` runs the image with both named volumes, an env file, the health check, a 30s stop grace period (the gateway drains in-flight turns on SIGTERM for up to 27s), and dropped capabilities:
+
+```bash
+cp deploy/conduit.env.example deploy/conduit.env   # add ANTHROPIC_API_KEY
+chmod 600 deploy/conduit.env
+docker compose -f deploy/compose.yaml up -d        # or podman-compose
+docker compose -f deploy/compose.yaml ps           # (healthy)
+docker compose -f deploy/compose.yaml logs -f
+```
+
+`deploy/conduit.env` is gitignored by the `*.env` rule. `docker compose ... build` builds from the checkout instead of pulling.
+
+### Backup
+
+Everything stateful is on the `/data` volume. Stop the container before a restore: `conduit backup restore` refuses to run while the pidfile names a live process or the port answers.
+
+```bash
+docker compose -f deploy/compose.yaml stop
+docker run --rm -v conduit_conduit-data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/conduit-data.tgz -C /data .
+docker compose -f deploy/compose.yaml start
+```
+
+Kubernetes/Helm is not provided; the reference host runs systemd.
+
 ---
 
-**Last Updated:** 2026-02-12  
+**Last Updated:** 2026-09-28  
 **Service Version:** Conduit-Go 1.0.0  
 **Target Environment:** Linux server with systemd
