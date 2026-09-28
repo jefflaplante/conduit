@@ -98,8 +98,20 @@ Operations are classified into tiers, similar to the SSH tool:
 |------|------------|----------|
 | **read** | get, list, describe, logs, watch, events, top, clusters, namespaces | Runs directly |
 | **modify** | scale, rollout, label, annotate, cordon, uncordon | Runs directly |
-| **dangerous** | delete, apply, create, edit, drain, exec, patch | Requires approval (default `require_approval`) |
+| **dangerous** | delete, apply, create, edit, drain, exec, patch, portforward (`portforward_create`) | Requires approval (default `require_approval`) |
 | **blocked** | Configurable | Always rejected |
+
+Every action that talks to the cluster goes through the same checks
+(`allowed_namespaces`, `safety_level`, `blocked_actions`, `require_approval`).
+The classification names used by `blocked_actions` are the tier-table names
+above: `watch` is checked as `get`, `portforward_create` as `portforward` on
+`pods`, `events` as `events` on `events`, and `namespaces` as `namespaces` on
+`namespaces` (conduit-39lm).
+
+`clusters`, `portforward_list` and `portforward_close` are not gated: they
+make no cluster API call and act only on local config or on forwards this
+tool already created (each of which passed the checks and any approval when
+it was opened). Closing a forward only removes access.
 
 ### Human Approval
 
@@ -150,6 +162,18 @@ If `allowed_namespaces` is set, operations are blocked for namespaces not in the
 ```
 
 This cluster only allows read operations in `app` and `monitoring` namespaces.
+
+Namespace-scoped actions (`get`, `describe`, `logs`, `events`, `watch`,
+`scale`, `rollout`, `delete`, `exec`, `top` for pods, `portforward_create`)
+are denied for any namespace not in the list, including the default namespace
+when none is given. `top` with `namespace: "all"` and `top` for nodes are
+denied when the list is set, because they cross namespaces.
+
+`namespaces` is a cluster-scoped read. It is allowed, but when
+`allowed_namespaces` is set the result is filtered to the allowed namespaces
+that exist (case-insensitive match), and the result carries
+`filtered_by_allowed_namespaces: true`. The tool never lists namespaces it
+may not act on.
 
 ## Tool Actions
 
@@ -298,6 +322,13 @@ Create local tunnels to pod ports.
 
 Returns a `forward_id` for managing the tunnel.
 
+Port forwarding opens a network path from the gateway host into a pod (the
+`pods/portforward` subresource, which Kubernetes RBAC treats like
+`pods/exec`), so it is classified **dangerous**. It needs a cluster
+`safety_level` of `dangerous`, is subject to `allowed_namespaces`, and with the
+default `require_approval` waits for the owner's approval. Non-interactive
+turns (cron, heartbeat, MCP) fail closed.
+
 #### portforward_list
 
 ```json
@@ -355,7 +386,8 @@ Returns cluster names, default namespaces, connection status, and server version
 
 #### namespaces
 
-List namespaces in a cluster.
+List namespaces in a cluster. This is a read-tier, cluster-scoped action; with
+`allowed_namespaces` set, only allowed namespaces are returned.
 
 ```json
 {"action": "namespaces"}
@@ -378,7 +410,7 @@ Port forwarding rejects local ports below 1024 to prevent binding to privileged 
 
 ### Namespace Isolation
 
-Use `allowed_namespaces` to restrict which namespaces can be accessed per cluster. This is enforced at the tool level before any API call.
+Use `allowed_namespaces` to restrict which namespaces can be accessed per cluster. This is enforced at the tool level before any API call, for every cluster-touching action; `namespaces` output is filtered to the list.
 
 ## Example Workflows
 

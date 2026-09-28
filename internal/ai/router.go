@@ -45,7 +45,16 @@ type Router struct {
 	historyConfig   *config.HistoryConfig // Token-aware history retrieval config
 	historyCuts     historyCutCache       // per-session history cut, for a stable cached prefix (conduit-31jg.63)
 
-	pricingResolver *PricingResolver // conduit-31jg.57
+	// pricingResolver is swapped by a live config reload (conduit-rmho),
+	// so it is read and written atomically. conduit-31jg.57
+	pricingResolver atomic.Pointer[PricingResolver]
+
+	// providerCfgs holds each provider's configuration as last applied
+	// (startup or live reload), so a reload rebuilds only the providers
+	// whose configuration changed. Guarded by mu. conduit-rmho
+	providerCfgs map[string]config.ProviderConfig
+	// reloadMu serializes provider reloads (prepare → commit). conduit-rmho
+	reloadMu sync.Mutex
 
 	throttle *ProviderThrottle // per-provider/model concurrency slots (conduit-38cz)
 
@@ -129,7 +138,7 @@ func (r *Router) GetUsageTracker() *UsageTracker {
 // SetPricingResolver sets the pricing resolver for dynamic model pricing and
 // hands it to the router's usage tracker (conduit-31jg.57).
 func (r *Router) SetPricingResolver(pr *PricingResolver) {
-	r.pricingResolver = pr
+	r.pricingResolver.Store(pr)
 	if r.usageTracker != nil {
 		r.usageTracker.SetPricingResolver(pr)
 	}
@@ -137,8 +146,10 @@ func (r *Router) SetPricingResolver(pr *PricingResolver) {
 
 // PricingResolver returns the router's resolver, or the package default.
 func (r *Router) PricingResolver() *PricingResolver {
-	if r != nil && r.pricingResolver != nil {
-		return r.pricingResolver
+	if r != nil {
+		if pr := r.pricingResolver.Load(); pr != nil {
+			return pr
+		}
 	}
 	return DefaultPricingResolver()
 }

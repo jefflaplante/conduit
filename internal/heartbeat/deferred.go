@@ -18,8 +18,10 @@ import (
 // schedule for later execution here") and dropped. Now it is written to a
 // file-backed SharedAlertQueue (atomic temp+rename writes, corrupt-file
 // recovery) and delivered by FlushDeferred, which runs at the start of every
-// heartbeat cycle. Delivery therefore happens on the first cycle after quiet
-// hours end (at most interval_minutes late) and survives restarts.
+// heartbeat cycle and from a timer armed for the end of quiet hours
+// (conduit-31jg.87). Delivery therefore happens when quiet hours end; after a
+// restart (timer lost) it falls back to the first heartbeat cycle, at most
+// interval_minutes late. Either way it survives restarts.
 //
 // The file is deliberately separate from alert_queue_path (pending.json):
 // that queue is shared with external scripts and the HEARTBEAT.md prompt, so
@@ -95,7 +97,7 @@ func (g *GatewayIntegration) deferAction(action HeartbeatAction, job *scheduler.
 	}
 	expires := now.Add(deferredTTL)
 	deliverAfter := g.quietConfig().NextQuietEnd(now)
-	return q.AddAlert(Alert{
+	err = q.AddAlert(Alert{
 		ID:         fmt.Sprintf("deferred-%d-%d", now.UnixNano(), seq),
 		Source:     deferredSource,
 		Component:  job.ID,
@@ -114,6 +116,81 @@ func (g *GatewayIntegration) deferAction(action HeartbeatAction, job *scheduler.
 			metaDeliverAfter: deliverAfter.Format(time.RFC3339),
 		},
 	})
+	if err == nil {
+		g.armDeferredFlush(deliverAfter)
+	}
+	return err
+}
+
+// deferredFlushSlack is added to the quiet-hours end so the timer fires
+// just outside the window, and deferredFlushTimeout bounds one timer flush.
+const (
+	deferredFlushSlack   = time.Second
+	deferredFlushTimeout = 2 * time.Minute
+)
+
+// armDeferredFlush schedules a FlushDeferred at the end of quiet hours (at),
+// so deferred actions go out when quiet hours end rather than on the next
+// heartbeat cycle, up to interval_minutes later (conduit-31jg.87). One
+// timer covers every queued action: FlushDeferred delivers all of them. An
+// already-armed timer with an earlier or equal deadline is kept. The
+// heartbeat-cycle flush remains the fallback (e.g. after a restart). Close
+// stops the timer.
+func (g *GatewayIntegration) armDeferredFlush(at time.Time) {
+	g.retries.mu.Lock()
+	closed := g.retries.closed
+	g.retries.mu.Unlock()
+	if closed {
+		return
+	}
+
+	g.deferMu.Lock()
+	defer g.deferMu.Unlock()
+	if g.flushTimer != nil && !at.Before(g.flushTimerAt) {
+		return
+	}
+	if g.flushTimer != nil {
+		g.flushTimer.Stop()
+	}
+	d := max(at.Sub(g.clock())+deferredFlushSlack, 0)
+	g.flushTimerAt = at
+	g.flushTimer = time.AfterFunc(d, g.timedDeferredFlush)
+}
+
+// timedDeferredFlush is the flush timer's callback.
+func (g *GatewayIntegration) timedDeferredFlush() {
+	g.deferMu.Lock()
+	g.flushTimer = nil
+	g.flushTimerAt = time.Time{}
+	g.deferMu.Unlock()
+
+	g.retries.mu.Lock()
+	if g.retries.closed {
+		g.retries.mu.Unlock()
+		return
+	}
+	// The retry lifetime context is cancelled by Close.
+	parent := g.retries.lifetimeLocked()
+	g.retries.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(parent, deferredFlushTimeout)
+	defer cancel()
+	if n, err := g.FlushDeferred(ctx); err != nil {
+		log.Printf("[HeartbeatIntegration] Timed deferred flush failed: %v", err)
+	} else if n > 0 {
+		log.Printf("[HeartbeatIntegration] Delivered %d deferred action(s) at quiet-hours end", n)
+	}
+}
+
+// stopDeferredFlush stops a pending flush timer (Close).
+func (g *GatewayIntegration) stopDeferredFlush() {
+	g.deferMu.Lock()
+	defer g.deferMu.Unlock()
+	if g.flushTimer != nil {
+		g.flushTimer.Stop()
+		g.flushTimer = nil
+		g.flushTimerAt = time.Time{}
+	}
 }
 
 // FlushDeferred delivers persisted deferred actions when outside quiet hours.

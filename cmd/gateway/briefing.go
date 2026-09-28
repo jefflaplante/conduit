@@ -117,7 +117,7 @@ Examples:
 
 func runBriefingGenerate(sessionID string, outputJSON bool, limit int) error {
 	// Load config to find workspace and database paths.
-	cfg, err := config.Load(cfgFile)
+	cfg, err := loadExistingConfig(cfgFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -212,7 +212,7 @@ func runBriefingGenerate(sessionID string, outputJSON bool, limit int) error {
 }
 
 func runBriefingShow(id string, outputJSON bool) error {
-	cfg, err := config.Load(cfgFile)
+	cfg, err := loadExistingConfig(cfgFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -246,7 +246,7 @@ func runBriefingShow(id string, outputJSON bool) error {
 }
 
 func runBriefingList(outputJSON bool) error {
-	cfg, err := config.Load(cfgFile)
+	cfg, err := loadExistingConfig(cfgFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -329,9 +329,9 @@ func storeBriefingInBrain(cfg *config.Config, b *briefing.Briefing) {
 	// Brain. It doesn't carry the gateway's max_ltm_entries, so it must not
 	// trim the shared table; the gateway enforces the cap on its next LTM
 	// write. This command only ever upserts one fixed key.
-	// conduit-31jg.53: brainCLIOptions carries the configured recency weight so
-	// brain migration 9 (if this is the first open after an upgrade) matches
-	// the gateway.
+	// conduit-31jg.53/.87: brainCLIOptions carries the configured salience
+	// weights so brain migration 9 (if this is the first open after an
+	// upgrade) and the base salience of the stored briefing match the gateway.
 	brainSvc, err := brain.New(brainDBPath, append(brainCLIOptions(cfg), brain.WithMaxLTMEntries(0))...)
 	if err != nil {
 		log.Printf("briefing: failed to open brain for briefing store: %v", err)

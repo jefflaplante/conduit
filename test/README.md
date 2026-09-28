@@ -23,7 +23,6 @@ test/
 │   ├── auth_test.go
 │   └── README.md
 ├── coverage.out              # Test coverage report
-├── test_oauth.go             # OAuth testing utilities
 └── test-jules-client.js      # Jules client test script
 ```
 
@@ -79,14 +78,6 @@ JavaScript client for testing AI agent authentication:
 
 ```bash
 node test/test-jules-client.js
-```
-
-### OAuth Test (`test_oauth.go`)
-
-Go utilities for testing OAuth token flows:
-
-```bash
-go run test/test_oauth.go
 ```
 
 ## Coverage Reports

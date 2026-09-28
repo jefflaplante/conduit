@@ -5,6 +5,7 @@ package sre
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -261,16 +262,27 @@ func (t *SRETool) getLogPatterns(ctx context.Context, service, timeRange string)
 		}
 	}
 
-	// Return top patterns (count > 1)
+	// Return the top 5 repeated patterns (count > 1), most frequent first.
+	// errorCounts is a map: rank explicitly (ties by text) so the "top 5"
+	// are actually the most frequent and the output is deterministic.
+	repeated := make([]string, 0, len(errorCounts))
 	for pattern, count := range errorCounts {
 		if count > 1 {
-			patterns = append(patterns, fmt.Sprintf("%s (x%d)", pattern, count))
+			repeated = append(repeated, pattern)
 		}
 	}
-
-	// Limit to top 5
-	if len(patterns) > 5 {
-		patterns = patterns[:5]
+	sort.Slice(repeated, func(i, j int) bool {
+		ci, cj := errorCounts[repeated[i]], errorCounts[repeated[j]]
+		if ci != cj {
+			return ci > cj
+		}
+		return repeated[i] < repeated[j]
+	})
+	if len(repeated) > 5 {
+		repeated = repeated[:5]
+	}
+	for _, pattern := range repeated {
+		patterns = append(patterns, fmt.Sprintf("%s (x%d)", pattern, errorCounts[pattern]))
 	}
 
 	return patterns
@@ -379,7 +391,8 @@ func (t *SRETool) suggestInvestigation(ctx context.Context, args map[string]inte
 		}
 	}
 
-	for cat, items := range categories {
+	for _, cat := range []string{"Kubernetes", "Datadog", "SSH"} {
+		items := categories[cat]
 		if len(items) > 0 {
 			content.WriteString(fmt.Sprintf("## %s\n", cat))
 			for _, s := range items {

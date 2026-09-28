@@ -67,6 +67,10 @@ func TestReflect_ClustersWrittenToBrain(t *testing.T) {
 	require.NotNil(t, entry, "cluster entry should exist in Brain LTM")
 	assert.Contains(t, entry.Value, "Tool WebFetch has 4 failures")
 	assert.Contains(t, entry.Value, "Avg duration:")
+	// conduit-31jg.87: a known source prefix (no "unknown source prefix
+	// \"rem\"" warning per cluster).
+	assert.Equal(t, "system:rem-reflect", entry.Source)
+	assert.NoError(t, brain.ValidateSource(entry.Source))
 }
 
 func TestReflect_EntriesMarkedProcessed(t *testing.T) {

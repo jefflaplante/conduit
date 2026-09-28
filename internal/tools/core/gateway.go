@@ -47,8 +47,11 @@ func (t *GatewayTool) Parameters() map[string]interface{} {
 				"description": "Session key for debug_prompt action (uses current session if omitted)",
 			},
 			"config": map[string]interface{}{
-				"type":        "object",
-				"description": "Configuration updates for update_config action",
+				"type": "object",
+				"description": "Changes for update_config, merge-patch style: nested objects merge, other values replace, null deletes. " +
+					"Top-level keys may be dot-paths; array elements are addressed by their \"name\" (providers, channels). " +
+					"Example: {\"ai.providers.z-ai.timeout_seconds\": 600}. Secrets only as ${ENV_VAR} references. " +
+					"Every update needs the owner's approval in chat.",
 			},
 		},
 		"required": []string{"action"},
@@ -84,9 +87,11 @@ func (t *GatewayTool) GetActionDocs() map[string]types.ActionDoc {
 			Returns:     "AI providers/models and workspace settings, secrets redacted",
 		},
 		"update_config": {
-			Description:    "Update gateway configuration fields",
+			Description: "Change config.json and hot-reload what can be applied live (provider settings of existing providers, " +
+				"pricing overrides, call_log, subagent_default_model). Other keys are saved and need a restart. " +
+				"Always requires the owner's approval (\"YES <code>\" in chat); fails closed in non-interactive turns.",
 			RequiredParams: []string{"config"},
-			Returns:        "confirmation with applied config and timestamp",
+			Returns:        "pending approval; once approved, the keys applied live, the keys saved for restart, and their redacted values",
 		},
 		"metrics": {
 			Description: "Get gateway performance metrics",

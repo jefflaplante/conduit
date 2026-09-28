@@ -96,6 +96,7 @@ This document covers the **Agent Heartbeat** system.
 | `enabled_task_types` | array | `["alerts", "checks", "reports"]` | Which task types to execute |
 | `alert_targets` | array | `[]` | Validated but not currently used for routing (see below) |
 | `alert_retry_policy` | object | see below | Background retries for failed deliveries |
+| `job_failure_alert_threshold` | int | `0` (= 3) | Consecutive failed runs of a scheduled job that trigger one alert; negative disables. See [Scheduled Job Failure Alerts](#scheduled-job-failure-alerts) |
 | `log_level` | string | `"info"` | Logging verbosity |
 | `verbose_logging` | bool | `false` | Extra debug output |
 
@@ -111,7 +112,7 @@ See [Delivery](#delivery) for how retries interact with the circuit breaker.
 
 ### Alert Targets
 
-Alert targets are parsed and validated, but the gateway does not currently route by them: heartbeat messages go to the heartbeat job's target (`telegram:<chat_id>`, or an action's own target). The format is kept for compatibility:
+Alert targets are parsed and validated, but the gateway does not currently route by them: heartbeat messages go to the heartbeat job's target (`telegram:<chat_id>`, or an action's own target). The only target read is `alert_targets[0]` when it is a `telegram` target: its `chat_id` becomes the heartbeat job's target and the destination of [scheduled job failure alerts](#scheduled-job-failure-alerts). The format is kept for compatibility:
 
 ```json
 {
@@ -329,6 +330,40 @@ Use the alert queue file as a bridge between monitoring systems and Conduit (the
                                         │  Heartbeat  │
                                         └─────────────┘
 ```
+
+### Scheduled Job Failure Alerts
+
+The scheduler watches its own Go jobs (cron jobs, the heartbeat, REM), so a job that keeps
+failing cannot go unnoticed (conduit-2six):
+
+- **Failure log.** Every failed run appends one JSON line to `memory/cron-log.jsonl` in the
+  workspace, written by the scheduler itself, so a run whose first LLM call fails still leaves a
+  trace: `{"ts", "job", "job_id", "status", "summary", "error", "timeout", "consecutive_failures",
+  "duration_s", "source": "scheduler"}`. `status` is `"error"`, or `"timeout"` for a
+  context-deadline failure (the same values `scripts/cron-status.py` counts); runs cut off by a
+  shutdown drain are logged with `"status": "interrupted"`. The file is created mode 0600.
+- **Failure streak.** Each job carries a `failure_streak` (`count`, `timeouts`, `since`,
+  `alerted`) in `cron_jobs.json`. A successful run clears it.
+- **One alert per streak.** When the streak reaches `job_failure_alert_threshold` (default 3), the
+  owner gets one warning. A streak of two or more failures that is about a day old also triggers
+  it, so a daily job alerts on day 2, not day 3. Later failures in the same streak send
+  nothing more. The next successful run sends a single "recovered" notice.
+- **Interrupted runs don't count.** A run cancelled by a shutdown or deploy drain neither extends
+  nor resets the streak.
+- **Timeouts count.** A run that ends with `context deadline exceeded` (for example, a whole-turn
+  deadline on a slow provider) counts as a failure. The alert says the latest run timed out and
+  how many failures in the streak were timeouts, so a provider stall is easy to tell apart from a
+  broken job.
+- **Routing.** Alerts go to `alert_targets[0]` (`telegram:<chat_id>`) through the same
+  DeliveryRegistry as heartbeat messages. Each attempt is recorded in `alert_history`
+  (`alert_type` `cron_job_failing` / `cron_job_recovered`, `source` `scheduler:<job id>`) and gets
+  the same circuit breaker and `alert_retry_policy` retries. With no Telegram alert target, the
+  notice is logged and dropped. The failure log and the streak are still kept.
+- **Quiet hours.** Both notices are non-critical. During quiet hours they are deferred to
+  `deferred.json` and delivered by the deferred flush after quiet hours end.
+
+The streak shows in the Cron tool (`list` shows `FAILING: N consecutive failed run(s)` with the
+last error; `status` shows `Failing Jobs`) and in `/status`.
 
 ### Cron Job Alerts
 

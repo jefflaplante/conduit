@@ -84,6 +84,8 @@ func NewSecurityEngine(cfg SecurityConfig) *SecurityEngine {
 			"drain":  true,
 			"exec":   true,
 			"patch":  true,
+			// portforward opens network access into a pod (conduit-39lm).
+			"portforward": true,
 		},
 		blockedResources: make(map[string]map[string]bool),
 	}

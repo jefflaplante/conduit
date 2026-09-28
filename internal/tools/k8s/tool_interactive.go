@@ -159,31 +159,50 @@ func (t *K8sTool) executePortForwardCreate(ctx context.Context, args map[string]
 
 	namespace := t.resolveNamespace(args, clusterCfg)
 
-	client, err := t.clients.GetClient(clusterName)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+	// Port-forward opens a network path from this host into a pod, the same
+	// pods/portforward subresource kubectl gates like pods/exec, so it is
+	// classified dangerous (conduit-39lm).
+	cls, denied := t.checkSecurity("portforward", "pods", namespace, clusterCfg)
+	if denied != nil {
+		return denied, nil
 	}
 
-	fwd, err := t.portForwarder.Create(client, pod, namespace, localPort, remotePort, clusterName)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to create port forward: %v", err)}, nil
-	}
+	op := k8sOp{Cluster: clusterName, Namespace: namespace, Verb: "portforward", Resource: "pods", Name: pod,
+		Extra: []opField{
+			{"local_port", "Local port", strconv.Itoa(localPort)},
+			{"remote_port", "Remote port", strconv.Itoa(remotePort)},
+		}}
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		client, err := t.clients.GetClient(clusterName)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+		}
 
-	return &types.ToolResult{
-		Success: true,
-		Content: fmt.Sprintf("Port forward created: 127.0.0.1:%d -> %s:%d (pod %s in %s/%s)",
-			fwd.LocalPort, pod, remotePort, pod, clusterName, namespace),
-		Data: map[string]interface{}{
-			"id":          fwd.ID,
-			"local_port":  fwd.LocalPort,
-			"remote_port": fwd.RemotePort,
-			"pod":         fwd.Pod,
-			"namespace":   fwd.Namespace,
-			"cluster":     fwd.Cluster,
-		},
-	}, nil
+		fwd, err := t.portForwarder.Create(client, pod, namespace, localPort, remotePort, clusterName)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to create port forward: %v", err)}, nil
+		}
+
+		return &types.ToolResult{
+			Success: true,
+			Content: fmt.Sprintf("Port forward created: 127.0.0.1:%d -> %s:%d (pod %s in %s/%s)",
+				fwd.LocalPort, pod, remotePort, pod, clusterName, namespace),
+			Data: map[string]interface{}{
+				"id":          fwd.ID,
+				"local_port":  fwd.LocalPort,
+				"remote_port": fwd.RemotePort,
+				"pod":         fwd.Pod,
+				"namespace":   fwd.Namespace,
+				"cluster":     fwd.Cluster,
+			},
+		}, nil
+	})
 }
 
+// executePortForwardClose and executePortForwardList operate only on the
+// in-process forwards this tool created (each of which passed checkSecurity
+// and any approval at creation); they make no cluster API call. Closing
+// only removes access, so neither is gated (conduit-39lm).
 func (t *K8sTool) executePortForwardClose(args map[string]interface{}) (*types.ToolResult, error) {
 	id := toolargs.GetString(args, "forward_id", "")
 	if id == "" {

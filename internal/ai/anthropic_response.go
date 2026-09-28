@@ -117,10 +117,16 @@ func (a *AnthropicProvider) parseAnthropicContent(resp *models.MessagesResponse)
 }
 
 // parseAnthropicToolCall extracts a tool call from an Anthropic tool_use
-// block: id and name must be strings and input a JSON object, otherwise the
-// block is skipped.
+// block: id and name must be non-empty strings and input a JSON object,
+// otherwise the block is skipped. The empty-string rule matches the streaming
+// parser (streaming.go): a tool call with no id cannot be answered with a
+// tool_result, and one with no name cannot be dispatched (conduit-31jg.87).
 func (a *AnthropicProvider) parseAnthropicToolCall(block models.ResponseBlock) *ToolCall {
 	if !block.HasID() || !block.HasName() || block.Input == nil {
+		return nil
+	}
+	if block.ID == "" || block.Name == "" {
+		log.Printf("[Anthropic] malformed tool_use block (empty id or name) — skipped")
 		return nil
 	}
 	return &ToolCall{

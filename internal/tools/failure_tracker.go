@@ -1,6 +1,9 @@
 package tools
 
-import "sync"
+import (
+	"sort"
+	"sync"
+)
 
 // FailureTracker tracks consecutive failures for tools and suggests approach pivots
 // when a tool repeatedly fails.
@@ -82,5 +85,6 @@ func (ft *FailureTracker) GetFailedTools() []string {
 			failed = append(failed, tool)
 		}
 	}
+	sort.Strings(failed)
 	return failed
 }

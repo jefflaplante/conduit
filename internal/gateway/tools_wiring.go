@@ -72,7 +72,16 @@ func convertToolsToAIFormat(registry *tools.Registry) []ai.Tool {
 			docs := adp.GetActionDocs()
 			if len(docs) > 0 {
 				description += "\n\nAction details:"
-				for action, doc := range docs {
+				// Sort action names: docs is a map, and a random order here
+				// changes the tools-array bytes across restarts, missing the
+				// provider prompt cache for the tools prefix (conduit-oc3u).
+				actions := make([]string, 0, len(docs))
+				for action := range docs {
+					actions = append(actions, action)
+				}
+				sort.Strings(actions)
+				for _, action := range actions {
+					doc := docs[action]
 					description += fmt.Sprintf("\n[%s] %s", action, doc.Description)
 					if len(doc.RequiredParams) > 0 {
 						description += fmt.Sprintf(" Required: %s.", strings.Join(doc.RequiredParams, ", "))

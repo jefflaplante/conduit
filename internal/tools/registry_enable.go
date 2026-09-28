@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"sort"
 	"strings"
 
 	"conduit/internal/sandbox"
@@ -35,6 +36,7 @@ func (r *Registry) getEnabledToolNames() []string {
 			names = append(names, name)
 		}
 	}
+	sort.Strings(names) // model-visible (tool_not_found available values)
 	return names
 }
 

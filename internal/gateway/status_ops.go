@@ -74,16 +74,18 @@ func (g *Gateway) DisableChannel(ctx context.Context, channelID string) error {
 // GetConfiguration returns the AI and workspace configuration for the
 // Gateway tool, with every secret (provider API keys, OAuth access/refresh
 // tokens, client secrets, URL passwords) replaced by config.RedactedValue.
-// The result reaches the model and the transcript (conduit-31jg.56).
+// The result reaches the model and the transcript (conduit-31jg.56). It
+// reflects live config updates (conduit-rmho).
 func (g *Gateway) GetConfiguration() (map[string]interface{}, error) {
-	if g.config == nil {
+	cfg := g.currentConfig()
+	if cfg == nil {
 		return nil, fmt.Errorf("configuration not loaded")
 	}
-	ai, err := config.Redacted(g.config.AI)
+	ai, err := config.Redacted(cfg.AI)
 	if err != nil {
 		return nil, err
 	}
-	workspace, err := config.Redacted(g.config.Workspace)
+	workspace, err := config.Redacted(cfg.Workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -91,11 +93,6 @@ func (g *Gateway) GetConfiguration() (map[string]interface{}, error) {
 		"ai":        ai,
 		"workspace": workspace,
 	}, nil
-}
-
-// UpdateConfiguration updates configuration
-func (g *Gateway) UpdateConfiguration(ctx context.Context, config map[string]interface{}) error {
-	return fmt.Errorf("configuration update not yet implemented")
 }
 
 // GetMetrics returns gateway metrics

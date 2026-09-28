@@ -3,6 +3,7 @@ package schema
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -69,6 +70,10 @@ func (p *ChannelDiscoveryProvider) GetDiscoveryData(ctx context.Context, discove
 			Description: description,
 		})
 	}
+
+	// status is a map; sort so discovery values (surfaced in validation
+	// errors) come out in a stable order.
+	sort.Slice(values, func(i, j int) bool { return values[i].Value < values[j].Value })
 
 	return &DynamicValues{
 		Source:      "channels",

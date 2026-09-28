@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -134,6 +135,7 @@ func (t *FactsTool) Execute(ctx context.Context, args map[string]interface{}) (*
 	for cat := range categorySet {
 		categories = append(categories, cat)
 	}
+	sort.Strings(categories)
 
 	// Format output
 	content := t.formatFacts(allFacts)

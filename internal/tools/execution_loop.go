@@ -173,7 +173,7 @@ func (e *ExecutionEngine) runToolLoop(ctx context.Context, ts *turnState) (*Conv
 		if guidance := tb.chain.takeGuidance(refocusMessage); guidance != "" {
 			log.Printf("[ExecutionEngine] Injecting tool-loop guidance at depth %d (conduit-31jg.13)", depth)
 			guidanceAt = len(ts.history)
-			ts.history = append(ts.history, ai.ChatMessage{Role: "user", Content: guidance})
+			ts.history = append(ts.history, ai.ChatMessage{Role: "user", Content: guidance, Injected: true})
 		}
 
 		req := ts.request()
@@ -324,11 +324,13 @@ func (e *ExecutionEngine) checkTurnWindow(ctx context.Context, chainStart time.T
 
 // extractOriginalGoal finds the original user goal from the message history.
 // It looks for the last user message in the conversation, which typically
-// contains the original request that initiated the tool chain.
+// contains the original request that initiated the tool chain. Messages the
+// gateway injected mid-turn (length auto-continue "continue", tool-loop
+// guidance) are skipped: they are not the user's request (conduit-31jg.87).
 func (e *ExecutionEngine) extractOriginalGoal(messages []ai.ChatMessage) string {
-	// Search backwards to find the most recent user message
+	// Search backwards to find the most recent user-authored message
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" && messages[i].Content != "" {
+		if messages[i].Role == "user" && messages[i].Content != "" && !messages[i].Injected {
 			goal := messages[i].Content
 			// Truncate long goals to keep the reminder concise
 			const maxGoalLen = 200

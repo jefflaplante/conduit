@@ -221,11 +221,13 @@ func (t *K8sTool) Execute(ctx context.Context, args map[string]interface{}) (*ty
 
 // ---------- Helper methods ----------
 
-// checkSecurity validates the operation against security policies. It
-// returns the classification, plus a non-nil *ToolResult when the operation
-// is denied outright (namespace, cluster safety level, blocked policy).
-// Operations in a require_approval tier are not denied here; callers route
-// them through authorize (conduit-c8ct).
+// checkSecurity validates a namespace-scoped operation against security
+// policies. It returns the classification, plus a non-nil *ToolResult when
+// the operation is denied outright (namespace, cluster safety level, blocked
+// policy). Operations in a require_approval tier are not denied here;
+// callers route them through authorize (conduit-c8ct). Every action that
+// reaches the cluster must pass through this or checkClusterScopedSecurity
+// (conduit-39lm).
 func (t *K8sTool) checkSecurity(action, resource, namespace string, clusterCfg *config.KubernetesCluster) (*OperationClassification, *types.ToolResult) {
 	classification := t.security.ClassifyOperation(action, resource, namespace)
 
@@ -239,11 +241,26 @@ func (t *K8sTool) checkSecurity(action, resource, namespace string, clusterCfg *
 		}
 	}
 
+	return classification, t.checkPolicy(classification, clusterCfg)
+}
+
+// checkClusterScopedSecurity is checkSecurity for operations that have no
+// target namespace (listing namespaces). It applies the tier, cluster safety
+// level and blocked-policy checks but not allowed_namespaces; the caller is
+// responsible for restricting its output to allowed namespaces
+// (conduit-39lm).
+func (t *K8sTool) checkClusterScopedSecurity(action, resource string, clusterCfg *config.KubernetesCluster) (*OperationClassification, *types.ToolResult) {
+	classification := t.security.ClassifyOperation(action, resource, "")
+	return classification, t.checkPolicy(classification, clusterCfg)
+}
+
+// checkPolicy applies the cluster safety level and blocked-action policy.
+func (t *K8sTool) checkPolicy(classification *OperationClassification, clusterCfg *config.KubernetesCluster) *types.ToolResult {
 	// Check cluster safety level
 	if clusterCfg != nil {
 		safetyLevel := t.config.EffectiveSafetyLevel(clusterCfg)
 		if err := t.security.ValidateForCluster(classification, safetyLevel); err != nil {
-			return classification, &types.ToolResult{
+			return &types.ToolResult{
 				Success: false,
 				Error:   err.Error(),
 			}
@@ -252,13 +269,13 @@ func (t *K8sTool) checkSecurity(action, resource, namespace string, clusterCfg *
 
 	// If blocked by policy
 	if classification.Blocked {
-		return classification, &types.ToolResult{
+		return &types.ToolResult{
 			Success: false,
 			Error:   classification.Reason,
 		}
 	}
 
-	return classification, nil
+	return nil
 }
 
 // resolveCluster determines which cluster to target. If only one cluster is

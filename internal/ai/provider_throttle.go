@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -121,7 +122,12 @@ type ProviderThrottle struct {
 
 // NewProviderThrottle builds a throttle from provider configs.
 func NewProviderThrottle(providers []config.ProviderConfig) *ProviderThrottle {
-	t := &ProviderThrottle{limits: map[string]providerLimits{}, pools: map[poolKey]*throttlePool{}}
+	return &ProviderThrottle{limits: limitsFromConfig(providers), pools: map[poolKey]*throttlePool{}}
+}
+
+// limitsFromConfig derives every provider's limits from its config.
+func limitsFromConfig(providers []config.ProviderConfig) map[string]providerLimits {
+	limits := make(map[string]providerLimits, len(providers))
 	for _, p := range providers {
 		pl := providerLimits{max: p.MaxConcurrent, family: knownLimitsFamily(p)}
 		if len(p.ModelMaxConcurrent) > 0 {
@@ -130,9 +136,49 @@ func NewProviderThrottle(providers []config.ProviderConfig) *ProviderThrottle {
 				pl.models[normalizeThrottleModel(m)] = n
 			}
 		}
-		t.limits[p.Name] = pl
+		limits[p.Name] = pl
 	}
-	return t
+	return limits
+}
+
+// SetLimits replaces the configured limits on a live config reload
+// (conduit-rmho). Pools of providers whose limits changed are dropped and
+// rebuilt lazily with the new limits by the next call; pools of unchanged
+// providers are kept. A call already holding a slot in a dropped pool keeps
+// it and releases it back to that pool, so during the switch a provider
+// can briefly run up to (old in-flight + new limit) calls. The dropped
+// pools' counters are not carried over. Returns the providers whose limits
+// changed, sorted.
+func (t *ProviderThrottle) SetLimits(providers []config.ProviderConfig) []string {
+	if t == nil {
+		return nil
+	}
+	next := limitsFromConfig(providers)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	changed := map[string]bool{}
+	for name, pl := range next {
+		if old, ok := t.limits[name]; !ok || !reflect.DeepEqual(old, pl) {
+			changed[name] = true
+		}
+	}
+	for name := range t.limits {
+		if _, ok := next[name]; !ok {
+			changed[name] = true
+		}
+	}
+	t.limits = next
+	for key := range t.pools {
+		if changed[key.provider] {
+			delete(t.pools, key)
+		}
+	}
+	out := make([]string, 0, len(changed))
+	for name := range changed {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // resolve returns the pool for (provider, model), creating it on first use.

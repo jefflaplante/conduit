@@ -171,8 +171,8 @@ func (t *SessionStatusTool) formatSessionStatus(status map[string]interface{}) s
 	// Context info
 	if context, ok := status["context"].(map[string]interface{}); ok && len(context) > 0 {
 		builder.WriteString("\nContext:\n")
-		for key, value := range context {
-			builder.WriteString(fmt.Sprintf("  %s: %v\n", key, value))
+		for _, key := range sortedKeys(context) {
+			builder.WriteString(fmt.Sprintf("  %s: %v\n", key, context[key]))
 		}
 	}
 

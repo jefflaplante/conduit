@@ -608,12 +608,15 @@ Agent heartbeat for automated tasks. See [agent-heartbeat.md](agent-heartbeat.md
       "max_retries": 3,
       "retry_interval": 300000000000,
       "backoff_factor": 2.0
-    }
+    },
+    "job_failure_alert_threshold": 3
   }
 }
 ```
 
 `alert_queue_path` is deprecated (still accepted, warns at load; see [agent-heartbeat.md](agent-heartbeat.md)). `alert_targets[].type` accepts `telegram`, `webhook` and `mqtt`; `email` and `slack` were removed because no deliverer exists for them (email/SMTP is tracked separately) — existing configs that use them still load, with a one-time warning, and those targets are ignored. `alert_retry_policy` drives background retries of failed heartbeat deliveries.
+
+`job_failure_alert_threshold` (default `0`, which means 3; negative disables) is the number of consecutive failed runs of any scheduled Go job that triggers one alert to `alert_targets[0]`. The alert is delivered through the heartbeat DeliveryRegistry and recorded in `alert_history`, and it is deferred during quiet hours. A "recovered" notice follows on the next success. Runs interrupted by a shutdown drain don't count; timeouts do, and the alert labels them. Every failed run is also appended to `memory/cron-log.jsonl`. See [agent-heartbeat.md](agent-heartbeat.md#scheduled-job-failure-alerts).
 
 ### Skills
 
@@ -1005,6 +1008,106 @@ Enables transcription of incoming voice messages (e.g., Telegram voice notes) vi
 | `provider` | string | `"whisper"` | STT provider (`"whisper"` is currently the only option) |
 | `api_key` | string | — | OpenAI API key (supports `${ENV_VAR}` expansion) |
 | `model` | string | `"whisper-1"` | Whisper model to use |
+
+## Live Config Updates (`Gateway` tool, `update_config`)
+
+The `Gateway` tool's `update_config` action changes the config file the
+gateway was started from (`--config`) and applies what it can without a
+restart (conduit-rmho). Everything else is saved and reported as needing a
+restart; nothing is silently ignored.
+
+### Request format
+
+`config` is a merge patch (RFC 7396 style): nested objects merge into the
+existing ones, any other value (string, number, bool, array) replaces the
+value at its path, and `null` deletes the key. Top-level keys may be
+dot-paths. A path segment that meets an array selects the element whose
+`name` equals it (providers, channels) or a numeric index. Names that
+contain dots (`glm-5.3`) must be given as nested keys, not in a dot-path.
+
+```json
+{"action": "update_config",
+ "config": {
+   "ai.providers.z-ai.timeout_seconds": 600,
+   "ai.providers.z-ai.max_concurrent": 4,
+   "ai": {"pricing_overrides": {"glm-5.3": {"input_per_m_token": 0.6, "output_per_m_token": 2.2}}}
+ }}
+```
+
+Secret-named keys (`api_key`, `*_token`, `password`, `secret`, ...) and URL
+passwords only accept a `${ENV_VAR}` reference; a literal credential is
+rejected, and so is the `[redacted]` marker from the `config` action.
+
+### What applies live and what needs a restart
+
+| Key | Mode | How it is applied |
+|-----|------|-------------------|
+| `ai.providers.<name>.*` of an existing provider that is not `claude-code` (model, `timeout_seconds`, `fallback_model`, `max_concurrent`, `model_max_concurrent`, `context_window`, `thinking`, `prompt_caching`, `base_url`, `api_key` ref, `auth`, ...) | live | The provider instance is rebuilt from its new config; throttle limits and pricing are rebuilt. Unchanged providers keep their instance. |
+| `ai.pricing_overrides`, deprecated `ai.smart_routing.pricing_overrides` | live | New pricing resolver for the router, the usage tracker and the package default. |
+| `ai.call_log.*` | live | A new call log is opened; the old one is flushed and closed. |
+| `ai.subagent_default_model` | live | Read by the next sub-agent spawn. |
+| `ai.providers` itself, a whole provider entry, a provider's `name`/`type`/`claude_code`, any `claude-code` provider | restart | Adding, removing, renaming or retyping providers changes wiring built at startup (MCP server, session mapper). |
+| Everything else: `port`, `ssh`, `database`, `data_dir`, `channels` (tokens and enable flags), `tools` (enabled list, sandbox `allowed_paths`, denylist), `auth`, `mcp`, `agent`, `heartbeat`/`agent_heartbeat` (quiet hours), `restart_resume`, `ai.default_provider`, `ai.model_aliases`, `ai.max_tokens`, `ai.prompt_caching`, `ai.compaction`, ... | restart | Saved to the file; the result lists these keys under "REQUIRES A RESTART". `restart_resume` is only read at startup, so it is restart-only by nature. |
+
+In-flight turns keep the provider instance they started with; new turns use
+the new one. Lookups by name that happen later in a turn (quota fallback,
+empty-response failover, vision side calls) see the new instance. When a
+provider's `max_concurrent`/`model_max_concurrent` changes, its throttle pools
+are rebuilt: calls already holding a slot finish in the old pool, so for a
+moment a provider can run up to (old in-flight + new limit) calls, and the
+dropped pools' counters restart from zero.
+
+`Gateway` `config` (and every other reader of the effective config) shows the
+live values. Restart-only values appear there only after a restart.
+
+### Validation and atomicity
+
+The patch is applied to the raw JSON document, and the result goes through
+the same pipeline as startup (`config.Parse`: `secrets_file`, `${ENV_VAR}`
+expansion, deprecated-key folding, derived defaults, `Validate`). If it fails,
+or a new provider instance cannot be built, the update is rejected and neither
+the file nor the running gateway changes. Setting a key to the value it
+already has is reported as unchanged.
+
+### Persistence
+
+The config file is edited as a document, not re-marshalled from the loaded
+struct: `${ENV_VAR}` placeholders, unknown keys, deprecated keys, key order,
+indentation and every untouched value are written back byte for byte, and
+expanded secrets never reach the disk. The write is atomic (temp file in the
+same directory, fsync, rename; symlinks are followed so the target is
+replaced) and keeps the file's permission bits (0600 for a new file). The
+previous content is saved to `<config>.bak` first. If the file was edited on
+disk between reading and writing, the update is refused and must be re-run.
+Updates are serialized.
+
+### Approval policy
+
+Every `update_config` call is model-originated and config controls the
+sandbox, credentials, provider endpoints and remote access, so **every**
+change needs the owner's approval through the human approval system (the same
+mechanism as gated Kubernetes and SSH operations):
+
+1. The patch is validated and classified first. An invalid patch is rejected
+   immediately, with nothing changed and no prompt.
+2. A valid plan is frozen (the exact patch bytes are fingerprinted) and the
+   owner is prompted on the originating channel with each key, its new
+   (redacted) value, whether it applies live or needs a restart, and whether it
+   is security-sensitive (sandbox, tools, credentials, `base_url`, auth,
+   approvals, channels, SSH, MCP, ...).
+3. Only after a `YES <code>` reply is the update applied, re-validated
+   against the file as it is at that moment. The model never sees the code.
+4. Non-interactive turns (cron, heartbeat, sub-agents, wakes, MCP) and a
+   gateway without an approval channel fail closed: nothing is applied.
+
+### Audit
+
+Each planned and applied update is logged (`component=config_reload`) with
+the changed key paths split into live, restart and security-sensitive keys,
+the rebuilt providers, the config path and the backup path, never values.
+The approval system logs its own request/approve/deny events with the same
+key lists. The tool result shows the redacted value of each changed key as
+saved.
 
 ## Environment Variables
 

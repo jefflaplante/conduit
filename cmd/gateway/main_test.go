@@ -61,10 +61,6 @@ func TestGatewayCLISearchIntegration(t *testing.T) {
 	t.Run("SearchWebRequest", func(t *testing.T) {
 		testWebSearchRequest(t, cfg)
 	})
-
-	t.Run("OAuthScenario", func(t *testing.T) {
-		testOAuthSearchScenario(t, cfg)
-	})
 }
 
 // testGatewayStartup tests that the gateway starts up correctly with search configuration
@@ -141,48 +137,6 @@ func testWebSearchRequest(t *testing.T, cfg *config.Config) {
 	t.Log("Web search functionality validated through gateway initialization")
 }
 
-// testOAuthSearchScenario tests OAuth token handling in search scenarios
-func testOAuthSearchScenario(t *testing.T, cfg *config.Config) {
-	// Test OAuth token detection
-	oauthToken := "sk-ant-oat01-test12345-abcdef"
-	tokenInfo := auth.GetOAuthTokenInfo(oauthToken)
-
-	if !tokenInfo.IsOAuthToken {
-		t.Error("Should detect OAuth token")
-	}
-
-	// Test tool mapping for OAuth
-	mappedTool, canMap := auth.MapToolForOAuth("web_search_20250305")
-	if !canMap {
-		t.Error("web_search_20250305 should map for OAuth")
-	}
-
-	if mappedTool != "WebSearch" {
-		t.Errorf("Should map to 'WebSearch', got '%s'", mappedTool)
-	}
-
-	// Test system prompt format
-	stringPrompt := "You are a helpful assistant."
-	convertedPrompt := auth.ConvertSystemPromptForOAuth(stringPrompt)
-
-	arrayPrompt, ok := convertedPrompt.([]map[string]interface{})
-	if !ok {
-		t.Error("Converted prompt should be array format")
-		return
-	}
-
-	if len(arrayPrompt) < 1 {
-		t.Error("Converted prompt should have at least one element")
-	}
-
-	// Check first element is Claude Code identifier
-	if arrayPrompt[0]["text"] != "You are Claude Code, Anthropic's official CLI for Claude." {
-		t.Error("First element should be Claude Code identifier")
-	}
-
-	t.Log("OAuth scenario validation passed")
-}
-
 // Test data storage
 var testToken string
 
@@ -206,38 +160,5 @@ func BenchmarkSearchRequestThroughAPI(b *testing.B) {
 			b.Fatalf("Failed to create gateway: %v", err)
 		}
 		_ = gw // Use the gateway to avoid unused variable warning
-	}
-}
-
-// BenchmarkOAuthTokenProcessing benchmarks OAuth token detection and processing
-func BenchmarkOAuthTokenProcessing(b *testing.B) {
-	tokens := []string{
-		"sk-ant-oat01-benchmark1-test123",
-		"sk-ant-api01-regular-test456",
-		"sk-ant-oat01-benchmark2-test789",
-		"invalid-token-format",
-	}
-
-	tools := []string{
-		"web_search",
-		"web_search_20250305",
-		"read",
-		"write",
-		"message",
-		"exec",
-	}
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		token := tokens[i%len(tokens)]
-		tool := tools[i%len(tools)]
-
-		// Benchmark the OAuth processing pipeline
-		tokenInfo := auth.GetOAuthTokenInfo(token)
-		if tokenInfo.IsOAuthToken {
-			auth.MapToolForOAuth(tool)
-			auth.ValidateOAuthHeaders(tokenInfo.RequiredHeaders)
-		}
 	}
 }

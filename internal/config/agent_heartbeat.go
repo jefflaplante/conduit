@@ -37,6 +37,12 @@ type AgentHeartbeatConfig struct {
 	AlertTargets     []AlertTarget    `json:"alert_targets"`
 	AlertRetryPolicy AlertRetryPolicy `json:"alert_retry_policy"`
 
+	// JobFailureAlertThreshold is how many consecutive failed runs of a
+	// scheduled job trigger one alert to AlertTargets[0] (conduit-2six).
+	// 0 means the default (3); a negative value disables the alerts (the
+	// failure streak is still tracked and the failure log still written).
+	JobFailureAlertThreshold int `json:"job_failure_alert_threshold,omitempty"`
+
 	// Task processing settings
 	HeartbeatTaskPath string   `json:"heartbeat_task_path"`
 	EnabledTaskTypes  []string `json:"enabled_task_types"`
