@@ -454,6 +454,7 @@ const (
 	WakeSourceSubAgentAnnounced = "sub_agent_announced" // raw result already posted to channel
 	WakeSourceSubAgentSilent    = "sub_agent_silent"    // raw result NOT posted; parent must decide
 	WakeSourceSubAgentFailed    = "sub_agent_failed"    // sub-agent encountered an error
+	WakeSourceSubAgentCanceled  = "sub_agent_canceled"  // sub-agent canceled via SessionsCancel (conduit-38cz)
 	WakeSourceHeartbeat         = "heartbeat"
 )
 

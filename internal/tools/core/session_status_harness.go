@@ -28,3 +28,29 @@ func formatProviderSlots(gauge map[string]interface{}) string {
 	}
 	return b.String()
 }
+
+// formatSubAgents renders GetSessionStatus's sub_agents (conduit-38cz):
+// the sub-agents this session spawned and how each ended.
+func formatSubAgents(status map[string]interface{}) string {
+	subs, ok := status["sub_agents"].([]map[string]interface{})
+	if !ok || len(subs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nSub-agents:\n")
+	for _, s := range subs {
+		name := fmt.Sprint(s["session_key"])
+		if l, _ := s["label"].(string); l != "" {
+			name += fmt.Sprintf(" (%q)", l)
+		}
+		fmt.Fprintf(&b, "  %s: %v", name, s["status"])
+		if by, _ := s["canceled_by"].(string); by != "" {
+			fmt.Fprintf(&b, " by %s", by)
+		}
+		if task, _ := s["task"].(string); task != "" {
+			fmt.Fprintf(&b, " — %s", task)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}

@@ -36,6 +36,11 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("cannot spawn sub-agent: parent context already canceled")
 	}
+	// conduit-38cz: during the shutdown drain the runner would drop the
+	// turn anyway; say so to the caller instead of spawning a dead session.
+	if g.isDraining() {
+		return "", fmt.Errorf("cannot spawn sub-agent: %w", errTurnDraining)
+	}
 
 	// Capture the parent session key now (before the goroutine), so we can wake it when done.
 	parentSessionKey := types.RequestSessionKey(ctx)
@@ -62,6 +67,16 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 	if len(skills) > 0 {
 		subContext["skill_filter"] = strings.Join(skills, ",")
 	}
+	// conduit-38cz: persisted lineage (SessionStatus shows it; survives a
+	// restart for inspection) and the label SessionsSend/SessionsCancel
+	// resolve.
+	subContext[ctxKeySubAgentStatus] = string(SubAgentRunning)
+	if parentSessionKey != "" {
+		subContext[ctxKeyParentSessionKey] = parentSessionKey
+	}
+	if label != "" {
+		subContext["label"] = label
+	}
 	if err := g.sessions.SetSessionContextBatch(session.Key, subContext); err != nil {
 		return "", fmt.Errorf("failed to configure sub-agent session: %w", err)
 	}
@@ -80,11 +95,22 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 		announce:         announce,
 	}
 
+	// Use gateway lifecycle context, not request context.
+	// Sub-agents are fire-and-forget - they should outlive the parent request.
+	// Created (and registered) before the goroutine starts so a cancel or a
+	// /stop cascade issued right after the spawn returns still reaches it
+	// (conduit-38cz, conduit-31jg.84).
+	subCtx, cancel := deriveSubAgentContext(g.lifecycleCtx(), timeoutSeconds)
+	g.turns().RegisterSubAgent(SubAgentInfo{
+		SessionKey:       session.Key,
+		ParentSessionKey: parentSessionKey,
+		Label:            label,
+		Model:            modelToUse,
+		Task:             turnPreview(task),
+	}, cancel)
+
 	// Run the sub-agent in a goroutine
 	go func() {
-		// Use gateway lifecycle context, not request context.
-		// Sub-agents are fire-and-forget - they should outlive the parent request.
-		subCtx, cancel := deriveSubAgentContext(g.lifecycleCtx(), timeoutSeconds)
 		defer cancel()
 
 		// Own WM bucket + read-only fallback to the parent's WM. conduit-31jg.30
@@ -102,6 +128,7 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 			Session:              session,
 			Text:                 task,
 			NonInteractiveSource: "subagent",
+			ParentSessionKey:     parentSessionKey,
 		}, sink)
 		g.finishSubAgent(session.Key, spawn, sink.outcome)
 	}()
@@ -123,6 +150,8 @@ type subAgentSpawn struct {
 type subAgentOutcome struct {
 	err    error
 	result string
+	// canceled: ended by SessionsCancel or a /stop cascade (conduit-38cz).
+	canceled bool
 }
 
 // subAgentTurnSink keeps the sub-agent's custom failure / degenerate-reply
@@ -142,7 +171,12 @@ func (s *subAgentTurnSink) Progress(string)                                {}
 func (s *subAgentTurnSink) ToolEvent(context.Context, tools.ToolEventInfo) {}
 
 func (s *subAgentTurnSink) Finish(_ context.Context, res *TurnResult) {
+	info, _ := s.g.turns().SubAgent(s.sessionKey)
 	switch {
+	case (res.Cancelled || res.Dropped) && info.Status == SubAgentCanceled:
+		// conduit-38cz: canceled by its parent, the owner or /stop.
+		s.outcome.canceled = true
+		s.outcome.err = fmt.Errorf("sub-agent canceled by %s", info.CanceledBy)
 	case res.Dropped:
 		s.outcome.err = fmt.Errorf("sub-agent did not start: %v", res.Err)
 	case res.Cancelled && s.g.isDraining():
@@ -176,6 +210,31 @@ func (s *subAgentTurnSink) Finish(_ context.Context, res *TurnResult) {
 // finishSubAgent announces the sub-agent's outcome to the parent channel
 // (when requested) and wakes the parent session.
 func (g *Gateway) finishSubAgent(sessionKey string, sp subAgentSpawn, out subAgentOutcome) {
+	status := SubAgentCompleted
+	switch {
+	case out.canceled:
+		status = SubAgentCanceled
+	case out.err != nil:
+		status = SubAgentFailed
+	}
+	info, quiet, _ := g.turns().finishSubAgent(sessionKey, status)
+	if info.Status != "" {
+		status = info.Status
+	}
+	g.recordSubAgentEnd(sessionKey, status, info.CanceledBy)
+
+	// conduit-38cz: never wake a parent that is itself a canceled
+	// sub-agent — the wake would start a fresh turn on it.
+	if sp.parentSessionKey != "" && g.subAgentParentGone(sp.parentSessionKey) {
+		log.Printf("[SubAgent] %s ended (%s); parent %s was canceled — not waking it", sessionKey, status, sp.parentSessionKey)
+		return
+	}
+
+	if status == SubAgentCanceled {
+		g.wakeParentCanceled(sessionKey, sp, info, quiet)
+		return
+	}
+
 	if out.err != nil {
 		log.Printf("[SubAgent] Error on %s: %v", sessionKey, out.err)
 		errorMsg := fmt.Sprintf("Error: %v", out.err)

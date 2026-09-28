@@ -28,6 +28,9 @@ func (g *Gateway) GetSessionStatus(ctx context.Context, sessionKey string) (map[
 		"context":        session.Context,
 		"context_budget": ContextBudgetFromSession(session).ToMap(),
 		"fuel_gauge":     g.GetFuelGauge(5).ToMap(),
+		// conduit-38cz: sub-agents this session spawned (running and
+		// recently finished).
+		"sub_agents": subAgentStatusList(g.turns().SubAgents(session.Key)),
 	}, nil
 }
 

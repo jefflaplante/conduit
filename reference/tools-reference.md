@@ -246,6 +246,29 @@ Spawn a new session with specific configuration.
 {"channel": "tui", "user_id": "background-worker"}
 ```
 
+### SessionsCancel
+
+Cancel a running sub-agent spawned with SessionsSpawn (conduit-38cz). This
+stops its in-flight LLM call and tool loop, drops wakes queued on it, and
+cancels any sub-agents it spawned. The sub-agent's session ends in the
+`canceled` state. The spawning session is woken with wake source
+`sub_agent_canceled`. Only the spawning session, an ancestor of it, or the
+owner (a turn started by a live human message) can cancel a sub-agent.
+SessionsCancel is enabled automatically whenever `SessionsSpawn` is in
+`tools.enabled_tools`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `sessionKey` | string | No* | Sub-agent session key (returned by SessionsSpawn) |
+| `label` | string | No* | Label given at spawn time |
+| `reason` | string | No | Recorded and shown in the cancel notice |
+
+\* One of `sessionKey` or `label` is required.
+
+```json
+{"label": "research-worker", "reason": "user changed the plan"}
+```
+
 ### SessionStatus
 
 Get detailed status of the current or specified session.

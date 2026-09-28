@@ -84,6 +84,10 @@ type TurnRunner struct {
 	// Both guarded by mu (conduit-31jg.88).
 	inflight map[*turnState]struct{}
 	drainLog []TurnSnapshot
+
+	// subagents tracks parent→child sub-agent sessions for SessionsCancel
+	// and the /stop cascade (conduit-38cz, conduit-31jg.84). Own lock.
+	subagents *subAgentRegistry
 }
 
 // TurnOutcome is how a turn in flight during a shutdown drain ended
@@ -122,6 +126,9 @@ type TurnSnapshot struct {
 	Source string `json:"source,omitempty"`
 	// ScheduledJob is the owning scheduler job, if any.
 	ScheduledJob string `json:"scheduled_job,omitempty"`
+	// ParentSessionKey is the session that spawned this sub-agent turn
+	// (conduit-38cz); "" for other turns.
+	ParentSessionKey string `json:"parent_session_key,omitempty"`
 	// UserMessageID is the persisted user row ("" while queued).
 	UserMessageID string `json:"user_message_id,omitempty"`
 	// Preview is the first line of the request, at most turnPreviewMax runes.
@@ -164,6 +171,8 @@ func newTurnState(req TurnRequest) *turnState {
 		ScheduledJob: req.ScheduledJob,
 		StartedAt:    time.Now(),
 		Source:       req.NonInteractiveSource,
+
+		ParentSessionKey: req.ParentSessionKey,
 	}
 	text := req.Text
 	if strings.TrimSpace(text) == "" {
@@ -314,6 +323,10 @@ type TurnRequest struct {
 	// SkipReflection disables SPAR farewell / context-budget prompt
 	// injection for this turn (the /goodbye turn already is the reflection).
 	SkipReflection bool
+
+	// ParentSessionKey links a sub-agent turn to the session that spawned
+	// it (TurnSnapshot, conduit-38cz).
+	ParentSessionKey string
 }
 
 // TurnResult is what the runner hands to TurnSink.Finish.
@@ -393,6 +406,7 @@ func NewTurnRunner(store *sessions.Store, router *ai.Router, compactor turnCompa
 		queued:    make(map[string][]*queuedTurn),
 		scheduled: make(map[string]string),
 		inflight:  make(map[*turnState]struct{}),
+		subagents: newSubAgentRegistry(),
 	}
 }
 

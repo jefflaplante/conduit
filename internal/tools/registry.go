@@ -134,6 +134,11 @@ func NewRegistry(cfg config.ToolsConfig) *Registry {
 	for _, toolName := range cfg.EnabledTools {
 		registry.enabledTools[normalizeToolName(toolName)] = true
 	}
+	// conduit-38cz: SessionsCancel comes with SessionsSpawn — a session
+	// that can spawn sub-agents can always cancel its own.
+	if registry.enabledTools[normalizeToolName("SessionsSpawn")] {
+		registry.enabledTools[normalizeToolName("SessionsCancel")] = true
+	}
 
 	// conduit-31jg.6: symlinks are now resolved before the containment check.
 	// Warn about top-level links in a sandbox root that point outside it —
@@ -227,6 +232,7 @@ func (r *Registry) registerAllTools() {
 		core.NewSessionsListTool(r.services),
 		core.NewSessionsSendTool(r.services),
 		core.NewSessionsSpawnTool(r.services),
+		core.NewSessionsCancelTool(r.services), // conduit-38cz
 		core.NewSessionStatusTool(r.services),
 		// Gateway tool
 		core.NewGatewayTool(r.services),
@@ -828,7 +834,7 @@ func (r *Registry) GetAllToolsHelp() map[string]interface{} {
 			"memory":          {"MemorySearch"},
 			"communication":   {"Message", "Tts"},
 			"web":             {"WebSearch", "WebFetch"},
-			"sessions":        {"SessionsList", "SessionsSend", "SessionsSpawn", "SessionStatus"},
+			"sessions":        {"SessionsList", "SessionsSend", "SessionsSpawn", "SessionsCancel", "SessionStatus"},
 			"scheduling":      {"Cron"},
 			"gateway":         {"Gateway"},
 			"vision":          {"Image"},

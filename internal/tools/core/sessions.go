@@ -711,6 +711,7 @@ func (t *SessionStatusTool) formatSessionStatus(status map[string]interface{}) s
 		}
 		builder.WriteString(formatProviderSlots(gauge)) // conduit-38cz
 	}
+	builder.WriteString(formatSubAgents(status)) // conduit-38cz
 
 	// Context info
 	if context, ok := status["context"].(map[string]interface{}); ok && len(context) > 0 {
