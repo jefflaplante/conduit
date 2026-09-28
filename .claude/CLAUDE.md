@@ -59,7 +59,7 @@ Incoming messages flow: Channel Adapter → Channel Manager → Gateway → AI R
 - types.BrainService (internal/tools/types/types.go) — Tiered cognitive memory: Store, Get, Recall, List, Delete, Push/Pop/Peek (scratchpad), Promote, Consolidate, Status, Close.
 - types.BrainFTSSearcher (internal/tools/types/types.go) — FTS5-backed search over brain LTM entries.
 - types.VisionAnalyzer (internal/tools/types/types.go) — Narrow single-method interface (`AnalyzeImage`) wiring ImageTool to a multimodal LLM backend.
-- agent.AgentSystem (internal/agent/interface.go) — Concrete agent system interface with Name(), BuildSystemPrompt, SetTools, ProcessResponse. Includes SessionStateManager for tracking processing states.
+- agent.AgentSystem (internal/agent/interface.go) — Concrete agent system interface with Name(), BuildSystemPrompt, SetTools, ProcessResponse. (interface.go also declares SessionStateManager, which is currently unwired — no production implementation or caller.)
 
 ### Dependency Injection Pattern
 
@@ -97,8 +97,6 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/agent/ — Agent personality system: interface definition, Conduit agent implementation, prompt builder with section-based prompt construction
 - internal/models/ — Anthropic API models: typed Messages API request/response structs (messages.go) and the request builder (anthropic.go)
 - internal/tools/ — Tool registry (registry*.go: registration, lookup, enable/sandbox, execute, skills bridge, optional tools, selftest), execution engine with parallel support, plus top-level tool files:
-  - aliases.go — Anthropic tool alias resolution (unversioned name → versioned name) with env override
-  - anthropic.go — Anthropic versioned tool name constants (web_search, web_fetch)
   - execution*.go, execution_adapter.go — Tool execution engine and adapter (dispatch, parallel/same-path grouping, loop, format, timeout/drain, middleware, events). HandleToolCallFlow is a for-loop over rounds with an explicit turnState (runToolLoop/roundTrip/advance); golden trace in testdata/toolloop_golden.json
   - chain_state.go, failure_tracker.go, pattern_tracker.go, watchdog.go — Per-turn chain state, failure/pattern tracking, stall watchdog
   - exec.go (Bash; bash_policy.go + shell_lexer.go denylist), fileops*.go (Read/Write/Glob/List), google_workspace.go — Top-level tool implementations

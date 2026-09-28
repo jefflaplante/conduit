@@ -466,3 +466,13 @@ func isKind(raw json.RawMessage, first byte) bool {
 	raw = bytes.TrimLeft(raw, " \t\r\n")
 	return len(raw) > 0 && raw[0] == first
 }
+
+// AnthropicTool represents a tool definition for the Anthropic API.
+// conduit-31jg.36: also the tool type of MessagesRequest; CacheControl marks
+// the tools cache breakpoint.
+type AnthropicTool struct {
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description"`
+	InputSchema  map[string]interface{} `json:"input_schema"`
+	CacheControl *CacheControl          `json:"cache_control,omitempty"`
+}

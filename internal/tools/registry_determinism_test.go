@@ -42,9 +42,6 @@ func TestRegistry_ModelVisibleNameListsSorted(t *testing.T) {
 		}
 	}
 
-	if names := ListAvailableAliases(); !sort.StringsAreSorted(names) {
-		t.Fatalf("ListAvailableAliases not sorted: %v", names)
-	}
 	if names := ListAvailableOptionalTools(); !sort.StringsAreSorted(names) {
 		t.Fatalf("ListAvailableOptionalTools not sorted: %v", names)
 	}
