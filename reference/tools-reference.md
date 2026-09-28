@@ -269,6 +269,10 @@ SessionsCancel is enabled automatically whenever `SessionsSpawn` is in
 {"label": "research-worker", "reason": "user changed the plan"}
 ```
 
+`/stop` in a chat also stops every sub-agent that chat spawned, their
+children, and so on (conduit-31jg.84). The reply says how many were stopped.
+Cancels caused by `/stop` don't wake anyone.
+
 ### SessionStatus
 
 Get detailed status of the current or specified session.

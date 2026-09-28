@@ -465,15 +465,19 @@ func (r *TurnRunner) Stop(sessionKey string) (stoppedRunning bool, droppedQueued
 	return stoppedRunning, droppedQueued
 }
 
-// stopResponse renders Stop's outcome for the /stop commands.
-func stopResponse(stoppedRunning bool, droppedQueued int) (string, bool) {
+// stopResponse renders StopTree's outcome for the /stop commands,
+// including how many sub-agents the cascade stopped (conduit-31jg.84).
+func stopResponse(res StopResult) (string, bool) {
+	sub := subAgentsLine(res.SubAgents)
 	switch {
-	case stoppedRunning && droppedQueued > 0:
-		return fmt.Sprintf("Stopping current operation... (%d queued message(s) dropped)", droppedQueued), true
-	case stoppedRunning:
-		return "Stopping current operation...", true
-	case droppedQueued > 0:
-		return fmt.Sprintf("Dropped %d queued message(s).", droppedQueued), true
+	case res.StoppedRunning && res.DroppedQueued > 0:
+		return fmt.Sprintf("Stopping current operation... (%d queued message(s) dropped)", res.DroppedQueued) + sub, true
+	case res.StoppedRunning:
+		return "Stopping current operation..." + sub, true
+	case res.DroppedQueued > 0:
+		return fmt.Sprintf("Dropped %d queued message(s).", res.DroppedQueued) + sub, true
+	case res.SubAgents > 0:
+		return fmt.Sprintf("Stopped %d sub-agent(s).", res.SubAgents), true
 	}
 	return "No active operation to stop.", false
 }

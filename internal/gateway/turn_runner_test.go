@@ -258,7 +258,7 @@ func TestTurnRunner_StopCounts(t *testing.T) {
 	if running, dropped := gw.turns().Stop("nope"); running || dropped != 0 {
 		t.Fatalf("Stop on idle session = %v,%d", running, dropped)
 	}
-	if s, ok := stopResponse(true, 2); !ok || !strings.Contains(s, "2 queued") {
+	if s, ok := stopResponse(StopResult{StoppedRunning: true, DroppedQueued: 2}); !ok || !strings.Contains(s, "2 queued") {
 		t.Fatalf("stopResponse = %q", s)
 	}
 }

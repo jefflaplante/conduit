@@ -216,6 +216,66 @@ func TestSessionsCancel_CascadesToDescendants(t *testing.T) {
 	waitSub(t, "parent woken once", func() bool { return len(wakeMessages(t, store, parent.Key)[types.WakeSourceSubAgentCanceled]) == 1 })
 }
 
+// conduit-31jg.84: /stop in the parent cascades to children and
+// grandchildren, reports the count, and wakes nobody.
+func TestStopTree_CascadesToChildrenAndGrandchildren(t *testing.T) {
+	gw, store, _ := newSubAgentCancelGateway(t)
+	parent, _ := store.GetOrCreateSession("u1", "chan1")
+	other, _ := store.GetOrCreateSession("u2", "chan2")
+	child1 := spawnHanging(t, gw, sessionCtx(parent.Key), "c1")
+	child2 := spawnHanging(t, gw, sessionCtx(parent.Key), "c2")
+	grand := spawnHanging(t, gw, sessionCtx(child1), "g")
+	unrelated := spawnHanging(t, gw, sessionCtx(other.Key), "u")
+
+	res := gw.turns().StopTree(parent.Key)
+	if res.SubAgents != 3 || res.StoppedRunning || res.DroppedQueued != 0 {
+		t.Fatalf("StopTree = %+v, want 3 sub-agents", res)
+	}
+	for _, k := range []string{child1, child2, grand} {
+		waitSub(t, k+" ended", subAgentEnded(gw, k))
+		if info, _ := gw.turns().SubAgent(k); info.Status != SubAgentCanceled || info.CanceledBy != "/stop" {
+			t.Errorf("%s = %+v", k, info)
+		}
+	}
+	if info, _ := gw.turns().SubAgent(unrelated); info.Status != SubAgentRunning || !gw.turns().Busy(unrelated) {
+		t.Errorf("unrelated sub-agent was stopped: %+v", info)
+	}
+	// Quiet: /stop's human knows; no session is woken.
+	time.Sleep(50 * time.Millisecond)
+	for _, k := range []string{parent.Key, child1} {
+		if w := wakeMessages(t, store, k); len(w) != 0 {
+			t.Errorf("%s woken after /stop: %v", k, w)
+		}
+	}
+	msg, ok := stopResponse(res)
+	if !ok || !strings.Contains(msg, "Stopped 3 sub-agent(s)") {
+		t.Errorf("stopResponse = %q", msg)
+	}
+	// A second /stop finds nothing.
+	if res := gw.turns().StopTree(parent.Key); res.SubAgents != 0 {
+		t.Errorf("second StopTree = %+v", res)
+	}
+	gw.turns().StopTree(other.Key)
+	waitSub(t, "unrelated ended", subAgentEnded(gw, unrelated))
+}
+
+func TestStopResponse_SubAgentCounts(t *testing.T) {
+	for _, c := range []struct {
+		res  StopResult
+		want string
+	}{
+		{StopResult{StoppedRunning: true, SubAgents: 2}, "Stopping current operation... (2 sub-agent(s) stopped)"},
+		{StopResult{StoppedRunning: true, DroppedQueued: 1, SubAgents: 1}, "Stopping current operation... (1 queued message(s) dropped) (1 sub-agent(s) stopped)"},
+		{StopResult{DroppedQueued: 1}, "Dropped 1 queued message(s)."},
+		{StopResult{SubAgents: 4}, "Stopped 4 sub-agent(s)."},
+		{StopResult{}, "No active operation to stop."},
+	} {
+		if got, _ := stopResponse(c.res); got != c.want {
+			t.Errorf("stopResponse(%+v) = %q, want %q", c.res, got, c.want)
+		}
+	}
+}
+
 // Spawning during the shutdown drain is refused up front.
 func TestSpawnSubAgent_RefusedWhileDraining(t *testing.T) {
 	gw, _, _ := newSubAgentCancelGateway(t)

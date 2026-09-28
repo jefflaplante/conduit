@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -294,4 +295,33 @@ func (r *TurnRunner) CancelSubAgent(key, by string, quiet bool) int {
 	keys, cancels := r.subagents.markTree(key, true, by, quiet)
 	r.cancelTree(keys, cancels)
 	return len(keys)
+}
+
+// StopResult is what /stop did (conduit-31jg.84).
+type StopResult struct {
+	StoppedRunning bool
+	DroppedQueued  int
+	// SubAgents is the number of running sub-agents (children,
+	// grandchildren, …) canceled by the cascade.
+	SubAgents int
+}
+
+// StopTree is /stop: Stop(sessionKey) plus a cascade to every running
+// sub-agent sessionKey spawned, recursively (conduit-31jg.84). Cascaded
+// cancels are quiet: the parent is not woken (the human just said stop).
+func (r *TurnRunner) StopTree(sessionKey string) StopResult {
+	var res StopResult
+	res.StoppedRunning, res.DroppedQueued = r.Stop(sessionKey)
+	keys, cancels := r.subagents.markTree(sessionKey, false, "/stop", true)
+	r.cancelTree(keys, cancels)
+	res.SubAgents = len(keys)
+	return res
+}
+
+// subAgentsLine renders a /stop sub-agent count suffix.
+func subAgentsLine(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (%d sub-agent(s) stopped)", n)
 }
