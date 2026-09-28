@@ -14,14 +14,6 @@ type SkillIntegrator struct {
 	config   *SkillsConfig
 }
 
-// NewSkillIntegrator creates a new skill integrator
-func NewSkillIntegrator(executor *Executor) *SkillIntegrator {
-	return &SkillIntegrator{
-		executor: executor,
-		loader:   NewSkillLoader(),
-	}
-}
-
 // NewSkillIntegratorWithConfig creates a skill integrator aware of dependency-inline settings
 func NewSkillIntegratorWithConfig(executor *Executor, cfg *SkillsConfig) *SkillIntegrator {
 	return &SkillIntegrator{
@@ -514,47 +506,5 @@ func BuildDependencyContextList(skills []Skill) string {
 	b.WriteString("Reference files declared by the above skills. Read them with the Read tool when the task requires their contents.\n\n")
 	b.WriteString(strings.Join(lines, "\n"))
 	b.WriteString("\n")
-	return b.String()
-}
-
-// BuildDependencyContext is the legacy package-level function preserving the
-// original behavior (inline everything, no cap). Kept for external callers and tests.
-func BuildDependencyContext(skills []Skill) string {
-	hasAny := false
-	for _, s := range skills {
-		if len(s.Dependencies) > 0 {
-			hasAny = true
-			break
-		}
-	}
-	if !hasAny {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString("\n### Skill Dependencies (auto-loaded)\n")
-	b.WriteString("Reference files declared by the above skills have been inlined below.\n\n")
-
-	for _, skill := range skills {
-		if len(skill.Dependencies) == 0 {
-			continue
-		}
-		for _, dep := range skill.Dependencies {
-			header := fmt.Sprintf("#### %s — %s\n", skill.Name, dep.Path)
-			switch {
-			case dep.Missing:
-				b.WriteString(header)
-				b.WriteString("_(declared dependency not found on disk; skill still active)_\n\n")
-			case dep.Skipped:
-				b.WriteString(header)
-				b.WriteString(fmt.Sprintf("_(skipped: %s)_\n\n", dep.SkipReason))
-			case dep.Content != "":
-				b.WriteString(header)
-				b.WriteString(strings.TrimRight(dep.Content, "\n"))
-				b.WriteString("\n\n")
-			}
-		}
-	}
-
 	return b.String()
 }

@@ -597,36 +597,6 @@ func (g *MultiTurnGenerator) Generate() *ai.GenerateRequest {
 	}
 }
 
-// MixedGenerator delegates to other generators based on a weighted random selection.
-type MixedGenerator struct {
-	generators  []RequestGenerator
-	weights     []int
-	totalWeight int
-}
-
-func NewMixedGenerator(gens map[RequestGenerator]int) *MixedGenerator {
-	mg := &MixedGenerator{}
-	for g, w := range gens {
-		mg.generators = append(mg.generators, g)
-		mg.weights = append(mg.weights, w)
-		mg.totalWeight += w
-	}
-	return mg
-}
-
-func (g *MixedGenerator) Name() string { return "mixed" }
-func (g *MixedGenerator) Generate() *ai.GenerateRequest {
-	r := rand.Intn(g.totalWeight)
-	cumulative := 0
-	for i, w := range g.weights {
-		cumulative += w
-		if r < cumulative {
-			return g.generators[i].Generate()
-		}
-	}
-	return g.generators[len(g.generators)-1].Generate()
-}
-
 // --- Internal helpers ---
 
 // generatorPicker picks generators according to a weighted distribution.

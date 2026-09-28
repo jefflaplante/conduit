@@ -411,30 +411,6 @@ func TestMultiTurnGenerator(t *testing.T) {
 	assert.Equal(t, 300, req.MaxTokens)
 }
 
-func TestMixedGenerator(t *testing.T) {
-	simple := &SimpleChatGenerator{}
-	tool := &ToolUseGenerator{}
-
-	mg := NewMixedGenerator(map[RequestGenerator]int{
-		simple: 80,
-		tool:   20,
-	})
-	assert.Equal(t, "mixed", mg.Name())
-
-	// Generate many requests — should get both types
-	names := make(map[string]bool)
-	for i := 0; i < 100; i++ {
-		req := mg.Generate()
-		if len(req.Tools) > 0 {
-			names["tool_use"] = true
-		} else {
-			names["simple"] = true
-		}
-	}
-	assert.True(t, names["simple"], "should generate simple requests")
-	assert.True(t, names["tool_use"], "should generate tool_use requests")
-}
-
 // --- Percentile tests ---
 
 func TestPercentile(t *testing.T) {

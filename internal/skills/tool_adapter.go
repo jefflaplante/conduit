@@ -89,12 +89,3 @@ func (sta *SkillToolAdapter) BrainProduces() []string {
 }
 
 // ToolResultCompatible type has been replaced by RegistryToolResult above
-
-// GetSkillSystemContext returns context information for agent prompts
-func GetSkillSystemContext(ctx context.Context, manager *Manager) (string, error) {
-	if manager == nil || !manager.IsEnabled() {
-		return "", nil
-	}
-
-	return manager.BuildSystemPromptContext(ctx)
-}
