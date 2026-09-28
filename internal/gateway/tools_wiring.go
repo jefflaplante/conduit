@@ -7,32 +7,11 @@ import (
 	"strings"
 
 	"conduit/internal/ai"
-	"conduit/internal/channels"
 	"conduit/internal/config"
 	"conduit/internal/tools"
 	"conduit/internal/tools/schema"
 	"conduit/internal/tools/types"
 )
-
-// channelStatusAdapter wraps the channel manager to implement
-// schema.ChannelStatusGetter for the schema builder's channel-discovery
-// provider.
-type channelStatusAdapter struct {
-	manager *channels.Manager
-}
-
-// GetStatus implements schema.ChannelStatusGetter.
-func (a *channelStatusAdapter) GetStatus() map[string]interface{} {
-	result := make(map[string]interface{})
-	for id, status := range a.manager.GetStatus() {
-		result[id] = map[string]interface{}{
-			"status":  string(status.Status),
-			"message": status.Message,
-			"name":    id, // Use ID as name for now.
-		}
-	}
-	return result
-}
 
 // deriveRuntimeChannel returns the first enabled channel name, or "websocket"
 // as fallback. Used to seed the agent system's RuntimeChannel config.
@@ -117,28 +96,4 @@ func convertToolsToAIFormat(registry *tools.Registry) []ai.Tool {
 	}
 
 	return aiTools
-}
-
-// createSchemaBuilder creates a schema builder with discovery providers for
-// enhanced tool schemas. A nil gateway yields a builder without channel
-// discovery; other providers (workspace paths) are still attached.
-func createSchemaBuilder(gw *Gateway, cfg *config.Config) *schema.Builder {
-	providers := make(map[string]schema.DiscoveryProvider)
-
-	// Add channel discovery provider.
-	if gw != nil && gw.channelManager != nil {
-		channelProvider := schema.NewChannelDiscoveryProvider(&channelStatusAdapter{manager: gw.channelManager})
-		providers["channels"] = channelProvider
-	}
-
-	// Add workspace discovery provider.
-	workspaceDir := cfg.Workspace.ContextDir
-	if workspaceDir == "" {
-		workspaceDir = "./workspace"
-	}
-	allowedPaths := cfg.Tools.Sandbox.AllowedPaths
-	workspaceProvider := schema.NewWorkspaceDiscoveryProvider(workspaceDir, allowedPaths)
-	providers["workspace_paths"] = workspaceProvider
-
-	return schema.NewBuilder(providers)
 }

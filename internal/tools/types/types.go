@@ -49,7 +49,7 @@ type ToolServices struct {
 	Approvals approval.Requester
 
 	// Schema enhancement
-	SchemaBuilder *schema.Builder // For enhancing tool schemas with discovery data
+	SchemaBuilder *schema.Builder // Discovery-enhanced schemas (CLI/help only); built by Registry.SetServices, callers leave it nil
 
 	// Debug
 	DebugLog *debuglog.RingBuffer // In-memory ring buffer for debug log entries (nil-safe)
