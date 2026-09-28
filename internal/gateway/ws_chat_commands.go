@@ -63,7 +63,7 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 
 		// SPAR reflection: fire reflection BEFORE clearing context.
 		// The model still has the full conversation context at this point.
-		if g.sessionReflector != nil {
+		if g.cognition.ReflectionEnabled() {
 			if session, sErr := g.sessions.GetSession(sessionKey); sErr == nil && session.MessageCount > 2 {
 				reflCtx, reflCancel := context.WithTimeout(ctx, 10*time.Second)
 				g.reflectHighConfidencePost(reflCtx, session)

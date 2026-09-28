@@ -20,7 +20,7 @@ func (g *Gateway) refreshBeadsPeriodic(ctx context.Context, interval time.Durati
 	// must be visible to all sessions. The value is overwritten on each
 	// refresh cycle, so it stays current despite being in long-term storage.
 	brainStore := func(storeCtx context.Context, key, value, source string) error {
-		return g.brainService.Store(storeCtx, key, value, brain.TierLongTerm, source)
+		return g.cognition.Brain.Store(storeCtx, key, value, brain.TierLongTerm, source)
 	}
 
 	// Run immediately at startup.

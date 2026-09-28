@@ -258,11 +258,9 @@ func (g *Gateway) stopAll(shutdownCtx context.Context, server *http.Server) {
 	// close the vector search service (no-op when disabled).
 	g.search.StopVector()
 
-	// Close brain service.
-	if g.brainService != nil {
-		if err := g.brainService.Close(); err != nil {
-			g.logger.Error("error closing brain service", "error", err)
-		}
+	// Close brain service (cognition; no-op when the brain is disabled).
+	if err := g.cognition.Stop(); err != nil {
+		g.logger.Error("error closing brain service", "error", err)
 	}
 
 	// conduit-2lzv: flush the LLM call log last — turns are drained by now.
@@ -362,18 +360,12 @@ func (g *Gateway) Start(ctx context.Context) error {
 		stopCleanup()
 	}()
 
-	// Start SPAR reflection idle-session loop (writes Go-only metrics for
-	// substantive sessions that go idle). Runs on the same cadence as state cleanup.
-	if g.sessionReflector != nil {
-		go g.reflectOnIdleSessions(ctx, 30*time.Minute, 5*time.Minute)
-	}
-
-	// Start beads→Brain wiring: query active tasks from `br` CLI and write
-	// summary to Brain's sense.tasks.active namespace for Situation Awareness.
-	// Best-effort: if br is missing or slow, this is silently skipped.
-	if g.brainService != nil {
-		go g.refreshBeadsPeriodic(ctx, 5*time.Minute)
-	}
+	// Start cognition loops (conduit-18ub): the SPAR reflection idle-session
+	// loop (Go-only metrics for substantive sessions that go idle; same
+	// cadence as state cleanup) then the beads→Brain refresh loop.
+	g.cognition.Start(ctx,
+		func(ctx context.Context) { g.reflectOnIdleSessions(ctx, 30*time.Minute, 5*time.Minute) },
+		func(ctx context.Context) { g.refreshBeadsPeriodic(ctx, 5*time.Minute) })
 
 	// Start search subsystem: FTS file watcher and periodic safety-net
 	// re-index loop (fsnotify handles real-time .md changes; the periodic

@@ -13,8 +13,6 @@ import (
 	"conduit/internal/ai"
 	"conduit/internal/approval"
 	"conduit/internal/auth"
-	"conduit/internal/brain"
-	"conduit/internal/brain/rem"
 	"conduit/internal/channels"
 	"conduit/internal/channels/telegram"
 	tuiAdapter "conduit/internal/channels/tui"
@@ -24,7 +22,6 @@ import (
 	"conduit/internal/mcp"
 	"conduit/internal/middleware"
 	"conduit/internal/mqtt"
-	"conduit/internal/reflection"
 	"conduit/internal/scheduler"
 	"conduit/internal/sessions"
 	"conduit/internal/skills"
@@ -108,14 +105,11 @@ type Gateway struct {
 	// MQTT event ingest (optional)
 	mqttService *mqtt.Service
 
-	// Brain cognitive architecture (optional)
-	brainService    *brain.Brain
-	remCycle        *rem.REMCycle
-	reflectionStore *reflection.ReflectionStore
-
-	// SPAR reflection: session-end detection and metrics
-	farewellDetector *reflection.FarewellDetector
-	sessionReflector *reflection.SessionReflector
+	// Cognition (optional): Brain cognitive architecture, REM cycle and SPAR
+	// reflection (session-end detection and metrics). Held by value so a
+	// zero Gateway has a valid, disabled cognition service. See
+	// CognitionService (cognition_service.go; conduit-18ub).
+	cognition CognitionService
 
 	// SSH server (optional)
 	sshServer *charmssh.Server
@@ -400,10 +394,10 @@ func New(cfg *config.Config) (*Gateway, error) {
 	}
 
 	// Initialize optional Brain cognitive architecture (+ REM cycle).
-	gw.initBrainSubsystem(cfg)
+	gw.cognition.initBrain(cfg, logger)
 
 	// Initialize optional SPAR reflection store (requires Brain for its database).
-	gw.initReflectionSubsystem(cfg, executionEngine)
+	gw.cognition.initReflection(cfg, executionEngine, logger)
 
 	toolsRegistry.SetServices(gw.buildToolServices(cfg, sessionStore, aiRouter, debugBuffer, skillsManager))
 
@@ -421,8 +415,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 	agentSystem.SetTools(aiTools)
 
 	// Wire brain service into agent for Situation Awareness prompt section
-	if gw.brainService != nil {
-		agentSystem.SetBrainService(gw.brainService)
+	if gw.cognition.BrainEnabled() {
+		agentSystem.SetBrainService(gw.cognition.Brain)
 	}
 
 	// Initialize scheduler
@@ -441,8 +435,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Initialize heartbeat integration
 	hbIntegration := heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, gw.monitoring.MetricsCollector, cfg.AgentHeartbeat.Model, cfg.AgentHeartbeat.TimeoutSeconds)
 	hbIntegration.SetAgentHeartbeatConfig(cfg.AgentHeartbeat) // conduit-31jg.33: configured TZ + quiet window
-	if gw.brainService != nil {
-		hbIntegration.SetBrainWriter(newHeartbeatBrainWriter(gw.brainService))
+	if gw.cognition.BrainEnabled() {
+		hbIntegration.SetBrainWriter(newHeartbeatBrainWriter(gw.cognition.Brain))
 		logger.Info("heartbeat Brain writer enabled for sense.alerts.* namespace")
 	}
 	// conduit-31jg.66: heartbeat turns run on the shared TurnRunner.
@@ -469,8 +463,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 		"tool_count", len(aiTools),
 		"vector_search_enabled", gw.search.VectorService != nil,
 		"mqtt_enabled", gw.mqttService != nil,
-		"brain_enabled", gw.brainService != nil,
-		"reflection_enabled", gw.reflectionStore != nil,
+		"brain_enabled", gw.cognition.BrainEnabled(),
+		"reflection_enabled", gw.cognition.ReflectionStore != nil,
 		"compaction_enabled", gw.compactionEngine != nil,
 		"rate_limiting_enabled", cfg.RateLimiting.Enabled,
 		"model_alias_count", len(cfg.AI.ModelAliases))

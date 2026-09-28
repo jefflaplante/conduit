@@ -154,7 +154,7 @@ func TestRefreshBeadsPeriodic_CancelImmediately(t *testing.T) {
 	gw, _ := newTestGatewayWithSessions(t)
 	gw.logger = newTestLogger()
 
-	// brainService must not be nil — give it a real (but short-lived) brain.
+	// cognition.Brain must not be nil — give it a real (but short-lived) brain.
 	dbPath := filepath.Join(t.TempDir(), "brain.db")
 	b, err := brainNew(dbPath)
 	if err != nil {
@@ -162,7 +162,7 @@ func TestRefreshBeadsPeriodic_CancelImmediately(t *testing.T) {
 		return
 	}
 	defer b.Close()
-	gw.brainService = b
+	gw.cognition.Brain = b
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

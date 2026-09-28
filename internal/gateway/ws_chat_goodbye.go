@@ -28,7 +28,7 @@ func (g *Gateway) handleReflectiveSessionEnd(ctx context.Context, client *Client
 
 	// If reflection is available and the session has enough history, let
 	// the model reflect before we tear down the context.
-	if g.sessionReflector != nil && session.MessageCount > 2 {
+	if g.cognition.ReflectionEnabled() && session.MessageCount > 2 {
 		if reflPrompt := g.reflectHighConfidencePre(); reflPrompt != "" {
 			// Short timeout to avoid blocking the client if the model is slow.
 			reflCtx, reflCancel := context.WithTimeout(ctx, 30*time.Second)
@@ -68,7 +68,7 @@ func (g *Gateway) handleReflectiveSessionEnd(ctx context.Context, client *Client
 			}
 			return
 		}
-	} else if g.sessionReflector != nil {
+	} else if g.cognition.ReflectionEnabled() {
 		// Session too short for model reflection — write Go-only metrics
 		reflCtx, reflCancel := context.WithTimeout(ctx, 5*time.Second)
 		g.reflectOnSessionEnd(reflCtx, sessionKey)

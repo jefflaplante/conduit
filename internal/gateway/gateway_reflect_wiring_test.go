@@ -29,7 +29,7 @@ func TestShouldTriggerReflection_NilDetector(t *testing.T) {
 }
 
 func TestShouldTriggerReflection_Farewell(t *testing.T) {
-	gw := &Gateway{farewellDetector: reflection.NewFarewellDetector()}
+	gw := &Gateway{cognition: CognitionService{FarewellDetector: reflection.NewFarewellDetector()}}
 	triggered, typ := gw.shouldTriggerReflection("goodbye")
 	if !triggered {
 		t.Error("expected farewell to trigger")
@@ -40,7 +40,7 @@ func TestShouldTriggerReflection_Farewell(t *testing.T) {
 }
 
 func TestShouldTriggerReflection_Command(t *testing.T) {
-	gw := &Gateway{farewellDetector: reflection.NewFarewellDetector()}
+	gw := &Gateway{cognition: CognitionService{FarewellDetector: reflection.NewFarewellDetector()}}
 	triggered, typ := gw.shouldTriggerReflection("/goodbye")
 	if !triggered {
 		t.Error("expected /goodbye to trigger")
@@ -51,7 +51,7 @@ func TestShouldTriggerReflection_Command(t *testing.T) {
 }
 
 func TestShouldTriggerReflection_NoMatch(t *testing.T) {
-	gw := &Gateway{farewellDetector: reflection.NewFarewellDetector()}
+	gw := &Gateway{cognition: CognitionService{FarewellDetector: reflection.NewFarewellDetector()}}
 	triggered, _ := gw.shouldTriggerReflection("hello, how are you today?")
 	if triggered {
 		t.Error("expected no trigger for greeting")
@@ -75,7 +75,7 @@ func TestReflectHighConfidencePre_WithReflector(t *testing.T) {
 	store := reflection.NewStore(b.DB())
 	refl := reflection.NewSessionReflector(store)
 
-	gw := &Gateway{sessionReflector: refl}
+	gw := &Gateway{cognition: CognitionService{SessionReflector: refl}}
 	prompt := gw.reflectHighConfidencePre()
 	if prompt == "" {
 		t.Error("expected non-empty reflection prompt")
@@ -100,9 +100,8 @@ func TestReflectHighConfidencePost_WithReflector(t *testing.T) {
 	refl := reflection.NewSessionReflector(store)
 
 	gw := &Gateway{
-		sessionReflector: refl,
-		reflectionStore:  store,
-		logger:           newTestLogger(),
+		cognition: CognitionService{SessionReflector: refl, ReflectionStore: store},
+		logger:    newTestLogger(),
 	}
 	session := &sessions.Session{
 		Key:          "sess-ref",
@@ -143,10 +142,9 @@ func TestReflectOnSessionEnd_NonSubstantive(t *testing.T) {
 	rs := reflection.NewStore(b.DB())
 
 	gw := &Gateway{
-		sessions:         store,
-		logger:           newTestLogger(),
-		sessionReflector: reflection.NewSessionReflector(rs),
-		reflectionStore:  rs,
+		sessions:  store,
+		logger:    newTestLogger(),
+		cognition: CognitionService{SessionReflector: reflection.NewSessionReflector(rs), ReflectionStore: rs},
 	}
 	// Should return early because session has <= 5 messages
 	gw.reflectOnSessionEnd(context.Background(), session.Key)
@@ -168,10 +166,9 @@ func TestReflectOnSessionEnd_MissingSession(t *testing.T) {
 	rs := reflection.NewStore(b.DB())
 
 	gw := &Gateway{
-		sessions:         store,
-		logger:           newTestLogger(),
-		sessionReflector: reflection.NewSessionReflector(rs),
-		reflectionStore:  rs,
+		sessions:  store,
+		logger:    newTestLogger(),
+		cognition: CognitionService{SessionReflector: reflection.NewSessionReflector(rs), ReflectionStore: rs},
 	}
 	// No session exists — should not panic
 	gw.reflectOnSessionEnd(context.Background(), "no-such-session")
@@ -181,7 +178,7 @@ func TestReflectOnIdleSessions_NilReflector(t *testing.T) {
 	gw := &Gateway{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancelled immediately
-	// Should return early because sessionReflector is nil
+	// Should return early because cognition.SessionReflector is nil
 	gw.reflectOnIdleSessions(ctx, time.Hour, time.Second)
 }
 
@@ -201,10 +198,9 @@ func TestReflectOnIdleSessions_ContextCancel(t *testing.T) {
 	rs := reflection.NewStore(b.DB())
 
 	gw := &Gateway{
-		sessions:         store,
-		logger:           newTestLogger(),
-		sessionReflector: reflection.NewSessionReflector(rs),
-		reflectionStore:  rs,
+		sessions:  store,
+		logger:    newTestLogger(),
+		cognition: CognitionService{SessionReflector: reflection.NewSessionReflector(rs), ReflectionStore: rs},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
