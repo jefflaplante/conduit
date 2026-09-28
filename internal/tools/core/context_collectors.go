@@ -260,7 +260,8 @@ func (t *ContextTool) collectChannels() (map[string]interface{}, string) {
 		channels, err := t.services.Gateway.GetChannelStatus()
 		if err == nil && len(channels) > 0 {
 			result["channels"] = channels
-			for name, info := range channels {
+			for _, name := range sortedKeys(channels) {
+				info := channels[name]
 				if channelInfo, ok := info.(map[string]interface{}); ok {
 					status := "unknown"
 					if s, ok := channelInfo["status"].(string); ok {

@@ -194,8 +194,8 @@ func summarizeArgs(args map[string]interface{}) string {
 		return ""
 	}
 	parts := make([]string, 0, len(args))
-	for k, v := range args {
-		vs := fmt.Sprintf("%v", v)
+	for _, k := range sortedKeys(args) {
+		vs := fmt.Sprintf("%v", args[k])
 		vs = truncateStr(vs, 120)
 		parts = append(parts, fmt.Sprintf("%s=%s", k, vs))
 	}

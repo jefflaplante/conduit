@@ -2,6 +2,7 @@ package tools
 
 import (
 	"log"
+	"sort"
 
 	"conduit/internal/tools/types"
 )
@@ -24,6 +25,7 @@ func ListAvailableOptionalTools() []string {
 	for name := range optionalFactories {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 

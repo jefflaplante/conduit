@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -193,6 +194,7 @@ func (im *InventoryManager) GetGroups() []string {
 	for group := range im.hostsByGroup {
 		groups = append(groups, group)
 	}
+	sort.Strings(groups)
 	return groups
 }
 
@@ -566,6 +568,7 @@ func (im *InventoryManager) mergeInventoryHosts(newHosts []config.SSHHostConfig)
 			for g := range groupSet {
 				host.Groups = append(host.Groups, g)
 			}
+			sort.Strings(host.Groups)
 		}
 		hostMap[host.Name] = host
 	}
@@ -598,6 +601,7 @@ func (im *InventoryManager) mergeGroups(newGroups map[string][]string) {
 		for name := range hostSet {
 			merged = append(merged, name)
 		}
+		sort.Strings(merged)
 		im.hostsByGroup[group] = merged
 	}
 }
