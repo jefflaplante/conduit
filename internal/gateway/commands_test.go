@@ -100,32 +100,6 @@ func TestFormatAliasKeys(t *testing.T) {
 	}
 }
 
-func TestFormatAliasDisplay(t *testing.T) {
-	aliases := map[string]string{
-		"sonnet":  "claude-sonnet-4-20250514",
-		"default": "",
-	}
-
-	out := formatAliasDisplay(aliases, "• ", "→")
-	if !strings.Contains(out, "sonnet") {
-		t.Errorf("expected sonnet in output: %q", out)
-	}
-	if !strings.Contains(out, "claude-sonnet-4-20250514") {
-		t.Errorf("expected full model: %q", out)
-	}
-	// Empty string should render as "reset to default"
-	if !strings.Contains(out, "reset to default") {
-		t.Errorf("expected 'reset to default' for empty model, got %q", out)
-	}
-	// Check prefix and arrow are present
-	if !strings.Contains(out, "• ") {
-		t.Errorf("expected prefix '• ' in output")
-	}
-	if !strings.Contains(out, "→") {
-		t.Errorf("expected arrow '→' in output")
-	}
-}
-
 func TestGetModelAliases_UsesConfig(t *testing.T) {
 	gw := &Gateway{
 		config: &config.Config{

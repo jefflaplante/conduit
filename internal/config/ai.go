@@ -75,16 +75,6 @@ type CompactionConfig struct {
 	RecentMessagesToKeep int `json:"recent_messages_to_keep,omitempty"`
 }
 
-// DefaultCompactionConfig returns sensible defaults for context compaction.
-func DefaultCompactionConfig() CompactionConfig {
-	return CompactionConfig{
-		Enabled:              false,
-		Threshold:            0.70,
-		Model:                "claude-haiku-4-5-20251001",
-		RecentMessagesToKeep: 10,
-	}
-}
-
 // SmartRoutingConfig is the deprecated ai.smart_routing block.
 //
 // Deprecated: smart routing was removed (conduit-2avx); it had never been

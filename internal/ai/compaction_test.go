@@ -92,15 +92,6 @@ func TestCompactionEngine_ShouldCompact(t *testing.T) {
 	}
 }
 
-func TestCompactionConfig_Defaults(t *testing.T) {
-	cfg := config.DefaultCompactionConfig()
-
-	assert.False(t, cfg.Enabled, "default should be disabled")
-	assert.Equal(t, 0.70, cfg.Threshold, "default threshold should be 70%")
-	assert.Equal(t, "claude-haiku-4-5-20251001", cfg.Model, "default model should be haiku")
-	assert.Equal(t, 10, cfg.RecentMessagesToKeep, "default recent messages should be 10")
-}
-
 func TestCompactionEngine_Compact_NotEnoughMessages(t *testing.T) {
 	// Create a temporary database
 	store, err := sessions.NewStore(":memory:")

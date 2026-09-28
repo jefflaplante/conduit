@@ -160,52 +160,6 @@ func TestResolveContextWindow(t *testing.T) {
 	}
 }
 
-func TestRecordTokenUsage_AccumulatesRunningTotals(t *testing.T) {
-	session := &sessions.Session{
-		Key: "s6",
-		Context: map[string]string{
-			ctxKeySessionPromptTokensTotal:     "100",
-			ctxKeySessionCompletionTokensTotal: "50",
-		},
-	}
-	batch := recordTokenUsage(session, 25, 10, 35)
-	if batch == nil {
-		t.Fatal("expected non-nil batch")
-	}
-	if batch["last_prompt_tokens"] != "25" {
-		t.Errorf("expected last_prompt_tokens=25, got %s", batch["last_prompt_tokens"])
-	}
-	if batch["last_completion_tokens"] != "10" {
-		t.Errorf("expected last_completion_tokens=10, got %s", batch["last_completion_tokens"])
-	}
-	if batch["last_total_tokens"] != "35" {
-		t.Errorf("expected last_total_tokens=35, got %s", batch["last_total_tokens"])
-	}
-	if batch[ctxKeySessionPromptTokensTotal] != "125" {
-		t.Errorf("expected cumulative prompt=125, got %s", batch[ctxKeySessionPromptTokensTotal])
-	}
-	if batch[ctxKeySessionCompletionTokensTotal] != "60" {
-		t.Errorf("expected cumulative completion=60, got %s", batch[ctxKeySessionCompletionTokensTotal])
-	}
-	if batch[ctxKeyContextBudgetUpdatedAt] == "" {
-		t.Error("expected updated_at timestamp to be set")
-	}
-}
-
-func TestRecordTokenUsage_DerivesTotalWhenZero(t *testing.T) {
-	session := &sessions.Session{Key: "s7", Context: map[string]string{}}
-	batch := recordTokenUsage(session, 100, 20, 0)
-	if batch["last_total_tokens"] != "120" {
-		t.Errorf("expected derived total=120, got %s", batch["last_total_tokens"])
-	}
-}
-
-func TestRecordTokenUsage_NilSession(t *testing.T) {
-	if batch := recordTokenUsage(nil, 1, 2, 3); batch != nil {
-		t.Errorf("expected nil batch for nil session, got %v", batch)
-	}
-}
-
 func TestGetContextBudget_MethodIntegration(t *testing.T) {
 	gw, store := newTestGatewayWithSessions(t)
 	sess, _ := store.GetOrCreateSession("u1", "c1")

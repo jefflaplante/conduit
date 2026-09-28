@@ -93,19 +93,3 @@ func NewAuthService(cfg *config.Config, logger *slog.Logger, db *sql.DB) (*AuthS
 		WSAuthenticator: wsAuthenticator,
 	}, nil
 }
-
-// createInternalToken generates an authentication token for internal services
-// (e.g., the integrated SSH server) that connect back to the gateway via WebSocket.
-func (g *Gateway) createInternalToken(clientName string) (string, error) {
-	resp, err := g.auth.AuthStorage.CreateToken(auth.CreateTokenRequest{
-		ClientName: clientName,
-		Metadata: map[string]string{
-			"type": "internal",
-		},
-	})
-	if err != nil {
-		return "", err
-	}
-	g.logger.Debug("created internal token", "client_name", clientName, "token_id", resp.TokenInfo.TokenID)
-	return resp.Token, nil
-}
