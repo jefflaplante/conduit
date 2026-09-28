@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -56,10 +57,22 @@ type QuietHoursConfig struct {
 // chat_id is used today, and nothing filters by Severity.
 type AlertTarget struct {
 	Name     string            `json:"name"`
-	Type     string            `json:"type" validate:"enum=telegram|email|slack|webhook|mqtt"` // "telegram", "email", "slack", etc.
+	Type     string            `json:"type"` // one of alertTargetTypes; checked by Validate
 	Config   map[string]string `json:"config"`
 	Severity []string          `json:"severity"` // Reserved: not used for routing
 }
+
+// alertTargetTypes are the accepted alert_targets[].type values.
+//
+// conduit-40qj: "email" and "slack" were dropped — no deliverer exists for
+// them (SMTP is conduit-115f). Configs that still use them keep loading:
+// Validate accepts them (see removedAlertTargetTypes) and the load logs a
+// one-time warning that the target is ignored.
+var alertTargetTypes = []string{"telegram", "webhook", "mqtt"}
+
+// removedAlertTargetTypes were once valid alert target types. They pass
+// validation (so an existing config never fails to start) but warn at load.
+var removedAlertTargetTypes = map[string]bool{"email": true, "slack": true}
 
 // AlertRetryPolicy defines how failed alert deliveries should be retried
 type AlertRetryPolicy struct {
@@ -157,8 +170,8 @@ func (a AlertTarget) Validate() error {
 	if a.Type == "" {
 		return fmt.Errorf("type cannot be empty")
 	}
-	if err := validateEnumTags(&a); err != nil {
-		return err
+	if !slices.Contains(alertTargetTypes, a.Type) && !removedAlertTargetTypes[a.Type] {
+		return fmt.Errorf("invalid value %q for Type (allowed: %s)", a.Type, strings.Join(alertTargetTypes, ", "))
 	}
 
 	// Validate severity levels ([]string can't use enum tags)

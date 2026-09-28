@@ -386,7 +386,7 @@ func (t *SessionsSpawnTool) Name() string {
 }
 
 func (t *SessionsSpawnTool) Description() string {
-	return "Spawn a new sub-agent to work on a task asynchronously. You MUST call this tool to delegate work — describing or narrating a spawn does nothing. The sub-agent runs independently; with announce=true (default), results are delivered back to the user automatically. With announce=false, poll SessionStatus to check progress."
+	return "Spawn a new sub-agent to work on a task asynchronously. You MUST call this tool to delegate work — describing or narrating a spawn does nothing. The sub-agent runs independently and its result (or failure) is delivered back to you automatically as a new turn when it finishes; with announce=true (default) it is also posted to the user. Do not poll or wait on it — end your turn. SessionStatus is only for an optional one-off progress check."
 }
 
 func (t *SessionsSpawnTool) Parameters() map[string]interface{} {
@@ -460,7 +460,7 @@ func (t *SessionsSpawnTool) Execute(ctx context.Context, args map[string]interfa
 
 	resultMsg := fmt.Sprintf("Sub-agent spawned (session: %s, task: %q).", sessionKey, truncateTask(task, 80))
 	if !announce {
-		resultMsg += " Running quietly — poll SessionStatus to check progress."
+		resultMsg += " Running quietly — the result will be delivered to you automatically when it finishes; no need to poll."
 	}
 
 	return &types.ToolResult{
@@ -547,7 +547,7 @@ func (t *SessionsSpawnTool) SelfTest(ctx context.Context, opts *types.SelfTestOp
 					"announce":       false,
 					"timeoutSeconds": 600,
 				},
-				Expected: "Sub-agent spawned quietly; poll SessionStatus to check progress",
+				Expected: "Sub-agent spawned quietly; its result wakes this session automatically when complete",
 			},
 		}
 	}

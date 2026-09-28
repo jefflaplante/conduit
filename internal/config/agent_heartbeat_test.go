@@ -249,6 +249,16 @@ func TestAlertTargetValidation(t *testing.T) {
 			errMsg:  "invalid value",
 		},
 		{
+			// conduit-40qj: removed type — accepted (load warns instead).
+			name: "removed email type still validates",
+			target: AlertTarget{
+				Name:     "mail",
+				Type:     "email",
+				Severity: []string{"critical"},
+			},
+			wantErr: false,
+		},
+		{
 			name: "invalid severity",
 			target: AlertTarget{
 				Name:     "test",

@@ -127,9 +127,11 @@ Alert targets are parsed and validated, but the gateway does not currently route
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Unique identifier for this target |
-| `type` | string | Delivery type: `telegram`, `webhook`, `email` |
+| `type` | string | `telegram`, `webhook` or `mqtt` (only `telegram` is used today; see above) |
 | `config` | object | Type-specific configuration |
 | `severity` | array | Which severities to route here: `critical`, `warning`, `info` |
+
+The `email` and `slack` types were removed (conduit-40qj): no deliverer exists for them, so they never delivered anything. A config that still uses them keeps loading; the gateway logs a one-time warning naming the target, and ignores it. Remove such targets or switch them to `telegram`. Email delivery is tracked in conduit-115f.
 
 ## Alert Queue File (pending.json)
 

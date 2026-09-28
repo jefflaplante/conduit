@@ -60,6 +60,49 @@ func TestLoad_DeprecatedKeysWarnOnce(t *testing.T) {
 	}
 }
 
+// conduit-40qj: email/slack alert targets have no deliverer. A config that
+// still uses them must keep loading (no startup failure) and warn once.
+func TestLoad_RemovedAlertTargetTypesWarnNotFail(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	deprecationOnce.Clear()
+
+	var doc map[string]json.RawMessage
+	base, err := json.Marshal(Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(base, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["agent_heartbeat"] = json.RawMessage(`{"enabled": true, "interval_minutes": 5,
+	  "alert_targets": [
+	    {"name": "tg", "type": "telegram", "config": {"chat_id": "1"}, "severity": ["critical"]},
+	    {"name": "mail", "type": "email", "config": {"to": "x@example.com"}, "severity": ["critical"]},
+	    {"name": "chat", "type": "slack", "config": {}, "severity": ["warning"]}],
+	  "alert_retry_policy": {"max_retries": 3, "retry_interval": 30000000000, "backoff_factor": 2}}`)
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := Load(path); err != nil {
+			t.Fatalf("Load #%d: config with email/slack targets must still load: %v", i, err)
+		}
+	}
+	out := buf.String()
+	for _, want := range []string{`type "email" (target "mail") is no longer supported`, `type "slack" (target "chat") is no longer supported`} {
+		if n := strings.Count(out, want); n != 1 {
+			t.Errorf("warning %q logged %d times, want 1\n%s", want, n, out)
+		}
+	}
+}
+
 var deprecatedWarningsUnderTest = []string{
 	"agent_heartbeat.alert_queue_path is deprecated", // conduit-31jg.59
 	"ai.smart_routing is deprecated",                 // conduit-2avx

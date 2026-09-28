@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"sync"
 )
@@ -29,6 +30,14 @@ func (c *Config) warnDeprecatedKeys() {
 			"agent_heartbeat.alert_queue_path is deprecated: the gateway no longer processes that queue "+
 				"(it belongs to alert-flush.sh and the HEARTBEAT.md prompt). Its directory is still used for "+
 				"deferred.json; remove the key to use the default memory/alerts/ (conduit-31jg.59)")
+	}
+	for _, t := range c.AgentHeartbeat.AlertTargets {
+		if removedAlertTargetTypes[t.Type] {
+			warnDeprecatedOnce("agent_heartbeat.alert_targets.type="+t.Type,
+				fmt.Sprintf("agent_heartbeat.alert_targets: type %q (target %q) is no longer supported and is ignored: "+
+					"no %s deliverer exists (email/SMTP is tracked in conduit-115f). Remove the target or use type "+
+					"\"telegram\" (conduit-40qj)", t.Type, t.Name, t.Type))
+		}
 	}
 	if unroutedAlertTargets(c.AgentHeartbeat.AlertTargets) {
 		warnDeprecatedOnce("agent_heartbeat.alert_targets",
