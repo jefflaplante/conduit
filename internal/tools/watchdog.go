@@ -113,11 +113,6 @@ func (tb *turnBudget) markRound(toolCalls []ai.ToolCall, anySuccess bool, now ti
 	}
 }
 
-// watchdogDeadline returns the effective wall-clock deadline for the chain.
-func watchdogDeadline(chainStart time.Time, extensions int) time.Time {
-	return chainStart.Add(turnHardCap + time.Duration(extensions)*TurnExtension)
-}
-
 // watchdogTerminalMessage is the user-visible message returned when a turn is
 // stopped for exceeding its wall-clock window without extension eligibility.
 // reason explains why no extension was granted (stalled / budget / no coder work).

@@ -14,18 +14,6 @@ import (
 	"conduit/internal/config"
 )
 
-// mockDialer implements a mock dialer for testing tunnels
-type mockDialer struct {
-	dialFunc func(network, addr string) (net.Conn, error)
-}
-
-func (m *mockDialer) Dial(network, addr string) (net.Conn, error) {
-	if m.dialFunc != nil {
-		return m.dialFunc(network, addr)
-	}
-	return nil, fmt.Errorf("not implemented")
-}
-
 // testableSSHClient is a wrapper around SSHClient that allows mock dialing for tests
 type testableSSHClient struct {
 	*SSHClient

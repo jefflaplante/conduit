@@ -510,31 +510,6 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 	return raw
 }
 
-// joinSections assembles prompt text from sections (legacy, rebuilds each section).
-// If included is nil, all sections are built. Otherwise only included[i]==true sections are used.
-// If dropped names are provided, a compact-mode notice is appended.
-func joinSections(sections []promptSection, included []bool, dropped ...string) string {
-	var nonEmpty []string
-	for i, sec := range sections {
-		if included != nil && !included[i] {
-			continue
-		}
-		text := strings.TrimSpace(sec.build())
-		if text != "" {
-			nonEmpty = append(nonEmpty, text)
-		}
-	}
-
-	result := strings.Join(nonEmpty, "\n\n")
-
-	if len(dropped) > 0 {
-		result += fmt.Sprintf("\n\n---\n[Compact mode: omitted %s to fit context window. Core capabilities remain active.]",
-			strings.Join(dropped, ", "))
-	}
-
-	return result
-}
-
 // joinPromptParts joins the static and dynamic prompt parts the way a
 // single-string system prompt carries them (conduit-31jg.14).
 func joinPromptParts(static, dynamic string) string {

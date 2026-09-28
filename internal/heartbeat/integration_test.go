@@ -58,10 +58,6 @@ func newMockAIExecutorWithResponse(response string) *mockAIExecutor {
 	}
 }
 
-func (m *mockAIExecutor) setResponse(prompt, response string) {
-	m.responses[prompt] = response
-}
-
 // funcMockAIExecutor is a mock that uses a function for execution
 type funcMockAIExecutor struct {
 	execFunc func(ctx context.Context, session *sessions.Session, prompt, model string) (AIResponse, error)

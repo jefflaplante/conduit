@@ -17,12 +17,6 @@ func (m *multiError) add(format string, args ...interface{}) {
 	m.errs = append(m.errs, fmt.Sprintf(format, args...))
 }
 
-func (m *multiError) addIf(cond bool, format string, args ...interface{}) {
-	if cond {
-		m.add(format, args...)
-	}
-}
-
 func (m *multiError) hasErrors() bool { return len(m.errs) > 0 }
 
 func (m *multiError) toError() error {

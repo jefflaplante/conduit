@@ -69,13 +69,6 @@ func mockStreamOutput(text, sessionID string, inputTokens, outputTokens int) str
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// mockJSONOutput returns a valid JSON output string for testing.
-func mockJSONOutput(result, sessionID string, inputTokens, outputTokens int) string {
-	return fmt.Sprintf(
-		`{"result":"%s","session_id":"%s","usage":{"inputTokens":%d,"outputTokens":%d}}`,
-		result, sessionID, inputTokens, outputTokens)
-}
-
 // --- Integration Tests ---
 
 // TestIntegration_FullProviderFlowWithSessionMapping verifies the full request
