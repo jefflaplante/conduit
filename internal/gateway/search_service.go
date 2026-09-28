@@ -93,7 +93,7 @@ type SearchService struct {
 // succeeds.
 //
 // Brain indexing (which needs a brain.Brain value that is built later)
-// is attached via WireBrainIndexer once brainService exists.
+// is attached via WireBrainIndexer once the cognition Brain exists.
 //
 // The returned SearchService is ready to Start; Start attaches the
 // fsnotify watcher goroutine and the periodic safety-net re-index loop to

@@ -34,8 +34,8 @@ func TestHandleReflectiveSessionEnd_ShortSession(t *testing.T) {
 	}
 	defer b.Close()
 	rs := reflection.NewStore(b.DB())
-	gw.sessionReflector = reflection.NewSessionReflector(rs)
-	gw.reflectionStore = rs
+	gw.cognition.SessionReflector = reflection.NewSessionReflector(rs)
+	gw.cognition.ReflectionStore = rs
 
 	c := newTestWSClient("c1")
 	calls := []string{}
@@ -244,7 +244,7 @@ func TestInitializeREMCycle_NilCycle(t *testing.T) {
 	cfg.Brain.Enabled = true
 	cfg.Brain.REMEnabled = true
 	cfg.Brain.REMSchedule = "0 0 4 * * *"
-	// g.remCycle is nil
+	// g.cognition.REMCycle is nil
 	if err := gw.initializeREMCycle(cfg); err != nil {
 		t.Errorf("expected no error when remCycle nil, got %v", err)
 	}

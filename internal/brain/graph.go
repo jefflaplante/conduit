@@ -3,7 +3,9 @@ package brain
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"conduit/internal/database"
@@ -151,4 +153,32 @@ func (b *Brain) ListGraph(ctx context.Context, opts GraphOptions) (*Graph, error
 	}
 
 	return g, nil
+}
+
+// ExportGraph returns the complete LTM graph for JSON serialization.
+func (b *Brain) ExportGraph() (*Graph, error) {
+	ctx := context.Background()
+	opts := GraphOptions{
+		MinSalience:   0.0, // Include all nodes
+		MinConfidence: 0.0, // Include all edges
+		ValueTruncate: 0,   // Full values
+		NodeLimit:     0,   // No limit
+	}
+	return b.ListGraph(ctx, opts)
+}
+
+// ExportGraphFile exports the LTM graph to a JSON file.
+func (b *Brain) ExportGraphFile(path string) error {
+	graph, err := b.ExportGraph()
+	if err != nil {
+		return fmt.Errorf("export graph: %w", err)
+	}
+	data, err := json.MarshalIndent(graph, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal graph: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+	return nil
 }

@@ -124,37 +124,13 @@ func TestSummaryAIResponseAdapter_GetContent(t *testing.T) {
 	}
 }
 
-func TestCreateSchemaBuilder_WithGateway(t *testing.T) {
-	gw, _ := newTestGatewayWithSessions(t)
-	cfg := &config.Config{
-		Workspace: config.WorkspaceConfig{ContextDir: t.TempDir()},
-		Tools: config.ToolsConfig{
-			Sandbox: config.SandboxConfig{AllowedPaths: []string{t.TempDir()}},
-		},
-	}
-	b := createSchemaBuilder(gw, cfg)
-	if b == nil {
-		t.Error("expected non-nil builder")
-	}
-}
-
-func TestCreateSchemaBuilder_NoGateway(t *testing.T) {
-	cfg := &config.Config{
-		Workspace: config.WorkspaceConfig{ContextDir: ""},
-	}
-	b := createSchemaBuilder(nil, cfg)
-	if b == nil {
-		t.Error("expected non-nil builder")
-	}
-}
-
 // TestRefreshBeadsPeriodic_CancelImmediately verifies the function returns
 // when ctx is cancelled.
 func TestRefreshBeadsPeriodic_CancelImmediately(t *testing.T) {
 	gw, _ := newTestGatewayWithSessions(t)
 	gw.logger = newTestLogger()
 
-	// brainService must not be nil — give it a real (but short-lived) brain.
+	// cognition.Brain must not be nil — give it a real (but short-lived) brain.
 	dbPath := filepath.Join(t.TempDir(), "brain.db")
 	b, err := brainNew(dbPath)
 	if err != nil {
@@ -162,7 +138,7 @@ func TestRefreshBeadsPeriodic_CancelImmediately(t *testing.T) {
 		return
 	}
 	defer b.Close()
-	gw.brainService = b
+	gw.cognition.Brain = b
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -42,3 +42,13 @@ func (a *AIConfig) normalizePricingOverrides() {
 	a.PricingOverrides = a.EffectivePricingOverrides()
 	a.SmartRouting.PricingOverrides = nil
 }
+
+// PricingOverride allows overriding default pricing for a model (USD per
+// million tokens). The cache fields are optional: 0 derives them from the
+// input price (reads 0.1x, writes 1.25x / 2x by TTL). conduit-31jg.57
+type PricingOverride struct {
+	InputPerMToken      float64 `json:"input_per_m_token"`
+	OutputPerMToken     float64 `json:"output_per_m_token"`
+	CacheReadPerMToken  float64 `json:"cache_read_per_m_token,omitempty"`
+	CacheWritePerMToken float64 `json:"cache_write_per_m_token,omitempty"`
+}

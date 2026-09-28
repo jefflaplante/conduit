@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
 
@@ -14,8 +13,6 @@ import (
 	"conduit/internal/ai"
 	"conduit/internal/approval"
 	"conduit/internal/auth"
-	"conduit/internal/brain"
-	"conduit/internal/brain/rem"
 	"conduit/internal/channels"
 	"conduit/internal/channels/telegram"
 	tuiAdapter "conduit/internal/channels/tui"
@@ -25,15 +22,12 @@ import (
 	"conduit/internal/mcp"
 	"conduit/internal/middleware"
 	"conduit/internal/mqtt"
-	"conduit/internal/protocol"
-	"conduit/internal/reflection"
 	"conduit/internal/scheduler"
 	"conduit/internal/sessions"
 	"conduit/internal/skills"
 	"conduit/internal/stt"
 	"conduit/internal/tools"
 	"conduit/internal/tools/debuglog"
-	"conduit/internal/version"
 	"conduit/internal/workspace"
 
 	charmssh "github.com/charmbracelet/ssh"
@@ -111,14 +105,11 @@ type Gateway struct {
 	// MQTT event ingest (optional)
 	mqttService *mqtt.Service
 
-	// Brain cognitive architecture (optional)
-	brainService    *brain.Brain
-	remCycle        *rem.REMCycle
-	reflectionStore *reflection.ReflectionStore
-
-	// SPAR reflection: session-end detection and metrics
-	farewellDetector *reflection.FarewellDetector
-	sessionReflector *reflection.SessionReflector
+	// Cognition (optional): Brain cognitive architecture, REM cycle and SPAR
+	// reflection (session-end detection and metrics). Held by value so a
+	// zero Gateway has a valid, disabled cognition service. See
+	// CognitionService (cognition_service.go; conduit-18ub).
+	cognition CognitionService
 
 	// SSH server (optional)
 	sshServer *charmssh.Server
@@ -148,38 +139,6 @@ type Gateway struct {
 	sessionWake     chan string
 	pendingWakeMu   sync.Mutex
 	pendingWakeKeys map[string]struct{}
-}
-
-// Client represents a WebSocket client connection
-type Client struct {
-	ID      string
-	Role    string // "client" or "node"
-	UserID  string // user identity for session scoping
-	TokenID string // auth token ID used for this connection (for revocation)
-	Conn    *websocket.Conn
-	Send    chan []byte
-
-	// CloseFrame carries an out-of-band signal from off-goroutine callers
-	// (e.g. RevokeClientByToken running on the auth-revoke hook) asking the
-	// send-pump to emit a WebSocket close frame with a specific payload
-	// before exiting. The send-pump is the only goroutine that calls
-	// Conn.Write*, so routing close frames through here guarantees
-	// serialization and avoids the race where a revoker would call
-	// WriteControl/Close concurrently with an in-flight WriteMessage on
-	// the pump. Buffered size 1: duplicate revokes coalesce harmlessly
-	// (first non-blocking send wins, the rest drop). nil on pre-existing
-	// test fixtures is tolerated.
-	CloseFrame chan []byte
-
-	// conduit-31jg.25: the active session key is written by chat /
-	// session-switch goroutines and read by the read-loop teardown and the
-	// shutdown breadcrumb, so it lives behind mu. Use SessionKey() /
-	// SetSessionKey() (ws_client.go). done is closed when the read loop
-	// exits so the send-pump stops instead of leaking until shutdown.
-	mu         sync.Mutex
-	sessionKey string
-	done       chan struct{}
-	doneOnce   sync.Once
 }
 
 // New creates a new Gateway instance
@@ -435,10 +394,10 @@ func New(cfg *config.Config) (*Gateway, error) {
 	}
 
 	// Initialize optional Brain cognitive architecture (+ REM cycle).
-	gw.initBrainSubsystem(cfg)
+	gw.cognition.initBrain(cfg, logger)
 
 	// Initialize optional SPAR reflection store (requires Brain for its database).
-	gw.initReflectionSubsystem(cfg, executionEngine)
+	gw.cognition.initReflection(cfg, executionEngine, logger)
 
 	toolsRegistry.SetServices(gw.buildToolServices(cfg, sessionStore, aiRouter, debugBuffer, skillsManager))
 
@@ -456,8 +415,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 	agentSystem.SetTools(aiTools)
 
 	// Wire brain service into agent for Situation Awareness prompt section
-	if gw.brainService != nil {
-		agentSystem.SetBrainService(gw.brainService)
+	if gw.cognition.BrainEnabled() {
+		agentSystem.SetBrainService(gw.cognition.Brain)
 	}
 
 	// Initialize scheduler
@@ -476,8 +435,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Initialize heartbeat integration
 	hbIntegration := heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, gw.monitoring.MetricsCollector, cfg.AgentHeartbeat.Model, cfg.AgentHeartbeat.TimeoutSeconds)
 	hbIntegration.SetAgentHeartbeatConfig(cfg.AgentHeartbeat) // conduit-31jg.33: configured TZ + quiet window
-	if gw.brainService != nil {
-		hbIntegration.SetBrainWriter(newHeartbeatBrainWriter(gw.brainService))
+	if gw.cognition.BrainEnabled() {
+		hbIntegration.SetBrainWriter(newHeartbeatBrainWriter(gw.cognition.Brain))
 		logger.Info("heartbeat Brain writer enabled for sense.alerts.* namespace")
 	}
 	// conduit-31jg.66: heartbeat turns run on the shared TurnRunner.
@@ -504,8 +463,8 @@ func New(cfg *config.Config) (*Gateway, error) {
 		"tool_count", len(aiTools),
 		"vector_search_enabled", gw.search.VectorService != nil,
 		"mqtt_enabled", gw.mqttService != nil,
-		"brain_enabled", gw.brainService != nil,
-		"reflection_enabled", gw.reflectionStore != nil,
+		"brain_enabled", gw.cognition.BrainEnabled(),
+		"reflection_enabled", gw.cognition.ReflectionStore != nil,
 		"compaction_enabled", gw.compactionEngine != nil,
 		"rate_limiting_enabled", cfg.RateLimiting.Enabled,
 		"model_alias_count", len(cfg.AI.ModelAliases))
@@ -521,639 +480,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 	return gw, nil
 }
 
-// createInternalToken generates an authentication token for internal services
-// (e.g., the integrated SSH server) that connect back to the gateway via WebSocket.
-func (g *Gateway) createInternalToken(clientName string) (string, error) {
-	resp, err := g.auth.AuthStorage.CreateToken(auth.CreateTokenRequest{
-		ClientName: clientName,
-		Metadata: map[string]string{
-			"type": "internal",
-		},
-	})
-	if err != nil {
-		return "", err
-	}
-	g.logger.Debug("created internal token", "client_name", clientName, "token_id", resp.TokenInfo.TokenID)
-	return resp.Token, nil
-}
-
 // ShutdownManager returns the gateway's shutdown manager for external callers.
 func (g *Gateway) ShutdownManager() *ShutdownManager {
 	return g.shutdownMgr
-}
-
-// setLifecycleCtx stores the gateway-lifecycle context (Start).
-func (g *Gateway) setLifecycleCtx(ctx context.Context) {
-	g.ctxMu.Lock()
-	g.ctx = ctx
-	g.ctxMu.Unlock()
-}
-
-// lifecycleCtx returns the gateway-lifecycle context bound by Start, or
-// context.Background() before Start (conduit-31jg.73: Start used to write
-// g.ctx unlocked while WS/wake goroutines read it).
-func (g *Gateway) lifecycleCtx() context.Context {
-	g.ctxMu.RLock()
-	defer g.ctxMu.RUnlock()
-	if g.ctx == nil {
-		return context.Background()
-	}
-	return g.ctx
-}
-
-// Start starts the gateway server
-func (g *Gateway) Start(ctx context.Context) error {
-	// Wrap the incoming context so ShutdownManager can cancel it independently
-	// of signal-based cancellation from main.go.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	g.shutdownMgr.SetCancel(cancel)
-	// conduit-31jg.27: let ShutdownManager wait for stopAll to finish.
-	defer g.shutdownMgr.TrackGateway()()
-
-	// Store the gateway lifecycle context for WebSocket handlers.
-	// HTTP request contexts (r.Context()) are cancelled when the handler returns,
-	// which is immediate after WebSocket upgrade. WebSocket goroutines need a
-	// context tied to the gateway's lifecycle instead.
-	g.setLifecycleCtx(ctx)
-	g.ws.Start(ctx)
-
-	// Build HTTP mux (diagnostics, WS, debug, channels, vector) and wrap it
-	// with the request-ID middleware so auth/rate-limit logs can be correlated.
-	server := g.buildHTTPServer()
-
-	// conduit-31jg.27: bind synchronously so a port conflict fails startup
-	// (non-zero exit, visible to systemd) instead of logging and running on
-	// without HTTP/WS/health. Done before channels start so nothing needs
-	// unwinding.
-	listener, err := listenHTTP(server.Addr, httpBindRetryWindow)
-	if err != nil {
-		return fmt.Errorf("failed to bind HTTP listener on %s: %w", server.Addr, err)
-	}
-
-	// Start channel manager
-	if err := g.startChannels(ctx); err != nil {
-		_ = listener.Close()
-		return fmt.Errorf("failed to start channels: %w", err)
-	}
-
-	// Start scheduler (loads jobs from cron_jobs.json)
-	schedulerReady := false
-	if g.scheduler != nil {
-		if err := g.scheduler.Start(); err != nil {
-			g.logger.Warn("failed to start scheduler", "error", err)
-			g.logger.Warn("skipping heartbeat initialization to avoid wiping cron_jobs.json")
-		} else {
-			schedulerReady = true
-		}
-	}
-
-	// Auto-create agent heartbeat job if enabled (MUST be after scheduler.Start() so
-	// existing jobs are loaded from disk before we check for duplicates and potentially save)
-	if schedulerReady {
-		if err := g.initializeAgentHeartbeat(g.config); err != nil {
-			g.logger.Warn("failed to initialize agent heartbeat", "error", err)
-		}
-
-		// Auto-create REM sleep cycle job if brain and REM are enabled
-		if err := g.initializeREMCycle(g.config); err != nil {
-			g.logger.Warn("failed to initialize REM sleep cycle", "error", err)
-		}
-	}
-
-	// Start monitoring subsystem (heartbeat service + any future lifecycle).
-	if err := g.monitoring.Start(ctx); err != nil {
-		g.logger.Warn("failed to start monitoring service", "error", err)
-	}
-
-	// Start session state cleanup loop (prevents memory leak from abandoned sessions)
-	stopCleanup := g.sessions.StartStateCleanup(30*time.Minute, 5*time.Minute)
-	go func() {
-		<-ctx.Done()
-		stopCleanup()
-	}()
-
-	// Start SPAR reflection idle-session loop (writes Go-only metrics for
-	// substantive sessions that go idle). Runs on the same cadence as state cleanup.
-	if g.sessionReflector != nil {
-		go g.reflectOnIdleSessions(ctx, 30*time.Minute, 5*time.Minute)
-	}
-
-	// Start beads→Brain wiring: query active tasks from `br` CLI and write
-	// summary to Brain's sense.tasks.active namespace for Situation Awareness.
-	// Best-effort: if br is missing or slow, this is silently skipped.
-	if g.brainService != nil {
-		go g.refreshBeadsPeriodic(ctx, 5*time.Minute)
-	}
-
-	// Start search subsystem: FTS file watcher and periodic safety-net
-	// re-index loop (fsnotify handles real-time .md changes; the periodic
-	// loop catches anything missed plus beads/brain/message re-indexing).
-	if err := g.search.Start(ctx); err != nil {
-		g.logger.Warn("failed to start search service", "error", err)
-	}
-
-	// Session wakeup listener: re-activates sessions when inter-session messages arrive.
-	// Each wake signal triggers an AI processing loop on the target session in its own goroutine.
-	// When we dequeue a session key we also clear its pendingWake slot so subsequent
-	// wakes can enqueue again (coalescing only applies while a wake is still buffered).
-	go func() {
-		for {
-			select {
-			case sessionKey := <-g.sessionWake:
-				g.clearPendingWake(sessionKey)
-				go g.wakeSession(sessionKey)
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// Start MQTT service if configured
-	if g.mqttService != nil {
-		if err := g.mqttService.Start(ctx); err != nil {
-			g.logger.Warn("failed to start MQTT service", "error", err)
-		} else {
-			g.logger.Info("MQTT service started")
-		}
-	}
-
-	// Start MCP server if configured (for claude-code provider)
-	if g.mcpServer != nil {
-		if err := g.mcpServer.Start(ctx); err != nil {
-			g.logger.Error("failed to start MCP server", "error", err)
-			// Non-fatal: gateway can still work without MCP
-		} else {
-			g.logger.Info("MCP server started")
-		}
-
-		// Write .mcp.json so Claude Code discovers the server
-		if g.mcpConfigMgr != nil {
-			if err := g.mcpConfigMgr.Setup(); err != nil {
-				g.logger.Warn("failed to write .mcp.json", "error", err)
-			}
-		}
-	}
-
-	// Start SSH server if configured.
-	g.startSSHServer(ctx)
-
-	// Start message processing goroutine.
-	go g.processMessages(ctx)
-
-	// Serve on the pre-bound listener. A Serve failure after a successful
-	// bind is fatal: shut the gateway down so the supervisor restarts it
-	// rather than running headless (conduit-31jg.27).
-	go func() {
-		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			g.logger.Error("HTTP server failed; shutting down gateway", "error", err)
-			cancel()
-		}
-	}()
-
-	g.logger.Info("gateway started", "port", g.config.Port, "addr", listener.Addr().String())
-
-	g.processRestartBreadcrumb()
-
-	// Wait for context cancellation, then drain all subsystems.
-	<-ctx.Done()
-	g.logger.Info("shutting down gateway")
-
-	// Bounded so SIGTERM drain + stop stays under systemd's TimeoutStopSec
-	// (see gatewayStopTimeout, conduit-31jg.27).
-	shutdownCtx, stopCancel := context.WithTimeout(context.Background(), gatewayStopTimeout)
-	defer stopCancel()
-	g.stopAll(shutdownCtx, server)
-	return nil
-}
-
-// handleWebSocket handles WebSocket connections with authentication.
-// This stays on *Gateway because it is the HTTP handler entry point and
-// needs orchestrator-level access to auth (wsAuthenticator), metrics, tools,
-// skills, and the channel manager for the initial GatewayInfo frame. It
-// hands off to WebSocketService for connection-state bookkeeping.
-func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	// Check WebSocket connection limit before doing any work
-	if g.ws.WSConnCount.Load() >= MaxWebSocketConnections {
-		http.Error(w, "Too many WebSocket connections", http.StatusServiceUnavailable)
-		g.logger.Warn("WebSocket connection rejected: limit reached",
-			"current", g.ws.WSConnCount.Load(),
-			"max", MaxWebSocketConnections)
-		return
-	}
-
-	// Authenticate the WebSocket upgrade request
-	authResult := g.auth.WSAuthenticator.Authenticate(r)
-	if !authResult.Authenticated {
-		g.auth.WSAuthenticator.RejectUpgrade(w, authResult.Error)
-		return
-	}
-
-	// Build response header for protocol negotiation
-	var responseHeader http.Header
-	if authResult.ResponseProtocol != "" {
-		responseHeader = http.Header{
-			"Sec-WebSocket-Protocol": []string{authResult.ResponseProtocol},
-		}
-	}
-
-	// Atomically increment and check the connection count.
-	// Re-check after increment to handle races between the Load() above and now.
-	if count := g.ws.WSConnCount.Add(1); count > MaxWebSocketConnections {
-		g.ws.WSConnCount.Add(-1)
-		http.Error(w, "Too many WebSocket connections", http.StatusServiceUnavailable)
-		g.logger.Warn("WebSocket connection rejected (race): limit reached",
-			"current", count-1,
-			"max", MaxWebSocketConnections)
-		return
-	}
-
-	conn, err := g.ws.Upgrader.Upgrade(w, r, responseHeader)
-	if err != nil {
-		g.ws.WSConnCount.Add(-1) // Decrement on upgrade failure
-		g.logger.Error("WebSocket upgrade error", "error", err)
-		return
-	}
-
-	client := &Client{
-		ID:         fmt.Sprintf("client_%d", time.Now().UnixNano()),
-		Role:       authResult.AuthInfo.ClientName, // Store authenticated client name
-		UserID:     authResult.AuthInfo.ClientName, // Default user identity from auth
-		TokenID:    authResult.AuthInfo.TokenID,    // Track token for revocation
-		Conn:       conn,
-		Send:       make(chan []byte, 256),
-		CloseFrame: make(chan []byte, 1),
-	}
-
-	g.ws.ClientMu.Lock()
-	g.ws.Clients[client.ID] = client
-	clientCount := len(g.ws.Clients)
-	g.ws.ClientMu.Unlock()
-
-	// Update metrics
-	if g.monitoring.MetricsCollector != nil {
-		g.monitoring.MetricsCollector.UpdateWebSocketConnections(clientCount)
-	}
-
-	g.logger.Info("client connected", "client_id", client.ID, "auth", authResult.AuthInfo.ClientName)
-
-	// Send enriched gateway info to client
-	toolCount := len(g.tools.GetAvailableTools())
-	var skillCount int
-	if g.skillsManager != nil {
-		if skills, err := g.skillsManager.GetAvailableSkills(context.Background()); err == nil {
-			skillCount = len(skills)
-		}
-	}
-	g.sendToClient(client, &protocol.GatewayInfo{
-		BaseMessage: protocol.BaseMessage{
-			Type:      protocol.TypeGatewayInfo,
-			ID:        fmt.Sprintf("gi_%d", time.Now().UnixNano()),
-			Timestamp: time.Now(),
-		},
-		AssistantName: g.config.Agent.Name,
-		Version:       version.Info(),
-		GitCommit:     version.GitCommit,
-		UptimeSeconds: int64(g.monitoring.GatewayMetrics.GetUptime().Seconds()),
-		ModelAliases:  g.getModelAliases(),
-		ToolCount:     toolCount,
-		SkillCount:    skillCount,
-	})
-
-	// Handle client in separate goroutines.
-	// Use g.lifecycleCtx() (gateway lifecycle) instead of r.Context() because the HTTP request
-	// context is cancelled when this handler returns, which happens immediately
-	// after spawning these goroutines.
-	//
-	// conduit-31jg.25: both goroutines are tracked so WebSocketService.Stop
-	// can wait for them; if Stop already began, tear the conn down instead.
-	if !g.ws.Track(2) {
-		g.ws.ClientMu.Lock()
-		delete(g.ws.Clients, client.ID)
-		g.ws.ClientMu.Unlock()
-		g.ws.WSConnCount.Add(-1)
-		_ = conn.Close()
-		return
-	}
-	go func() {
-		defer g.ws.Untrack()
-		g.handleClientWrite(client)
-	}()
-	go func() {
-		defer g.ws.Untrack()
-		g.handleClientRead(g.lifecycleCtx(), client)
-	}()
-}
-
-// handleTokenRevocation closes all WebSocket connections authenticated with the
-// given token. This is called by TokenStorage.OnRevoke as a best-effort
-// operation -- errors from already-closing connections are silently ignored.
-//
-// The name stays on *Gateway (per conduit-23rz) to keep the symbol stable for
-// existing callers and tests. It delegates to WebSocketService.
-func (g *Gateway) handleTokenRevocation(tokenID string) {
-	if g.ws == nil {
-		return
-	}
-	n := g.ws.RevokeClientByToken(tokenID)
-	if n > 0 {
-		g.logger.Info("closed connections for revoked token",
-			"connection_count", n,
-			"token_id", tokenID)
-	}
-}
-
-// handleClientRead handles incoming messages from a WebSocket client
-func (g *Gateway) handleClientRead(ctx context.Context, client *Client) {
-	defer func() {
-		// conduit-31jg.25: stop the send-pump now rather than at gateway shutdown.
-		client.markDone()
-
-		// SPAR reflection: fire low-confidence (Go-only) reflection on WS disconnect
-		// for substantive sessions. This runs before cleanup so the session data is
-		// still available.
-		if sk := client.SessionKey(); sk != "" {
-			reflCtx, reflCancel := context.WithTimeout(g.lifecycleCtx(), 5*time.Second)
-			g.reflectOnSessionEnd(reflCtx, sk)
-			reflCancel()
-		}
-
-		g.ws.ClientMu.Lock()
-		delete(g.ws.Clients, client.ID)
-		clientCount := len(g.ws.Clients)
-		g.ws.ClientMu.Unlock()
-
-		// Decrement active WebSocket connection count
-		g.ws.WSConnCount.Add(-1)
-
-		// Update metrics
-		if g.monitoring.MetricsCollector != nil {
-			g.monitoring.MetricsCollector.UpdateWebSocketConnections(clientCount)
-		}
-
-		client.Conn.Close()
-		g.logger.Debug("client disconnected", "client_id", client.ID)
-	}()
-
-	// Set message size limit to prevent DoS via large messages, plus read
-	// deadline + pong handler so half-open peers are reaped (conduit-31jg.25).
-	g.ws.PrepareRead(client, g.config.WebSocket.GetMaxMessageSize())
-
-	for {
-		_, message, err := client.Conn.ReadMessage()
-		if err == nil {
-			g.ws.ExtendReadDeadline(client)
-		}
-		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				g.logger.Debug("client closed connection normally", "client_id", client.ID)
-			} else {
-				g.logger.Warn("WebSocket read error", "client_id", client.ID, "error", err)
-			}
-			break
-		}
-
-		parsed, err := protocol.ParseMessage(message)
-		if err != nil {
-			g.logger.Warn("failed to parse message", "client_id", client.ID, "error", err)
-			continue
-		}
-
-		switch msg := parsed.(type) {
-		case *protocol.ChatMessage:
-			if g.shutdownMgr != nil && g.shutdownMgr.IsDraining() {
-				g.sendToClient(client, map[string]string{
-					"type":    "system",
-					"content": "Gateway is restarting — not accepting new requests.",
-				})
-				continue
-			}
-			select {
-			case g.ws.MsgSemaphore <- struct{}{}:
-				go func() {
-					defer func() { <-g.ws.MsgSemaphore }()
-					g.handleWebSocketChat(ctx, client, msg)
-				}()
-			default:
-				g.recordWebSocketDrop(client, msg, "msg_semaphore_full")
-			}
-		case *protocol.CommandMessage:
-			go g.handleWebSocketCommand(ctx, client, msg)
-		case *protocol.SessionSwitch:
-			go g.handleWebSocketSessionSwitch(client, msg)
-		case *protocol.HealthCheck:
-			g.sendToClient(client, &protocol.HealthCheck{
-				BaseMessage: protocol.BaseMessage{
-					Type:      protocol.TypeHealthCheck,
-					ID:        fmt.Sprintf("health_%d", time.Now().UnixNano()),
-					Timestamp: time.Now(),
-				},
-				Status: "ok",
-			})
-		default:
-			g.logger.Debug("unhandled message type", "client_id", client.ID, "type", fmt.Sprintf("%T", msg))
-		}
-	}
-}
-
-// handleClientWrite is a thin wrapper that delegates to WebSocketService.
-// Kept on *Gateway only so the goroutine-spawn call site in handleWebSocket
-// reads naturally; the actual loop lives on WebSocketService.
-func (g *Gateway) handleClientWrite(client *Client) {
-	g.ws.HandleClientWrite(client)
-}
-
-// startChannels initializes and starts the channel manager
-func (g *Gateway) startChannels(ctx context.Context) error {
-	// Convert config channels to channel configs
-	var channelConfigs []channels.ChannelConfig
-
-	for _, chConfig := range g.config.Channels {
-		channelConfig := channels.ChannelConfig{
-			ID:      chConfig.Name,
-			Type:    chConfig.Type,
-			Name:    chConfig.Name,
-			Enabled: chConfig.Enabled,
-			Config:  chConfig.Config,
-		}
-		channelConfigs = append(channelConfigs, channelConfig)
-	}
-
-	// Start channel manager
-	if err := g.channelManager.Start(ctx, channelConfigs); err != nil {
-		return fmt.Errorf("failed to start channel manager: %w", err)
-	}
-
-	g.logger.Info("channel manager started")
-	return nil
-}
-
-// stopChannels stops the channel manager
-func (g *Gateway) stopChannels() {
-	if err := g.channelManager.Stop(); err != nil {
-		g.logger.Error("error stopping channel manager", "error", err)
-	}
-}
-
-// processMessages handles the main message processing loop
-func (g *Gateway) processMessages(ctx context.Context) {
-	g.logger.Debug("starting message processor")
-
-	for {
-		select {
-		case msg := <-g.channelManager.ReceiveMessages():
-			if g.shutdownMgr != nil && g.shutdownMgr.IsDraining() {
-				g.logger.Warn("rejecting channel message during shutdown drain",
-					"channel_id", msg.ChannelID)
-				continue
-			}
-			select {
-			case g.ws.MsgSemaphore <- struct{}{}:
-				go func() {
-					defer func() { <-g.ws.MsgSemaphore }()
-					g.handleIncomingMessage(ctx, msg)
-				}()
-			default:
-				g.recordIngestDrop(msg, "msg_semaphore_full")
-			}
-
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-// recordIngestDrop emits the gateway.ingest.drops{channel} metric and writes a
-// DLQ row for an ingress message that could not be handed off because
-// msgSemaphore was full. Silent drops were the bug in conduit-101n.
-func (g *Gateway) recordIngestDrop(msg *protocol.IncomingMessage, reason string) {
-	g.logger.Warn("request backpressure: dropping channel message",
-		"channel_id", msg.ChannelID, "reason", reason)
-
-	if g.monitoring != nil && g.monitoring.GatewayMetrics != nil {
-		g.monitoring.GatewayMetrics.IncrementIngestDrop(msg.ChannelID)
-	}
-	if g.sessions != nil {
-		if err := writeIngestDLQ(g.sessions.DB(), msg, reason); err != nil {
-			g.logger.Error("failed to write ingest DLQ row",
-				"channel_id", msg.ChannelID, "error", err)
-		}
-	}
-}
-
-// recordWebSocketDrop is the WS-chat analogue of recordIngestDrop. WS clients
-// don't have a channel adapter, so the drop is counted under the synthetic
-// "websocket" channel label and the DLQ row records the originating client.
-func (g *Gateway) recordWebSocketDrop(client *Client, msg *protocol.ChatMessage, reason string) {
-	g.logger.Warn("request backpressure: dropping chat message",
-		"client_id", client.ID, "reason", reason)
-
-	if g.monitoring != nil && g.monitoring.GatewayMetrics != nil {
-		g.monitoring.GatewayMetrics.IncrementIngestDrop("websocket")
-	}
-	if g.sessions != nil {
-		if err := writeClientChatDLQ(g.sessions.DB(), client.ID, client.UserID, msg.SessionKey, msg.Text, reason); err != nil {
-			g.logger.Error("failed to write ingest DLQ row",
-				"client_id", client.ID, "error", err)
-		}
-	}
-}
-
-// handleIncomingMessage processes a single incoming message
-func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.IncomingMessage) {
-	// Add request ID to context for correlation
-	ctx = logging.WithRequestID(ctx, "")
-	reqID := logging.RequestIDFromContext(ctx)
-
-	g.logger.Debug("processing message",
-		"channel_id", msg.ChannelID,
-		"text_length", len(msg.Text),
-		"request_id", reqID)
-
-	// Track activity in metrics collector
-	if g.monitoring != nil && g.monitoring.MetricsCollector != nil {
-		g.monitoring.MetricsCollector.MarkActivity()
-	}
-
-	// Get or create session
-	session, err := g.sessions.GetOrCreateSession(msg.UserID, msg.ChannelID)
-	if err != nil {
-		logging.Error(ctx, "error getting session", "error", err)
-		return
-	}
-
-	// conduit-31jg.43: approval replies are consumed here, before the
-	// busy-ack, the transcript and the per-session turn lock, so a pending
-	// approval never waits behind (or deadlocks with) an in-flight turn.
-	notify := g.channelApprovalNotifier(msg.ChannelID, msg.UserID, msg.SessionKey)
-	if g.approvals.HandleReply(ctx, approval.Inbound{
-		ChannelID: msg.ChannelID, UserID: msg.UserID, SessionKey: session.Key,
-		Text: msg.Text, Notify: notify,
-	}) {
-		return
-	}
-
-	// Handle commands before AI processing
-	if handled := g.handleCommand(ctx, msg, session); handled {
-		return
-	}
-
-	// Reset wake_depth on normal user messages so the recursion guard resets
-	// after a human sends a message to the session.
-	if session.Context["wake_depth"] != "" && session.Context["wake_depth"] != "0" {
-		_ = g.sessions.SetSessionContext(session.Key, "wake_depth", "0")
-	}
-
-	if g.ai == nil {
-		// Echo back if no AI available (for testing)
-		echoMsg := &protocol.OutgoingMessage{
-			BaseMessage: protocol.BaseMessage{
-				Type:      protocol.TypeOutgoingMessage,
-				ID:        fmt.Sprintf("echo_%d", time.Now().UnixNano()),
-				Timestamp: time.Now(),
-			},
-			ChannelID:  msg.ChannelID,
-			SessionKey: msg.SessionKey,
-			UserID:     msg.UserID,
-			Text:       fmt.Sprintf("Echo: %s", msg.Text),
-		}
-		g.channelManager.SendMessage(echoMsg)
-		return
-	}
-
-	// Transcript form of the message: a text marker for photos, not binary data.
-	textToStore := msg.Text
-	var aiAttachments []ai.Attachment
-	if len(msg.Attachments) > 0 {
-		if textToStore == "" {
-			textToStore = "[Sent a photo]"
-		} else {
-			textToStore = "[Photo] " + textToStore
-		}
-		// Thread image attachments to the AI layer for vision analysis
-		aiAttachments = make([]ai.Attachment, len(msg.Attachments))
-		for i, att := range msg.Attachments {
-			aiAttachments[i] = ai.Attachment{Type: att.Type, MediaType: att.MediaType, Data: att.Data}
-		}
-	}
-
-	// conduit-31jg.35: the shared TurnRunner owns the busy-ack decision, the
-	// turn lock, transcript persistence (inside the lock, conduit-31jg.22),
-	// /stop registration (conduit-31jg.23), reflection and compaction
-	// (conduit-31jg.49). This adapter only renders output for the channel.
-	g.turns().Run(ctx, TurnRequest{
-		Session:       session,
-		ChannelID:     msg.ChannelID,
-		UserID:        msg.UserID,
-		Text:          msg.Text,
-		StoreText:     textToStore,
-		StoreMetadata: msg.Metadata,
-		Attachments:   aiAttachments,
-		Origin: &approval.Origin{ // conduit-31jg.43: live human turn on a promptable channel
-			Source: msg.ChannelID, ChannelID: msg.ChannelID, UserID: msg.UserID,
-			SessionKey: session.Key, Notify: notify,
-		},
-	}, newChannelTurnSink(g, msg, session))
 }
 
 // promptQuietHours returns the agent_heartbeat quiet window for the prompt's

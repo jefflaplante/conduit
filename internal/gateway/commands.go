@@ -26,7 +26,7 @@ func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessa
 		// Fire Go-only reflection metrics for substantive sessions.
 		// Channel commands don't have a streaming path back to the model,
 		// so this is a low-confidence trigger (Go-computed metrics only).
-		if g.sessionReflector != nil && session.MessageCount > 2 {
+		if g.cognition.ReflectionEnabled() && session.MessageCount > 2 {
 			reflCtx, reflCancel := context.WithTimeout(ctx, 5*time.Second)
 			g.reflectHighConfidencePost(reflCtx, session)
 			reflCancel()
@@ -52,7 +52,7 @@ func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessa
 		log.Printf("Processing /reset command for session: %s", session.Key)
 
 		// SPAR reflection: fire reflection BEFORE clearing context
-		if g.sessionReflector != nil && session.MessageCount > 2 {
+		if g.cognition.ReflectionEnabled() && session.MessageCount > 2 {
 			reflCtx, reflCancel := context.WithTimeout(ctx, 5*time.Second)
 			g.reflectHighConfidencePost(reflCtx, session)
 			reflCancel()

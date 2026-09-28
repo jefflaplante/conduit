@@ -23,7 +23,7 @@ func (g *Gateway) handleBrainGraph(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "brain dashboard not enabled")
 		return
 	}
-	if g.brainService == nil {
+	if !g.cognition.BrainEnabled() {
 		writeJSONError(w, http.StatusServiceUnavailable, "brain disabled")
 		return
 	}
@@ -55,7 +55,7 @@ func (g *Gateway) handleBrainGraph(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	graph, err := g.brainService.ListGraph(r.Context(), opts)
+	graph, err := g.cognition.Brain.ListGraph(r.Context(), opts)
 	if err != nil {
 		log.Printf("[BrainGraph] ListGraph failed: %v", err)
 		writeJSONError(w, http.StatusInternalServerError, "list graph failed")

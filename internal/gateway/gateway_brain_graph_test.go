@@ -27,7 +27,7 @@ func newGraphTestGateway(t *testing.T, dashboardEnabled bool, b *brain.Brain) *G
 	t.Helper()
 	cfg := &config.Config{}
 	cfg.Brain.DashboardEnabled = dashboardEnabled
-	return &Gateway{config: cfg, brainService: b}
+	return &Gateway{config: cfg, cognition: CognitionService{Brain: b}}
 }
 
 func TestHandleBrainGraph_DashboardDisabled(t *testing.T) {
