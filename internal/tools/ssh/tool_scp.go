@@ -13,6 +13,30 @@ import (
 	"conduit/internal/tools/types"
 )
 
+// Fixed tiers for operations that are not shell commands (conduit-enf0).
+// An upload writes arbitrary bytes to an arbitrary remote path
+// (authorized_keys, cron.d, systemd units), which is as powerful as running
+// a command, so it is dangerous-tier: approval-gated under the default
+// require_approval and refused on hosts capped at read or modify. A download
+// only reads remotely (its local write is sandbox-confined), so it is
+// read-tier; it is still gated if an owner lists "read" in require_approval.
+const (
+	scpUploadTier   = TierDangerous
+	scpDownloadTier = TierRead
+)
+
+// operationBlocked is the refusal for a blocked non-command operation.
+func operationBlocked(c *ClassificationResult, data map[string]interface{}) *types.ToolResult {
+	data["tier"] = string(c.Tier)
+	data["reason"] = c.Reason
+	data["operation"] = c.BaseCommand
+	return &types.ToolResult{
+		Success: false,
+		Error:   fmt.Sprintf("%s blocked: %s", c.BaseCommand, c.Reason),
+		Data:    data,
+	}
+}
+
 // SetSandbox sets the filesystem sandbox that SCP local paths must resolve
 // inside. conduit-31jg.69
 func (t *SSHTool) SetSandbox(sb *sandbox.Sandbox) {
@@ -104,9 +128,14 @@ func (t *SSHTool) scpUpload(ctx context.Context, args map[string]interface{}) (*
 		}, nil
 	}
 
-	// Classify the operation (upload is modify-tier)
-	classification := t.securityEngine.ClassifyCommand(fmt.Sprintf("scp upload to %s", remotePath))
-	classification.Tier = TierModify // Override to ensure uploads are modify-tier
+	// conduit-enf0: classify the actual operation against the host tier.
+	classification := t.securityEngine.ClassifyOperationForHost("scp_upload", scpUploadTier,
+		"uploads write arbitrary content to a remote path", hostConfig.SecurityTier, remotePath)
+	if classification.Blocked {
+		return operationBlocked(classification, map[string]interface{}{
+			"host": host, "local_path": localPath, "remote_path": remotePath,
+		}), nil
+	}
 
 	// conduit-w3l7: gated uploads are frozen (host, resolved local path,
 	// remote path) and run only after a human "YES <code>" reply.
@@ -131,13 +160,14 @@ func (t *SSHTool) scpUpload(ctx context.Context, args map[string]interface{}) (*
 // runUpload performs an authorized SCP upload.
 func (t *SSHTool) runUpload(host, localPath, resolvedLocal, remotePath string, localInfo os.FileInfo) (*types.ToolResult, error) {
 	// Get SSH client for the host
-	sshClient, err := t.getSSHClientForHost(host)
+	sshClient, release, err := t.acquireSSHClient(host)
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("failed to connect to host: %v", err),
 		}, nil
 	}
+	defer release()
 
 	// Create SCP client
 	scpClient := NewSCPClient(sshClient)
@@ -218,18 +248,42 @@ func (t *SSHTool) scpDownload(ctx context.Context, args map[string]interface{}) 
 		return denied, nil
 	}
 
-	// Classify the operation (download is read-tier)
-	classification := t.securityEngine.ClassifyCommand(fmt.Sprintf("scp download from %s", remotePath))
-	classification.Tier = TierRead // Override to ensure downloads are read-tier
+	// conduit-enf0: classify against the host tier; gate if "read" is in
+	// require_approval (downloads were previously never gated).
+	classification := t.securityEngine.ClassifyOperationForHost("scp_download", scpDownloadTier,
+		"downloads read a remote file", hostConfig.SecurityTier, remotePath)
+	if classification.Blocked {
+		return operationBlocked(classification, map[string]interface{}{
+			"host": host, "local_path": localPath, "remote_path": remotePath,
+		}), nil
+	}
+	if classification.RequiresApproval {
+		return t.gate(ctx, t.downloadOperation(host, remotePath, localPath, resolvedLocal, classification),
+			func(context.Context) (*types.ToolResult, error) {
+				// The destination must still resolve to the approved path
+				// (e.g. no symlink swapped in while awaiting approval).
+				again, denied := t.resolveSCPLocalPath(localPath)
+				if denied != nil || again != resolvedLocal {
+					return &types.ToolResult{Success: false, Error: fmt.Sprintf("local path %s no longer resolves to the approved destination; nothing was downloaded", localPath)}, nil
+				}
+				return t.runDownload(host, remotePath, localPath, resolvedLocal)
+			})
+	}
 
+	return t.runDownload(host, remotePath, localPath, resolvedLocal)
+}
+
+// runDownload performs an authorized SCP download into resolvedLocal.
+func (t *SSHTool) runDownload(host, remotePath, localPath, resolvedLocal string) (*types.ToolResult, error) {
 	// Get SSH client for the host
-	sshClient, err := t.getSSHClientForHost(host)
+	sshClient, release, err := t.acquireSSHClient(host)
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("failed to connect to host: %v", err),
 		}, nil
 	}
+	defer release()
 
 	// Create SCP client
 	scpClient := NewSCPClient(sshClient)

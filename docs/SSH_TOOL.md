@@ -54,35 +54,42 @@ The SSH tool enables Conduit to execute commands on remote hosts via SSH. It sup
 ## Quick Start
 
 1. Add `"Ssh"` to your `enabled_tools` list in your config JSON
-2. Add a `remote_ssh` section under `tools` with at least one host and security settings
-3. Start Conduit -- the AI agent can now run commands on your remote hosts
+2. Add a top-level `remote_ssh` section with at least one host and security settings
+3. Build with the `with_ssh` tag (`make build-custom TOOLS="ssh"` or `make build-full`); the default build has no SSH tool
+4. Put every host's key in the known_hosts file (`pool.known_hosts_file`, default `~/.ssh/known_hosts`)
+5. Start Conduit -- the AI agent can now run commands on your remote hosts; dangerous-tier operations wait for your `YES <code>` approval
+
+See [reference/remote-ssh.md](../reference/remote-ssh.md#enabling-remote-execution) for the authoritative enablement checklist.
+
+> **Durations are nanoseconds.** Duration fields are Go `time.Duration`
+> values and must be JSON integers in nanoseconds (`300000000000` = 5m).
+> The examples below that show strings such as `"5m"` are illustrative; the
+> config loader currently rejects them.
 
 Minimal config to get started:
 
 ```json
 {
-  "tools": {
-    "enabled_tools": ["Ssh"],
-    "remote_ssh": {
-      "enabled": true,
-      "hosts": [
-        {
-          "name": "my-server",
-          "hostname": "192.168.1.100",
-          "user": "deploy",
-          "identity_file": "~/.ssh/id_ed25519"
-        }
-      ],
-      "security": {
-        "default_tier": "dangerous"
-      },
-      "audit": {
-        "enabled": true,
-        "log_path": "logs/ssh_audit.jsonl",
-        "log_commands": true,
-        "log_output": true,
-        "redact_secrets": true
+  "tools": { "enabled_tools": ["Ssh"] },
+  "remote_ssh": {
+    "enabled": true,
+    "hosts": [
+      {
+        "name": "my-server",
+        "hostname": "192.168.1.100",
+        "user": "deploy",
+        "identity_file": "~/.ssh/id_ed25519"
       }
+    ],
+    "security": {
+      "default_tier": "dangerous"
+    },
+    "audit": {
+      "enabled": true,
+      "log_path": "logs/ssh_audit.jsonl",
+      "log_commands": true,
+      "log_output": true,
+      "redact_secrets": true
     }
   }
 }
@@ -92,14 +99,14 @@ Minimal config to get started:
 
 ## Configuration
 
-The SSH tool is configured under `tools.remote_ssh` in your Conduit config JSON.
+The SSH tool is configured by the top-level `remote_ssh` block of your Conduit config JSON (not under `tools`).
 
 ### Enabling the Tool
 
 Two things are required:
 
 1. Include `"Ssh"` in the `tools.enabled_tools` array
-2. Set `tools.remote_ssh.enabled` to `true`
+2. Set `remote_ssh.enabled` to `true`
 
 The tool is disabled by default for safety.
 
@@ -206,7 +213,7 @@ Controls how SSH connections are managed:
 | `connect_timeout` | duration | 30s | Timeout for new connections |
 | `health_check_interval` | duration | 1m | How often to verify connection health |
 | `known_hosts_file` | string | — | Path to SSH known_hosts file |
-| `strict_host_key_checking` | string | `"yes"` | Host key verification: `"yes"`, `"no"`, or `"accept-new"` |
+| `strict_host_key_checking` | string | `"yes"` | `"yes"` (known hosts only) or `"accept-new"` (trust on first use, refuse changed keys). `"no"` is refused: host keys are always verified |
 
 ### Security
 
@@ -243,7 +250,7 @@ The security section is the most critical part of the configuration. The `defaul
 | `allow_subshells` | bool | `false` | Allow `$()` and backtick command substitution |
 | `allow_pipes` | bool | `true` | Allow pipe chains (`cmd1 \| cmd2`) |
 | `max_command_length` | int | 10000 | Maximum command string length in bytes |
-| `approval_timeout` | duration | 5m | How long approval requests remain valid |
+| `approval_timeout` | duration (ns) | gateway default (5m) | How long an SSH approval prompt stays valid (capped at 1h) |
 | `allowed_commands` | object | see below | Commands whitelisted at each tier |
 | `blocked_patterns` | []string | see below | Regex patterns that always block commands |
 
@@ -399,7 +406,7 @@ Create a local SSH port forwarding tunnel. The local end always binds to `127.0.
 | `remote_host` | string | yes | Remote host to forward to (typically `"localhost"`) |
 | `remote_port` | int | yes | Remote port to forward to |
 
-Returns the tunnel ID and assigned local port.
+Returns the tunnel ID and assigned local port. Dangerous tier: refused on hosts capped at `read`/`modify`, approval-gated by default.
 
 ### tunnel_close
 
@@ -429,7 +436,7 @@ Upload a local file to a remote host via SCP.
 | `local_path` | string | yes | Path to local file |
 | `remote_path` | string | yes | Destination path on remote host |
 
-Classified as a "modify" tier operation.
+Classified as a "dangerous" tier operation (arbitrary content to an arbitrary remote path): refused on hosts capped at `read`/`modify`, approval-gated by default. `local_path` must be inside the tools sandbox.
 
 ### scp_download
 
@@ -442,7 +449,7 @@ Download a file from a remote host to a local path via SCP.
 | `remote_path` | string | yes | Path to file on remote host |
 | `local_path` | string | yes | Destination path locally |
 
-Classified as a "read" tier operation.
+Classified as a "read" tier operation. `remote_path` is checked against `blocked_patterns`; `local_path` must be inside the tools sandbox.
 
 ### inventory_load
 
@@ -668,28 +675,26 @@ A single host with default security settings:
 
 ```json
 {
-  "tools": {
-    "enabled_tools": ["Ssh"],
-    "remote_ssh": {
-      "enabled": true,
-      "hosts": [
-        {
-          "name": "my-server",
-          "hostname": "192.168.1.100",
-          "user": "admin",
-          "identity_file": "~/.ssh/id_ed25519"
-        }
-      ],
-      "security": {
-        "default_tier": "dangerous"
-      },
-      "audit": {
-        "enabled": true,
-        "log_path": "logs/ssh_audit.jsonl",
-        "log_commands": true,
-        "log_output": true,
-        "redact_secrets": true
+  "tools": { "enabled_tools": ["Ssh"] },
+  "remote_ssh": {
+    "enabled": true,
+    "hosts": [
+      {
+        "name": "my-server",
+        "hostname": "192.168.1.100",
+        "user": "admin",
+        "identity_file": "~/.ssh/id_ed25519"
       }
+    ],
+    "security": {
+      "default_tier": "dangerous"
+    },
+    "audit": {
+      "enabled": true,
+      "log_path": "logs/ssh_audit.jsonl",
+      "log_commands": true,
+      "log_output": true,
+      "redact_secrets": true
     }
   }
 }
@@ -701,95 +706,93 @@ Multiple hosts with groups, bastion access, strict security, and full audit:
 
 ```json
 {
-  "tools": {
-    "enabled_tools": ["Ssh"],
-    "remote_ssh": {
-      "enabled": true,
-      "hosts": [
-        {
-          "name": "web-prod-1",
-          "hostname": "web1.example.com",
-          "user": "deploy",
-          "identity_file": "~/.ssh/id_ed25519",
-          "groups": ["production", "web"],
-          "security_tier": "read"
-        },
-        {
-          "name": "web-prod-2",
-          "hostname": "web2.example.com",
-          "user": "deploy",
-          "identity_file": "~/.ssh/id_ed25519",
-          "groups": ["production", "web"],
-          "security_tier": "read"
-        },
-        {
-          "name": "db-prod",
-          "hostname": "10.0.1.50",
-          "user": "dbadmin",
-          "identity_file": "~/.ssh/db_key",
-          "groups": ["production", "database"],
-          "security_tier": "read",
-          "jump_host": "bastion@jump.example.com:22"
-        }
-      ],
-      "host_groups": [
-        {
-          "name": "production",
-          "description": "All production servers",
-          "security_tier": "read",
-          "max_parallel": 10
-        },
-        {
-          "name": "web",
-          "description": "Web tier",
-          "pattern": "web-prod-*",
-          "max_parallel": 5
-        },
-        {
-          "name": "database",
-          "description": "Database servers",
-          "max_parallel": 1
-        }
-      ],
-      "defaults": {
-        "port": 22,
-        "connect_timeout": "30s"
+  "tools": { "enabled_tools": ["Ssh"] },
+  "remote_ssh": {
+    "enabled": true,
+    "hosts": [
+      {
+        "name": "web-prod-1",
+        "hostname": "web1.example.com",
+        "user": "deploy",
+        "identity_file": "~/.ssh/id_ed25519",
+        "groups": ["production", "web"],
+        "security_tier": "read"
       },
-      "security": {
-        "default_tier": "blocked",
-        "require_approval": ["dangerous", "blocked"],
-        "allow_subshells": false,
-        "allow_pipes": true,
-        "max_command_length": 10000,
-        "blocked_patterns": [
-          "rm\\s+(-[rf]+\\s+)*/$",
-          ">\\s*/dev/[sh]d[a-z]",
-          "curl.*\\|\\s*(ba)?sh",
-          "wget.*\\|\\s*(ba)?sh"
-        ]
+      {
+        "name": "web-prod-2",
+        "hostname": "web2.example.com",
+        "user": "deploy",
+        "identity_file": "~/.ssh/id_ed25519",
+        "groups": ["production", "web"],
+        "security_tier": "read"
       },
-      "pool": {
-        "max_connections_per_host": 5,
-        "max_total_connections": 50,
-        "idle_timeout": "5m",
-        "connect_timeout": "30s",
-        "health_check_interval": "1m",
-        "strict_host_key_checking": "yes"
-      },
-      "audit": {
-        "enabled": true,
-        "log_path": "logs/ssh_audit.jsonl",
-        "log_commands": true,
-        "log_output": true,
-        "max_output_capture": 65536,
-        "retention_days": 90,
-        "redact_secrets": true
-      },
-      "sessions": {
-        "max_concurrent_sessions": 5,
-        "session_idle_timeout": "10m",
-        "default_shell": "/bin/bash"
+      {
+        "name": "db-prod",
+        "hostname": "10.0.1.50",
+        "user": "dbadmin",
+        "identity_file": "~/.ssh/db_key",
+        "groups": ["production", "database"],
+        "security_tier": "read",
+        "jump_host": "bastion@jump.example.com:22"
       }
+    ],
+    "host_groups": [
+      {
+        "name": "production",
+        "description": "All production servers",
+        "security_tier": "read",
+        "max_parallel": 10
+      },
+      {
+        "name": "web",
+        "description": "Web tier",
+        "pattern": "web-prod-*",
+        "max_parallel": 5
+      },
+      {
+        "name": "database",
+        "description": "Database servers",
+        "max_parallel": 1
+      }
+    ],
+    "defaults": {
+      "port": 22,
+      "connect_timeout": "30s"
+    },
+    "security": {
+      "default_tier": "blocked",
+      "require_approval": ["dangerous", "blocked"],
+      "allow_subshells": false,
+      "allow_pipes": true,
+      "max_command_length": 10000,
+      "blocked_patterns": [
+        "rm\\s+(-[rf]+\\s+)*/$",
+        ">\\s*/dev/[sh]d[a-z]",
+        "curl.*\\|\\s*(ba)?sh",
+        "wget.*\\|\\s*(ba)?sh"
+      ]
+    },
+    "pool": {
+      "max_connections_per_host": 5,
+      "max_total_connections": 50,
+      "idle_timeout": "5m",
+      "connect_timeout": "30s",
+      "health_check_interval": "1m",
+      "strict_host_key_checking": "yes"
+    },
+    "audit": {
+      "enabled": true,
+      "log_path": "logs/ssh_audit.jsonl",
+      "log_commands": true,
+      "log_output": true,
+      "max_output_capture": 65536,
+      "retention_days": 90,
+      "redact_secrets": true
+    },
+    "sessions": {
+      "max_concurrent_sessions": 5,
+      "session_idle_timeout": "10m",
+      "default_shell": "/bin/bash"
     }
   }
 }

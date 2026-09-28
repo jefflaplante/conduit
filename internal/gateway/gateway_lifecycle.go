@@ -190,8 +190,8 @@ func (g *Gateway) startSSHServer(ctx context.Context) {
 	}()
 }
 
-// stopAll performs the orchestrated shutdown sequence: HTTP server, channels,
-// SSH, monitoring, scheduler, WebSocket, rate-limiter, search drain, MCP, MQTT,
+// stopAll performs the orchestrated shutdown sequence: HTTP server, approvals,
+// tools, channels, SSH, monitoring, scheduler, WebSocket, rate-limiter, search drain, MCP, MQTT,
 // vector, and finally brain. Order is load-bearing and was preserved from the
 // original inline shutdown block — see the per-step comments for rationale.
 func (g *Gateway) stopAll(shutdownCtx context.Context, server *http.Server) {
@@ -209,6 +209,13 @@ func (g *Gateway) stopAll(shutdownCtx context.Context, server *http.Server) {
 	// approved actions finish while channels can still report the result.
 	if g.approvals != nil {
 		g.approvals.Close()
+	}
+
+	// conduit-enf0: release tool-held resources (SSH pool connections,
+	// persistent sessions, tunnels) once no approved action can still use
+	// them.
+	if g.tools != nil {
+		g.tools.CloseTools()
 	}
 
 	g.stopChannels()

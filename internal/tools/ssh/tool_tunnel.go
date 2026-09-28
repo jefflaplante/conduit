@@ -55,6 +55,18 @@ func (t *SSHTool) createTunnel(ctx context.Context, args map[string]interface{})
 		}, nil
 	}
 
+	// conduit-enf0: a tunnel exposes the remote host's network (databases,
+	// admin ports, container APIs) to every local process and bypasses
+	// command classification, so it is dangerous-tier: refused on hosts
+	// capped below dangerous and approval-gated under the default policy.
+	classification := t.securityEngine.ClassifyOperationForHost("tunnel_create", tunnelTier,
+		"tunnels expose remote network services on a local port", hostConfig.SecurityTier)
+	if classification.Blocked {
+		return operationBlocked(classification, map[string]interface{}{
+			"host": host, "local_port": localPort, "remote_host": remoteHost, "remote_port": remotePort,
+		}), nil
+	}
+
 	// Check if client is available
 	if t.client == nil {
 		return &types.ToolResult{
@@ -70,10 +82,30 @@ func (t *SSHTool) createTunnel(ctx context.Context, args map[string]interface{})
 		}, nil
 	}
 
-	// Get or create SSH client for this host
-	// For now, we need to get the underlying SSHClient from the pool
-	// This is a simplified implementation - in production, you'd want proper client management
-	sshClient, err := t.getSSHClientForHost(host)
+	// Reject bad ports before asking a human to approve them.
+	for _, check := range []error{validatePort(localPort, "local"), validatePort(remotePort, "remote")} {
+		if check != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to create tunnel: %v", check)}, nil
+		}
+	}
+
+	if classification.RequiresApproval {
+		return t.gate(ctx, t.tunnelOperation(host, localPort, remoteHost, remotePort, classification),
+			func(context.Context) (*types.ToolResult, error) {
+				return t.runCreateTunnel(host, localPort, remoteHost, remotePort)
+			})
+	}
+
+	return t.runCreateTunnel(host, localPort, remoteHost, remotePort)
+}
+
+// tunnelTier is the fixed security tier of tunnel_create (conduit-enf0).
+const tunnelTier = TierDangerous
+
+// runCreateTunnel opens an authorized tunnel. The pooled SSH connection it
+// uses goes back to the pool when the tunnel closes.
+func (t *SSHTool) runCreateTunnel(host string, localPort int, remoteHost string, remotePort int) (*types.ToolResult, error) {
+	sshClient, release, err := t.acquireSSHClient(host)
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,
@@ -82,8 +114,9 @@ func (t *SSHTool) createTunnel(ctx context.Context, args map[string]interface{})
 	}
 
 	// Create the tunnel
-	tunnel, err := t.tunnelManager.CreateTunnel(sshClient, localPort, remoteHost, remotePort)
+	tunnel, err := t.tunnelManager.CreateTunnelWithRelease(sshClient, localPort, remoteHost, remotePort, release)
 	if err != nil {
+		release()
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("failed to create tunnel: %v", err),

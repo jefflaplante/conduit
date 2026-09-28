@@ -5,6 +5,7 @@ package ssh
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -264,7 +265,12 @@ func getKeyFileAuth(keyPath string) (ssh.AuthMethod, error) {
 	return ssh.PublicKeys(signer), nil
 }
 
-// buildHostKeyCallback creates a host key verification callback
+// buildHostKeyCallback creates a host key verification callback. Every
+// connection (pool, persistent sessions, jump hosts, and so SCP and tunnels)
+// is built through here. It never skips verification: "no" is refused
+// rather than mapped to ssh.InsecureIgnoreHostKey, because the tool runs
+// real commands and an unverified host key hands them (and the agent's
+// credentials) to whoever answers on that address (conduit-enf0).
 func buildHostKeyCallback(poolConfig config.SSHPoolConfig) (ssh.HostKeyCallback, error) {
 	mode := poolConfig.StrictHostKeyChecking
 	if mode == "" {
@@ -273,8 +279,8 @@ func buildHostKeyCallback(poolConfig config.SSHPoolConfig) (ssh.HostKeyCallback,
 
 	switch mode {
 	case "no":
-		// WARNING: Insecure - accepts any host key
-		return ssh.InsecureIgnoreHostKey(), nil
+		return nil, fmt.Errorf("remote_ssh.pool.strict_host_key_checking=\"no\" is not supported: host keys are always verified; " +
+			"add the hosts to known_hosts (ssh-keyscan) or use \"accept-new\" to trust keys on first use")
 
 	case "accept-new":
 		// Accept new keys and add them to known_hosts
@@ -286,6 +292,27 @@ func buildHostKeyCallback(poolConfig config.SSHPoolConfig) (ssh.HostKeyCallback,
 
 	default:
 		return nil, fmt.Errorf("invalid strict_host_key_checking value: %s", mode)
+	}
+}
+
+// explainHostKeyErrors wraps a known_hosts callback so rejections say what
+// to do: an unknown host needs its key added after out-of-band
+// verification, a changed key may be an attack.
+func explainHostKeyErrors(knownHostsFile string, cb ssh.HostKeyCallback) ssh.HostKeyCallback {
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := cb(hostname, remote, key)
+		var keyErr *knownhosts.KeyError
+		if err == nil || !errors.As(err, &keyErr) {
+			return err
+		}
+		fp := ssh.FingerprintSHA256(key)
+		if len(keyErr.Want) == 0 {
+			return fmt.Errorf("host key for %s (%s %s) is not in %s; verify the fingerprint out of band and add it "+
+				"(e.g. ssh-keyscan -p <port> <host> >> %s): %w", hostname, key.Type(), fp, knownHostsFile, knownHostsFile, err)
+		}
+		return fmt.Errorf("HOST KEY MISMATCH for %s: presented %s %s does not match %s (line %d); refusing to connect "+
+			"(possible man-in-the-middle; if the key legitimately changed, update known_hosts): %w",
+			hostname, key.Type(), fp, keyErr.Want[0].Filename, keyErr.Want[0].Line, err)
 	}
 }
 
@@ -310,7 +337,8 @@ func newStrictCallback(knownHostsFile string) (ssh.HostKeyCallback, error) {
 
 	// Check if file exists
 	if _, err := os.Stat(knownHostsFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("known_hosts file not found: %s", knownHostsFile)
+		return nil, fmt.Errorf("known_hosts file not found: %s (strict_host_key_checking=yes needs the host keys there; "+
+			"set remote_ssh.pool.known_hosts_file or add them with ssh-keyscan)", knownHostsFile)
 	}
 
 	callback, err := knownhosts.New(knownHostsFile)
@@ -318,7 +346,7 @@ func newStrictCallback(knownHostsFile string) (ssh.HostKeyCallback, error) {
 		return nil, fmt.Errorf("failed to load known_hosts: %w", err)
 	}
 
-	return callback, nil
+	return explainHostKeyErrors(knownHostsFile, callback), nil
 }
 
 // acceptNewCallback is a host key callback that accepts new keys
@@ -389,12 +417,13 @@ func (c *acceptNewCallback) withExistingKnownHosts(existing ssh.HostKeyCallback)
 
 // callback is the host key callback for when there's no existing known_hosts
 func (c *acceptNewCallback) callback(hostname string, remote net.Addr, key ssh.PublicKey) error {
+	// Check if we've seen this host before in this session. The lock is
+	// released before acceptAndSave, which takes it itself (holding it
+	// across that call deadlocked every first connection; conduit-enf0).
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Check if we've seen this host before in this session
-	hostKey := hostname
-	if existingKey, ok := c.known[hostKey]; ok {
+	existingKey, seen := c.known[hostname]
+	c.mu.Unlock()
+	if seen {
 		if !bytes.Equal(existingKey.Marshal(), key.Marshal()) {
 			return fmt.Errorf("host key mismatch for %s", hostname)
 		}

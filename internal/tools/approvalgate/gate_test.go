@@ -60,6 +60,14 @@ func TestRequest_PendingAndDeferredRun(t *testing.T) {
 	assert.Equal(t, 1, ran)
 }
 
+func TestRequest_PassesTTL(t *testing.T) { // conduit-enf0
+	f := &fakeRequester{}
+	op := testOp()
+	op.TTL = 90 * time.Second
+	Request(context.Background(), f, op, func(context.Context) (*types.ToolResult, error) { return nil, nil })
+	assert.Equal(t, 90*time.Second, f.action.TTL)
+}
+
 func TestRequest_FailedRunSurfacesError(t *testing.T) {
 	f := &fakeRequester{}
 	Request(context.Background(), f, testOp(), func(context.Context) (*types.ToolResult, error) {

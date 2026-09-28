@@ -1241,7 +1241,7 @@ Datadog integration. See [SRE Tools Reference](reference/sre-tools.md).
 
 ## `remote_ssh`
 
-Remote SSH execution with security tiers. See [Remote SSH Reference](reference/remote-ssh.md).
+Remote SSH execution with security tiers. Requires a `with_ssh` build, `"Ssh"` in `tools.enabled_tools`, and host keys in known_hosts; see [Enabling Remote Execution](reference/remote-ssh.md#enabling-remote-execution). Duration fields are integer nanoseconds.
 
 ```json
 {
@@ -1257,7 +1257,7 @@ Remote SSH execution with security tiers. See [Remote SSH Reference](reference/r
         "security_tier": "modify"
       }
     ],
-    "defaults": { "port": 22, "user": "deploy", "connect_timeout": "30s" },
+    "defaults": { "port": 22, "user": "deploy", "connect_timeout": 30000000000 },
     "security": { "default_tier": "dangerous", "allow_subshells": false },
     "audit": { "enabled": true, "log_path": "logs/ssh_audit.jsonl" }
   }

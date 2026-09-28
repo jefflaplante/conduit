@@ -5,8 +5,10 @@ package ssh
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
+	"conduit/internal/config"
 	"conduit/internal/tools/types"
 )
 
@@ -189,9 +191,41 @@ func (t *SSHTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *ty
 		clientDep.Status = "connected"
 		clientDep.Message = fmt.Sprintf("%d total, %d active, %d idle connections",
 			poolStatus.TotalConnections, poolStatus.ActiveConnections, poolStatus.IdleConnections)
+		if _, pooled := t.client.(*PoolClient); pooled && poolStatus.TotalConnections == 0 {
+			// conduit-enf0: the real client dials lazily on first use.
+			clientDep.Status = "ready"
+			clientDep.Message = "pool-backed client; no connections yet (hosts are dialled on first use)"
+		}
 		result.Capabilities = []string{"exec", "exec_group", "hosts", "status", "session_start", "session_send", "session_close", "session_list", "tunnel_create", "tunnel_close", "tunnel_list", "scp_upload", "scp_download", "inventory_load", "inventory_list", "inventory_refresh"}
 	}
 	deps = append(deps, clientDep)
+
+	// conduit-enf0: with the real client, check the host key policy (a
+	// static config check, no network) and, only when CheckDependencies is
+	// set, dial each enabled host once.
+	if _, pooled := t.client.(*PoolClient); pooled {
+		hostKeyDep := t.selfTestHostKeyPolicy()
+		deps = append(deps, hostKeyDep)
+		if !hostKeyDep.Available {
+			result.Status = types.SelfTestStatusFailed
+			result.Message = "SSH host key verification is misconfigured; every connection will be refused"
+			result.Suggestions = append(result.Suggestions,
+				"Set remote_ssh.pool.known_hosts_file to a known_hosts file containing the hosts' keys (ssh-keyscan), or use strict_host_key_checking \"accept-new\"")
+		} else if opts.CheckDependencies {
+			failed := 0
+			for _, probe := range t.probeHosts(ctx, enabledHosts) {
+				deps = append(deps, probe)
+				if !probe.Available {
+					failed++
+				}
+			}
+			if failed > 0 && result.Message == "" {
+				result.Status = types.SelfTestStatusDegraded
+				result.Message = fmt.Sprintf("SSH ready but %d of %d host(s) are unreachable or rejected the connection", failed, len(enabledHosts))
+				result.Suggestions = append(result.Suggestions, "See the SSHHost:<name> dependencies for each host's connection error")
+			}
+		}
+	}
 
 	// Set overall status message if not already set
 	if result.Message == "" {
@@ -274,4 +308,62 @@ func (t *SSHTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *ty
 	}
 
 	return result
+}
+
+// selfTestHostKeyPolicy checks that host key verification can be built
+// from the pool config (mode is not "no", the known_hosts file loads). It
+// does not touch the network.
+func (t *SSHTool) selfTestHostKeyPolicy() types.DependencyStatus {
+	dep := types.DependencyStatus{Name: "HostKeyVerification", Required: true}
+	mode := t.config.Pool.StrictHostKeyChecking
+	if mode == "" {
+		mode = "yes"
+	}
+	if _, err := buildHostKeyCallback(t.config.Pool); err != nil {
+		dep.Status = "misconfigured"
+		dep.Message = err.Error()
+		return dep
+	}
+	dep.Available = true
+	dep.Status = "active"
+	dep.Message = "strict_host_key_checking=" + mode
+	return dep
+}
+
+// probeHosts dials each host through the pool (no command runs) and
+// returns the connection to it. Probes run in parallel and stop waiting
+// when ctx ends; a probe still dialling finishes in the background and
+// returns its connection to the pool.
+func (t *SSHTool) probeHosts(ctx context.Context, hosts []*config.SSHHostConfig) []types.DependencyStatus {
+	out := make([]types.DependencyStatus, len(hosts))
+	var wg sync.WaitGroup
+	for i, host := range hosts {
+		out[i] = types.DependencyStatus{Name: "SSHHost:" + host.Name, Status: "timeout", Message: "connection probe did not finish in time"}
+		done := make(chan error, 1)
+		go func(name string) {
+			client, err := t.pool.Get(name)
+			if err == nil {
+				t.pool.Put(name, client)
+			}
+			done <- err
+		}(host.Name)
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			select {
+			case err := <-done:
+				if err != nil {
+					out[i].Status = "unreachable"
+					out[i].Message = err.Error()
+					return
+				}
+				out[i].Available = true
+				out[i].Status = "reachable"
+				out[i].Message = "connected and host key verified"
+			case <-ctx.Done():
+			}
+		}(i)
+	}
+	wg.Wait()
+	return out
 }

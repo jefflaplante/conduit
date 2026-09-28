@@ -21,9 +21,22 @@ const approvedBy = "human-approval"
 // effectiveSecurityConfig fills in RequireApproval when the config omits it:
 // an absent list means the secure default (["dangerous", "blocked"]), not
 // "no approvals". An explicit [] still disables gating (conduit-w3l7).
+//
+// The same absent-means-default rule applies to the hard blocks: a
+// remote_ssh block is decoded onto zero values (config defaults are not
+// merged), so omitting blocked_patterns or allowed_commands.blocked used to
+// silently drop every block (mkfs, dd, /etc/shadow, curl|sh), leaving them
+// merely approval-gated. Explicit [] still means none (conduit-enf0).
 func effectiveSecurityConfig(sec config.SSHSecurityConfig) config.SSHSecurityConfig {
+	def := config.DefaultRemoteSSHConfig().Security
 	if sec.RequireApproval == nil {
-		sec.RequireApproval = config.DefaultRemoteSSHConfig().Security.RequireApproval
+		sec.RequireApproval = def.RequireApproval
+	}
+	if sec.BlockedPatterns == nil {
+		sec.BlockedPatterns = def.BlockedPatterns
+	}
+	if sec.AllowedCommands.Blocked == nil {
+		sec.AllowedCommands.Blocked = def.AllowedCommands.Blocked
 	}
 	return sec
 }
@@ -77,8 +90,11 @@ func classificationData(c *ClassificationResult) map[string]interface{} {
 
 // gate hands a frozen SSH operation to the approval manager. run executes
 // later, exactly once, only if the bound human approves; non-interactive
-// turns and a missing approver fail closed (conduit-w3l7).
+// turns and a missing approver fail closed (conduit-w3l7). The approval
+// stays valid for security.approval_timeout (0 = the gateway default, capped
+// at approval.MaxTTL; conduit-enf0).
 func (t *SSHTool) gate(ctx context.Context, op approvalgate.Operation, run approvalgate.Run) (*types.ToolResult, error) {
+	op.TTL = t.config.Security.ApprovalTimeout
 	return approvalgate.Request(ctx, t.approver(), op, run), nil
 }
 
@@ -202,9 +218,63 @@ func (t *SSHTool) uploadOperation(host, localPath, resolvedLocal, remotePath str
 			"tier":        string(c.Tier),
 		},
 		Summary: fmt.Sprintf("the SCP upload of %s to %s:%s", localPath, host, remotePath),
-		Data: map[string]interface{}{
-			"tier":              string(c.Tier),
-			"requires_approval": true,
+		Data:    classificationData(c),
+	}
+}
+
+func (t *SSHTool) downloadOperation(host, remotePath, localPath, resolvedLocal string, c *ClassificationResult) approvalgate.Operation {
+	return approvalgate.Operation{
+		Kind:  "ssh.scp_download",
+		Title: fmt.Sprintf("Download %s:%s via SCP", host, remotePath),
+		Fields: []approval.Field{
+			{Name: "Host", Value: t.hostLabel(host)},
+			{Name: "Remote path", Value: remotePath},
+			{Name: "Local file", Value: resolvedLocal},
+			{Name: "Risk", Value: riskText(c)},
 		},
+		Params: map[string]string{
+			"host":        host,
+			"remote_path": remotePath,
+			"local_path":  resolvedLocal,
+		},
+		Audit: map[string]string{
+			"host":        host,
+			"remote_path": remotePath,
+			"local_path":  localPath,
+			"tier":        string(c.Tier),
+		},
+		Summary: fmt.Sprintf("the SCP download of %s:%s to %s", host, remotePath, localPath),
+		Data:    classificationData(c),
+	}
+}
+
+func (t *SSHTool) tunnelOperation(host string, localPort int, remoteHost string, remotePort int, c *ClassificationResult) approvalgate.Operation {
+	local := "auto-assigned"
+	if localPort != 0 {
+		local = strconv.Itoa(localPort)
+	}
+	target := fmt.Sprintf("%s:%d", remoteHost, remotePort)
+	return approvalgate.Operation{
+		Kind:  "ssh.tunnel_create",
+		Title: fmt.Sprintf("Open an SSH tunnel to %s via %s", target, t.hostLabel(host)),
+		Fields: []approval.Field{
+			{Name: "Via host", Value: t.hostLabel(host)},
+			{Name: "Forward to", Value: target},
+			{Name: "Local port", Value: "127.0.0.1:" + local},
+			{Name: "Risk", Value: riskText(c)},
+		},
+		Params: map[string]string{
+			"host":        host,
+			"local_port":  strconv.Itoa(localPort),
+			"remote_host": remoteHost,
+			"remote_port": strconv.Itoa(remotePort),
+		},
+		Audit: map[string]string{
+			"host":   host,
+			"target": target,
+			"tier":   string(c.Tier),
+		},
+		Summary: fmt.Sprintf("the SSH tunnel to %s via %s", target, host),
+		Data:    classificationData(c),
 	}
 }

@@ -187,9 +187,10 @@ func TestBuildHostKeyCallback_Modes(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "no mode - accepts anything",
+			// conduit-enf0: never InsecureIgnoreHostKey.
+			name:    "no mode - refused, host keys are always verified",
 			mode:    "no",
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name:    "invalid mode",

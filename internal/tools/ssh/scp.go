@@ -18,6 +18,14 @@ import (
 // remote-supplied size could OOM the gateway. conduit-31jg.69
 const maxSCPDownloadBytes = 256 << 20
 
+// scpShellQuote single-quotes a remote path for the remote login shell that
+// runs "scp -t/-f <path>". The path used to be interpolated raw, so a
+// remote_path such as "/tmp/x; reboot" ran arbitrary commands, and a
+// read-tier scp_download needs no approval (conduit-enf0).
+func scpShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // SCPClient provides SCP file transfer operations over SSH
 type SCPClient struct {
 	sshClient *SSHClient
@@ -85,7 +93,7 @@ func (s *SCPClient) UploadBytes(data []byte, remotePath string, mode os.FileMode
 
 	// Start scp in sink mode (-t = to remote)
 	// The remote path is the target directory or file
-	if err := session.Start(fmt.Sprintf("scp -t %s", remoteDir)); err != nil {
+	if err := session.Start("scp -t " + scpShellQuote(remoteDir)); err != nil {
 		return fmt.Errorf("failed to start scp: %w", err)
 	}
 
@@ -159,7 +167,7 @@ func (s *SCPClient) Download(remotePath, localPath string) error {
 	}
 
 	// Start scp in source mode (-f = from remote)
-	if err := session.Start(fmt.Sprintf("scp -f %s", remotePath)); err != nil {
+	if err := session.Start("scp -f " + scpShellQuote(remotePath)); err != nil {
 		return fmt.Errorf("failed to start scp: %w", err)
 	}
 

@@ -41,20 +41,31 @@ type Client interface {
 	Close() error
 }
 
-// getSSHClientForHost gets or creates an SSHClient for a host
-// This is a helper that bridges between the Client interface and the actual SSHClient needed for tunnels
-func (t *SSHTool) getSSHClientForHost(hostName string) (*SSHClient, error) {
+// acquireSSHClient checks out an SSHClient for hostName for SCP and tunnels.
+// The caller must call release exactly once when done with the client: for
+// the pool-backed client it returns the connection to the pool (previously
+// SCP and tunnels checked connections out and never returned them, so a
+// handful of transfers exhausted max_connections_per_host; conduit-enf0).
+func (t *SSHTool) acquireSSHClient(hostName string) (client *SSHClient, release func(), err error) {
 	// If the client is a PoolClient, we can get the underlying SSHClient
 	if poolClient, ok := t.client.(*PoolClient); ok {
-		return poolClient.GetClient(hostName)
+		c, err := poolClient.GetClient(hostName)
+		if err != nil {
+			return nil, nil, err
+		}
+		return c, func() { poolClient.ReleaseClient(hostName, c) }, nil
 	}
 
 	// For other client types, we need to check if they can provide an SSHClient
 	if clientProvider, ok := t.client.(SSHClientProvider); ok {
-		return clientProvider.GetSSHClient(hostName)
+		c, err := clientProvider.GetSSHClient(hostName)
+		if err != nil {
+			return nil, nil, err
+		}
+		return c, func() {}, nil
 	}
 
-	return nil, fmt.Errorf("client does not support tunneling - requires SSHClient access")
+	return nil, nil, fmt.Errorf("client does not support tunneling - requires SSHClient access")
 }
 
 // SSHClientProvider is an interface for clients that can provide underlying SSHClient instances
@@ -74,6 +85,7 @@ func NewPoolClient(pool *Pool) *PoolClient {
 
 // Execute runs a command on the specified host
 func (p *PoolClient) Execute(ctx context.Context, host, command string, timeout time.Duration) (*ExecutionResult, error) {
+	start := time.Now()
 	result, err := p.pool.ExecWithTimeout(host, command, timeout)
 	if err != nil {
 		return nil, err
@@ -85,7 +97,7 @@ func (p *PoolClient) Execute(ctx context.Context, host, command string, timeout 
 		ExitCode: result.ExitCode,
 		Stdout:   result.Stdout,
 		Stderr:   result.Stderr,
-		Duration: timeout, // Approximate - actual duration tracked in ExecResult
+		Duration: time.Since(start),
 	}, nil
 }
 
@@ -119,7 +131,13 @@ func (p *PoolClient) Close() error {
 	return nil
 }
 
-// GetClient gets an SSHClient from the pool for the specified host
+// GetClient checks an SSHClient out of the pool for the specified host.
+// Return it with ReleaseClient when done.
 func (p *PoolClient) GetClient(hostName string) (*SSHClient, error) {
 	return p.pool.Get(hostName)
+}
+
+// ReleaseClient returns a client obtained from GetClient to the pool.
+func (p *PoolClient) ReleaseClient(hostName string, client *SSHClient) {
+	p.pool.Put(hostName, client)
 }

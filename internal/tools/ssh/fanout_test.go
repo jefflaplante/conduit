@@ -5,6 +5,7 @@ package ssh
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ func setupTestPool(t *testing.T, hostCount int) *Pool {
 	for i := 0; i < hostCount; i++ {
 		hosts[i] = config.SSHHostConfig{
 			Name:     fmt.Sprintf("host-%d", i+1),
-			Hostname: fmt.Sprintf("192.168.1.%d", i+1),
+			Hostname: fmt.Sprintf("192.0.2.%d", i+1), // TEST-NET-1, never routed
 			Port:     22,
 			User:     "test",
 		}
@@ -34,6 +35,10 @@ func setupTestPool(t *testing.T, hostCount int) *Pool {
 		MaxTotalConnections:   50,
 		IdleTimeout:           5 * time.Minute,
 		ConnectTimeout:        30 * time.Second,
+		// A missing known_hosts file makes every connect fail before any
+		// network I/O: these tests only check result structure, and must
+		// never dial (or authenticate to) real hosts (conduit-enf0).
+		KnownHostsFile: filepath.Join(t.TempDir(), "missing_known_hosts"),
 	}
 
 	return NewPool(hosts, defaults, poolConfig)

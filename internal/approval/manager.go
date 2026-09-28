@@ -21,7 +21,11 @@ const (
 	DefaultTTL           = 5 * time.Minute
 	DefaultExecTimeout   = 2 * time.Minute
 	DefaultMaxBadReplies = 3
-	codeLength           = 6
+	// MaxTTL caps a per-action TTL (Action.TTL). An approval code is a
+	// bearer credential for one frozen action; it should not outlive the
+	// conversation it was asked in (conduit-enf0).
+	MaxTTL     = time.Hour
+	codeLength = 6
 	// codeAlphabet omits look-alikes (0/O, 1/I/L) so codes are easy to type.
 	codeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 )
@@ -77,6 +81,22 @@ type Action struct {
 	// Fingerprint binds the approval to the exact parameters; see
 	// Fingerprint(). ExecuteFuncs should re-verify it before acting.
 	Fingerprint string
+	// TTL optionally overrides the Manager's TTL for this action (e.g. the
+	// SSH tool's security.approval_timeout). Zero or negative uses
+	// Config.TTL; values above MaxTTL are capped (conduit-enf0).
+	TTL time.Duration
+}
+
+// ttlFor returns the lifetime of a pending approval for action.
+func (m *Manager) ttlFor(action Action) time.Duration {
+	switch {
+	case action.TTL <= 0:
+		return m.cfg.TTL
+	case action.TTL > MaxTTL:
+		return MaxTTL
+	default:
+		return action.TTL
+	}
 }
 
 // Ticket identifies one pending approval.
@@ -193,7 +213,7 @@ func NewManager(cfg Config) *Manager {
 	}
 }
 
-// TTL returns the configured approval lifetime.
+// TTL returns the configured default approval lifetime (see Action.TTL).
 func (m *Manager) TTL() time.Duration { return m.cfg.TTL }
 
 // Request registers a pending approval for action and prompts the human on
@@ -218,6 +238,7 @@ func (m *Manager) Request(ctx context.Context, action Action, exec ExecuteFunc) 
 		return nil, errors.New("approval: action fingerprint and execute func are required")
 	}
 
+	ttl := m.ttlFor(action)
 	now := m.now()
 	t := Ticket{
 		ID:          "apr_" + randomHex(8),
@@ -227,7 +248,7 @@ func (m *Manager) Request(ctx context.Context, action Action, exec ExecuteFunc) 
 		ChannelID:   origin.ChannelID,
 		UserID:      origin.UserID,
 		CreatedAt:   now,
-		ExpiresAt:   now.Add(m.cfg.TTL),
+		ExpiresAt:   now.Add(ttl),
 	}
 	p := &pending{action: action, origin: origin, exec: exec}
 
@@ -245,12 +266,12 @@ func (m *Manager) Request(ctx context.Context, action Action, exec ExecuteFunc) 
 	p.ticket = t
 	m.pending[t.Code] = p
 	code, id := t.Code, t.ID
-	p.timer = time.AfterFunc(m.cfg.TTL, func() { m.expire(code, id) })
+	p.timer = time.AfterFunc(ttl, func() { m.expire(code, id) })
 	m.mu.Unlock()
 
 	m.audit("approval.requested", &t, action, "source", origin.Source)
 
-	if err := origin.Notify(ctx, promptNotice(t, action, m.cfg.TTL)); err != nil {
+	if err := origin.Notify(ctx, promptNotice(t, action, ttl)); err != nil {
 		m.remove(code, id)
 		m.audit("approval.prompt_failed", &t, action, "error", err.Error())
 		return nil, fmt.Errorf("%w: %v", ErrCannotPrompt, err)
