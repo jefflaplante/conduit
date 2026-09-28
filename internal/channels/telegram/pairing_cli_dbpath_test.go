@@ -43,8 +43,9 @@ func TestPairingCLI_UsesServerDatabase(t *testing.T) {
 
 	store, err := sessions.NewStore(auth.ResolveDatabasePath(cfg))
 	require.NoError(t, err)
-	p, err := NewPairingStorage(store.DB()).CreatePairing("user-42", time.Hour)
-	require.NoError(t, err)
+	const code = "5f0c7c2e-7a0e-4b8e-9a51-0d4c2f6b1e42"
+	now := time.Now()
+	insertPairing(t, store.DB(), code, "user-42", now, now.Add(time.Hour), true)
 	require.NoError(t, store.Close())
 
 	// Even if a stale env var from the old hack is present, it is ignored.
@@ -55,12 +56,12 @@ func TestPairingCLI_UsesServerDatabase(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, serverDB, got)
 
-	require.NoError(t, approvePairing(cli, p.Code))
+	require.NoError(t, approvePairing(cli, code))
 
 	store2, err := sessions.NewStore(serverDB)
 	require.NoError(t, err)
 	defer store2.Close()
-	after, err := NewPairingStorage(store2.DB()).GetPairingByCode(p.Code)
+	after, err := NewPairingStorage(store2.DB()).GetPairingByCode(code)
 	require.NoError(t, err)
 	assert.False(t, after.IsActive, "approval must land in the server's database")
 

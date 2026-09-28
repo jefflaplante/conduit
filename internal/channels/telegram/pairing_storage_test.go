@@ -54,23 +54,6 @@ func TestNewPairingStorage(t *testing.T) {
 	assert.Equal(t, db, storage.db)
 }
 
-func TestPairingStorage_CreatePairing(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-
-	storage := NewPairingStorage(db)
-
-	// Create a pairing
-	pairing, err := storage.CreatePairing("user123", 1*time.Hour)
-	require.NoError(t, err)
-	require.NotNil(t, pairing)
-
-	assert.NotEmpty(t, pairing.Code)
-	assert.Equal(t, "user123", pairing.UserID)
-	assert.True(t, pairing.IsActive)
-	assert.True(t, pairing.ExpiresAt.After(time.Now()))
-}
-
 func TestPairingStorage_GetPairingByCode(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -221,32 +204,6 @@ func TestPairingStorage_ListPendingPairings_ExcludesExpired(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, pairings, 1)
 	assert.Equal(t, "user2", pairings[0].UserID)
-}
-
-func TestPairingStorage_CleanupExpiredPairings(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-
-	storage := NewPairingStorage(db)
-
-	// Insert an expired pairing (in UTC)
-	now := time.Now().UTC()
-	insertPairing(t, db, "expired-code", "user1", now.Add(-2*time.Hour), now.Add(-1*time.Hour), true)
-
-	// Insert a valid pairing
-	insertPairing(t, db, "valid-code", "user2", now, now.Add(1*time.Hour), true)
-
-	// Cleanup
-	deleted, err := storage.CleanupExpiredPairings()
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), deleted)
-
-	// Verify only valid pairing remains
-	_, err = storage.GetPairingByCode("valid-code")
-	require.NoError(t, err)
-
-	_, err = storage.GetPairingByCode("expired-code")
-	assert.Error(t, err) // should be deleted
 }
 
 func TestParseTimestamp(t *testing.T) {
