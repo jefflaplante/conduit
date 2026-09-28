@@ -689,7 +689,7 @@ func TestWebFetchTool_Execute_RequestHeaders(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Contains(t, receivedHeaders.Get("User-Agent"), "Conduit-Gateway")
+	assert.Contains(t, receivedHeaders.Get("User-Agent"), "conduit/")
 	assert.Contains(t, receivedHeaders.Get("Accept"), "text/html")
 	assert.Contains(t, receivedHeaders.Get("Accept-Language"), "en-US")
 }
