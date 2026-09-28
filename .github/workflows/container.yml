@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  pull_request:
+    paths:
+      - Containerfile
+      - .dockerignore
+      - configs/container/**
+      - .github/workflows/container.yml
   workflow_dispatch:
 
 env:
@@ -47,6 +53,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -77,12 +84,49 @@ jobs:
             type=sha,prefix=sha-,suffix=${{ matrix.variant.suffix }}
             type=raw,value=${{ matrix.variant.suffix == '' && 'latest' || matrix.variant.name }},enable={{is_default_branch}}
 
+      # conduit-utxe: run the image with its default config and a throwaway
+      # env before publishing: /health must return 200 on the EXPOSEd port
+      # and the non-root user must be able to create the DB under /data.
+      - name: Build smoke-test image (${{ matrix.variant.name }}, amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Containerfile
+          load: true
+          push: false
+          tags: conduit-smoke:${{ matrix.variant.name }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            BUILD_TAGS=${{ matrix.variant.build_tags }}
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+          platforms: linux/amd64
+
+      - name: Smoke test (${{ matrix.variant.name }})
+        env:
+          IMAGE: conduit-smoke:${{ matrix.variant.name }}
+        run: |
+          set -euo pipefail
+          docker run -d --name conduit-smoke -p 18789:18789 \
+            -e ANTHROPIC_API_KEY=sk-ant-smoke-test "$IMAGE"
+          trap 'docker logs conduit-smoke 2>&1 | tail -50; docker rm -f conduit-smoke >/dev/null' EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:18789/health; then ok=1; break; fi
+            sleep 1
+          done
+          echo
+          [ "$ok" = 1 ] || { echo "::error::/health did not return 200"; exit 1; }
+          docker exec conduit-smoke test -s /data/gateway.db
+          docker exec conduit-smoke test -s /data/auth/token_secret
+          docker exec conduit-smoke /usr/local/bin/conduit status
+          [ "$(docker exec conduit-smoke id -u)" = 1000 ]
+
       - name: Build and push container image (${{ matrix.variant.name }})
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Containerfile
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |

@@ -60,34 +60,42 @@ RUN apk add --no-cache ca-certificates tzdata
 RUN addgroup -g 1000 conduit && \
     adduser -u 1000 -G conduit -s /bin/sh -D conduit
 
-# Create directories for data and config
-RUN mkdir -p /data /etc/conduit /workspace && \
-    chown -R conduit:conduit /data /etc/conduit /workspace
+# Writable state lives on two volumes owned by the runtime user (conduit-utxe):
+#   /data       data_dir: gateway.db (+ search/brain DBs), auth/token_secret,
+#               MCP token, ssh keys, .env, conduit.pid
+#   /workspace  agent workspace and tool sandbox root
+# Named volumes inherit this ownership on first use; bind mounts must be
+# writable by uid 1000 (see DEPLOYMENT.md, "Container").
+RUN mkdir -p /data /workspace /etc/conduit && \
+    chown conduit:conduit /data /workspace && \
+    chmod 0700 /data
 
-WORKDIR /app
+# Binary (root-owned, not writable by the runtime user)
+COPY --from=builder /build/conduit /usr/local/bin/conduit
 
-# Copy binary from builder
-COPY --from=builder /build/conduit .
+# Container default config: port 18789, DB under /data, workspace /workspace,
+# secrets via ${ENV} expansion. Read-only; override by mounting a file over
+# /etc/conduit/config.json.
+COPY configs/container/conduit.json /etc/conduit/config.json
 
-# Copy default minimal config
-COPY --chown=conduit:conduit configs/examples/config-minimal.json /etc/conduit/config.json
-
-# Set ownership
-RUN chown conduit:conduit /app/conduit
+# data_dir for the token secret, MCP token, .env and pidfile. Relative paths
+# in a custom config resolve under /data, which is writable.
+ENV CONDUIT_DATA_DIR=/data
+WORKDIR /data
 
 # Switch to non-root user
-USER conduit
+USER conduit:conduit
 
-# Expose default port
+# Default port (matches configs/container/conduit.json)
 EXPOSE 18789
 
 # Volume mount points
-VOLUME ["/data", "/etc/conduit", "/workspace"]
+VOLUME ["/data", "/workspace"]
 
-# Health check
+# Health check (port must match "port" in the config)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:18789/health || exit 1
 
 # Default command
-ENTRYPOINT ["./conduit"]
+ENTRYPOINT ["/usr/local/bin/conduit"]
 CMD ["server", "--config", "/etc/conduit/config.json", "--verbose"]

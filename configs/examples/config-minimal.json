@@ -1,14 +1,15 @@
 {
-  "port": 18889,
+  "port": 18789,
   "database": {
     "path": "./gateway.db"
   },
   "tools": {
     "enabled_tools": [
-      "read_file",
-      "write_file",
-      "list_files"
+      "Read",
+      "Write",
+      "Glob"
     ],
+    "max_tool_chains": 25,
     "sandbox": {
       "workspace_dir": "./workspace",
       "allowed_paths": [
