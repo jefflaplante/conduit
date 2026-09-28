@@ -82,9 +82,9 @@ func TestIsQuotaOrAuthError(t *testing.T) {
 // TestIsQuotaOrAuthErrorWithQuotaVariations tests various quota-related error messages
 func TestIsQuotaOrAuthErrorWithQuotaVariations(t *testing.T) {
 	tests := []struct {
-		name    string
-		errMsg  string
-		want    bool
+		name   string
+		errMsg string
+		want   bool
 	}{
 		{
 			name:   "exact match",

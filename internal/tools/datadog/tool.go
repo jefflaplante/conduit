@@ -582,7 +582,7 @@ func parseTime(s string) (time.Time, error) {
 
 		n, err := fmt.Sscanf(s, "%d%c", &value, &unit)
 		if err != nil || n != 2 {
-			return time.Time{}, fmt.Errorf("invalid relative time format: use -1h, -15m, -30s, etc.")
+			return time.Time{}, fmt.Errorf("invalid relative time format (want e.g. -1h, -15m, -30s)")
 		}
 
 		var duration time.Duration

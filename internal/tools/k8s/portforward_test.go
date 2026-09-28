@@ -339,14 +339,6 @@ func TestK8sTool_Execute_PortForwardCreate_MissingParams(t *testing.T) {
 	assert.Contains(t, result.Error, "remote_port parameter is required")
 }
 
-// setupTestToolWithPortForwarder is a helper that returns the tool with an
-// accessible portForwarder for tests that need to check forward state.
-func setupTestToolWithPortForwarder(t *testing.T) *K8sTool {
-	t.Helper()
-	tool := setupTestTool(t)
-	return tool
-}
-
 func TestK8sTool_PortForwarder_Initialized(t *testing.T) {
 	cfg := &config.KubernetesConfig{
 		Enabled: true,

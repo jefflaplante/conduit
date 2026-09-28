@@ -240,6 +240,8 @@ func (t *TTSTool) optimizeFormatForChannel(channel, defaultFormat string) string
 }
 
 // getAvailableVoices returns a list of available voices (placeholder)
+//
+//lint:ignore U1000 kept pending salvage review (conduit-31jg.72); see staticcheck.conf
 func (t *TTSTool) getAvailableVoices(ctx context.Context) ([]string, error) {
 	// This would execute edge-tts --list-voices and parse the output
 	cmd := exec.CommandContext(ctx, "edge-tts", "--list-voices")

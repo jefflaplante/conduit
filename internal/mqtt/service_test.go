@@ -148,7 +148,7 @@ func TestService_Publish_NotAllowed(t *testing.T) {
 
 	svc := NewService(cfg)
 
-	result, err := svc.Publish(nil, "test/topic", []byte(`{}`), 1, false)
+	result, err := svc.Publish(context.Background(), "test/topic", []byte(`{}`), 1, false)
 	assert.Nil(t, result)
 	assert.Equal(t, ErrPublishNotAllowed, err)
 }
@@ -163,7 +163,7 @@ func TestService_Publish_NotConnected(t *testing.T) {
 
 	svc := NewService(cfg)
 
-	result, err := svc.Publish(nil, "test/topic", []byte(`{}`), 1, false)
+	result, err := svc.Publish(context.Background(), "test/topic", []byte(`{}`), 1, false)
 	assert.Nil(t, result)
 	assert.Equal(t, ErrNotConnected, err)
 }

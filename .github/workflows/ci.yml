@@ -67,48 +67,24 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      # Blocking: default checks minus the pre-existing backlog listed in
-      # staticcheck.conf (default tags and all optional tool tags).
+      # Blocking: the full default check set (staticcheck.conf disables
+      # nothing since conduit-31jg.72), default tags and all optional tool tags.
       - name: staticcheck
         run: make staticcheck
 
-      # Non-blocking: full default check set, ignoring staticcheck.conf, so
-      # the backlog stays visible in the logs until it is burned down.
-      - name: staticcheck backlog report (non-blocking)
-        continue-on-error: true
-        run: |
-          mv staticcheck.conf "$RUNNER_TEMP/staticcheck.conf"
-          make staticcheck-report
-
   gofmt:
-    name: gofmt (changed files)
-    if: github.event_name == 'pull_request'
+    name: gofmt (whole repo)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
 
-      # Only files changed by the PR: ~20 files on main predate this check
-      # and are not gofmt-clean; formatting them wholesale is a follow-up.
-      - name: gofmt -l on changed .go files
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          files=$(git diff --name-only --diff-filter=ACMR "origin/${BASE_REF}...HEAD" -- '*.go')
-          if [ -z "$files" ]; then
-            echo "No Go files changed."
-            exit 0
-          fi
-          unformatted=$(gofmt -l $files)
-          if [ -n "$unformatted" ]; then
-            echo "These changed files are not gofmt-clean (run: gofmt -w <file>):"
-            echo "$unformatted"
-            exit 1
-          fi
+      # The whole tree is gofmt-clean since conduit-31jg.72, so check every
+      # file (previously only files changed by the PR).
+      - name: gofmt -l
+        run: make fmt-check

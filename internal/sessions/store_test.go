@@ -390,7 +390,7 @@ func TestSearchMessages(t *testing.T) {
 		t.Fatalf("SearchMessages with empty query failed: %v", err)
 	}
 
-	if results != nil && len(results) != 0 {
+	if len(results) != 0 {
 		t.Errorf("Expected nil or empty results for empty query, got %d", len(results))
 	}
 

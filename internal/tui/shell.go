@@ -475,19 +475,6 @@ type BackgroundJobCompletedMsg struct {
 	Error      error
 }
 
-// executeShellCmdWithDir returns a tea.Cmd that executes a shell command in the specified directory
-// with streaming output support and configurable timeout.
-func executeShellCmdWithDir(sessionKey, cmdLine, workDir string) tea.Cmd {
-	return executeShellCmdWithTimeout(sessionKey, cmdLine, workDir, DefaultCommandTimeout)
-}
-
-// executeShellCmdWithTimeout returns a tea.Cmd that executes a shell command with a specific timeout
-func executeShellCmdWithTimeout(sessionKey, cmdLine, workDir string, timeout time.Duration) tea.Cmd {
-	return func() tea.Msg {
-		return runShellCommand(sessionKey, cmdLine, workDir, nil, timeout)
-	}
-}
-
 // runShellCommand runs cmdLine under `sh -c` and returns its result message.
 //
 // conduit-31jg.69: stdout and stderr go straight into one bounded
@@ -591,28 +578,26 @@ func executeBackgroundCmd(sessionKey, cmdLine, workDir string, jobs *JobManager)
 // watchBackgroundJobs returns a tea.Cmd that waits for background job completion notifications
 func watchBackgroundJobs(sessionKey string, jobs *JobManager) tea.Cmd {
 	return func() tea.Msg {
-		select {
-		case jobID := <-jobs.jobsDone:
-			job := jobs.GetJob(jobID)
-			if job == nil {
-				return nil
-			}
-			output := job.Output.String()
-			job.mu.Lock()
-			status := job.Status
-			err := job.Error
-			job.mu.Unlock()
+		jobID := <-jobs.jobsDone
+		job := jobs.GetJob(jobID)
+		if job == nil {
+			return nil
+		}
+		output := job.Output.String()
+		job.mu.Lock()
+		status := job.Status
+		err := job.Error
+		job.mu.Unlock()
 
-			// Truncate output if needed
-			truncated, _ := TruncateOutput(output, MaxOutputLines)
+		// Truncate output if needed
+		truncated, _ := TruncateOutput(output, MaxOutputLines)
 
-			return BackgroundJobCompletedMsg{
-				SessionKey: sessionKey,
-				JobID:      jobID,
-				Status:     status,
-				Output:     truncated,
-				Error:      err,
-			}
+		return BackgroundJobCompletedMsg{
+			SessionKey: sessionKey,
+			JobID:      jobID,
+			Status:     status,
+			Output:     truncated,
+			Error:      err,
 		}
 	}
 }

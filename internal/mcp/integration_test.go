@@ -30,7 +30,7 @@ type testTool struct {
 }
 
 func (t *testTool) Name() string        { return t.name }
-func (t *testTool) Description() string  { return t.desc }
+func (t *testTool) Description() string { return t.desc }
 func (t *testTool) Parameters() map[string]interface{} {
 	if t.params != nil {
 		return t.params
@@ -61,7 +61,7 @@ type echoTool struct {
 }
 
 func (t *echoTool) Name() string        { return t.name }
-func (t *echoTool) Description() string  { return "Echoes input back" }
+func (t *echoTool) Description() string { return "Echoes input back" }
 func (t *echoTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
@@ -333,7 +333,7 @@ func TestIntegration_ToolCallWithComplexArguments(t *testing.T) {
 
 	registry := newMockRegistry(
 		&mockTool{
-			name: "ComplexTool",
+			name:        "ComplexTool",
 			description: "Accepts complex args",
 			params: map[string]interface{}{
 				"type": "object",

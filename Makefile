@@ -4,7 +4,7 @@
         run test test-full test-coverage clean deps format lint \
         install-deps channel-deps install init dev health help \
         container-core container-full container-sre container-iot \
-        vet vet-full test-race test-race-full staticcheck staticcheck-report ci
+        vet vet-full test-race test-race-full staticcheck staticcheck-report fmt-check ci
 
 # Build configuration
 BINARY_NAME=conduit
@@ -134,12 +134,13 @@ staticcheck:
 	$(STATICCHECK) ./...
 	$(STATICCHECK) -tags "$(call tags_for,$(OPTIONAL_TOOLS))" ./...
 
-# Full default check set (CI moves staticcheck.conf aside first). Informational.
+# Full default check set ignoring staticcheck.conf (move it aside first).
+# Informational; staticcheck.conf currently disables nothing (conduit-31jg.72).
 staticcheck-report:
 	$(STATICCHECK) ./...
 
 # Everything CI runs, locally.
-ci: build build-full vet vet-full staticcheck test-race test-race-full
+ci: fmt-check build build-full vet vet-full staticcheck test-race test-race-full
 
 # =============================================================================
 
@@ -206,6 +207,15 @@ format:
 	@echo "Formatting Go code..."
 	$(GOFMT) -w .
 	go mod tidy
+
+# Fail if any Go file in the repo is not gofmt-clean (CI gate; conduit-31jg.72).
+fmt-check:
+	@unformatted=$$($(GOFMT) -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "These files are not gofmt-clean (run: make format):"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
 
 # Lint Go code (requires golint: go install golang.org/x/lint/golint@latest)
 lint:
@@ -331,7 +341,8 @@ help:
 	@echo "  make test-full       Run tests with all optional tools"
 	@echo "  make test-coverage   Run tests with coverage report"
 	@echo "  make test-race       Run tests with the race detector"
-	@echo "  make ci              Run everything CI runs (vet, staticcheck, race, all tags)"
+	@echo "  make ci              Run everything CI runs (gofmt, vet, staticcheck, race, all tags)"
+	@echo "  make fmt-check       Fail if any Go file is not gofmt-clean"
 	@echo "  make dev             Development mode with auto-restart"
 	@echo "  make health          Check if gateway is running"
 	@echo ""

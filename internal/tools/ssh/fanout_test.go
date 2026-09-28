@@ -12,42 +12,6 @@ import (
 	"conduit/internal/config"
 )
 
-// mockSSHClient is a mock SSH client for testing
-type mockSSHClient struct {
-	execFunc   func(command string) (*ExecResult, error)
-	healthy    bool
-	closed     bool
-	execCalled int
-}
-
-func (m *mockSSHClient) Exec(command string) (*ExecResult, error) {
-	m.execCalled++
-	if m.execFunc != nil {
-		return m.execFunc(command)
-	}
-	return &ExecResult{
-		Stdout:   "mock output",
-		Stderr:   "",
-		ExitCode: 0,
-	}, nil
-}
-
-func (m *mockSSHClient) ExecWithTimeout(command string, timeout time.Duration) (*ExecResult, error) {
-	return m.Exec(command)
-}
-
-func (m *mockSSHClient) IsHealthy() bool {
-	return m.healthy
-}
-
-func (m *mockSSHClient) IsClosed() bool {
-	return m.closed
-}
-
-func (m *mockSSHClient) Close() {
-	m.closed = true
-}
-
 // setupTestPool creates a test pool with mock hosts
 func setupTestPool(t *testing.T, hostCount int) *Pool {
 	hosts := make([]config.SSHHostConfig, hostCount)

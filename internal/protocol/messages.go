@@ -46,10 +46,10 @@ type BaseMessage struct {
 // Attachment represents a media attachment (image, document, etc.) carried in-memory.
 // Data is excluded from JSON serialization and is never persisted to the database.
 type Attachment struct {
-	Type      string `json:"type"`                // "image", "document", "audio"
-	MediaType string `json:"media_type"`          // MIME type: "image/jpeg", "image/png", etc.
-	Data      []byte `json:"-"`                   // Raw bytes, excluded from JSON
-	Filename  string `json:"filename,omitempty"`   // Optional original filename
+	Type      string `json:"type"`               // "image", "document", "audio"
+	MediaType string `json:"media_type"`         // MIME type: "image/jpeg", "image/png", etc.
+	Data      []byte `json:"-"`                  // Raw bytes, excluded from JSON
+	Filename  string `json:"filename,omitempty"` // Optional original filename
 }
 
 // IncomingMessage represents a message received from a channel

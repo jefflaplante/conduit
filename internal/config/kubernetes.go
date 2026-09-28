@@ -128,4 +128,3 @@ func (c *KubernetesConfig) EffectiveSafetyLevel(cluster *KubernetesCluster) stri
 	}
 	return "read"
 }
-

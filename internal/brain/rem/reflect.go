@@ -447,17 +447,3 @@ func (r *REMCycle) backfillScores(ctx context.Context, hw int64, dryRun bool) (i
 	}
 	return len(todo), nil
 }
-
-// reflectSummary returns a human-readable summary line for the report log.
-func reflectSummary(r *ReflectResult) string {
-	if r == nil {
-		return "Reflect: not run"
-	}
-	parts := []string{
-		fmt.Sprintf("entries processed: %d", r.EntriesProcessed),
-		fmt.Sprintf("clusters found: %d", r.ClustersFound),
-		fmt.Sprintf("patterns promoted: %d", r.PatternsPromoted),
-		fmt.Sprintf("scores backfilled: %d", r.ScoresBackfilled),
-	}
-	return "Reflect: " + strings.Join(parts, ", ")
-}

@@ -183,15 +183,6 @@ func testOAuthSearchScenario(t *testing.T, cfg *config.Config) {
 	t.Log("OAuth scenario validation passed")
 }
 
-// Helper functions
-func getMapKeys(m map[string]interface{}) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 // Test data storage
 var testToken string
 

@@ -3,7 +3,6 @@ package ai
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -339,7 +338,7 @@ func TestParseOpenAISSEStream_Done(t *testing.T) {
 func TestParseOpenAISSEStream_Usage(t *testing.T) {
 	chunks := []string{
 		`data: {"choices":[{"delta":{"content":"hi"},"index":0}]}`,
-		fmt.Sprintf(`data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`),
+		`data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
 		`data: [DONE]`,
 	}
 	body := strings.NewReader(strings.Join(chunks, "\n"))
@@ -505,9 +504,9 @@ func TestOpenAITimeoutConfiguration(t *testing.T) {
 		{
 			name: "custom timeout is respected",
 			cfg: config.ProviderConfig{
-				Name:          "test",
-				Type:          "openai",
-				APIKey:        "test-key",
+				Name:           "test",
+				Type:           "openai",
+				APIKey:         "test-key",
 				TimeoutSeconds: 600,
 			},
 			expectedTimeout: 600 * time.Second,
@@ -515,9 +514,9 @@ func TestOpenAITimeoutConfiguration(t *testing.T) {
 		{
 			name: "zero value uses default",
 			cfg: config.ProviderConfig{
-				Name:          "test",
-				Type:          "openai",
-				APIKey:        "test-key",
+				Name:           "test",
+				Type:           "openai",
+				APIKey:         "test-key",
 				TimeoutSeconds: 0,
 			},
 			expectedTimeout: 300 * time.Second,
@@ -525,9 +524,9 @@ func TestOpenAITimeoutConfiguration(t *testing.T) {
 		{
 			name: "short timeout works",
 			cfg: config.ProviderConfig{
-				Name:          "test",
-				Type:          "openai",
-				APIKey:        "test-key",
+				Name:           "test",
+				Type:           "openai",
+				APIKey:         "test-key",
 				TimeoutSeconds: 45,
 			},
 			expectedTimeout: 45 * time.Second,

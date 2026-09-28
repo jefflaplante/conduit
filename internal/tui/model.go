@@ -693,13 +693,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 	case "pgup":
 		if s := m.activeSession(); s != nil {
-			s.Chat.Viewport.HalfViewUp()
+			s.Chat.Viewport.HalfPageUp()
 		}
 		return nil, true
 
 	case "pgdown":
 		if s := m.activeSession(); s != nil {
-			s.Chat.Viewport.HalfViewDown()
+			s.Chat.Viewport.HalfPageDown()
 		}
 		return nil, true
 

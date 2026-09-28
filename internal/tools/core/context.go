@@ -944,30 +944,6 @@ func (t *ContextTool) runBeadsCommand(dir string, beadsArgs ...string) (string, 
 	return strings.TrimSpace(string(output)), nil
 }
 
-// parseBeadsOutput parses br command output into individual task lines.
-func (t *ContextTool) parseBeadsOutput(output string) []string {
-	var tasks []string
-	lines := strings.Split(output, "\n")
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		// Skip header lines or status info
-		if strings.HasPrefix(line, "ID") ||
-			strings.HasPrefix(line, "--") ||
-			strings.HasPrefix(line, "Backend:") ||
-			strings.HasPrefix(line, "Database:") ||
-			strings.Contains(line, "ready tasks") {
-			continue
-		}
-		tasks = append(tasks, line)
-	}
-
-	return tasks
-}
-
 // runGit executes a git command in the given directory and returns trimmed stdout.
 func (t *ContextTool) runGit(dir string, gitArgs ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

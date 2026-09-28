@@ -23,9 +23,9 @@ type streamEvent struct {
 	Event json.RawMessage `json:"event,omitempty"`
 
 	// Fields for "message" type events
-	Role      string          `json:"role,omitempty"`
-	Content   json.RawMessage `json:"content,omitempty"`
-	UsageRaw  json.RawMessage `json:"usage,omitempty"`
+	Role     string          `json:"role,omitempty"`
+	Content  json.RawMessage `json:"content,omitempty"`
+	UsageRaw json.RawMessage `json:"usage,omitempty"`
 
 	// Fields for "system/api_retry" events
 	Attempt    int `json:"attempt,omitempty"`
@@ -39,9 +39,9 @@ type streamEvent struct {
 	Message json.RawMessage `json:"message,omitempty"`
 
 	// Fields for "result" events (verbose mode) and JSON output mode (no type field)
-	Result    *string         `json:"result,omitempty"`
-	IsError   bool            `json:"is_error,omitempty"`
-	SessionID string          `json:"session_id,omitempty"`
+	Result    *string `json:"result,omitempty"`
+	IsError   bool    `json:"is_error,omitempty"`
+	SessionID string  `json:"session_id,omitempty"`
 }
 
 // streamDelta represents the inner delta object within a stream_event.
@@ -64,15 +64,15 @@ type contentBlock struct {
 // camelCase (JSON output) and snake_case (stream events) field names.
 type claudeCodeUsage struct {
 	// camelCase (JSON output mode)
-	InputTokensCC          int `json:"inputTokens,omitempty"`
-	OutputTokensCC         int `json:"outputTokens,omitempty"`
-	CacheReadCC            int `json:"cacheReadInputTokens,omitempty"`
-	CacheCreationCC        int `json:"cacheCreationInputTokens,omitempty"`
+	InputTokensCC   int `json:"inputTokens,omitempty"`
+	OutputTokensCC  int `json:"outputTokens,omitempty"`
+	CacheReadCC     int `json:"cacheReadInputTokens,omitempty"`
+	CacheCreationCC int `json:"cacheCreationInputTokens,omitempty"`
 	// snake_case (stream message events)
-	InputTokensSC          int `json:"input_tokens,omitempty"`
-	OutputTokensSC         int `json:"output_tokens,omitempty"`
-	CacheReadSC            int `json:"cache_read_input_tokens,omitempty"`
-	CacheCreationSC        int `json:"cache_creation_input_tokens,omitempty"`
+	InputTokensSC   int `json:"input_tokens,omitempty"`
+	OutputTokensSC  int `json:"output_tokens,omitempty"`
+	CacheReadSC     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationSC int `json:"cache_creation_input_tokens,omitempty"`
 }
 
 // resultUsage represents the usage field inside the verbose "result" event,

@@ -49,17 +49,9 @@ func ChunkMarkdown(content string, maxTokens int) []Chunk {
 			prefix := strings.Repeat("#", level)
 			entry := prefix + " " + headingText
 
-			// Update heading breadcrumb stack: keep headings at lower depth, replace at this level
+			// Update heading breadcrumb stack: keep only headings with a
+			// strictly lower level, then push this one.
 			var newHeadings []string
-			for _, h := range currentHeadings {
-				if headingLevel(strings.TrimSpace(strings.SplitN(h, " ", 2)[0]+"x")) < level {
-					newHeadings = append(newHeadings, h)
-				} else {
-					break
-				}
-			}
-			// Recalculate: keep only headings with strictly lower level
-			newHeadings = nil
 			for _, h := range currentHeadings {
 				hl := headingLevelFromEntry(h)
 				if hl < level {

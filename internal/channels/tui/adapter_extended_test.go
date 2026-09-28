@@ -314,7 +314,7 @@ func TestAdapter_ContextCancellation(t *testing.T) {
 
 	// SendMessage should fail with context canceled
 	msg := &protocol.OutgoingMessage{Text: "Hello"}
-	err = adapter.SendMessage(msg)
-	// May return context.Canceled or queue full error
-	// Just verify it doesn't panic
+	// May return context.Canceled or queue full error; the result is
+	// deliberately ignored — just verify it doesn't panic.
+	_ = adapter.SendMessage(msg)
 }

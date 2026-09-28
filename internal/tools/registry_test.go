@@ -615,28 +615,6 @@ func TestRegistry_EnabledToolsNormalized(t *testing.T) {
 	}
 }
 
-// mockSelfTesterTool is a test tool that implements SelfTester
-type mockSelfTesterTool struct {
-	name   string
-	status types.SelfTestStatus
-}
-
-func (m *mockSelfTesterTool) Name() string        { return m.name }
-func (m *mockSelfTesterTool) Description() string { return "Mock tool for testing" }
-func (m *mockSelfTesterTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
-}
-func (m *mockSelfTesterTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	return &types.ToolResult{Success: true}, nil
-}
-func (m *mockSelfTesterTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
-	return &types.SelfTestResult{
-		Status:       m.status,
-		Message:      "Mock self-test result",
-		Capabilities: []string{"mock_capability"},
-	}
-}
-
 func TestSelfTestTool_Exists(t *testing.T) {
 	registry, _ := setupTestRegistry(t, "workspace", "sandbox")
 

@@ -38,6 +38,7 @@ func TestWithRequestID(t *testing.T) {
 
 func TestRequestIDFromContext(t *testing.T) {
 	t.Run("nil context returns empty", func(t *testing.T) {
+		//lint:ignore SA1012 deliberately exercising the nil-context guard
 		id := RequestIDFromContext(nil)
 		if id != "" {
 			t.Errorf("expected empty string for nil context, got: %s", id)

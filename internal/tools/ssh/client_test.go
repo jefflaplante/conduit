@@ -15,16 +15,6 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// testHostConfig creates a test host configuration
-func testHostConfig(name, hostname string) config.SSHHostConfig {
-	return config.SSHHostConfig{
-		Name:     name,
-		Hostname: hostname,
-		Port:     22,
-		User:     "testuser",
-	}
-}
-
 // testDefaults creates test default settings
 func testDefaults() config.SSHHostDefaults {
 	return config.SSHHostDefaults{

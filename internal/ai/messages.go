@@ -173,25 +173,6 @@ func (r *Router) buildChatMessagesWithSystemPrompt(ctx context.Context, session 
 	return messages, nil
 }
 
-// getRecentMessages retrieves recent messages from a session (legacy, fixed count)
-func (r *Router) getRecentMessages(session *sessions.Session, limit int) ([]sessions.Message, error) {
-	if r.sessionStore == nil {
-		// No store available, return empty history
-		fmt.Printf("[Router] WARNING: No session store available for history\n")
-		return []sessions.Message{}, nil
-	}
-
-	// Retrieve messages from session store
-	messages, err := r.sessionStore.GetMessages(session.Key, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get messages: %w", err)
-	}
-
-	fmt.Printf("[Router] Retrieved %d messages from session %s\n", len(messages), session.Key)
-
-	return messages, nil
-}
-
 // getRecentMessagesTokenAware retrieves messages using token budget instead of fixed count.
 // This ensures long conversations retain meaningful context rather than arbitrary message counts.
 func (r *Router) getRecentMessagesTokenAware(session *sessions.Session) ([]sessions.Message, error) {

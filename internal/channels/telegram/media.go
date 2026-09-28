@@ -310,13 +310,3 @@ func (s *MediaSender) ProcessAndSendMedia(chatID int64, text string) (string, []
 
 	return cleanedText, errors
 }
-
-// botAPI extension for media methods
-// These are added to the existing botAPI interface
-
-// mediaBot extends botAPI with media sending methods
-type mediaBot interface {
-	botAPI
-	SendVoice(ctx context.Context, params *bot.SendVoiceParams) (*models.Message, error)
-	SendAudio(ctx context.Context, params *bot.SendAudioParams) (*models.Message, error)
-}

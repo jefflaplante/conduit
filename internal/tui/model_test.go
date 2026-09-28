@@ -11,9 +11,9 @@ import (
 
 // mockGatewayClient is a mock implementation of GatewayClient for testing
 type mockGatewayClient struct {
-	connected    bool
-	sendChatCalls    []string
-	commandCalls     []struct{ cmd, args string }
+	connected          bool
+	sendChatCalls      []string
+	commandCalls       []struct{ cmd, args string }
 	createSessionCalls int
 }
 

@@ -2,6 +2,8 @@
 
 package ssh
 
+//lint:file-ignore U1000 mockSession/mockSSHConn are unused scaffolding kept pending salvage review (conduit-31jg.72); see staticcheck.conf
+
 import (
 	"bytes"
 	"io"

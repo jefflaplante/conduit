@@ -379,8 +379,8 @@ func (q *SharedAlertQueue) RemoveProcessedAlerts() error {
 
 	// Only save if something changed
 	if len(queue.Alerts) != originalCount ||
-		(queue.SuppressionMap != nil && len(queue.SuppressionMap) > 0) ||
-		(queue.DeduplicationMap != nil && len(queue.DeduplicationMap) > 0) {
+		len(queue.SuppressionMap) > 0 ||
+		len(queue.DeduplicationMap) > 0 {
 		if err := q.saveQueueUnlocked(queue); err != nil {
 			return fmt.Errorf("failed to save queue after cleanup: %w", err)
 		}

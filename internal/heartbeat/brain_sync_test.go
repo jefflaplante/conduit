@@ -63,14 +63,6 @@ func (m *mockBrainWriter) getStored() map[string]string {
 	return cp
 }
 
-func (m *mockBrainWriter) getDeleted() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	cp := make([]string, len(m.deleted))
-	copy(cp, m.deleted)
-	return cp
-}
-
 func TestSanitizeKeyComponent(t *testing.T) {
 	tests := []struct {
 		input    string

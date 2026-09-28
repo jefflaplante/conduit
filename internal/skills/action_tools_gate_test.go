@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -115,7 +116,7 @@ func TestRefreshPathHonorsGate(t *testing.T) {
 	}
 	manager := NewManager(cfg)
 
-	tools, err := manager.GenerateTools(nil)
+	tools, err := manager.GenerateTools(context.Background())
 	if err != nil {
 		t.Fatalf("GenerateTools failed: %v", err)
 	}

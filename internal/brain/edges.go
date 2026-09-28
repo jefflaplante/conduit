@@ -163,11 +163,11 @@ type BackfillConfig struct {
 
 // BackfillReport contains statistics from a backfill operation
 type BackfillReport struct {
-	TotalNodes      int // Total LTM nodes in database
-	NodesProcessed  int // Nodes that were candidates for backfill
-	EdgesCreated    int // Number of edges actually created
-	EdgesSkipped    int // Edges not created due to caps or existing edges
-	GlobalCap       int // Global cap configured for this backfill
+	TotalNodes     int // Total LTM nodes in database
+	NodesProcessed int // Nodes that were candidates for backfill
+	EdgesCreated   int // Number of edges actually created
+	EdgesSkipped   int // Edges not created due to caps or existing edges
+	GlobalCap      int // Global cap configured for this backfill
 }
 
 // BackfillEdges performs a one-shot backfill of namespace edges for historical
