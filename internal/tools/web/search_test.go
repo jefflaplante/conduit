@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -205,20 +206,20 @@ func TestWebSearch_ShortAPIKey(t *testing.T) {
 	// a short key.
 	tool := &WebSearchTool{
 		braveAPIKey: "abc", // Only 3 chars, would panic with [:8]
+		// Offline transport: the request fails fast after the logging line.
+		httpClient: &http.Client{Transport: failingTransport{}},
 	}
 
 	// Execute should reach the logging line and not panic.
-	// It will return an error because we don't have a real HTTP client,
-	// but the important thing is it doesn't panic.
-	result, err := tool.Execute(nil, map[string]interface{}{
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"query": "test",
 	})
 
 	// We expect a non-nil result (the API key is set, so it won't hit
-	// the "not configured" error). It might fail later due to nil httpClient
-	// or nil context, but we just need to verify no panic from logging.
+	// the "not configured" error). The request itself fails, but we just
+	// need to verify no panic from logging.
 	if err != nil {
-		// An actual error from nil context/client is fine.
+		// An error from the offline transport is fine.
 		// The test is about not panicking.
 		return
 	}
@@ -228,12 +229,19 @@ func TestWebSearch_ShortAPIKey(t *testing.T) {
 	}
 }
 
+// failingTransport fails every request without touching the network.
+type failingTransport struct{}
+
+func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("offline test transport")
+}
+
 func TestWebSearch_EmptyAPIKey(t *testing.T) {
 	tool := &WebSearchTool{
 		braveAPIKey: "",
 	}
 
-	result, err := tool.Execute(nil, map[string]interface{}{
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"query": "test",
 	})
 

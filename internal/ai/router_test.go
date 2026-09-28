@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -446,7 +447,7 @@ func TestMockProviderBasics(t *testing.T) {
 	}
 
 	// Test default response (no responses configured)
-	resp, err := mock.GenerateResponse(nil, &GenerateRequest{
+	resp, err := mock.GenerateResponse(context.Background(), &GenerateRequest{
 		Messages: []ChatMessage{{Role: "user", Content: "test"}},
 	})
 	if err != nil {
@@ -472,7 +473,7 @@ func TestMockProviderConfiguredResponses(t *testing.T) {
 	})
 
 	// First call
-	resp1, err := mock.GenerateResponse(nil, &GenerateRequest{
+	resp1, err := mock.GenerateResponse(context.Background(), &GenerateRequest{
 		Messages: []ChatMessage{{Role: "user", Content: "first"}},
 	})
 	if err != nil {
@@ -483,7 +484,7 @@ func TestMockProviderConfiguredResponses(t *testing.T) {
 	}
 
 	// Second call
-	resp2, err := mock.GenerateResponse(nil, &GenerateRequest{
+	resp2, err := mock.GenerateResponse(context.Background(), &GenerateRequest{
 		Messages: []ChatMessage{{Role: "user", Content: "second"}},
 	})
 	if err != nil {
@@ -519,7 +520,7 @@ func TestMockProviderErrorResponse(t *testing.T) {
 	mock.AddErrorResponse(expectedErr)
 
 	// Call should return error
-	_, err := mock.GenerateResponse(nil, &GenerateRequest{
+	_, err := mock.GenerateResponse(context.Background(), &GenerateRequest{
 		Messages: []ChatMessage{{Role: "user", Content: "test"}},
 	})
 	if err == nil {
@@ -540,7 +541,7 @@ func TestMockProviderReset(t *testing.T) {
 
 	// Add responses and make calls
 	mock.AddResponse("Response 1", nil)
-	mock.GenerateResponse(nil, &GenerateRequest{
+	mock.GenerateResponse(context.Background(), &GenerateRequest{
 		Messages: []ChatMessage{{Role: "user", Content: "test"}},
 	})
 
@@ -556,7 +557,7 @@ func TestMockProviderReset(t *testing.T) {
 	}
 
 	// Should get default response again
-	resp, _ := mock.GenerateResponse(nil, &GenerateRequest{
+	resp, _ := mock.GenerateResponse(context.Background(), &GenerateRequest{
 		Messages: []ChatMessage{{Role: "user", Content: "test"}},
 	})
 	if resp.Content != "Mock response" {
@@ -761,7 +762,7 @@ func TestStreamingWithProviderSelection(t *testing.T) {
 
 	// Call with explicit provider name — should use that provider
 	// Since mock providers don't implement StreamingProvider, it falls back to non-streaming
-	resp, err := router.GenerateResponseStreaming(nil, session, "hello", "ollama-local", "", nil)
+	resp, err := router.GenerateResponseStreaming(context.Background(), session, "hello", "ollama-local", "", nil)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -806,7 +807,7 @@ func TestStreamingAutoResolution(t *testing.T) {
 	}
 
 	// Pass empty provider but model that resolves to ollama
-	resp, err := router.GenerateResponseStreaming(nil, session, "hello", "", "llama3.2", nil)
+	resp, err := router.GenerateResponseStreaming(context.Background(), session, "hello", "", "llama3.2", nil)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
