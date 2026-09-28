@@ -40,3 +40,41 @@ func TestWarnEscapingSymlinks_ReportsTruncation(t *testing.T) {
 		t.Fatalf("truncated scan not reported: %q", lines)
 	}
 }
+
+// conduit-31jg.87: a dangling symlink is reported as dangling, not as
+// resolving outside the sandbox, and allowed_paths is not suggested.
+func TestWarnEscapingSymlinks_DanglingReportedDistinctly(t *testing.T) {
+	ws := t.TempDir()
+	out := t.TempDir()
+	if err := os.Symlink(out, filepath.Join(ws, "shared")); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(ws, "skills", "brain-spread-activation")
+	if err := os.Symlink(missing, filepath.Join(ws, "brain_spread_activation")); err != nil {
+		t.Fatal(err)
+	}
+
+	var lines []string
+	logf := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
+	warnEscapingSymlinks(sandbox.New(ws, nil), sandbox.SymlinkScanOptions{}, logf)
+
+	if len(lines) != 2 {
+		t.Fatalf("want 2 warnings, got %q", lines)
+	}
+	var dangling, escaping string
+	for _, l := range lines {
+		switch {
+		case strings.Contains(l, "brain_spread_activation"):
+			dangling = l
+		case strings.Contains(l, "shared"):
+			escaping = l
+		}
+	}
+	if !strings.Contains(dangling, "dangling symlink (target missing)") ||
+		strings.Contains(dangling, "resolves outside") || strings.Contains(dangling, "allowed_paths") {
+		t.Errorf("dangling warning = %q", dangling)
+	}
+	if !strings.Contains(escaping, "resolves outside") || !strings.Contains(escaping, "allowed_paths") {
+		t.Errorf("escaping warning = %q", escaping)
+	}
+}
