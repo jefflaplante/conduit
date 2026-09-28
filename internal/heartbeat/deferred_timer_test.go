@@ -16,7 +16,7 @@ type testClock struct {
 	t  time.Time
 }
 
-func (c *testClock) now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *testClock) now() time.Time  { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
 func (c *testClock) set(t time.Time) { c.mu.Lock(); c.t = t; c.mu.Unlock() }
 
 // conduit-31jg.87: deferring an action arms a timer for the end of quiet
