@@ -18,13 +18,16 @@ import (
 var maintenanceCmd = &cobra.Command{
 	Use:   "maintenance",
 	Short: "Database maintenance operations",
-	Long:  `Manage database maintenance tasks including cleanup, optimization, and scheduling.`,
+	Long: `Run database maintenance tasks (session cleanup, database optimization) on demand.
+
+There is no built-in schedule: run 'conduit maintenance run' from a system
+timer (cron, systemd) to run maintenance periodically.`,
 }
 
 var maintenanceRunCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run maintenance tasks immediately",
-	Long:  `Execute all configured maintenance tasks immediately, bypassing the scheduler.`,
+	Long:  `Execute all configured maintenance tasks immediately.`,
 	RunE:  runMaintenanceTasks,
 }
 
@@ -38,8 +41,8 @@ var maintenanceRunTaskCmd = &cobra.Command{
 
 var maintenanceStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show maintenance task status",
-	Long:  `Display the current status of all maintenance tasks including last run times and results.`,
+	Short: "Show maintenance configuration summary",
+	Long:  `Display the maintenance configuration. Task results are only reported by 'run' and 'run-task'; no run history is kept.`,
 	RunE:  showMaintenanceStatus,
 }
 
@@ -68,8 +71,12 @@ func init() {
 	maintenanceCmd.PersistentFlags().BoolVar(&maintenanceJSONOutput, "json", false, "Output results in JSON format")
 	maintenanceCmd.PersistentFlags().BoolVar(&maintenanceVerbose, "verbose", false, "Verbose output")
 
-	maintenanceRunCmd.Flags().BoolVar(&maintenanceForce, "force", false, "Force run even outside maintenance window")
-	maintenanceRunTaskCmd.Flags().BoolVar(&maintenanceForce, "force", false, "Force run even outside maintenance window")
+	// --force is a no-op kept for existing scripts: manual runs always
+	// execute (conduit-3kgo; there is no maintenance window any more).
+	for _, c := range []*cobra.Command{maintenanceRunCmd, maintenanceRunTaskCmd} {
+		c.Flags().BoolVar(&maintenanceForce, "force", false, "No effect (manual runs always execute)")
+		_ = c.Flags().MarkDeprecated("force", "manual runs always execute; the flag has no effect")
+	}
 
 	// Add to root command
 	rootCmd.AddCommand(maintenanceCmd)
@@ -181,22 +188,18 @@ func showMaintenanceStatus(cmd *cobra.Command, args []string) error {
 
 	if maintenanceJSONOutput {
 		return json.NewEncoder(os.Stdout).Encode(map[string]interface{}{
-			"enabled":  config.Enabled,
-			"schedule": config.Schedule,
-			"status":   "configuration_only",
-			"message":  "Status from running scheduler not available in this implementation",
+			"status":  "configuration_only",
+			"message": maintenanceNoScheduleNote,
+			"config":  config,
 		})
 	}
 
 	fmt.Printf("Maintenance Configuration:\n")
-	fmt.Printf("  Enabled: %t\n", config.Enabled)
-	fmt.Printf("  Schedule: %s\n", config.Schedule)
 	fmt.Printf("  Session Retention: %d days\n", config.Sessions.RetentionDays)
 	fmt.Printf("  Database Vacuum Enabled: %t\n", config.Database.VacuumEnabled)
 	fmt.Printf("  Vacuum Threshold: %d MB\n", config.Database.VacuumThreshold)
 
-	fmt.Printf("\nNote: Real-time status requires a running scheduler instance.\n")
-	fmt.Printf("Run 'conduit maintenance run' to execute tasks immediately.\n")
+	fmt.Printf("\nNote: %s\n", maintenanceNoScheduleNote)
 
 	return nil
 }
@@ -212,9 +215,7 @@ func showMaintenanceConfig(cmd *cobra.Command, args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(config)
 	}
 
-	fmt.Println("Maintenance Configuration:")
-	fmt.Printf("  Enabled: %t\n", config.Enabled)
-	fmt.Printf("  Schedule: %s\n", config.Schedule)
+	fmt.Println("Maintenance Configuration (built-in defaults):")
 
 	fmt.Println("\nSession Configuration:")
 	fmt.Printf("  Retention Days: %d\n", config.Sessions.RetentionDays)
@@ -228,18 +229,19 @@ func showMaintenanceConfig(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Backup Before Vacuum: %t\n", config.Database.BackupBeforeVacuum)
 	fmt.Printf("  Optimize Indexes: %t\n", config.Database.OptimizeIndexes)
 
-	fmt.Println("\nMaintenance Window:")
-	fmt.Printf("  Start Hour: %d\n", config.Window.StartHour)
-	fmt.Printf("  End Hour: %d\n", config.Window.EndHour)
-	fmt.Printf("  Time Zone: %s\n", config.Window.TimeZone)
-
 	return nil
 }
 
-// loadMaintenanceConfig loads the maintenance configuration
+// maintenanceNoScheduleNote is shown by `status`: nothing runs maintenance
+// in the background and no run history is kept (conduit-3kgo).
+const maintenanceNoScheduleNote = "Maintenance runs only when invoked ('conduit maintenance run' or 'run-task'); " +
+	"there is no background schedule and no run history. Use a system timer to run it periodically."
+
+// loadMaintenanceConfig returns the maintenance configuration. config.Config
+// has no maintenance section, so this is always maintenance.DefaultConfig()
+// (conduit-3kgo); add a section there before making these settings
+// configurable.
 func loadMaintenanceConfig() (maintenance.Config, error) {
-	// For now, return default configuration
-	// In a real implementation, this would load from a config file
 	return maintenance.DefaultConfig(), nil
 }
 
