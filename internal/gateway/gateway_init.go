@@ -8,6 +8,7 @@ import (
 
 	"conduit/internal/agent"
 	"conduit/internal/ai"
+	"conduit/internal/approval"
 	"conduit/internal/brain"
 	"conduit/internal/brain/rem"
 	"conduit/internal/config"
@@ -257,7 +258,15 @@ func (g *Gateway) buildToolServices(
 		visionAnalyzer = newVisionAdapter(aiRouter)
 	}
 
+	// conduit-c8ct/w3l7: approval gate for K8s/SSH. Assigned only when set
+	// so a nil *Manager never becomes a non-nil interface.
+	var approvals approval.Requester
+	if g.approvals != nil {
+		approvals = g.approvals
+	}
+
 	return &tools.ToolServices{
+		Approvals:     approvals,
 		SessionStore:  sessionStore,
 		ConfigMgr:     cfg,
 		WebClient:     &http.Client{Timeout: 30 * time.Second},

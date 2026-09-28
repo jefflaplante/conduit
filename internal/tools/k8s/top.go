@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -97,10 +98,20 @@ func (t *K8sTool) executeTopPods(ctx context.Context, args map[string]interface{
 	}
 
 	// Check security (top is a read operation)
-	if secErr := t.checkSecurity("top", "pods", namespace, clusterCfg); secErr != nil {
-		return secErr, nil
+	cls, denied := t.checkSecurity("top", "pods", namespace, clusterCfg)
+	if denied != nil {
+		return denied, nil
 	}
 
+	op := k8sOp{Cluster: clusterName, Namespace: namespace, Verb: "top", Resource: "pods",
+		Extra: []opField{{"sort_by", "Sort by", sortBy}, {"limit", "Limit", strconv.Itoa(limit)}}}
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		return t.runTopPods(ctx, clusterName, namespace, sortBy, limit)
+	})
+}
+
+// runTopPods fetches pod metrics once security (and any approval) passed.
+func (t *K8sTool) runTopPods(ctx context.Context, clusterName, namespace, sortBy string, limit int) (*types.ToolResult, error) {
 	client, err := t.clients.GetClient(clusterName)
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
@@ -200,10 +211,20 @@ func (t *K8sTool) executeTopNodes(ctx context.Context, args map[string]interface
 	}
 
 	// Check security (top is a read operation)
-	if secErr := t.checkSecurity("top", "nodes", "", clusterCfg); secErr != nil {
-		return secErr, nil
+	cls, denied := t.checkSecurity("top", "nodes", "", clusterCfg)
+	if denied != nil {
+		return denied, nil
 	}
 
+	op := k8sOp{Cluster: clusterName, Verb: "top", Resource: "nodes",
+		Extra: []opField{{"sort_by", "Sort by", sortBy}, {"limit", "Limit", strconv.Itoa(limit)}}}
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		return t.runTopNodes(ctx, clusterName, sortBy, limit)
+	})
+}
+
+// runTopNodes fetches node metrics once security (and any approval) passed.
+func (t *K8sTool) runTopNodes(ctx context.Context, clusterName, sortBy string, limit int) (*types.ToolResult, error) {
 	client, err := t.clients.GetClient(clusterName)
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil

@@ -79,6 +79,18 @@ func TestKubernetesConfig_Validate_EmptyKubeconfigPath(t *testing.T) {
 	assert.Contains(t, err.Error(), "kubeconfig_path cannot be empty")
 }
 
+func TestKubernetesConfig_Validate_RequireApproval(t *testing.T) {
+	cfg := KubernetesConfig{Enabled: true, RequireApproval: []string{"modify", "dangerous"}}
+	require.NoError(t, cfg.Validate())
+
+	cfg.RequireApproval = []string{"dangerous", "delete"}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "require_approval")
+
+	assert.Equal(t, []string{"dangerous"}, DefaultKubernetesConfig().RequireApproval)
+}
+
 func TestKubernetesConfig_Validate_InvalidSafetyLevel(t *testing.T) {
 	tests := []struct {
 		name  string

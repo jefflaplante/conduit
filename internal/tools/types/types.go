@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"conduit/internal/approval"
 	"conduit/internal/config"
 	"conduit/internal/fts"
 	"conduit/internal/sessions"
@@ -430,6 +431,11 @@ type ToolServices struct {
 	REMCycle      REMCycleRunner    // Optional REM sleep cycle runner
 	Reflection    ReflectionService // Optional SPAR reflection store
 	Vision        VisionAnalyzer    // Optional multimodal image analysis (Anthropic vision, etc.)
+
+	// Approvals gates risky tool operations behind a human "YES <code>"
+	// reply on the originating channel (conduit-c8ct, conduit-w3l7). Nil
+	// means no approval channel: gated operations fail closed.
+	Approvals approval.Requester
 
 	// Schema enhancement
 	SchemaBuilder *schema.Builder // For enhancing tool schemas with discovery data

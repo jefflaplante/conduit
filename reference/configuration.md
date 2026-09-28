@@ -784,11 +784,12 @@ Multi-cluster Kubernetes configuration for the K8s tool. Kubeconfig paths suppor
 | `clusters` | array | `[]` | Cluster configurations |
 | `defaults.namespace` | string | `"default"` | Default namespace |
 | `defaults.safety_level` | string | `"read"` | Default safety level |
+| `require_approval` | array | `["dangerous"]` | Tiers whose operations need a human `YES <code>` reply in the originating chat before running; non-interactive turns fail closed. `[]` disables |
 
 **Safety Levels:**
-- `read` — get, list, describe, logs, watch, events, top, clusters, namespaces (auto-approved)
-- `modify` — scale, rollout, label, annotate, cordon, uncordon (recommended confirmation)
-- `dangerous` — delete, apply, create, edit, drain, exec, patch (requires approval)
+- `read` — get, list, describe, logs, watch, events, top, clusters, namespaces
+- `modify` — scale, rollout, label, annotate, cordon, uncordon
+- `dangerous` — delete, apply, create, edit, drain, exec, patch (requires approval by default)
 
 See [Kubernetes Integration](kubernetes.md) for full tool documentation.
 

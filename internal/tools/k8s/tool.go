@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,8 +32,14 @@ func NewK8sTool(services *types.ToolServices, cfg *config.KubernetesConfig) (*K8
 		return nil, fmt.Errorf("kubernetes config is required")
 	}
 
-	// Create security engine with default config (no blocked actions, no approval required).
-	security := NewSecurityEngine(SecurityConfig{})
+	// conduit-c8ct: the configured require_approval tiers reach the engine
+	// (previously an empty SecurityConfig was used, so nothing was ever
+	// classified as needing approval). Absent => DefaultRequireApproval.
+	requireApproval := cfg.RequireApproval
+	if requireApproval == nil {
+		requireApproval = DefaultRequireApproval
+	}
+	security := NewSecurityEngine(SecurityConfig{RequireApproval: requireApproval})
 
 	// Convert config clusters to client manager clusters.
 	clusters := make([]ClusterConfig, len(cfg.Clusters))
@@ -245,43 +252,50 @@ func (t *K8sTool) executeGet(ctx context.Context, args map[string]interface{}) (
 	namespace := t.resolveNamespace(args, clusterCfg)
 	labelSelector := toolargs.GetString(args, "label_selector", "")
 
-	if err := t.checkSecurity("get", resource, namespace, clusterCfg); err != nil {
-		return err, nil
+	cls, denied := t.checkSecurity("get", resource, namespace, clusterCfg)
+	if denied != nil {
+		return denied, nil
 	}
 
-	client, err := t.clients.GetClient(clusterName)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+	op := k8sOp{Cluster: clusterName, Namespace: namespace, Verb: "get", Resource: resource, Name: name}
+	if labelSelector != "" {
+		op.Extra = append(op.Extra, opField{"label_selector", "Label selector", labelSelector})
 	}
-
-	if name != "" {
-		// Get single resource
-		result, err := client.GetResource(ctx, resource, name, namespace)
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		client, err := t.clients.GetClient(clusterName)
 		if err != nil {
-			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to get %s/%s: %v", resource, name, err)}, nil
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+		}
+
+		if name != "" {
+			// Get single resource
+			result, err := client.GetResource(ctx, resource, name, namespace)
+			if err != nil {
+				return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to get %s/%s: %v", resource, name, err)}, nil
+			}
+			return &types.ToolResult{
+				Success: true,
+				Content: fmt.Sprintf("Retrieved %s/%s in namespace %s on cluster %s", resource, name, namespace, clusterName),
+				Data:    result,
+			}, nil
+		}
+
+		// List resources
+		results, err := client.ListResources(ctx, resource, namespace, labelSelector)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to list %s: %v", resource, err)}, nil
+		}
+
+		items := make([]interface{}, len(results))
+		for i, r := range results {
+			items[i] = r
 		}
 		return &types.ToolResult{
 			Success: true,
-			Content: fmt.Sprintf("Retrieved %s/%s in namespace %s on cluster %s", resource, name, namespace, clusterName),
-			Data:    result,
+			Content: fmt.Sprintf("Found %d %s in namespace %s on cluster %s", len(results), resource, namespace, clusterName),
+			Data:    map[string]interface{}{"items": items, "count": len(results)},
 		}, nil
-	}
-
-	// List resources
-	results, err := client.ListResources(ctx, resource, namespace, labelSelector)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to list %s: %v", resource, err)}, nil
-	}
-
-	items := make([]interface{}, len(results))
-	for i, r := range results {
-		items[i] = r
-	}
-	return &types.ToolResult{
-		Success: true,
-		Content: fmt.Sprintf("Found %d %s in namespace %s on cluster %s", len(results), resource, namespace, clusterName),
-		Data:    map[string]interface{}{"items": items, "count": len(results)},
-	}, nil
+	})
 }
 
 func (t *K8sTool) executeDescribe(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
@@ -297,24 +311,28 @@ func (t *K8sTool) executeDescribe(ctx context.Context, args map[string]interface
 	}
 
 	namespace := t.resolveNamespace(args, clusterCfg)
-	if err := t.checkSecurity("describe", resource, namespace, clusterCfg); err != nil {
-		return err, nil
+	cls, denied := t.checkSecurity("describe", resource, namespace, clusterCfg)
+	if denied != nil {
+		return denied, nil
 	}
 
-	client, err := t.clients.GetClient(clusterName)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
-	}
+	op := k8sOp{Cluster: clusterName, Namespace: namespace, Verb: "describe", Resource: resource, Name: name}
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		client, err := t.clients.GetClient(clusterName)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+		}
 
-	description, err := client.DescribeResource(ctx, resource, name, namespace)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to describe %s/%s: %v", resource, name, err)}, nil
-	}
+		description, err := client.DescribeResource(ctx, resource, name, namespace)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to describe %s/%s: %v", resource, name, err)}, nil
+		}
 
-	return &types.ToolResult{
-		Success: true,
-		Content: description,
-	}, nil
+		return &types.ToolResult{
+			Success: true,
+			Content: description,
+		}, nil
+	})
 }
 
 func (t *K8sTool) executeLogs(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
@@ -333,24 +351,33 @@ func (t *K8sTool) executeLogs(ctx context.Context, args map[string]interface{}) 
 	tailLines := int64(toolargs.GetInt(args, "tail_lines", 100))
 	since := int64(toolargs.GetInt(args, "since", 0))
 
-	if err := t.checkSecurity("logs", "pods", namespace, clusterCfg); err != nil {
-		return err, nil
+	cls, denied := t.checkSecurity("logs", "pods", namespace, clusterCfg)
+	if denied != nil {
+		return denied, nil
 	}
 
-	client, err := t.clients.GetClient(clusterName)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
-	}
+	op := k8sOp{Cluster: clusterName, Namespace: namespace, Verb: "logs", Resource: "pods", Name: name,
+		Extra: []opField{
+			{"container", "Container", container},
+			{"tail_lines", "Tail lines", strconv.FormatInt(tailLines, 10)},
+			{"since", "Since (seconds)", strconv.FormatInt(since, 10)},
+		}}
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		client, err := t.clients.GetClient(clusterName)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+		}
 
-	logs, err := client.GetLogs(ctx, name, namespace, container, tailLines, since)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to get logs for pod %s: %v", name, err)}, nil
-	}
+		logs, err := client.GetLogs(ctx, name, namespace, container, tailLines, since)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to get logs for pod %s: %v", name, err)}, nil
+		}
 
-	return &types.ToolResult{
-		Success: true,
-		Content: logs,
-	}, nil
+		return &types.ToolResult{
+			Success: true,
+			Content: logs,
+		}, nil
+	})
 }
 
 func (t *K8sTool) executeScale(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
@@ -371,23 +398,28 @@ func (t *K8sTool) executeScale(ctx context.Context, args map[string]interface{})
 	}
 
 	namespace := t.resolveNamespace(args, clusterCfg)
-	if secErr := t.checkSecurity("scale", resource, namespace, clusterCfg); secErr != nil {
-		return secErr, nil
+	cls, denied := t.checkSecurity("scale", resource, namespace, clusterCfg)
+	if denied != nil {
+		return denied, nil
 	}
 
-	client, err := t.clients.GetClient(clusterName)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
-	}
+	op := k8sOp{Cluster: clusterName, Namespace: namespace, Verb: "scale", Resource: resource, Name: name,
+		Extra: []opField{{"replicas", "Replicas", strconv.Itoa(replicas)}}}
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		client, err := t.clients.GetClient(clusterName)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+		}
 
-	if err := client.ScaleResource(ctx, resource, name, namespace, int32(replicas)); err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to scale %s/%s: %v", resource, name, err)}, nil
-	}
+		if err := client.ScaleResource(ctx, resource, name, namespace, int32(replicas)); err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to scale %s/%s: %v", resource, name, err)}, nil
+		}
 
-	return &types.ToolResult{
-		Success: true,
-		Content: fmt.Sprintf("Scaled %s/%s to %d replicas in namespace %s on cluster %s", resource, name, replicas, namespace, clusterName),
-	}, nil
+		return &types.ToolResult{
+			Success: true,
+			Content: fmt.Sprintf("Scaled %s/%s to %d replicas in namespace %s on cluster %s", resource, name, replicas, namespace, clusterName),
+		}, nil
+	})
 }
 
 func (t *K8sTool) executeRollout(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
@@ -403,27 +435,39 @@ func (t *K8sTool) executeRollout(ctx context.Context, args map[string]interface{
 		return &types.ToolResult{Success: false, Error: "resource, name, and subaction parameters are required for rollout"}, nil
 	}
 
-	namespace := t.resolveNamespace(args, clusterCfg)
-	if secErr := t.checkSecurity("rollout", resource, namespace, clusterCfg); secErr != nil {
-		return secErr, nil
-	}
-
-	client, err := t.clients.GetClient(clusterName)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
-	}
-
 	switch subaction {
-	case "restart":
-		if err := client.RolloutRestart(ctx, resource, name, namespace); err != nil {
-			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to restart %s/%s: %v", resource, name, err)}, nil
-		}
+	case "restart", "status", "history":
+	default:
 		return &types.ToolResult{
-			Success: true,
-			Content: fmt.Sprintf("Rolling restart initiated for %s/%s in namespace %s on cluster %s", resource, name, namespace, clusterName),
+			Success: false,
+			Error:   fmt.Sprintf("unknown rollout subaction: %s (valid: restart, status, history)", subaction),
 		}, nil
+	}
 
-	case "status", "history":
+	namespace := t.resolveNamespace(args, clusterCfg)
+	cls, denied := t.checkSecurity("rollout", resource, namespace, clusterCfg)
+	if denied != nil {
+		return denied, nil
+	}
+
+	op := k8sOp{Cluster: clusterName, Namespace: namespace, Verb: "rollout " + subaction, Resource: resource, Name: name}
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		client, err := t.clients.GetClient(clusterName)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+		}
+
+		if subaction == "restart" {
+			if err := client.RolloutRestart(ctx, resource, name, namespace); err != nil {
+				return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to restart %s/%s: %v", resource, name, err)}, nil
+			}
+			return &types.ToolResult{
+				Success: true,
+				Content: fmt.Sprintf("Rolling restart initiated for %s/%s in namespace %s on cluster %s", resource, name, namespace, clusterName),
+			}, nil
+		}
+
+		// status / history
 		description, err := client.DescribeResource(ctx, resource, name, namespace)
 		if err != nil {
 			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to get rollout %s for %s/%s: %v", subaction, resource, name, err)}, nil
@@ -432,13 +476,7 @@ func (t *K8sTool) executeRollout(ctx context.Context, args map[string]interface{
 			Success: true,
 			Content: description,
 		}, nil
-
-	default:
-		return &types.ToolResult{
-			Success: false,
-			Error:   fmt.Sprintf("unknown rollout subaction: %s (valid: restart, status, history)", subaction),
-		}, nil
-	}
+	})
 }
 
 func (t *K8sTool) executeDelete(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
@@ -454,23 +492,27 @@ func (t *K8sTool) executeDelete(ctx context.Context, args map[string]interface{}
 	}
 
 	namespace := t.resolveNamespace(args, clusterCfg)
-	if secErr := t.checkSecurity("delete", resource, namespace, clusterCfg); secErr != nil {
-		return secErr, nil
+	cls, denied := t.checkSecurity("delete", resource, namespace, clusterCfg)
+	if denied != nil {
+		return denied, nil
 	}
 
-	client, err := t.clients.GetClient(clusterName)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
-	}
+	op := k8sOp{Cluster: clusterName, Namespace: namespace, Verb: "delete", Resource: resource, Name: name}
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		client, err := t.clients.GetClient(clusterName)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+		}
 
-	if err := client.DeleteResource(ctx, resource, name, namespace); err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to delete %s/%s: %v", resource, name, err)}, nil
-	}
+		if err := client.DeleteResource(ctx, resource, name, namespace); err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to delete %s/%s: %v", resource, name, err)}, nil
+		}
 
-	return &types.ToolResult{
-		Success: true,
-		Content: fmt.Sprintf("Deleted %s/%s in namespace %s on cluster %s", resource, name, namespace, clusterName),
-	}, nil
+		return &types.ToolResult{
+			Success: true,
+			Content: fmt.Sprintf("Deleted %s/%s in namespace %s on cluster %s", resource, name, namespace, clusterName),
+		}, nil
+	})
 }
 
 func (t *K8sTool) executeNamespaces(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
@@ -559,30 +601,38 @@ func (t *K8sTool) executeWatch(ctx context.Context, args map[string]interface{})
 	}
 
 	// Watch is a read operation — same security tier as "get".
-	if secErr := t.checkSecurity("get", resource, namespace, clusterCfg); secErr != nil {
-		return secErr, nil
+	cls, denied := t.checkSecurity("get", resource, namespace, clusterCfg)
+	if denied != nil {
+		return denied, nil
 	}
 
-	client, err := t.clients.GetClient(clusterName)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
-	}
+	op := k8sOp{Cluster: clusterName, Namespace: namespace, Verb: "watch", Resource: resource,
+		Extra: []opField{
+			{"label_selector", "Label selector", labelSelector},
+			{"timeout", "Timeout (seconds)", strconv.Itoa(timeoutSec)},
+		}}
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		client, err := t.clients.GetClient(clusterName)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+		}
 
-	result, err := WatchResources(ctx, client, resource, namespace, labelSelector, time.Duration(timeoutSec)*time.Second)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("watch failed: %v", err)}, nil
-	}
+		result, err := WatchResources(ctx, client, resource, namespace, labelSelector, time.Duration(timeoutSec)*time.Second)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("watch failed: %v", err)}, nil
+		}
 
-	data, _ := json.Marshal(result)
-	var resultMap map[string]interface{}
-	json.Unmarshal(data, &resultMap)
+		data, _ := json.Marshal(result)
+		var resultMap map[string]interface{}
+		_ = json.Unmarshal(data, &resultMap)
 
-	return &types.ToolResult{
-		Success: true,
-		Content: fmt.Sprintf("Watch completed: %d event(s) in %s on cluster %s (completed=%t)",
-			len(result.Events), result.Duration, clusterName, result.Completed),
-		Data: resultMap,
-	}, nil
+		return &types.ToolResult{
+			Success: true,
+			Content: fmt.Sprintf("Watch completed: %d event(s) in %s on cluster %s (completed=%t)",
+				len(result.Events), result.Duration, clusterName, result.Completed),
+			Data: resultMap,
+		}, nil
+	})
 }
 
 func (t *K8sTool) executeExec(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
@@ -604,39 +654,48 @@ func (t *K8sTool) executeExec(ctx context.Context, args map[string]interface{}) 
 	namespace := t.resolveNamespace(args, clusterCfg)
 	container := toolargs.GetString(args, "container", "")
 
-	if secErr := t.checkSecurity("exec", "pods", namespace, clusterCfg); secErr != nil {
-		return secErr, nil
-	}
-
-	client, err := t.clients.GetClient(clusterName)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+	cls, denied := t.checkSecurity("exec", "pods", namespace, clusterCfg)
+	if denied != nil {
+		return denied, nil
 	}
 
 	timeout := time.Duration(toolargs.GetInt(args, "timeout", 0)) * time.Second
 
-	result, err := t.podExecutor.Execute(ctx, client, pod, namespace, container, command, timeout)
-	if err != nil {
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("exec failed: %v", err)}, nil
-	}
+	op := k8sOp{Cluster: clusterName, Namespace: namespace, Verb: "exec", Resource: "pods", Name: pod,
+		Extra: []opField{
+			{"container", "Container", container},
+			{"command", "Command", command},
+			{"timeout", "Timeout", timeout.String()},
+		}}
+	return t.authorize(ctx, cls, op, func(ctx context.Context) (*types.ToolResult, error) {
+		client, err := t.clients.GetClient(clusterName)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to connect to cluster %s: %v", clusterName, err)}, nil
+		}
 
-	content := result.Stdout
-	if result.TimedOut {
-		content = fmt.Sprintf("[timed out]\n%s", content)
-	}
-	if result.Stderr != "" {
-		content += fmt.Sprintf("\n--- stderr ---\n%s", result.Stderr)
-	}
+		result, err := t.podExecutor.Execute(ctx, client, pod, namespace, container, command, timeout)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("exec failed: %v", err)}, nil
+		}
 
-	data, _ := json.Marshal(result)
-	var dataMap map[string]interface{}
-	json.Unmarshal(data, &dataMap)
+		content := result.Stdout
+		if result.TimedOut {
+			content = fmt.Sprintf("[timed out]\n%s", content)
+		}
+		if result.Stderr != "" {
+			content += fmt.Sprintf("\n--- stderr ---\n%s", result.Stderr)
+		}
 
-	return &types.ToolResult{
-		Success: result.ExitCode == 0 && !result.TimedOut,
-		Content: content,
-		Data:    dataMap,
-	}, nil
+		data, _ := json.Marshal(result)
+		var dataMap map[string]interface{}
+		_ = json.Unmarshal(data, &dataMap)
+
+		return &types.ToolResult{
+			Success: result.ExitCode == 0 && !result.TimedOut,
+			Content: content,
+			Data:    dataMap,
+		}, nil
+	})
 }
 
 // ---------- Port forward actions ----------
@@ -732,15 +791,18 @@ func (t *K8sTool) executePortForwardList() (*types.ToolResult, error) {
 
 // ---------- Helper methods ----------
 
-// checkSecurity validates the operation against security policies.
-// Returns a non-nil *ToolResult if the operation is blocked or has warnings.
-func (t *K8sTool) checkSecurity(action, resource, namespace string, clusterCfg *config.KubernetesCluster) *types.ToolResult {
+// checkSecurity validates the operation against security policies. It
+// returns the classification, plus a non-nil *ToolResult when the operation
+// is denied outright (namespace, cluster safety level, blocked policy).
+// Operations in a require_approval tier are not denied here; callers route
+// them through authorize (conduit-c8ct).
+func (t *K8sTool) checkSecurity(action, resource, namespace string, clusterCfg *config.KubernetesCluster) (*OperationClassification, *types.ToolResult) {
 	classification := t.security.ClassifyOperation(action, resource, namespace)
 
 	// Check namespace restrictions
 	if clusterCfg != nil && len(clusterCfg.AllowedNamespaces) > 0 {
 		if err := t.security.ValidateNamespace(clusterCfg.AllowedNamespaces, namespace); err != nil {
-			return &types.ToolResult{
+			return classification, &types.ToolResult{
 				Success: false,
 				Error:   err.Error(),
 			}
@@ -751,7 +813,7 @@ func (t *K8sTool) checkSecurity(action, resource, namespace string, clusterCfg *
 	if clusterCfg != nil {
 		safetyLevel := t.config.EffectiveSafetyLevel(clusterCfg)
 		if err := t.security.ValidateForCluster(classification, safetyLevel); err != nil {
-			return &types.ToolResult{
+			return classification, &types.ToolResult{
 				Success: false,
 				Error:   err.Error(),
 			}
@@ -760,13 +822,13 @@ func (t *K8sTool) checkSecurity(action, resource, namespace string, clusterCfg *
 
 	// If blocked by policy
 	if classification.Blocked {
-		return &types.ToolResult{
+		return classification, &types.ToolResult{
 			Success: false,
 			Error:   classification.Reason,
 		}
 	}
 
-	return nil
+	return classification, nil
 }
 
 // resolveCluster determines which cluster to target. If only one cluster is

@@ -92,6 +92,15 @@ type Ticket struct {
 	ExpiresAt   time.Time
 }
 
+// Requester is the slice of *Manager a caller needs to gate an action
+// (conduit-c8ct, conduit-w3l7). Tools receive it via types.ToolServices so
+// they never import the gateway.
+type Requester interface {
+	Request(ctx context.Context, action Action, exec ExecuteFunc) (*Ticket, error)
+}
+
+var _ Requester = (*Manager)(nil)
+
 // ExecuteFunc performs the approved action. It runs at most once, only after
 // the bound human approves, with a fresh context bounded by ExecTimeout.
 type ExecuteFunc func(ctx context.Context, t Ticket) (result string, err error)
@@ -496,7 +505,7 @@ func promptNotice(t Ticket, a Action, ttl time.Duration) Notice {
 	var b strings.Builder
 	fmt.Fprintf(&b, "APPROVAL NEEDED [%s]\n%s\n", t.Code, a.Title)
 	for _, f := range a.Fields {
-		fmt.Fprintf(&b, "\n%s: %s", f.Name, f.Value)
+		writeField(&b, f)
 	}
 	fmt.Fprintf(&b, "\n\nReply \"YES %s\" to approve or \"NO %s\" to cancel. Expires in %s (%s).",
 		t.Code, t.Code, ttl.Round(time.Second), t.ExpiresAt.Format("15:04:05"))
@@ -507,6 +516,22 @@ func promptNotice(t Ticket, a Action, ttl time.Duration) Notice {
 			{Label: "Approve", Reply: "YES " + t.Code},
 			{Label: "Deny", Reply: "NO " + t.Code},
 		},
+	}
+}
+
+// writeField renders one prompt field. Single-line values stay on the label
+// line; multi-line values (commands, bodies) go on their own indented lines
+// so the human can read exactly what will run.
+func writeField(b *strings.Builder, f Field) {
+	v := strings.TrimRight(f.Value, "\n")
+	if !strings.Contains(v, "\n") {
+		fmt.Fprintf(b, "\n%s: %s", f.Name, v)
+		return
+	}
+	fmt.Fprintf(b, "\n%s:", f.Name)
+	for _, line := range strings.Split(v, "\n") {
+		b.WriteString("\n    ")
+		b.WriteString(line)
 	}
 }
 
