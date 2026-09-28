@@ -608,12 +608,15 @@ Agent heartbeat for automated tasks. See [agent-heartbeat.md](agent-heartbeat.md
       "max_retries": 3,
       "retry_interval": 300000000000,
       "backoff_factor": 2.0
-    }
+    },
+    "job_failure_alert_threshold": 3
   }
 }
 ```
 
 `alert_queue_path` is deprecated (still accepted, warns at load; see [agent-heartbeat.md](agent-heartbeat.md)). `alert_targets[].type` accepts `telegram`, `webhook` and `mqtt`; `email` and `slack` were removed because no deliverer exists for them (email/SMTP is tracked separately) — existing configs that use them still load, with a one-time warning, and those targets are ignored. `alert_retry_policy` drives background retries of failed heartbeat deliveries.
+
+`job_failure_alert_threshold` (default `0`, which means 3; negative disables) is the number of consecutive failed runs of any scheduled Go job that triggers one alert to `alert_targets[0]`. The alert is delivered through the heartbeat DeliveryRegistry and recorded in `alert_history`, and it is deferred during quiet hours. A "recovered" notice follows on the next success. Runs interrupted by a shutdown drain don't count; timeouts do, and the alert labels them. Every failed run is also appended to `memory/cron-log.jsonl`. See [agent-heartbeat.md](agent-heartbeat.md#scheduled-job-failure-alerts).
 
 ### Skills
 

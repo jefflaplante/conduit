@@ -430,7 +430,11 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// "CRON_TZ=<zone> " prefixes are supported for opt-in migration.
 	// conduit-31jg.60: `conduit cron migrate-tz` rewrites jobs to carry
 	// CRON_TZ=<configured zone>; migrated jobs ignore this default.
-	gw.scheduler = scheduler.New(workspaceDir, gw.executeScheduledJob)
+	// conduit-2six: failure log + consecutive-failure notices (see
+	// scheduler_health.go); the notifier gets its heartbeat delivery below.
+	jobHealth := newJobHealthNotifier(cfg.AgentHeartbeat)
+	gw.scheduler = scheduler.New(workspaceDir, gw.executeScheduledJob,
+		schedulerHealthOptions(workspaceDir, cfg.AgentHeartbeat, jobHealth)...)
 
 	// Initialize heartbeat integration
 	hbIntegration := heartbeat.NewGatewayIntegration(workspaceDir, sessionStore, aiRouter, gw.scheduler, gw, gw.monitoring.MetricsCollector, cfg.AgentHeartbeat.Model, cfg.AgentHeartbeat.TimeoutSeconds)
@@ -450,6 +454,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// conduit-31jg.59: route heartbeat delivery through that registry
 	// (ChannelSenderDeliverer wrapping gw) for breaker + audit + retries.
 	hbIntegration.SetDeliveryRegistry(gw.monitoring.DeliveryRegistry)
+	jobHealth.hb = hbIntegration // conduit-2six
 	logger.Info("alert auditor wired to delivery registry")
 
 	// NOTE: initializeAgentHeartbeat is called AFTER scheduler.Start() in the Run() method

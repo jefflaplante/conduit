@@ -99,7 +99,11 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			return
 		}
 		messages, _ := g.sessions.GetMessages(session.Key, 1000)
-		sendResponse(formatStatusResponse(session, len(messages), g.ai.GetUsageTracker(), g.ai.DefaultModel()))
+		resp := formatStatusResponse(session, len(messages), g.ai.GetUsageTracker(), g.ai.DefaultModel())
+		if failing := g.failingJobsSummary(); failing != "" { // conduit-2six
+			resp += "\n\nFailing jobs (consecutive failures): " + failing
+		}
+		sendResponse(resp)
 
 	case text == "/help" || text == "/commands":
 		help := "Available Commands:\n\n" +

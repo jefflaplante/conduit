@@ -245,19 +245,23 @@ func (g *Gateway) ListJobs() []*types.SchedulerJob {
 	}
 
 	jobs := g.scheduler.ListJobs()
+	health := g.schedulerJobHealth() // conduit-2six: read under the scheduler lock
 	result := make([]*types.SchedulerJob, len(jobs))
 	for i, job := range jobs {
+		h := health[job.ID]
 		result[i] = &types.SchedulerJob{
-			ID:       job.ID,
-			Name:     job.Name,
-			Schedule: job.Schedule,
-			Type:     string(job.Type),
-			Command:  job.Command,
-			Model:    job.Model,
-			Target:   job.Target,
-			Enabled:  job.Enabled,
-			OneShot:  job.OneShot,
-			Skills:   job.Skills,
+			ID:                  job.ID,
+			Name:                job.Name,
+			Schedule:            job.Schedule,
+			Type:                string(job.Type),
+			Command:             job.Command,
+			Model:               job.Model,
+			Target:              job.Target,
+			Enabled:             job.Enabled,
+			OneShot:             job.OneShot,
+			Skills:              job.Skills,
+			LastError:           h.LastError,
+			ConsecutiveFailures: h.ConsecutiveFailures,
 		}
 	}
 	return result
@@ -331,17 +335,8 @@ func (g *Gateway) initializeAgentHeartbeat(cfg *config.Config) error {
 	// Convert interval minutes to cron schedule (6-field format: seconds, minutes, hours, day, month, weekday)
 	cronSchedule := fmt.Sprintf("0 */%d * * * *", cfg.AgentHeartbeat.IntervalMinutes)
 
-	// Determine target from alert targets (use first one if available)
-	var target string
-	if len(cfg.AgentHeartbeat.AlertTargets) > 0 {
-		// Format: "telegram:chat_id" or similar
-		firstTarget := cfg.AgentHeartbeat.AlertTargets[0]
-		if firstTarget.Type == "telegram" {
-			if chatID, exists := firstTarget.Config["chat_id"]; exists {
-				target = fmt.Sprintf("telegram:%s", chatID)
-			}
-		}
-	}
+	// Determine target from alert targets (first one, "telegram:<chat_id>").
+	target := ownerAlertTarget(cfg.AgentHeartbeat)
 
 	// Create the main agent heartbeat job
 	jobID := "agent_heartbeat_main"

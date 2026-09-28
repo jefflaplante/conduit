@@ -73,6 +73,10 @@ type SchedulerJob struct {
 	Enabled  bool     `json:"enabled"`
 	OneShot  bool     `json:"oneshot,omitempty"`
 	Skills   []string `json:"skills,omitempty"`
+
+	// Read-only run health (conduit-2six); ignored by ScheduleJob.
+	LastError           string `json:"last_error,omitempty"`
+	ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
 }
 
 // SearchService provides FTS5-backed full-text search over documents, messages, and beads.
