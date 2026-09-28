@@ -87,11 +87,6 @@ type Factory struct {
 	stt stt.Transcriber
 }
 
-// NewFactory creates a new Telegram adapter factory
-func NewFactory() *Factory {
-	return &Factory{}
-}
-
 // NewFactoryWithDB creates a new Telegram adapter factory with database support
 func NewFactoryWithDB(db *sql.DB, transcriber stt.Transcriber) *Factory {
 	return &Factory{
