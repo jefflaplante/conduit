@@ -412,7 +412,7 @@ func (g *Gateway) initializeREMCycle(cfg *config.Config) error {
 		return nil
 	}
 
-	if g.remCycle == nil {
+	if g.cognition.REMCycle == nil {
 		log.Printf("[REMCycle] REM cycle not initialized, skipping job creation")
 		return nil
 	}

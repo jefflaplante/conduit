@@ -258,15 +258,192 @@ func (g *Gateway) stopAll(shutdownCtx context.Context, server *http.Server) {
 	// close the vector search service (no-op when disabled).
 	g.search.StopVector()
 
-	// Close brain service.
-	if g.brainService != nil {
-		if err := g.brainService.Close(); err != nil {
-			g.logger.Error("error closing brain service", "error", err)
-		}
+	// Close brain service (cognition; no-op when the brain is disabled).
+	if err := g.cognition.Stop(); err != nil {
+		g.logger.Error("error closing brain service", "error", err)
 	}
 
 	// conduit-2lzv: flush the LLM call log last — turns are drained by now.
 	if err := g.ai.CloseCallLog(shutdownCtx); err != nil {
 		g.logger.Warn("LLM call log close", "error", err)
 	}
+}
+
+// setLifecycleCtx stores the gateway-lifecycle context (Start).
+func (g *Gateway) setLifecycleCtx(ctx context.Context) {
+	g.ctxMu.Lock()
+	g.ctx = ctx
+	g.ctxMu.Unlock()
+}
+
+// lifecycleCtx returns the gateway-lifecycle context bound by Start, or
+// context.Background() before Start (conduit-31jg.73: Start used to write
+// g.ctx unlocked while WS/wake goroutines read it).
+func (g *Gateway) lifecycleCtx() context.Context {
+	g.ctxMu.RLock()
+	defer g.ctxMu.RUnlock()
+	if g.ctx == nil {
+		return context.Background()
+	}
+	return g.ctx
+}
+
+// Start starts the gateway server
+func (g *Gateway) Start(ctx context.Context) error {
+	// Wrap the incoming context so ShutdownManager can cancel it independently
+	// of signal-based cancellation from main.go.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	g.shutdownMgr.SetCancel(cancel)
+	// conduit-31jg.27: let ShutdownManager wait for stopAll to finish.
+	defer g.shutdownMgr.TrackGateway()()
+
+	// Store the gateway lifecycle context for WebSocket handlers.
+	// HTTP request contexts (r.Context()) are cancelled when the handler returns,
+	// which is immediate after WebSocket upgrade. WebSocket goroutines need a
+	// context tied to the gateway's lifecycle instead.
+	g.setLifecycleCtx(ctx)
+	g.ws.Start(ctx)
+
+	// Build HTTP mux (diagnostics, WS, debug, channels, vector) and wrap it
+	// with the request-ID middleware so auth/rate-limit logs can be correlated.
+	server := g.buildHTTPServer()
+
+	// conduit-31jg.27: bind synchronously so a port conflict fails startup
+	// (non-zero exit, visible to systemd) instead of logging and running on
+	// without HTTP/WS/health. Done before channels start so nothing needs
+	// unwinding.
+	listener, err := listenHTTP(server.Addr, httpBindRetryWindow)
+	if err != nil {
+		return fmt.Errorf("failed to bind HTTP listener on %s: %w", server.Addr, err)
+	}
+
+	// Start channel manager
+	if err := g.startChannels(ctx); err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("failed to start channels: %w", err)
+	}
+
+	// Start scheduler (loads jobs from cron_jobs.json)
+	schedulerReady := false
+	if g.scheduler != nil {
+		if err := g.scheduler.Start(); err != nil {
+			g.logger.Warn("failed to start scheduler", "error", err)
+			g.logger.Warn("skipping heartbeat initialization to avoid wiping cron_jobs.json")
+		} else {
+			schedulerReady = true
+		}
+	}
+
+	// Auto-create agent heartbeat job if enabled (MUST be after scheduler.Start() so
+	// existing jobs are loaded from disk before we check for duplicates and potentially save)
+	if schedulerReady {
+		if err := g.initializeAgentHeartbeat(g.config); err != nil {
+			g.logger.Warn("failed to initialize agent heartbeat", "error", err)
+		}
+
+		// Auto-create REM sleep cycle job if brain and REM are enabled
+		if err := g.initializeREMCycle(g.config); err != nil {
+			g.logger.Warn("failed to initialize REM sleep cycle", "error", err)
+		}
+	}
+
+	// Start monitoring subsystem (heartbeat service + any future lifecycle).
+	if err := g.monitoring.Start(ctx); err != nil {
+		g.logger.Warn("failed to start monitoring service", "error", err)
+	}
+
+	// Start session state cleanup loop (prevents memory leak from abandoned sessions)
+	stopCleanup := g.sessions.StartStateCleanup(30*time.Minute, 5*time.Minute)
+	go func() {
+		<-ctx.Done()
+		stopCleanup()
+	}()
+
+	// Start cognition loops (conduit-18ub): the SPAR reflection idle-session
+	// loop (Go-only metrics for substantive sessions that go idle; same
+	// cadence as state cleanup) then the beads→Brain refresh loop.
+	g.cognition.Start(ctx,
+		func(ctx context.Context) { g.reflectOnIdleSessions(ctx, 30*time.Minute, 5*time.Minute) },
+		func(ctx context.Context) { g.refreshBeadsPeriodic(ctx, 5*time.Minute) })
+
+	// Start search subsystem: FTS file watcher and periodic safety-net
+	// re-index loop (fsnotify handles real-time .md changes; the periodic
+	// loop catches anything missed plus beads/brain/message re-indexing).
+	if err := g.search.Start(ctx); err != nil {
+		g.logger.Warn("failed to start search service", "error", err)
+	}
+
+	// Session wakeup listener: re-activates sessions when inter-session messages arrive.
+	// Each wake signal triggers an AI processing loop on the target session in its own goroutine.
+	// When we dequeue a session key we also clear its pendingWake slot so subsequent
+	// wakes can enqueue again (coalescing only applies while a wake is still buffered).
+	go func() {
+		for {
+			select {
+			case sessionKey := <-g.sessionWake:
+				g.clearPendingWake(sessionKey)
+				go g.wakeSession(sessionKey)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Start MQTT service if configured
+	if g.mqttService != nil {
+		if err := g.mqttService.Start(ctx); err != nil {
+			g.logger.Warn("failed to start MQTT service", "error", err)
+		} else {
+			g.logger.Info("MQTT service started")
+		}
+	}
+
+	// Start MCP server if configured (for claude-code provider)
+	if g.mcpServer != nil {
+		if err := g.mcpServer.Start(ctx); err != nil {
+			g.logger.Error("failed to start MCP server", "error", err)
+			// Non-fatal: gateway can still work without MCP
+		} else {
+			g.logger.Info("MCP server started")
+		}
+
+		// Write .mcp.json so Claude Code discovers the server
+		if g.mcpConfigMgr != nil {
+			if err := g.mcpConfigMgr.Setup(); err != nil {
+				g.logger.Warn("failed to write .mcp.json", "error", err)
+			}
+		}
+	}
+
+	// Start SSH server if configured.
+	g.startSSHServer(ctx)
+
+	// Start message processing goroutine.
+	go g.processMessages(ctx)
+
+	// Serve on the pre-bound listener. A Serve failure after a successful
+	// bind is fatal: shut the gateway down so the supervisor restarts it
+	// rather than running headless (conduit-31jg.27).
+	go func() {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			g.logger.Error("HTTP server failed; shutting down gateway", "error", err)
+			cancel()
+		}
+	}()
+
+	g.logger.Info("gateway started", "port", g.config.Port, "addr", listener.Addr().String())
+
+	g.processRestartBreadcrumb()
+
+	// Wait for context cancellation, then drain all subsystems.
+	<-ctx.Done()
+	g.logger.Info("shutting down gateway")
+
+	// Bounded so SIGTERM drain + stop stays under systemd's TimeoutStopSec
+	// (see gatewayStopTimeout, conduit-31jg.27).
+	shutdownCtx, stopCancel := context.WithTimeout(context.Background(), gatewayStopTimeout)
+	defer stopCancel()
+	g.stopAll(shutdownCtx, server)
+	return nil
 }

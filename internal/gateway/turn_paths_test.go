@@ -330,8 +330,8 @@ func TestGoodbye_ReflectionTurnInLock(t *testing.T) {
 	}
 	defer b.Close()
 	rs := reflection.NewStore(b.DB())
-	gw.sessionReflector = reflection.NewSessionReflector(rs)
-	gw.reflectionStore = rs
+	gw.cognition.SessionReflector = reflection.NewSessionReflector(rs)
+	gw.cognition.ReflectionStore = rs
 
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	for _, m := range [][2]string{{"user", "hi"}, {"assistant", "hello"}, {"user", "thanks"}} {
@@ -529,8 +529,8 @@ func TestGoodbye_StopKeepsSession(t *testing.T) {
 	}
 	defer b.Close()
 	rs := reflection.NewStore(b.DB())
-	gw.sessionReflector = reflection.NewSessionReflector(rs)
-	gw.reflectionStore = rs
+	gw.cognition.SessionReflector = reflection.NewSessionReflector(rs)
+	gw.cognition.ReflectionStore = rs
 
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	for _, m := range [][2]string{{"user", "hi"}, {"assistant", "hello"}, {"user", "thanks"}} {

@@ -9,14 +9,11 @@ import (
 	"conduit/internal/agent"
 	"conduit/internal/ai"
 	"conduit/internal/approval"
-	"conduit/internal/brain"
-	"conduit/internal/brain/rem"
 	"conduit/internal/config"
 	"conduit/internal/logging"
 	"conduit/internal/mcp"
 	"conduit/internal/middleware"
 	"conduit/internal/mqtt"
-	"conduit/internal/reflection"
 	"conduit/internal/sessions"
 	"conduit/internal/skills"
 	"conduit/internal/tools"
@@ -63,143 +60,6 @@ func buildRateLimitMiddleware(cfg *config.Config, logger *slog.Logger) *middlewa
 	})
 }
 
-// initBrainSubsystem constructs the optional Brain cognitive architecture and
-// its REM sleep cycle, wiring both onto the gateway. A no-op when Brain is
-// disabled; on construction failure the gateway logs a warning and continues
-// without a brain service.
-func (g *Gateway) initBrainSubsystem(cfg *config.Config) {
-	if !cfg.Brain.Enabled {
-		return
-	}
-
-	brainDBPath := cfg.Brain.Path
-	if brainDBPath == "" {
-		brainDBPath = config.DeriveBrainDBPath(cfg.Database.Path)
-	}
-	var brainOpts []brain.Option
-	brainOpts = append(brainOpts, brain.WithRecallEventsPath(cfg.RecallEventsPath())) // conduit-31jg.40
-	if cfg.Brain.MaxLTMEntries > 0 {
-		brainOpts = append(brainOpts, brain.WithMaxLTMEntries(cfg.Brain.MaxLTMEntries))
-	}
-	if cfg.Brain.AutoFlushSeconds > 0 {
-		brainOpts = append(brainOpts, brain.WithAutoFlushInterval(time.Duration(cfg.Brain.AutoFlushSeconds)*time.Second))
-	}
-	if cfg.Brain.ConsolidateThreshold > 0 {
-		brainOpts = append(brainOpts, brain.WithConsolidateThreshold(cfg.Brain.ConsolidateThreshold))
-	}
-	if cfg.Brain.EvictThreshold > 0 {
-		brainOpts = append(brainOpts, brain.WithEvictThreshold(cfg.Brain.EvictThreshold))
-	}
-	brainOpts = append(brainOpts, brain.WithAutoPromote(cfg.Brain.AutoPromote))
-	if cfg.Brain.WMGracePeriodSeconds > 0 {
-		brainOpts = append(brainOpts, brain.WithWMGracePeriod(time.Duration(cfg.Brain.WMGracePeriodSeconds)*time.Second))
-	}
-	if cfg.Brain.AccessWeight > 0 {
-		brainOpts = append(brainOpts, brain.WithAccessWeight(cfg.Brain.AccessWeight))
-	}
-	if cfg.Brain.RecencyWeight > 0 {
-		brainOpts = append(brainOpts, brain.WithRecencyWeight(cfg.Brain.RecencyWeight))
-	}
-	if cfg.Brain.TierWeight > 0 {
-		brainOpts = append(brainOpts, brain.WithTierWeight(cfg.Brain.TierWeight))
-	}
-	if cfg.Brain.RecencyDecayRate > 0 {
-		brainOpts = append(brainOpts, brain.WithRecencyDecayRate(cfg.Brain.RecencyDecayRate))
-	}
-	if cfg.Brain.AccessCountCap > 0 {
-		brainOpts = append(brainOpts, brain.WithAccessCountCap(cfg.Brain.AccessCountCap))
-	}
-	if cfg.Brain.WarmthInjectFloor > 0 {
-		brainOpts = append(brainOpts, brain.WithWarmthInjectFloor(cfg.Brain.WarmthInjectFloor))
-	}
-	if cfg.Brain.WarmthInjectLimit != 0 {
-		brainOpts = append(brainOpts, brain.WithWarmthInjectLimit(cfg.Brain.WarmthInjectLimit))
-	}
-	brainOpts = append(brainOpts, brainCapacityOptions(cfg.Brain)...) // conduit-31jg.53
-	brainSvc, brainErr := brain.New(brainDBPath, brainOpts...)
-	if brainErr != nil {
-		g.logger.Warn("failed to initialize brain, continuing without", "error", brainErr)
-		return
-	}
-
-	g.brainService = brainSvc
-	g.logger.Info("brain cognitive architecture initialized", "path", brainDBPath)
-
-	// Initialize REM cycle if enabled.
-	if !cfg.Brain.REMEnabled {
-		return
-	}
-	remConfig := rem.REMConfig{
-		PruneAgeDays:      cfg.Brain.REMPruneAgeDays,
-		SalienceDecayRate: cfg.Brain.REMSalienceDecayRate,
-		IntegrationDay:    cfg.Brain.REMIntegrationDay,
-		GroomWithLLM:      cfg.Brain.REMGroomWithLLM,
-		LogPath:           cfg.Brain.REMLogPath,
-		WorkspaceDir:      cfg.Workspace.ContextDir,
-		MaxLTMEntries:     cfg.Brain.MaxLTMEntries,
-	}
-	g.remCycle = rem.NewREMCycle(g.brainService, g.brainService.DB(), remConfig)
-	g.logger.Info("REM sleep cycle initialized",
-		"schedule", cfg.Brain.REMSchedule,
-		"prune_age_days", cfg.Brain.REMPruneAgeDays,
-		"integration_day", cfg.Brain.REMIntegrationDay)
-}
-
-// initReflectionSubsystem constructs the optional SPAR reflection store,
-// session reflector, and farewell detector, and wires per-tool reflection
-// capture onto the execution engine. Requires a brain service for its
-// underlying database; a no-op when brain or reflection is disabled.
-func (g *Gateway) initReflectionSubsystem(cfg *config.Config, executionEngine *tools.ExecutionEngine) {
-	if g.brainService == nil {
-		return
-	}
-	reflCfg := cfg.Reflection
-	if reflCfg == nil {
-		reflCfg = reflection.DefaultConfig()
-	}
-	if !reflCfg.Enabled {
-		return
-	}
-
-	g.reflectionStore = reflection.NewStore(g.brainService.DB())
-	g.sessionReflector = reflection.NewSessionReflector(g.reflectionStore)
-	g.farewellDetector = reflection.NewFarewellDetector()
-
-	// Wire per-tool reflection capture: adapt ExecutionEngine's
-	// AfterExecutionFunc to the reflection middleware's hook.
-	reflMW := reflection.NewReflectionMiddleware(g.reflectionStore, reflCfg)
-	hook := reflMW.Hook()
-	executionEngine.SetAfterExecutionHook(func(ctx context.Context, toolName string, result *tools.ExecutionResult) {
-		info := reflection.ToolOutcomeInfo{
-			ToolName:   toolName,
-			SessionKey: types.RequestSessionKey(ctx),
-			Duration:   result.Duration,
-		}
-		if result.Error != nil {
-			info.Error = result.Error.Error()
-			info.IsTimeout = reflection.IsTimeoutError(info.Error)
-		}
-		if result.Result != nil {
-			info.Success = result.Result.Success && result.Error == nil
-			info.RetryCount = result.Result.Retries
-		}
-		hook(ctx, info)
-	})
-
-	// conduit-31jg.13: failure/pattern trackers are per-turn now; their
-	// threshold crossings are promoted to SPAR here (conduit-17wz /
-	// conduit-2ngi) so cross-session learning flows through the store rather
-	// than through prompt injection into other sessions.
-	executionEngine.SetPivotHook(func(ctx context.Context, toolName string, failCount int, lastError string) {
-		reflMW.RecordConsecutiveFailure(types.RequestSessionKey(ctx), toolName, failCount, lastError)
-	})
-	executionEngine.SetCircularHook(func(ctx context.Context, pattern, signatureHash string) {
-		reflMW.RecordCircularPattern(types.RequestSessionKey(ctx), pattern, signatureHash)
-	})
-
-	g.logger.Info("reflection store initialized")
-}
-
 // buildToolServices assembles the ToolServices struct consumed by the tool
 // registry after all underlying subsystems (search, brain, reflection, mqtt,
 // vision) have been constructed. Extracted from New so the constructor body
@@ -225,29 +85,29 @@ func (g *Gateway) buildToolServices(
 
 	// Build BrainService interface value (nil if disabled).
 	var brainSvcAdapter types.BrainService
-	if g.brainService != nil {
-		brainSvcAdapter = newBrainAdapter(g.brainService)
+	if g.cognition.BrainEnabled() {
+		brainSvcAdapter = newBrainAdapter(g.cognition.Brain)
 	}
 
 	// Build BrainFTSSearcher interface value (nil if brain or search DB
 	// unavailable). Attaches the indexer to the search service in passing.
 	var brainFTS types.BrainFTSSearcher
-	if g.brainService != nil && g.search.SearchDB != nil {
-		g.search.WireBrainIndexer(context.Background(), g.brainService.DB())
+	if g.cognition.BrainEnabled() && g.search.SearchDB != nil {
+		g.search.WireBrainIndexer(context.Background(), g.cognition.Brain.DB())
 		brainFTS = g.search.BrainIndexer
 	}
 
 	// Build REMCycleRunner interface value (nil if REM cycle not initialized).
 	var remCycleRunner types.REMCycleRunner
-	if g.remCycle != nil {
-		remCycleRunner = newREMCycleAdapter(g.remCycle)
+	if g.cognition.REMCycle != nil {
+		remCycleRunner = newREMCycleAdapter(g.cognition.REMCycle)
 	}
 
 	// Build ReflectionService interface value (nil if reflection store not
 	// initialized).
 	var reflectionSvc types.ReflectionService
-	if g.reflectionStore != nil {
-		reflectionSvc = newReflectionAdapter(g.reflectionStore)
+	if g.cognition.ReflectionStore != nil {
+		reflectionSvc = newReflectionAdapter(g.cognition.ReflectionStore)
 	}
 
 	// Wire a vision analyzer backed by the AI router so the ImageTool can

@@ -17,7 +17,7 @@ import (
 // (e.g. a single /status check). Already-reflected sessions are tracked in
 // memory to avoid duplicate writes across ticks.
 func (g *Gateway) reflectOnIdleSessions(ctx context.Context, idleTimeout time.Duration, interval time.Duration) {
-	if g.sessionReflector == nil {
+	if !g.cognition.ReflectionEnabled() {
 		return
 	}
 
@@ -53,7 +53,7 @@ func (g *Gateway) reflectOnIdleSessions(ctx context.Context, idleTimeout time.Du
 // This is called when the model is unavailable (idle timeout, WS disconnect).
 // It writes a session summary with score=0 if the session was substantive.
 func (g *Gateway) reflectOnSessionEnd(ctx context.Context, sessionKey string) {
-	if g.sessionReflector == nil || g.reflectionStore == nil {
+	if !g.cognition.ReflectionEnabled() || g.cognition.ReflectionStore == nil {
 		return
 	}
 
@@ -80,7 +80,7 @@ func (g *Gateway) reflectOnSessionEnd(ctx context.Context, sessionKey string) {
 		MessageCount: session.MessageCount,
 	}
 
-	metrics, err := g.sessionReflector.ComputeMetrics(ctx, sessionKey, info)
+	metrics, err := g.cognition.SessionReflector.ComputeMetrics(ctx, sessionKey, info)
 	if err != nil {
 		g.logger.Warn("reflection: failed to compute session metrics",
 			"session_key", sessionKey, "error", err)
@@ -88,7 +88,7 @@ func (g *Gateway) reflectOnSessionEnd(ctx context.Context, sessionKey string) {
 	}
 
 	// Write session summary with score=0 (Go-computed, unscored)
-	if err := g.sessionReflector.WriteSessionSummary(ctx, metrics, 0); err != nil {
+	if err := g.cognition.SessionReflector.WriteSessionSummary(ctx, metrics, 0); err != nil {
 		g.logger.Warn("reflection: failed to write session summary",
 			"session_key", sessionKey, "error", err)
 		return
@@ -107,16 +107,16 @@ func (g *Gateway) reflectOnSessionEnd(ctx context.Context, sessionKey string) {
 //
 // Returns empty string if reflection is not initialized.
 func (g *Gateway) reflectHighConfidencePre() string {
-	if g.sessionReflector == nil {
+	if !g.cognition.ReflectionEnabled() {
 		return ""
 	}
-	return g.sessionReflector.BuildReflectionPrompt()
+	return g.cognition.SessionReflector.BuildReflectionPrompt()
 }
 
 // reflectHighConfidencePost computes metrics and writes the session summary
 // after the model has responded to the reflection prompt.
 func (g *Gateway) reflectHighConfidencePost(ctx context.Context, session *sessions.Session) {
-	if g.sessionReflector == nil {
+	if !g.cognition.ReflectionEnabled() {
 		return
 	}
 
@@ -126,7 +126,7 @@ func (g *Gateway) reflectHighConfidencePost(ctx context.Context, session *sessio
 		MessageCount: session.MessageCount,
 	}
 
-	metrics, err := g.sessionReflector.ComputeMetrics(ctx, session.Key, info)
+	metrics, err := g.cognition.SessionReflector.ComputeMetrics(ctx, session.Key, info)
 	if err != nil {
 		g.logger.Warn("reflection: failed to compute post-reflection metrics",
 			"session_key", session.Key, "error", err)
@@ -136,7 +136,7 @@ func (g *Gateway) reflectHighConfidencePost(ctx context.Context, session *sessio
 	// Score is not set here — the model's response should have stored a score
 	// via Brain. We write the Go-computed summary with score=0; the model's
 	// self-assessment is stored separately in Brain under reflect.session.*.
-	if err := g.sessionReflector.WriteSessionSummary(ctx, metrics, 0); err != nil {
+	if err := g.cognition.SessionReflector.WriteSessionSummary(ctx, metrics, 0); err != nil {
 		g.logger.Warn("reflection: failed to write post-reflection summary",
 			"session_key", session.Key, "error", err)
 		return
@@ -152,8 +152,8 @@ func (g *Gateway) reflectHighConfidencePost(ctx context.Context, session *sessio
 // Returns (shouldTrigger, triggerType). Safe to call even if reflection is disabled
 // (returns false).
 func (g *Gateway) shouldTriggerReflection(message string) (bool, reflection.TriggerType) {
-	if g.farewellDetector == nil {
+	if g.cognition.FarewellDetector == nil {
 		return false, reflection.TriggerNone
 	}
-	return g.farewellDetector.ShouldTriggerReflection(message)
+	return g.cognition.FarewellDetector.ShouldTriggerReflection(message)
 }

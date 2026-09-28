@@ -56,7 +56,7 @@ func (h gatewayTurnHooks) IsFarewell(text string) bool {
 
 func (h gatewayTurnHooks) ReflectionPrompt() string { return h.g.reflectHighConfidencePre() }
 
-func (h gatewayTurnHooks) ReflectionEnabled() bool { return h.g.sessionReflector != nil }
+func (h gatewayTurnHooks) ReflectionEnabled() bool { return h.g.cognition.ReflectionEnabled() }
 
 func (h gatewayTurnHooks) AfterReflection(ctx context.Context, s *sessions.Session) {
 	h.g.reflectHighConfidencePost(ctx, s)
