@@ -57,11 +57,11 @@ func TestPromptGolden(t *testing.T) {
 
 	hostname, _ := os.Hostname()
 	normalize := func(s string) string {
-		if hostname != "" {
-			s = strings.ReplaceAll(s, hostname, "<HOST>")
-		}
-		s = strings.ReplaceAll(s, fmt.Sprintf("%s (%s)", runtime.GOOS, runtime.GOARCH), "<OS>")
-		s = strings.ReplaceAll(s, runtime.Version(), "<GOVERSION>")
+		// Only the Runtime line's fields are host-specific; replace them as
+		// whole "key=value |" pairs so a short hostname can't match elsewhere.
+		s = strings.ReplaceAll(s, "host="+hostname+" |", "host=<HOST> |")
+		s = strings.ReplaceAll(s, fmt.Sprintf("os=%s (%s) |", runtime.GOOS, runtime.GOARCH), "os=<OS> |")
+		s = strings.ReplaceAll(s, "node="+runtime.Version()+" |", "node=<GOVERSION> |")
 		return s
 	}
 
