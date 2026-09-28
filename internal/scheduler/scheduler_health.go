@@ -20,7 +20,7 @@ import (
 // whose first LLM call failed left no trace) and nothing alerted on repeated
 // failure. The scheduler now
 //
-//   - appends a status:"error" (or "interrupted") record to the failure log
+//   - appends a status:"error"/"timeout"/"interrupted" record to the failure log
 //     (the workspace's memory/cron-log.jsonl) for every failed run itself;
 //   - keeps a persisted per-job failure streak (Job.FailureStreak, saved in
 //     cron_jobs.json with the rest of the job's runtime state);
@@ -223,7 +223,8 @@ type failureLogRecord struct {
 	TS                  string  `json:"ts"`
 	Job                 string  `json:"job"`
 	JobID               string  `json:"job_id"`
-	Status              string  `json:"status"` // "error" or "interrupted"
+	Status              string  `json:"status"` // "error", "timeout" or "interrupted" (matches workspace cron-status.py)
+	Summary             string  `json:"summary"`
 	Error               string  `json:"error"`
 	Timeout             bool    `json:"timeout,omitempty"`
 	ConsecutiveFailures int     `json:"consecutive_failures,omitempty"`
@@ -236,17 +237,22 @@ func newFailureLogRecord(snap *Job, runErr error, interrupted bool, streak int, 
 	if name == "" {
 		name = snap.ID
 	}
-	status := "error"
-	if interrupted {
-		status = "interrupted"
+	timeout := !interrupted && isTimeout(runErr)
+	status, summary := "error", fmt.Sprintf("failed (%d consecutive)", streak)
+	switch {
+	case interrupted:
+		status, summary = "interrupted", "interrupted by shutdown/drain"
+	case timeout:
+		status, summary = "timeout", fmt.Sprintf("timed out (%d consecutive failures)", streak)
 	}
 	return &failureLogRecord{
 		TS:                  now.UTC().Format(time.RFC3339),
 		Job:                 name,
 		JobID:               snap.ID,
 		Status:              status,
+		Summary:             summary,
 		Error:               truncate(runErr.Error(), maxLoggedErrorLen),
-		Timeout:             !interrupted && isTimeout(runErr),
+		Timeout:             timeout,
 		ConsecutiveFailures: streak,
 		DurationSeconds:     elapsed.Round(time.Millisecond).Seconds(),
 		Source:              "scheduler",
@@ -272,7 +278,7 @@ func (s *Scheduler) appendFailureLog(rec *failureLogRecord) {
 		log.Printf("[Scheduler] Failure log: %v", err)
 		return
 	}
-	f, err := os.OpenFile(s.failureLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(s.failureLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		log.Printf("[Scheduler] Failure log: %v", err)
 		return

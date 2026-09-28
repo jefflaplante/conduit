@@ -223,7 +223,8 @@ func TestFailureStreak_TimeoutsCountAndAreLabelled(t *testing.T) {
 		t.Errorf("message = %q", msg)
 	}
 	recs := readFailureLog(t, logPath)
-	if len(recs) != 3 || recs[0].Timeout || !recs[1].Timeout || !recs[2].Timeout {
+	if len(recs) != 3 || recs[0].Timeout || !recs[1].Timeout || !recs[2].Timeout ||
+		recs[0].Status != "error" || recs[1].Status != "timeout" || recs[2].Status != "timeout" {
 		t.Fatalf("failure log timeout flags = %+v", recs)
 	}
 }

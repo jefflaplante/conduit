@@ -338,9 +338,10 @@ failing cannot go unnoticed (conduit-2six):
 
 - **Failure log.** Every failed run appends one JSON line to `memory/cron-log.jsonl` in the
   workspace, written by the scheduler itself, so a run whose first LLM call fails still leaves a
-  trace: `{"ts", "job", "job_id", "status": "error", "error", "timeout", "consecutive_failures",
-  "duration_s", "source": "scheduler"}`. Runs cut off by a shutdown drain are logged with
-  `"status": "interrupted"`.
+  trace: `{"ts", "job", "job_id", "status", "summary", "error", "timeout", "consecutive_failures",
+  "duration_s", "source": "scheduler"}`. `status` is `"error"`, or `"timeout"` for a
+  context-deadline failure (the same values `scripts/cron-status.py` counts); runs cut off by a
+  shutdown drain are logged with `"status": "interrupted"`. The file is created mode 0600.
 - **Failure streak.** Each job carries a `failure_streak` (`count`, `timeouts`, `since`,
   `alerted`) in `cron_jobs.json`. A successful run clears it.
 - **One alert per streak.** When the streak reaches `job_failure_alert_threshold` (default 3), the
