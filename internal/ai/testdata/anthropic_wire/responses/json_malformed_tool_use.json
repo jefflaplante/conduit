@@ -3,11 +3,6 @@
     "content": "",
     "tool_calls": [
       {
-        "id": "",
-        "name": "",
-        "arguments": {}
-      },
-      {
         "id": "t6",
         "name": "Read",
         "arguments": {

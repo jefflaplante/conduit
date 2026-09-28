@@ -3,6 +3,7 @@ package communication
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -336,6 +337,7 @@ func (t *MessageTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions)
 					offlineChannels = append(offlineChannels, channel)
 				}
 			}
+			sort.Strings(offlineChannels)
 
 			if onlineCount == 0 {
 				result.Status = types.SelfTestStatusDegraded

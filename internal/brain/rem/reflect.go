@@ -31,9 +31,11 @@ type ReflectResult struct {
 const (
 	patternMinSessions    = 2
 	patternMinOccurrences = 2
-	// patternSource is the provenance of promoted pattern entries (system:
-	// sources go stale after 14 days in grooming).
-	patternSource = "system:rem-reflect"
+	// reflectSource is the provenance of every Reflect-phase LTM entry:
+	// promoted patterns and reflect.clusters.* summaries (system: sources go
+	// stale after 14 days in grooming). Clusters used "rem:reflect", an
+	// unknown prefix that logged a warning per entry (conduit-31jg.87).
+	reflectSource = "system:rem-reflect"
 	// maxPatternValueLen keeps promoted values within the Situation
 	// Awareness per-line budget (renderCategory truncates at 200).
 	maxPatternValueLen = 200
@@ -116,12 +118,12 @@ func (r *REMCycle) Reflect(ctx context.Context, dryRun bool) (*ReflectResult, er
 	// Step 6: write clusters and promoted patterns to Brain LTM.
 	for _, cl := range clusters {
 		key := fmt.Sprintf("reflect.clusters.%s.%s", cl.Tool, cl.Outcome)
-		if err := r.brain.Store(ctx, key, formatClusterSummary(cl), brain.TierLongTerm, "rem:reflect"); err != nil {
+		if err := r.brain.Store(ctx, key, formatClusterSummary(cl), brain.TierLongTerm, reflectSource); err != nil {
 			return result, fmt.Errorf("store cluster %s: %w", key, err)
 		}
 	}
 	for _, p := range promos {
-		if err := r.brain.Store(ctx, p.key, p.value, brain.TierLongTerm, patternSource); err != nil {
+		if err := r.brain.Store(ctx, p.key, p.value, brain.TierLongTerm, reflectSource); err != nil {
 			return result, fmt.Errorf("store pattern %s: %w", p.key, err)
 		}
 	}

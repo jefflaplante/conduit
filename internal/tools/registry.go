@@ -1,7 +1,11 @@
 package tools
 
 import (
+	"errors"
+	"io/fs"
 	"log"
+	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -91,7 +95,19 @@ func NewRegistry(cfg config.ToolsConfig) *Registry {
 // complete one.
 func warnEscapingSymlinks(sb *sandbox.Sandbox, opts sandbox.SymlinkScanOptions, logf func(format string, args ...any)) {
 	found, truncated := sb.ScanEscapingSymlinks(opts)
-	for link, target := range found {
+	links := make([]string, 0, len(found))
+	for link := range found {
+		links = append(links, link)
+	}
+	sort.Strings(links)
+	for _, link := range links {
+		target := found[link]
+		// conduit-31jg.87: a dangling link fails resolution too, but it
+		// is not an escape and allowed_paths would not help — say so.
+		if _, err := os.Stat(link); errors.Is(err, fs.ErrNotExist) {
+			logf("[Sandbox] WARNING: %s -> %s is a dangling symlink (target missing); file tools cannot use it. Fix or remove the link.", link, target)
+			continue
+		}
 		logf("[Sandbox] WARNING: %s -> %s resolves outside tools.sandbox roots; Read/Write/Edit/Glob will deny it. Add %q to tools.sandbox.allowed_paths to keep access.", link, target, target)
 	}
 	if truncated {

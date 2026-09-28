@@ -159,6 +159,7 @@ type REMCycleReport struct {
 	Date          string                 `json:"date"`
 	DryRun        bool                   `json:"dry_run"`
 	Triage        map[string]interface{} `json:"triage,omitempty"`
+	Reflect       map[string]interface{} `json:"reflect,omitempty"`
 	Consolidation map[string]interface{} `json:"consolidation,omitempty"`
 	Pruning       map[string]interface{} `json:"pruning,omitempty"`
 	Integration   map[string]interface{} `json:"integration,omitempty"`

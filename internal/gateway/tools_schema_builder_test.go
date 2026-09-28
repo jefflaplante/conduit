@@ -11,24 +11,12 @@ import (
 	"conduit/internal/tools"
 )
 
-// normalizedToolDefs marshals the model-facing tool definitions with each
-// tool's "Action details" lines sorted, so two conversions can be compared
-// byte-for-byte (GetActionDocs is a map, so those lines come out in random
-// order per conversion).
-func normalizedToolDefs(t *testing.T, defs []ai.Tool) string {
+// marshalToolDefs marshals the model-facing tool definitions verbatim — no
+// normalization — since convertToolsToAIFormat must itself be deterministic
+// for the prompt-cached tools prefix to stay stable (conduit-oc3u).
+func marshalToolDefs(t *testing.T, defs []ai.Tool) string {
 	t.Helper()
-	const marker = "\n\nAction details:\n"
-	out := make([]ai.Tool, len(defs))
-	copy(out, defs)
-	for i := range out {
-		d := out[i].Description
-		if k := strings.Index(d, marker); k >= 0 {
-			lines := strings.Split(d[k+len(marker):], "\n")
-			sort.Strings(lines)
-			out[i].Description = d[:k+len(marker)] + strings.Join(lines, "\n")
-		}
-	}
-	b, err := json.Marshal(out)
+	b, err := json.Marshal(defs)
 	if err != nil {
 		t.Fatalf("marshal tool defs: %v", err)
 	}
@@ -92,7 +80,55 @@ func TestConvertToolsToAIFormat_IndependentOfSchemaBuilder(t *testing.T) {
 	reg.GetServices().SchemaBuilder = nil
 	withoutDiscovery := convertToolsToAIFormat(reg)
 
-	if a, b := normalizedToolDefs(t, withDiscovery), normalizedToolDefs(t, withoutDiscovery); a != b {
+	if a, b := marshalToolDefs(t, withDiscovery), marshalToolDefs(t, withoutDiscovery); a != b {
 		t.Fatalf("model-facing tool definitions depend on the discovery SchemaBuilder:\nwith:    %s\nwithout: %s", a, b)
+	}
+}
+
+// TestConvertToolsToAIFormat_Deterministic covers conduit-oc3u: repeated
+// conversions must yield byte-identical tool definitions, including the
+// "Action details" lines built from GetActionDocs (a map, whose iteration
+// order Go randomizes per range — the Gateway tool has 10+ actions, so an
+// unsorted build reorders them across 20 conversions with near certainty).
+func TestConvertToolsToAIFormat_Deterministic(t *testing.T) {
+	gw, store := newTestGatewayWithSessions(t)
+	gw.search = &SearchService{}
+	ws := t.TempDir()
+	cfg := &config.Config{
+		Workspace: config.WorkspaceConfig{ContextDir: ws},
+		Tools: config.ToolsConfig{
+			EnabledTools: []string{"Gateway", "Cron", "Message", "ReadFile"},
+			Sandbox:      config.SandboxConfig{WorkspaceDir: ws, AllowedPaths: []string{ws}},
+		},
+	}
+	reg := tools.NewRegistry(cfg.Tools)
+	reg.SetServices(gw.buildToolServices(cfg, store, nil, nil, nil))
+
+	defs := convertToolsToAIFormat(reg)
+	first := marshalToolDefs(t, defs)
+
+	var gwDesc string
+	for _, d := range defs {
+		if d.Name == "Gateway" {
+			gwDesc = d.Description
+		}
+	}
+	const marker = "\n\nAction details:\n"
+	k := strings.Index(gwDesc, marker)
+	if k < 0 {
+		t.Fatalf("Gateway tool description has no action details: %q", gwDesc)
+	}
+	lines := strings.Split(gwDesc[k+len(marker):], "\n")
+	if len(lines) < 8 {
+		t.Fatalf("expected many Gateway action lines, got %d", len(lines))
+	}
+	if !sort.StringsAreSorted(lines) {
+		t.Fatalf("Gateway action details not sorted:\n%s", strings.Join(lines, "\n"))
+	}
+
+	for n := 0; n < 20; n++ {
+		if got := marshalToolDefs(t, convertToolsToAIFormat(reg)); got != first {
+			t.Fatalf("conversion %d differs from the first:\nfirst: %s\ngot:   %s", n+1, first, got)
+		}
 	}
 }

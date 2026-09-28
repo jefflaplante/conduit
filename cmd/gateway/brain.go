@@ -61,10 +61,9 @@ brain schema/data migrations, as the gateway would.`,
 			// Initialize brain. Opening the DB runs pending brain
 			// migrations; carry the configured recency weight when a config
 			// is loadable so migration 9 matches the gateway (conduit-31jg.53).
-			var cfg *config.Config
-			if c, cfgErr := config.Load(cfgFile); cfgErr == nil {
-				cfg = c
-			}
+			// loadConfigIfPresent never writes a default config.json when the
+			// file is missing (conduit-31jg.87).
+			cfg := loadConfigIfPresent(cfgFile)
 			b, err := brain.New(dbPath, brainCLIOptions(cfg)...)
 			if err != nil {
 				return fmt.Errorf("failed to initialize brain at %s: %w", dbPath, err)
@@ -109,14 +108,31 @@ brain schema/data migrations, as the gateway would.`,
 // (conduit-31jg.53) converts stored salience to base salience by
 // subtracting the configured recency weight; if a CLI command is the first
 // to open the database after an upgrade, it must subtract the same weight
-// the gateway would. cfg may be nil (no config available): defaults apply.
+// the gateway would. The base salience a CLI Store writes depends on the
+// access/tier weights and access-count cap, so those are carried too
+// (conduit-31jg.87), as is the recency decay rate used at query time. The
+// conditions mirror the gateway (internal/gateway/cognition_service.go).
+// cfg may be nil (no config available): defaults apply.
 func brainCLIOptions(cfg *config.Config) []brain.Option {
 	if cfg == nil {
 		return nil
 	}
+	bc := cfg.Brain
 	var opts []brain.Option
-	if cfg.Brain.RecencyWeight > 0 {
-		opts = append(opts, brain.WithRecencyWeight(cfg.Brain.RecencyWeight))
+	if bc.RecencyWeight > 0 {
+		opts = append(opts, brain.WithRecencyWeight(bc.RecencyWeight))
+	}
+	if bc.AccessWeight > 0 {
+		opts = append(opts, brain.WithAccessWeight(bc.AccessWeight))
+	}
+	if bc.TierWeight > 0 {
+		opts = append(opts, brain.WithTierWeight(bc.TierWeight))
+	}
+	if bc.AccessCountCap > 0 {
+		opts = append(opts, brain.WithAccessCountCap(bc.AccessCountCap))
+	}
+	if bc.RecencyDecayRate > 0 {
+		opts = append(opts, brain.WithRecencyDecayRate(bc.RecencyDecayRate))
 	}
 	return opts
 }

@@ -32,6 +32,11 @@ type GatewayIntegration struct {
 	hbCfg        *config.AgentHeartbeatConfig
 	deferred     *SharedAlertQueue
 	now          func() time.Time // test hook; nil means time.Now
+	// flushTimer fires FlushDeferred when quiet hours end, so deferred
+	// actions don't wait up to one heartbeat interval (conduit-31jg.87).
+	// Guarded by deferMu; flushTimerAt is its deadline.
+	flushTimer   *time.Timer
+	flushTimerAt time.Time
 
 	// conduit-31jg.59: all delivery goes through a DeliveryRegistry
 	// (circuit breaker + alert_history audit). Guarded by deferMu.

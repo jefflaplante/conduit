@@ -4,6 +4,7 @@ package ssh
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -371,6 +372,7 @@ func (p *Pool) ListHosts() []string {
 	for name := range p.hosts {
 		hosts = append(hosts, name)
 	}
+	sort.Strings(hosts)
 	return hosts
 }
 

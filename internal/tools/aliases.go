@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"conduit/internal/tools/types"
@@ -201,5 +202,6 @@ func ListAvailableAliases() []string {
 	for alias := range AnthropicToolVersions {
 		aliases = append(aliases, alias)
 	}
+	sort.Strings(aliases)
 	return aliases
 }

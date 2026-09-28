@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"conduit/internal/tools/types"
@@ -47,6 +48,7 @@ func (r *Registry) findSimilarEnabledTools(name string) []string {
 			similar = append(similar, toolName)
 		}
 	}
+	sort.Strings(similar) // model-visible (tool_disabled available values)
 	return similar
 }
 
@@ -95,7 +97,14 @@ func (r *Registry) GetToolSchemas() []map[string]interface{} {
 func (r *Registry) GetToolSchemasWithContext(ctx context.Context) []map[string]interface{} {
 	var schemas []map[string]interface{}
 
-	for _, tool := range r.GetAvailableTools() {
+	available := r.GetAvailableTools()
+	names := make([]string, 0, len(available))
+	for name := range available {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		tool := available[name]
 		params := tool.Parameters()
 
 		// Check if tool provides schema hints and we have a schema builder

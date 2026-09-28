@@ -14,6 +14,10 @@ import (
 // ContinueLengthTruncated (conduit-31jg.51).
 const maxLengthAutoContinues = 2
 
+// autoContinuePrompt is the synthetic user turn asking the model to resume a
+// length-truncated reply; the message carries Injected=true.
+const autoContinuePrompt = "continue"
+
 // lengthTruncatedMarker is appended when a final is still truncated after
 // the continue budget is spent.
 const lengthTruncatedMarker = "\n\n_(truncated at max_tokens — ask me to continue if this cuts off)_"
@@ -62,7 +66,7 @@ func ContinueLengthTruncated(ctx context.Context, provider Provider, req *Genera
 		fragments = append(fragments, resp.Content)
 		req.Messages = append(req.Messages,
 			ChatMessage{Role: "assistant", Content: resp.Content},
-			ChatMessage{Role: "user", Content: "continue"},
+			ChatMessage{Role: "user", Content: autoContinuePrompt, Injected: true},
 		)
 		start := time.Now()
 		contResp, contErr := provider.GenerateResponse(withCallPhase(ctx, "continue"), req) // conduit-2lzv
