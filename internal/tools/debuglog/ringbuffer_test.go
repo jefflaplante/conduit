@@ -1,9 +1,28 @@
 package debuglog
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
+
+func TestPreview_RedactsCollapsesAndTruncates(t *testing.T) {
+	tok := "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh"
+	got := Preview("a\n\n  b "+tok+" "+strings.Repeat("ü", 300), 50)
+	if strings.Contains(got, tok) {
+		t.Fatalf("token leaked: %q", got)
+	}
+	if !strings.HasPrefix(got, "a b <REDACTED> ") {
+		t.Fatalf("whitespace not collapsed / not redacted: %q", got)
+	}
+	if n := utf8.RuneCountInString(got); n != 51 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("preview has %d runes (%q), want 50 + ellipsis", n, got)
+	}
+	if Preview("short", 0) != "short" {
+		t.Fatal("short input changed")
+	}
+}
 
 func TestRingBuffer_AddAndLen(t *testing.T) {
 	rb := NewRingBuffer(5)
