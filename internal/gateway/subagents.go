@@ -347,11 +347,12 @@ func (g *Gateway) getSubagentModel(model string) string {
 		return model
 	}
 
-	if g.config != nil && g.config.AI.SubagentDefaultModel != "" {
-		if fullModel, exists := g.getModelAliases()[strings.ToLower(g.config.AI.SubagentDefaultModel)]; exists && fullModel != "" {
+	// conduit-rmho: currentConfig reflects live update_config changes.
+	if cfg := g.currentConfig(); cfg != nil && cfg.AI.SubagentDefaultModel != "" {
+		if fullModel, exists := g.getModelAliases()[strings.ToLower(cfg.AI.SubagentDefaultModel)]; exists && fullModel != "" {
 			return fullModel
 		}
-		return g.config.AI.SubagentDefaultModel
+		return cfg.AI.SubagentDefaultModel
 	}
 
 	return g.getDefaultModel()
@@ -359,7 +360,8 @@ func (g *Gateway) getSubagentModel(model string) string {
 
 // getDefaultModel returns the gateway's configured default model
 func (g *Gateway) getDefaultModel() string {
-	if g.config == nil || len(g.config.AI.Providers) == 0 {
+	cfg := g.currentConfig() // conduit-rmho: live provider model changes
+	if cfg == nil || len(cfg.AI.Providers) == 0 {
 		// conduit-31jg.17: nothing configured → "" (provider default;
 		// ai.ContextWindowForModel("") = DefaultContextWindow). No
 		// hardcoded model literal.
@@ -367,13 +369,13 @@ func (g *Gateway) getDefaultModel() string {
 	}
 
 	// Find the default provider
-	defaultName := g.config.AI.DefaultProvider
-	for _, provider := range g.config.AI.Providers {
+	defaultName := cfg.AI.DefaultProvider
+	for _, provider := range cfg.AI.Providers {
 		if provider.Name == defaultName {
 			return provider.Model
 		}
 	}
 
 	// Fall back to first provider's model
-	return g.config.AI.Providers[0].Model
+	return cfg.AI.Providers[0].Model
 }

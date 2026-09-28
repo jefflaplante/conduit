@@ -228,7 +228,15 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
+	return Parse(data)
+}
 
+// Parse builds a configuration from the raw JSON of a config file exactly as
+// Load does after reading it: tilde and ${ENV_VAR} expansion (after loading
+// secrets_file), deprecated-key normalization, derived defaults and
+// Validate. The live config reload (conduit-rmho) uses it so a changed
+// config passes the same checks as one loaded at startup.
+func Parse(data []byte) (*Config, error) {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)

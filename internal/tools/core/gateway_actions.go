@@ -138,34 +138,6 @@ func (t *GatewayTool) getConfig(ctx context.Context) (*types.ToolResult, error) 
 	}, nil
 }
 
-func (t *GatewayTool) updateConfig(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	config, ok := args["config"].(map[string]interface{})
-	if !ok {
-		return &types.ToolResult{
-			Success: false,
-			Error:   "config parameter is required for update_config action and must be an object",
-		}, nil
-	}
-
-	err := t.services.Gateway.UpdateConfiguration(ctx, config)
-	if err != nil {
-		return &types.ToolResult{
-			Success: false,
-			Error:   fmt.Sprintf("failed to update configuration: %v", err),
-		}, nil
-	}
-
-	return &types.ToolResult{
-		Success: true,
-		Content: "Configuration updated successfully",
-		Data: map[string]interface{}{
-			"action":    "update_config",
-			"config":    config,
-			"timestamp": time.Now(),
-		},
-	}, nil
-}
-
 func (t *GatewayTool) getMetrics(ctx context.Context) (*types.ToolResult, error) {
 	metrics, err := t.services.Gateway.GetMetrics()
 	if err != nil {
