@@ -128,7 +128,7 @@ func configOperation(plan *types.ConfigUpdateResult, frozen string) approvalgate
 	sort.Strings(keys)
 	summary := "the configuration change to " + approvalgate.Clip(strings.Join(keys, ", "), 200)
 	return approvalgate.Operation{
-		Kind:   "gateway.update_config",
+		Kind:   types.ConfigUpdateApprovalKind,
 		Title:  fmt.Sprintf("Change gateway configuration (%d key(s))", len(plan.Changes)),
 		Fields: fields,
 		Params: map[string]string{"patch": frozen},

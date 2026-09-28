@@ -38,6 +38,7 @@ func (g *Gateway) initApprovals() {
 // recordApprovalOutcome notes the decision in the session transcript so the
 // model learns what happened on its next turn. Body text is never included.
 func (g *Gateway) recordApprovalOutcome(r approval.Resolution) {
+	g.recordConfigApproval(r) // conduit-2qes
 	if g.sessions == nil || r.Ticket.SessionKey == "" {
 		return
 	}
