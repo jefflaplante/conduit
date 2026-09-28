@@ -102,22 +102,6 @@ func TestHandleWebSocketSessionSwitch_UnknownAction(t *testing.T) {
 	}
 }
 
-func TestChannelStatusAdapter_GetStatus(t *testing.T) {
-	m := channels.NewManager()
-	if err := m.Start(context.Background(), nil); err != nil {
-		t.Fatalf("start: %v", err)
-	}
-	a := &channelStatusAdapter{manager: m}
-	status := a.GetStatus()
-	if status == nil {
-		t.Error("expected non-nil status map")
-	}
-	// Empty manager -> empty map
-	if len(status) != 0 {
-		t.Errorf("expected empty, got %v", status)
-	}
-}
-
 func TestStartStopChannels(t *testing.T) {
 	gw, _ := newTestGatewayWithSessions(t)
 	gw.config = &config.Config{Channels: nil}

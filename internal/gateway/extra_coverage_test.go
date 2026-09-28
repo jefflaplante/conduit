@@ -124,30 +124,6 @@ func TestSummaryAIResponseAdapter_GetContent(t *testing.T) {
 	}
 }
 
-func TestCreateSchemaBuilder_WithGateway(t *testing.T) {
-	gw, _ := newTestGatewayWithSessions(t)
-	cfg := &config.Config{
-		Workspace: config.WorkspaceConfig{ContextDir: t.TempDir()},
-		Tools: config.ToolsConfig{
-			Sandbox: config.SandboxConfig{AllowedPaths: []string{t.TempDir()}},
-		},
-	}
-	b := createSchemaBuilder(gw, cfg)
-	if b == nil {
-		t.Error("expected non-nil builder")
-	}
-}
-
-func TestCreateSchemaBuilder_NoGateway(t *testing.T) {
-	cfg := &config.Config{
-		Workspace: config.WorkspaceConfig{ContextDir: ""},
-	}
-	b := createSchemaBuilder(nil, cfg)
-	if b == nil {
-		t.Error("expected non-nil builder")
-	}
-}
-
 // TestRefreshBeadsPeriodic_CancelImmediately verifies the function returns
 // when ctx is cancelled.
 func TestRefreshBeadsPeriodic_CancelImmediately(t *testing.T) {

@@ -281,7 +281,8 @@ func (g *Gateway) buildToolServices(
 		REMCycle:      remCycleRunner,
 		Reflection:    reflectionSvc,
 		Vision:        visionAnalyzer,
-		SchemaBuilder: createSchemaBuilder(g, cfg),
+		// SchemaBuilder is left unset: Registry.SetServices builds it
+		// (conduit-5y17 — the single construction path).
 		DebugLog:      debugBuffer,
 		SkillsManager: skillsManager,
 	}

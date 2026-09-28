@@ -114,7 +114,13 @@ func (r *Registry) SetServices(services *types.ToolServices) {
 	r.registerAllTools()
 }
 
-// initializeSchemaBuilder creates and configures the schema builder with discovery providers
+// initializeSchemaBuilder creates and configures the schema builder with discovery providers.
+//
+// conduit-5y17: this is the only place a discovery-backed SchemaBuilder is
+// built (the gateway used to build a second one that SetServices then
+// overwrote). It feeds GetToolSchemasWithContext (the `conduit tools` CLI)
+// only; the model-facing tool definitions apply static SchemaHints without
+// discovery so they stay prompt-cache stable.
 func (r *Registry) initializeSchemaBuilder() {
 	if r.services == nil {
 		return
