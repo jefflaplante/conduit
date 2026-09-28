@@ -16,6 +16,11 @@ type ConfigUpdater interface {
 	ApplyConfigUpdate(ctx context.Context, patch map[string]interface{}) (*ConfigUpdateResult, error)
 }
 
+// ConfigUpdateApprovalKind is the approval.Action.Kind of an update_config
+// approval. The gateway matches it to count denied/expired approvals
+// (conduit-2qes).
+const ConfigUpdateApprovalKind = "gateway.update_config"
+
 // Config change modes (ConfigChange.Mode).
 const (
 	// ConfigChangeLive: applied to the running gateway without a restart.

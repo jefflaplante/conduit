@@ -1111,6 +1111,44 @@ The approval system logs its own request/approve/deny events with the same
 key lists. The tool result shows the redacted value of each changed key as
 saved.
 
+### Metrics
+
+Plans and applies are also counted by outcome (conduit-2qes). The counters
+hold counts only: no key paths, values or secrets, and the only Prometheus
+label is the fixed `outcome` set below. They are in-memory and reset on
+restart.
+
+| Outcome | Counted when |
+|---------|--------------|
+| `planned` | A valid plan with changes was built and sent for approval (not terminal: the apply after approval is counted separately) |
+| `applied_live` | Saved, and every changed key was applied to the running gateway |
+| `applied_restart_required` | Saved; at least one changed key only takes effect after a restart |
+| `unchanged` | Every requested key already had the requested value (plan or apply) |
+| `rejected_invalid` | Malformed patch, literal secret, unknown path, or `config.Parse`/`Validate` failure (plan or apply); nothing changed |
+| `rejected_conflict` | The file changed on disk between read and write; nothing changed |
+| `failed` | No config file known, the file could not be read/parsed, a provider or the call log could not be built, or the write failed; nothing changed |
+| `approval_denied` | The owner denied the approval prompt (or it was revoked after too many wrong codes) |
+| `approval_expired` | The approval prompt expired, or was answered after expiry |
+
+An approved update counts once as `planned` and then once as its apply
+outcome. Requests refused before a prompt is sent (non-interactive turn, no
+approval channel) are not counted here; they only appear in the approval log.
+The counters also include `providers_rebuilt_total` (provider instances rebuilt
+by live applies) and `last_applied` (time of the last successful apply).
+
+They are exposed in three places:
+
+- `GET /metrics`: `config_updates` object (`planned_total`,
+  `applied_live_total`, `applied_restart_required_total`, `unchanged_total`,
+  `rejected_invalid_total`, `rejected_conflict_total`, `failed_total`,
+  `approval_denied_total`, `approval_expired_total`,
+  `providers_rebuilt_total`, `last_applied`).
+- `GET /prometheus`: `conduit_config_updates_total{outcome="..."}` (one series
+  per outcome, always present), `conduit_config_update_providers_rebuilt_total`
+  and `conduit_config_update_last_applied_timestamp_seconds` (0 = none yet).
+- `Gateway` tool `status`: `config_updates` map with the same keys as
+  `/metrics`.
+
 ## Environment Variables
 
 Common environment variables:
