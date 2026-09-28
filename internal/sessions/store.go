@@ -248,6 +248,8 @@ func (s *Store) SetMessagesDeletedCallback(cb MessagesDeletedCallback) {
 
 // Legacy createTables method - replaced by database migrations
 // This method is kept for reference but is no longer used
+//
+//lint:ignore U1000 kept pending salvage review (conduit-31jg.72); see staticcheck.conf
 func (s *Store) createTablesLegacy() error {
 	// Create sessions table
 	sessionsSQL := `

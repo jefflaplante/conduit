@@ -134,7 +134,8 @@ staticcheck:
 	$(STATICCHECK) ./...
 	$(STATICCHECK) -tags "$(call tags_for,$(OPTIONAL_TOOLS))" ./...
 
-# Full default check set (CI moves staticcheck.conf aside first). Informational.
+# Full default check set ignoring staticcheck.conf (move it aside first).
+# Informational; staticcheck.conf currently disables nothing (conduit-31jg.72).
 staticcheck-report:
 	$(STATICCHECK) ./...
 

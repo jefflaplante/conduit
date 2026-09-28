@@ -67,18 +67,10 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      # Blocking: default checks minus the pre-existing backlog listed in
-      # staticcheck.conf (default tags and all optional tool tags).
+      # Blocking: the full default check set (staticcheck.conf disables
+      # nothing since conduit-31jg.72), default tags and all optional tool tags.
       - name: staticcheck
         run: make staticcheck
-
-      # Non-blocking: full default check set, ignoring staticcheck.conf, so
-      # the backlog stays visible in the logs until it is burned down.
-      - name: staticcheck backlog report (non-blocking)
-        continue-on-error: true
-        run: |
-          mv staticcheck.conf "$RUNNER_TEMP/staticcheck.conf"
-          make staticcheck-report
 
   gofmt:
     name: gofmt (changed files)
