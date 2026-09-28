@@ -34,7 +34,7 @@ func TestNewTokenStorage(t *testing.T) {
 
 	storage := NewTokenStorage(db, "test-secret-key-for-hmac-hashing")
 	if storage == nil {
-		t.Error("Expected NewTokenStorage to return a non-nil storage")
+		t.Fatal("Expected NewTokenStorage to return a non-nil storage")
 	}
 
 	if storage.db != db {
