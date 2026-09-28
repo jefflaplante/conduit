@@ -650,7 +650,7 @@ func (pb *PromptBuilder) buildToolingSection() string {
 	}
 
 	builder.WriteString("TOOLS.md does not control tool availability; it is user guidance for how to use external tools.\n")
-	builder.WriteString("To delegate work, call SessionsSpawn — this is the ONLY way to spawn a sub-agent. Never claim you spawned one without the tool call. Results arrive automatically (announce=true) or via SessionStatus (announce=false).\n")
+	builder.WriteString("To delegate work, call SessionsSpawn — this is the ONLY way to spawn a sub-agent. Never claim you spawned one without the tool call. Its result arrives automatically as a new turn when it finishes (announce=false only skips posting it to the user) — do not poll SessionStatus or wait; end your turn.\n")
 
 	return builder.String()
 }
