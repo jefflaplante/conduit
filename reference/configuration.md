@@ -336,6 +336,24 @@ Optional email identity configuration for the agent. When configured, the agent'
 
 Available tools: Read, Write, Edit, Bash, Glob, MemorySearch, Find, Facts, WebSearch, WebFetch, Message, Tts, Cron, Chain, Gateway, Context, Image, Brain, SessionsList, SessionsSend, SessionsSpawn, SessionStatus, google_workspace
 
+#### Bash Command Denylist
+
+The Bash tool checks each command against a denylist before it runs. These keys live under `tools.sandbox`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `command_denylist` | built-in list (`DefaultCommandDenylist` in `internal/tools/exec.go`) | Entries to block. A non-empty list **replaces** the built-in list; it does not add to it. |
+| `denylist_mode` | `"legacy"` | `"legacy"` matches each entry as a case-insensitive substring anywhere in the command. `"command_position"` matches entries only against commands the shell would actually run, so quoted text, heredoc bodies and ordinary arguments no longer cause false positives. An unknown value falls back to `"legacy"` and logs a warning. |
+| `strict_autonomous` | `true` | Only used with `"command_position"`. When true, sessions with no human in the loop (heartbeat, cron, sub-agents, wakes, non-interactive turns) also get the legacy substring check. |
+
+To opt in:
+
+```json
+{ "tools": { "sandbox": { "denylist_mode": "command_position", "strict_autonomous": true } } }
+```
+
+The config is read at startup, so restart the gateway after changing it. For the matching rules and their limits, see [security.md](security.md#bash-command-policy-conduit-23hg).
+
 #### Google Workspace Tool
 
 Optional integration with Gmail and Calendar via the `gws` CLI. See [Google Workspace Setup Guide](guides/google-workspace-setup.md) for detailed instructions.

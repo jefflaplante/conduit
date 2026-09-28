@@ -109,22 +109,11 @@ func (t *ExecTool) getEffectiveDenylist() []string {
 	return DefaultCommandDenylist
 }
 
-// checkCommandDenylist checks the command against all denylist patterns.
-// Returns the matched pattern if denied, or empty string if allowed.
+// checkCommandDenylist checks the command against all denylist patterns using
+// the configured denylist_mode (see bash_policy.go), for an interactive
+// session. Returns the matched pattern if denied, or empty string if allowed.
 func (t *ExecTool) checkCommandDenylist(command string) string {
-	normalized := strings.ToLower(strings.TrimSpace(command))
-	// Collapse multiple spaces for more robust matching
-	for strings.Contains(normalized, "  ") {
-		normalized = strings.ReplaceAll(normalized, "  ", " ")
-	}
-
-	for _, pattern := range t.getEffectiveDenylist() {
-		lowerPattern := strings.ToLower(pattern)
-		if strings.Contains(normalized, lowerPattern) {
-			return pattern
-		}
-	}
-	return ""
+	return t.checkCommandPolicy(context.Background(), command).Pattern
 }
 
 func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
@@ -174,13 +163,16 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 	}
 
 	// Check command against denylist before execution
-	if matched := t.checkCommandDenylist(command); matched != "" {
-		log.Printf("[Exec] DENIED command=%q matched_pattern=%q cwd=%q", command, matched, cwd)
+	if m := t.checkCommandPolicy(ctx, command); m.Pattern != "" {
+		matched := m.Pattern
+		log.Printf("[Exec] DENIED command=%q matched_pattern=%q mode=%s reason=%q cwd=%q", command, matched, m.Mode, m.Reason, cwd)
 		return types.NewErrorResult("command_denied",
-			fmt.Sprintf("Command blocked by security denylist (matched pattern: %q)", matched)).
+			fmt.Sprintf("Command blocked by security denylist (matched pattern: %q; %s)", matched, m.Reason)).
 			WithParameter("command", command).
 			WithContext(map[string]interface{}{
 				"matched_pattern":   matched,
+				"match_reason":      m.Reason,
+				"denylist_mode":     m.Mode,
 				"working_directory": cwd,
 			}).
 			WithSuggestions([]string{
