@@ -226,27 +226,3 @@ func extractFromWebSocketProtocol(r *http.Request) ExtractedToken {
 		Source: TokenSourceWebSocketProtocol,
 	}
 }
-
-// SanitizeTokenForLogging returns a safe version of a token for logging purposes
-// Shows prefix and last 4 chars, masks the middle
-func SanitizeTokenForLogging(token string) string {
-	if token == "" {
-		return "<empty>"
-	}
-
-	// For very short tokens, just show asterisks
-	if len(token) < 12 {
-		return "****"
-	}
-
-	// Show first 8 chars (typically includes prefix) and last 4
-	return token[:8] + "****" + token[len(token)-4:]
-}
-
-// MaskToken completely masks a token for display
-func MaskToken(token string) string {
-	if token == "" {
-		return "<none>"
-	}
-	return "<redacted>"
-}

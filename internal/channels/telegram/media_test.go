@@ -40,14 +40,6 @@ func TestParseMediaLines(t *testing.T) {
 			expectedText: "Playing song:",
 		},
 		{
-			name:  "tts with text",
-			input: "MEDIA:tts:Hello, how are you today?",
-			expectedMedia: []MediaLine{
-				{Type: MediaTypeTTS, Content: "Hello, how are you today?"},
-			},
-			expectedText: "",
-		},
-		{
 			name:  "media with caption",
 			input: "MEDIA:voice:SGVsbG8=|Voice message for you",
 			expectedMedia: []MediaLine{
@@ -199,20 +191,6 @@ func TestMediaSender_SendAudioURL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, errMsg)
 	assert.Len(t, mockBot.sentAudio, 1)
-}
-
-func TestMediaSender_TTSWithoutProvider(t *testing.T) {
-	mockBot := &mockBotForMedia{}
-	sender := NewMediaSender(mockBot, context.Background())
-
-	media := MediaLine{
-		Type:    MediaTypeTTS,
-		Content: "Hello, this is a test",
-	}
-
-	errMsg, err := sender.SendMedia(123456, media)
-	require.Error(t, err)
-	assert.Contains(t, errMsg, "TTS not available")
 }
 
 func TestMediaSender_ProcessAndSendMedia(t *testing.T) {

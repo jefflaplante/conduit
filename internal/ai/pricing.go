@@ -138,15 +138,6 @@ func longestPrefix(table map[string]ModelPricing, model string) (ModelPricing, b
 	return best, bestLen > 0
 }
 
-// PricingForModel returns the built-in pricing for a model (exact match,
-// else longest boundary-aligned prefix), or zero pricing when unknown.
-// Prefer PricingResolver, which also applies config overrides and resolves
-// provider-prefixed IDs.
-func PricingForModel(model string) ModelPricing {
-	p, _ := lookupPricing(nil, candidateIDs("", model))
-	return p
-}
-
 // candidateIDs lists the IDs a (provider, model) pair may be priced under,
 // most specific first: the model as given, provider/model, then the model
 // with leading "vendor/" segments stripped one at a time

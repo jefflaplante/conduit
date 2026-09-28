@@ -452,5 +452,4 @@ func TestHandleCompactCommand_NilEngine(t *testing.T) {
 
 // Sanity: ensure the test channel manager does not leak state between tests
 // (covered implicitly by t.Cleanup).
-var _ = channels.StripReplyTags
 var _ = sessions.Session{}

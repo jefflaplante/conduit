@@ -129,20 +129,6 @@ func TestGenerate_ExtractsNextSteps(t *testing.T) {
 	assert.NotEmpty(t, b.NextSteps)
 }
 
-func TestGenerateFromMessages(t *testing.T) {
-	g := NewGenerator()
-
-	now := time.Now()
-	messages := []Message{
-		{ID: "1", Role: "user", Content: "Hello", Timestamp: now},
-		{ID: "2", Role: "assistant", Content: "Hi there!", Timestamp: now.Add(1 * time.Minute)},
-	}
-
-	b, err := g.GenerateFromMessages(messages)
-	require.NoError(t, err)
-	assert.Equal(t, "unknown", b.SessionID)
-}
-
 func TestSaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
 

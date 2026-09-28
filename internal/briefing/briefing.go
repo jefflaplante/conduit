@@ -87,11 +87,6 @@ func (g *BriefingGenerator) Generate(sessionID string, messages []Message) (*Bri
 	return b, nil
 }
 
-// GenerateFromMessages is an alias that generates a briefing without a specific session ID.
-func (g *BriefingGenerator) GenerateFromMessages(messages []Message) (*Briefing, error) {
-	return g.Generate("unknown", messages)
-}
-
 // Save persists a briefing to the given directory as a JSON file.
 func Save(briefing *Briefing, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
