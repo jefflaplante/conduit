@@ -73,3 +73,7 @@ The service uses systemd security hardening:
 Write access is limited to:
 - `$PROJECT_DIR` (database, sessions)
 - `./workspace` (workspace context files)
+
+## Container
+
+`compose.yaml` runs the published image with `/data` and `/workspace` volumes, an env file (`conduit.env`, from `conduit.env.example`) and the health check. See DEPLOYMENT.md, "Container".

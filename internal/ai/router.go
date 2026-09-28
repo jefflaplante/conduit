@@ -51,6 +51,10 @@ type Router struct {
 
 	pricingResolver *PricingResolver // conduit-31jg.57
 
+	throttle *ProviderThrottle // per-provider/model concurrency slots (conduit-38cz)
+
+	callLog atomic.Pointer[CallLog] // persistent per-call JSONL log (conduit-2lzv)
+
 	// Per-session turn serialization: prevents concurrent LLM turns on the
 	// same session (e.g., a normal user message and an inter-session wake
 	// firing at the same time). Keys are session.Key; values are
@@ -489,6 +493,8 @@ func (r *Router) TurnCost(provider, model string, u Usage) (cost float64, priced
 
 // initializeProviders sets up AI providers
 func (r *Router) initializeProviders(cfg config.AIConfig) error {
+	r.throttle = NewProviderThrottle(cfg.Providers) // conduit-38cz
+
 	// Allow empty provider configs for testing
 	// The router will still be valid but GenerateResponse will fail if no providers exist
 	if len(cfg.Providers) == 0 {
@@ -753,6 +759,7 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 	}
 
 	log.Printf("[Router] Generate: provider=%q", providerName)
+	ctx = r.withCallTurn(ctx, session) // conduit-2lzv
 
 	// Build system prompt using agent system
 	var systemBlocks []SystemBlock
@@ -886,6 +893,7 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 
 	contextWindow := r.contextWindowForProvider(providerName)
 	log.Printf("[Router] WithTools: provider=%q model=%q context_window=%d", providerName, modelOverride, contextWindow)
+	ctx = r.withCallTurn(ctx, session) // conduit-2lzv
 
 	// Build system prompt using agent system
 	var systemBlocks []SystemBlock
@@ -1132,6 +1140,7 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		// so dispatch to the unlocked worker to avoid deadlock.
 		return r.generateResponseWithToolsLocked(ctx, session, userMessage, providerName, modelOverride, nil)
 	}
+	ctx = r.withCallTurn(ctx, session) // conduit-2lzv
 
 	// Build system prompt
 	var systemBlocks []SystemBlock

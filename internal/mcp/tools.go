@@ -12,15 +12,16 @@ import (
 // mcpExcludedTools lists tools that should not be exposed over MCP.
 // These are Conduit-internal tools that do not make sense for external callers.
 var mcpExcludedTools = map[string]bool{
-	"Chain":         true, // Internal orchestration
-	"DebugLog":      true, // Internal debug
-	"Gateway":       true, // Internal gateway control
-	"SessionsList":  true, // Internal session management
-	"SessionsSend":  true, // Internal session management
-	"SessionsSpawn": true, // Internal session management
-	"SessionStatus": true, // Internal session management
-	"StatusUpdate":  true, // Internal status updates
-	"Context":       true, // Internal context/prompt management
+	"Chain":          true, // Internal orchestration
+	"DebugLog":       true, // Internal debug
+	"Gateway":        true, // Internal gateway control
+	"SessionsList":   true, // Internal session management
+	"SessionsSend":   true, // Internal session management
+	"SessionsSpawn":  true, // Internal session management
+	"SessionsCancel": true, // Internal session management (conduit-38cz)
+	"SessionStatus":  true, // Internal session management
+	"StatusUpdate":   true, // Internal status updates
+	"Context":        true, // Internal context/prompt management
 }
 
 // FilterToolsForMCP returns the subset of registry tools suitable for MCP exposure.

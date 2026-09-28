@@ -98,3 +98,8 @@ if [[ "$(systemctl show -p UMask --value "$SERVICE")" != "0077" ]]; then
   say "Note: $SERVICE UMask is not 0077; new files the gateway creates will be world-readable."
   echo "    Fix once: sudo mkdir -p /etc/systemd/system/$SERVICE.service.d && printf '[Service]\\nUMask=0077\\n' | sudo tee /etc/systemd/system/$SERVICE.service.d/umask.conf && sudo systemctl daemon-reload"
 fi
+
+if [[ -z "$(systemctl show -p RuntimeDirectory --value "$SERVICE")" ]]; then
+  say "Note: $SERVICE has no RuntimeDirectory; the gateway writes its pidfile to {data_dir}/conduit.pid (default ~/.conduit)."
+  echo "    For /run/conduit/conduit.pid (conduit-1qcg): sudo mkdir -p /etc/systemd/system/$SERVICE.service.d && printf '[Service]\\nRuntimeDirectory=conduit\\nRuntimeDirectoryMode=0755\\n' | sudo tee /etc/systemd/system/$SERVICE.service.d/runtime-dir.conf && sudo systemctl daemon-reload"
+fi

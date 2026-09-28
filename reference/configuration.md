@@ -228,6 +228,51 @@ Model aliases (for `/model` command):
 - `opus` - claude-opus-4-6
 - `glm` - z-ai/glm-4-flash (requires [z.ai setup](z-ai.md))
 
+#### Concurrency limits (`max_concurrent`, `model_max_concurrent`)
+
+Caps how many calls to a provider (or one of its models) are in flight at
+once, so a burst of sub-agents or a quota/timeout fallback storm cannot push
+a backend past its concurrency limit and into a 429 cascade (conduit-38cz).
+
+```json
+{
+  "name": "z-ai",
+  "type": "openai",
+  "model": "glm-5.3-flash",
+  "max_concurrent": 20,
+  "model_max_concurrent": { "glm-5.3": 5, "glm-5.3-flash": 50 }
+}
+```
+
+- `max_concurrent` — one pool shared by all of the provider's models. `0` or
+  omitted = unlimited.
+- `model_max_concurrent` — per-model pools, keyed by model name (matched
+  case-insensitively, with or without a `provider/` prefix, so `glm-5.3` and
+  `z-ai/glm-5.3` share one pool). A listed model uses its own pool **instead
+  of** `max_concurrent`. `0` = explicitly unlimited (use it to switch off a
+  built-in default).
+- Built-in defaults: providers named `z-ai`/`zai`/`z.ai`, or whose `base_url`
+  host is `z.ai` or a subdomain of it, get z.ai's documented limits
+  `glm-5.3` = 5 and `glm-5.3-flash` = 50 unless configured otherwise.
+  Precedence: `model_max_concurrent` entry, then built-in model default, then
+  `max_concurrent`, then unlimited.
+- Negative values are rejected at config load.
+
+A call over the cap waits for a slot. It holds the slot only while the
+provider call runs: tool execution in between doesn't hold it, and a streaming
+call releases it at stream end. The wait uses the call's own context, so
+`/stop` and the turn deadline (e.g. a sub-agent's `timeoutSeconds`) end it.
+The wait counts toward the turn's deadline. A same-model timeout retry that
+is still queued gives up in time to leave the fallback handoff its reserved
+slice, because the handoff goes to a different pool. A wait that is given up
+makes no provider call, so it isn't metered or written to the [LLM call log](#llm-call-log). A call that did wait records the wait as `queue_wait_ms` in the call log, separate from its `latency_ms`.
+
+The fuel gauge (`Gateway` tool status, `SessionStatus` → `fuel_gauge`) lists
+every pool under `provider_slots`: `limit`, `source`
+(`model_config`/`builtin`/`provider_config`/`unlimited`), `in_flight`,
+`waiting`, and totals `acquired_total`, `queued_total`, `abandoned_total`,
+`max_wait_ms`.
+
 ### Pricing Overrides
 
 ```json
@@ -244,6 +289,71 @@ Model aliases (for `/model` command):
 Keys are bare model IDs or provider-prefixed IDs; values are USD per million tokens and win over the built-in pricing matrix. Optional `cache_read_per_m_token` / `cache_write_per_m_token` default to 0.1x / 1.25x (2x with extended TTL) of the input price.
 
 **Deprecated: `ai.smart_routing`.** Smart routing was removed (conduit-2avx); it had never been wired, so it was a no-op. The block is still accepted and logs a one-time warning at load. `enabled`, `track_usage` and `cost_budget_daily` are ignored; `smart_routing.pricing_overrides` is still merged into `ai.pricing_overrides` (which wins on conflicts). Move overrides to `ai.pricing_overrides` and delete the block.
+
+### LLM Call Log
+
+A persistent JSONL record of every LLM provider call (conduit-2lzv): one line per call, including each recovery retry, fallback handoff, EmptyGuard retry, length auto-continue, tool-loop depth and side call (vision). It's there so you can diagnose provider incidents (timeouts, fallbacks, stalled sub-agents) after the fact without digging through journalctl.
+
+```json
+{
+  "ai": {
+    "call_log": {
+      "enabled": true,
+      "path": "",
+      "max_size_mb": 20,
+      "max_files": 5
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | The log holds metadata only, so it's on by default. Set `false` to turn it off. |
+| `path` | string | `{data_dir}/logs/llm-calls.jsonl` | Path of the active file. Supports `~` and `${ENV}`. |
+| `max_size_mb` | int | `20` | The active file rotates before it would exceed this size. |
+| `max_files` | int | `5` | Total files kept, active file included: `llm-calls.jsonl`, `.1` … `.4`. The oldest file is deleted. |
+
+The default location is the data dir (`CONDUIT_DATA_DIR`, then `data_dir`, then `~/.conduit`) rather than the workspace. The data dir is gateway-private state (`0700`) that sits next to the auth and restart files, and the agent's file tools don't browse it. Log files are created with mode `0600`.
+
+**Metadata only.** A line never contains prompt text, response text, tool-call arguments or credentials. The record type has no field that could hold them. The error message is scrubbed with `internal/redact` (Telegram tokens and registered secrets), flattened to one line and truncated to 240 characters.
+
+**Non-blocking.** Records go through a 1024-entry buffer to a single writer goroutine. When the buffer is full, the record is dropped and counted. Write and open failures are also counted, and the log retries opening the file every 30s. A provider call is never blocked or failed by the log. On shutdown the log is flushed and closed last in the stop sequence, with at most 2s of the stop budget.
+
+Example line:
+
+```json
+{"ts":"2026-09-28T14:03:11.482Z","session_key":"telegram_42","session_label":"main-chat","agent_kind":"main","channel":"telegram","turn_id":"9f2c41d07a3e","provider":"fallbackprov","model":"fallbackprov/fb-model-x","phase":"depth1","attempt":3,"handed_off":true,"fallback_from":"glm-5.3","streaming":false,"finish_reason":"stop","tool_calls":1,"prompt_tokens":18234,"completion_tokens":412,"total_tokens":18646,"cache_creation_tokens":0,"cache_read_tokens":16000,"cost_usd":0.0071,"priced":true,"latency_ms":8123,"error_class":"none"}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `ts` | Time the call completed (UTC, RFC3339 with milliseconds). |
+| `session_key`, `session_label`, `agent_kind`, `channel` | The turn's session. `agent_kind` is `main` or `subagent`. `channel` is the channel kind (`telegram`, `tui`, `cron`, `subagent`, …). Empty for a side call made outside a turn. |
+| `turn_id`, `request_id` | `turn_id` is one ID per router turn and is shared by every call of that turn. `request_id` is the HTTP/logging request ID, when there is one. |
+| `provider`, `model` | The route that served this call. An empty model resolves to the provider default. |
+| `phase` | Where the call came from: `depth0` is the turn's first call, `depthN` is the Nth tool-loop round, `continue` is a length auto-continue, `empty-guard` is an EmptyGuard retry or failover, and `side-call[:vision]` is a side call. |
+| `attempt` | 1…n within one logical call: the first attempt, then the timeout retry, then quota or timeout handoffs. |
+| `handed_off`, `fallback_from` | `handed_off` is true when the call ran on a route other than the turn's first route. `fallback_from` is that first route's model. |
+| `streaming`, `ttft_ms` | Whether the attempt streamed. `ttft_ms` is the time to the first text delta, present only for streamed attempts that emitted text. |
+| `stop_reason`, `finish_reason`, `tool_calls`, `empty` | Provider stop condition, the number of tool calls (count only) and a flag for a raw-empty response. |
+| `prompt_tokens`, `completion_tokens`, `total_tokens`, `cache_creation_tokens`, `cache_read_tokens` | Token usage. |
+| `cost_usd`, `priced` | Per-call cost. `priced` is false when the model has no known price, and absent on errors. |
+| `latency_ms` | Wall time of the provider call. It excludes any wait for a concurrency slot. |
+| `queue_wait_ms` | Time spent waiting for a provider concurrency slot before the call (see [Concurrency limits](#concurrency-limits-max_concurrent-model_max_concurrent)). Omitted when there was no measurable wait. |
+| `error_class`, `http_status`, `error` | `error_class` is one of `none`, `timeout`, `rate_limit`, `quota`, `auth`, `server`, `context_cancel`, `context_length` or `other`. `error` is the redacted, truncated message. |
+
+Diagnosis recipes:
+
+```bash
+LOG=~/.conduit/logs/llm-calls.jsonl
+# Today's timeouts: count, latency distribution and affected sessions
+jq -c 'select(.error_class=="timeout" and (.ts|startswith("2026-09-28")))' $LOG | jq -s '{count:length, latency_ms:(map(.latency_ms)|sort), sessions:(map(.session_key)|unique)}'
+# Error rate by class
+jq -r .error_class $LOG | sort | uniq -c
+# Every call of one turn, in order
+jq -c 'select(.turn_id=="9f2c41d07a3e") | [.phase,.attempt,.provider,.model,.error_class,.latency_ms]' $LOG
+```
 
 ### Context Compaction
 
@@ -334,7 +444,25 @@ Optional email identity configuration for the agent. When configured, the agent'
 }
 ```
 
-Available tools: Read, Write, Edit, Bash, Glob, MemorySearch, Find, Facts, WebSearch, WebFetch, Message, Tts, Cron, Chain, Gateway, Context, Image, Brain, SessionsList, SessionsSend, SessionsSpawn, SessionStatus, google_workspace
+Available tools: Read, Write, Edit, Bash, Glob, MemorySearch, Find, Facts, WebSearch, WebFetch, Message, Tts, Cron, Chain, Gateway, Context, Image, Brain, SessionsList, SessionsSend, SessionsSpawn, SessionsCancel (auto-enabled with SessionsSpawn), SessionStatus, google_workspace
+
+#### Bash Command Denylist
+
+The Bash tool checks each command against a denylist before it runs. These keys live under `tools.sandbox`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `command_denylist` | built-in list (`DefaultCommandDenylist` in `internal/tools/exec.go`) | Entries to block. A non-empty list **replaces** the built-in list; it does not add to it. |
+| `denylist_mode` | `"legacy"` | `"legacy"` matches each entry as a case-insensitive substring anywhere in the command. `"command_position"` matches entries only against commands the shell would actually run, so quoted text, heredoc bodies and ordinary arguments no longer cause false positives. An unknown value falls back to `"legacy"` and logs a warning. |
+| `strict_autonomous` | `true` | Only used with `"command_position"`. When true, sessions with no human in the loop (heartbeat, cron, sub-agents, wakes, non-interactive turns) also get the legacy substring check. |
+
+To opt in:
+
+```json
+{ "tools": { "sandbox": { "denylist_mode": "command_position", "strict_autonomous": true } } }
+```
+
+The config is read at startup, so restart the gateway after changing it. For the matching rules and their limits, see [security.md](security.md#bash-command-policy-conduit-23hg).
 
 #### Google Workspace Tool
 
@@ -485,7 +613,7 @@ Agent heartbeat for automated tasks. See [agent-heartbeat.md](agent-heartbeat.md
 }
 ```
 
-`alert_queue_path` is deprecated (still accepted, warns at load; see [agent-heartbeat.md](agent-heartbeat.md)). `alert_retry_policy` drives background retries of failed heartbeat deliveries.
+`alert_queue_path` is deprecated (still accepted, warns at load; see [agent-heartbeat.md](agent-heartbeat.md)). `alert_targets[].type` accepts `telegram`, `webhook` and `mqtt`; `email` and `slack` were removed because no deliverer exists for them (email/SMTP is tracked separately) — existing configs that use them still load, with a one-time warning, and those targets are ignored. `alert_retry_policy` drives background retries of failed heartbeat deliveries.
 
 ### Skills
 
@@ -766,11 +894,12 @@ Multi-cluster Kubernetes configuration for the K8s tool. Kubeconfig paths suppor
 | `clusters` | array | `[]` | Cluster configurations |
 | `defaults.namespace` | string | `"default"` | Default namespace |
 | `defaults.safety_level` | string | `"read"` | Default safety level |
+| `require_approval` | array | `["dangerous"]` | Tiers whose operations need a human `YES <code>` reply in the originating chat before running; non-interactive turns fail closed. `[]` disables |
 
 **Safety Levels:**
-- `read` — get, list, describe, logs, watch, events, top, clusters, namespaces (auto-approved)
-- `modify` — scale, rollout, label, annotate, cordon, uncordon (recommended confirmation)
-- `dangerous` — delete, apply, create, edit, drain, exec, patch (requires approval)
+- `read` — get, list, describe, logs, watch, events, top, clusters, namespaces
+- `modify` — scale, rollout, label, annotate, cordon, uncordon
+- `dangerous` — delete, apply, create, edit, drain, exec, patch (requires approval by default)
 
 See [Kubernetes Integration](kubernetes.md) for full tool documentation.
 

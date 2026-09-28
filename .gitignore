@@ -71,10 +71,9 @@ temp/
 .air.toml
 tmp-air/
 
-# Docker files
+# Docker files (.dockerignore is tracked: it scopes the Containerfile build context)
 Dockerfile
 docker-compose.yml
-.dockerignore
 
 # Deployment scripts (keep deploy/ tracked)
 scripts/deploy.*

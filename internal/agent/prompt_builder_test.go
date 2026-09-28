@@ -109,6 +109,18 @@ func TestBuildToolingSection_NamesOnly(t *testing.T) {
 	}
 }
 
+// conduit-3a4v: finished sub-agents wake the parent automatically, so the
+// prompt must not tell the model to poll SessionStatus for results.
+func TestBuildToolingSection_SpawnDoesNotInstructPolling(t *testing.T) {
+	section := newTestPromptBuilder().buildToolingSection()
+	if strings.Contains(section, "via SessionStatus") || strings.Contains(section, "poll SessionStatus to") {
+		t.Errorf("Tooling section still instructs polling SessionStatus:\n%s", section)
+	}
+	if !strings.Contains(section, "arrives automatically") {
+		t.Errorf("Tooling section should say sub-agent results arrive automatically:\n%s", section)
+	}
+}
+
 func TestBuildToolingSection_SkillToolsCompressed(t *testing.T) {
 	tools := append(newTestPromptBuilder().tools, ai.Tool{
 		Name:        "skill_solar",

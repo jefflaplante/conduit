@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -95,7 +94,9 @@ func init() {
 	// honoured by the server and by the token/pairing CLIs.
 	rootCmd.PersistentFlags().StringVar(&dbPath, "database", "", "database file path (default: database.path from --config)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose logging")
-	rootCmd.PersistentFlags().String("pidfile", "", "path to PID file (default: /tmp/conduit.pid)")
+	rootCmd.PersistentFlags().String("pidfile", "",
+		"path to PID file (default: $RUNTIME_DIRECTORY/conduit.pid, else {data_dir}/conduit.pid; "+
+			"CLI commands also search /run/conduit and /tmp)")
 
 	// Server command flags
 	serverCmd.Flags().IntVarP(&port, "port", "p", 18789, "WebSocket server port")
@@ -221,9 +222,10 @@ func runServer() error {
 		return fmt.Errorf("failed to create gateway: %w", err)
 	}
 
-	// Write pidfile
-	pidPath := resolvePidfilePath()
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+	// Write pidfile (conduit-1qcg: $RUNTIME_DIRECTORY or {data_dir}, not /tmp,
+	// so CLI stop/status/restore can see it despite PrivateTmp=true).
+	pidPath := serverPidfilePath(cfg)
+	if err := writePidfile(pidPath); err != nil {
 		log.Printf("Warning: failed to write pidfile %s: %v", pidPath, err)
 	} else {
 		defer os.Remove(pidPath)

@@ -549,7 +549,7 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 
 	case text == "/stop":
 		// conduit-31jg.23: running turn + queued turns (TurnRunner.Stop).
-		resp, _ := stopResponse(c.turns.Stop(sessionKey))
+		resp, _ := stopResponse(c.turns.StopTree(sessionKey)) // conduit-31jg.84: + sub-agents
 		sendResponse(resp)
 
 	default:

@@ -97,7 +97,7 @@ func NewSSHTool(services *types.ToolServices, cfg *config.RemoteSSHConfig) (*SSH
 	}
 
 	// Create security engine
-	securityEngine, err := NewSecurityEngine(cfg.Security)
+	securityEngine, err := NewSecurityEngine(effectiveSecurityConfig(cfg.Security)) // conduit-w3l7
 	if err != nil {
 		return nil, fmt.Errorf("failed to create security engine: %w", err)
 	}
@@ -398,23 +398,21 @@ func (t *SSHTool) executeCommand(ctx context.Context, args map[string]interface{
 		}, nil
 	}
 
-	// Check if approval is required (for dangerous tier)
+	// conduit-w3l7: approval-tier commands are frozen and run only after a
+	// human "YES <code>" reply; non-interactive turns fail closed.
 	if classification.RequiresApproval {
-		// For now, we'll include approval requirement in the response
-		// The approval workflow will be implemented in a later phase
-		return &types.ToolResult{
-			Success: false,
-			Error:   fmt.Sprintf("command requires approval (tier: %s)", classification.Tier),
-			Data: map[string]interface{}{
-				"tier":              string(classification.Tier),
-				"reason":            classification.Reason,
-				"base_cmd":          classification.BaseCommand,
-				"requires_approval": true,
-				"warnings":          classification.Warnings,
-			},
-		}, nil
+		return t.gate(ctx, t.execOperation(host, command, timeout, classification),
+			func(ctx context.Context) (*types.ToolResult, error) {
+				return t.runCommand(ctx, host, command, timeout, classification, approvedBy)
+			})
 	}
 
+	return t.runCommand(ctx, host, command, timeout, classification, "")
+}
+
+// runCommand executes an authorized command on host. approver is recorded in
+// the audit log ("" when no human approval was required).
+func (t *SSHTool) runCommand(ctx context.Context, host, command string, timeout int, classification *ClassificationResult, approver string) (*types.ToolResult, error) {
 	// Check if client is available
 	if t.client == nil {
 		// Return classification info when client is not available (for testing/development)
@@ -445,6 +443,7 @@ func (t *SSHTool) executeCommand(ctx context.Context, args map[string]interface{
 				Command:      command,
 				SecurityTier: string(classification.Tier),
 				Approved:     true, // Command was approved by security check
+				ApprovedBy:   approver,
 				ExitCode:     -1,
 				Duration:     "0s",
 				Error:        err.Error(),
@@ -469,6 +468,7 @@ func (t *SSHTool) executeCommand(ctx context.Context, args map[string]interface{
 			Command:      result.Command,
 			SecurityTier: string(classification.Tier),
 			Approved:     true, // Command was approved by security check
+			ApprovedBy:   approver,
 			ExitCode:     result.ExitCode,
 			Duration:     result.Duration.String(),
 			Stdout:       result.Stdout,
@@ -583,22 +583,6 @@ func (t *SSHTool) executeGroupCommand(ctx context.Context, args map[string]inter
 		}, nil
 	}
 
-	// Check if approval is required
-	if classification.RequiresApproval {
-		return &types.ToolResult{
-			Success: false,
-			Error:   fmt.Sprintf("command requires approval (tier: %s)", classification.Tier),
-			Data: map[string]interface{}{
-				"group":             groupName,
-				"tier":              string(classification.Tier),
-				"reason":            classification.Reason,
-				"base_cmd":          classification.BaseCommand,
-				"requires_approval": true,
-				"warnings":          classification.Warnings,
-			},
-		}, nil
-	}
-
 	// Determine max parallel from: parameter > group config > default
 	if maxParallel == 0 && groupConfig != nil && groupConfig.MaxParallel > 0 {
 		maxParallel = groupConfig.MaxParallel
@@ -610,14 +594,28 @@ func (t *SSHTool) executeGroupCommand(ctx context.Context, args map[string]inter
 		}
 	}
 
-	// Create fan-out executor with specified max parallel
-	executor := NewFanoutExecutor(t.pool, maxParallel)
-
 	// Extract host names
 	hostNames := make([]string, len(hosts))
 	for i, host := range hosts {
 		hostNames[i] = host.Name
 	}
+
+	// conduit-w3l7: gate on the resolved host list, so an approval covers
+	// exactly these hosts even if group membership changes before approval.
+	if classification.RequiresApproval {
+		return t.gate(ctx, t.groupOperation(groupName, hostNames, command, timeout, maxParallel, classification),
+			func(ctx context.Context) (*types.ToolResult, error) {
+				return t.runGroupCommand(ctx, groupName, hostNames, command, timeout, maxParallel, classification, approvedBy)
+			})
+	}
+
+	return t.runGroupCommand(ctx, groupName, hostNames, command, timeout, maxParallel, classification, "")
+}
+
+// runGroupCommand fans an authorized command out to hostNames.
+func (t *SSHTool) runGroupCommand(ctx context.Context, groupName string, hostNames []string, command string, timeout, maxParallel int, classification *ClassificationResult, approver string) (*types.ToolResult, error) {
+	// Create fan-out executor with specified max parallel
+	executor := NewFanoutExecutor(t.pool, maxParallel)
 
 	// Execute on all hosts
 	execTimeout := time.Duration(timeout) * time.Second
@@ -631,6 +629,7 @@ func (t *SSHTool) executeGroupCommand(ctx context.Context, args map[string]inter
 				Command:      command,
 				SecurityTier: string(classification.Tier),
 				Approved:     true,
+				ApprovedBy:   approver,
 				ExitCode:     result.ExitCode,
 				Duration:     result.Duration.String(),
 				Stdout:       result.Stdout,
@@ -761,7 +760,7 @@ func (t *SSHTool) getStatus(ctx context.Context, args map[string]interface{}) (*
 	// Security configuration summary
 	content.WriteString("Security Configuration:\n")
 	content.WriteString(fmt.Sprintf("  Default tier: %s\n", t.config.Security.DefaultTier))
-	content.WriteString(fmt.Sprintf("  Require approval: %v\n", t.config.Security.RequireApproval))
+	content.WriteString(fmt.Sprintf("  Require approval: %v\n", t.securityEngine.config.RequireApproval))
 	content.WriteString(fmt.Sprintf("  Allow subshells: %v\n", t.config.Security.AllowSubshells))
 	content.WriteString(fmt.Sprintf("  Allow pipes: %v\n", t.config.Security.AllowPipes))
 
@@ -769,7 +768,7 @@ func (t *SSHTool) getStatus(ctx context.Context, args map[string]interface{}) (*
 		"enabled": t.config.Enabled,
 		"security": map[string]interface{}{
 			"default_tier":     t.config.Security.DefaultTier,
-			"require_approval": t.config.Security.RequireApproval,
+			"require_approval": t.securityEngine.config.RequireApproval,
 			"allow_subshells":  t.config.Security.AllowSubshells,
 			"allow_pipes":      t.config.Security.AllowPipes,
 		},
@@ -940,21 +939,28 @@ func (t *SSHTool) sessionSend(ctx context.Context, args map[string]interface{}) 
 		}, nil
 	}
 
-	// Check if approval is required
+	// conduit-w3l7: approval-tier commands are frozen (session + host +
+	// command) and run only after a human "YES <code>" reply.
 	if classification.RequiresApproval {
-		return &types.ToolResult{
-			Success: false,
-			Error:   fmt.Sprintf("command requires approval (tier: %s)", classification.Tier),
-			Data: map[string]interface{}{
-				"tier":              string(classification.Tier),
-				"reason":            classification.Reason,
-				"base_cmd":          classification.BaseCommand,
-				"requires_approval": true,
-				"session_id":        sessionID,
-			},
-		}, nil
+		host := sessionInfo.Host
+		return t.gate(ctx, t.sessionOperation(sessionID, host, command, timeout, classification),
+			func(context.Context) (*types.ToolResult, error) {
+				current, err := t.sessionManager.GetSession(sessionID)
+				if err != nil {
+					return &types.ToolResult{Success: false, Error: fmt.Sprintf("session %s is gone; nothing was run", sessionID)}, nil
+				}
+				if current.Host != host {
+					return &types.ToolResult{Success: false, Error: fmt.Sprintf("session %s now points at %s, not the approved host %s; nothing was run", sessionID, current.Host, host)}, nil
+				}
+				return t.runSessionCommand(sessionID, current, command, timeout, classification, approvedBy)
+			})
 	}
 
+	return t.runSessionCommand(sessionID, sessionInfo, command, timeout, classification, "")
+}
+
+// runSessionCommand sends an authorized command to a persistent session.
+func (t *SSHTool) runSessionCommand(sessionID string, sessionInfo *SessionInfo, command string, timeout int, classification *ClassificationResult, approver string) (*types.ToolResult, error) {
 	// Send the command
 	execTimeout := time.Duration(timeout) * time.Second
 	output, err := t.sessionManager.SendCommand(sessionID, command, execTimeout)
@@ -967,6 +973,7 @@ func (t *SSHTool) sessionSend(ctx context.Context, args map[string]interface{}) 
 				Command:      command,
 				SecurityTier: string(classification.Tier),
 				Approved:     true, // Command was approved by security check
+				ApprovedBy:   approver,
 				ExitCode:     -1,
 				Duration:     "0s",
 				Error:        err.Error(),
@@ -991,6 +998,7 @@ func (t *SSHTool) sessionSend(ctx context.Context, args map[string]interface{}) 
 			Command:      command,
 			SecurityTier: string(classification.Tier),
 			Approved:     true, // Command was approved by security check
+			ApprovedBy:   approver,
 			ExitCode:     output.ExitCode,
 			Duration:     output.Duration.String(),
 			Stdout:       output.Stdout,
@@ -1411,18 +1419,28 @@ func (t *SSHTool) scpUpload(ctx context.Context, args map[string]interface{}) (*
 	classification := t.securityEngine.ClassifyCommand(fmt.Sprintf("scp upload to %s", remotePath))
 	classification.Tier = TierModify // Override to ensure uploads are modify-tier
 
-	// Check if approval is required
+	// conduit-w3l7: gated uploads are frozen (host, resolved local path,
+	// remote path) and run only after a human "YES <code>" reply.
 	if classification.RequiresApproval {
-		return &types.ToolResult{
-			Success: false,
-			Error:   fmt.Sprintf("SCP upload requires approval (tier: %s)", classification.Tier),
-			Data: map[string]interface{}{
-				"tier":              string(classification.Tier),
-				"requires_approval": true,
-			},
-		}, nil
+		size := localInfo.Size()
+		return t.gate(ctx, t.uploadOperation(host, localPath, resolvedLocal, remotePath, size, classification),
+			func(context.Context) (*types.ToolResult, error) {
+				info, err := os.Stat(resolvedLocal)
+				if err != nil || info.IsDir() {
+					return &types.ToolResult{Success: false, Error: fmt.Sprintf("local file %s is no longer a readable file; nothing was uploaded", localPath)}, nil
+				}
+				if info.Size() != size {
+					return &types.ToolResult{Success: false, Error: fmt.Sprintf("local file %s changed size since approval (%d -> %d bytes); nothing was uploaded", localPath, size, info.Size())}, nil
+				}
+				return t.runUpload(host, localPath, resolvedLocal, remotePath, info)
+			})
 	}
 
+	return t.runUpload(host, localPath, resolvedLocal, remotePath, localInfo)
+}
+
+// runUpload performs an authorized SCP upload.
+func (t *SSHTool) runUpload(host, localPath, resolvedLocal, remotePath string, localInfo os.FileInfo) (*types.ToolResult, error) {
 	// Get SSH client for the host
 	sshClient, err := t.getSSHClientForHost(host)
 	if err != nil {
@@ -2193,7 +2211,7 @@ func (t *SSHTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *ty
 		securityDep.Status = "active"
 		securityDep.Message = fmt.Sprintf("default tier: %s, approval: %v, subshells: %v, pipes: %v",
 			t.config.Security.DefaultTier,
-			t.config.Security.RequireApproval,
+			t.securityEngine.config.RequireApproval,
 			t.config.Security.AllowSubshells,
 			t.config.Security.AllowPipes)
 	}
@@ -2307,7 +2325,7 @@ func (t *SSHTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *ty
 			"hosts":         hostDetails,
 			"security": map[string]interface{}{
 				"default_tier":     t.config.Security.DefaultTier,
-				"require_approval": t.config.Security.RequireApproval,
+				"require_approval": t.securityEngine.config.RequireApproval,
 				"allow_subshells":  t.config.Security.AllowSubshells,
 				"allow_pipes":      t.config.Security.AllowPipes,
 			},

@@ -522,7 +522,7 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 
 	case text == "/stop":
 		// conduit-31jg.23: running turn + queued turns (TurnRunner.Stop).
-		resp, _ := stopResponse(g.turns().Stop(sessionKey))
+		resp, _ := stopResponse(g.turns().StopTree(sessionKey)) // conduit-31jg.84: + sub-agents
 		sendResponse(resp)
 
 	case text == "/compact" || strings.HasPrefix(text, "/compact "):

@@ -10,8 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"conduit/internal/config"
-
 	"github.com/spf13/cobra"
 )
 
@@ -28,10 +26,10 @@ func resolveStatusPort(cmd *cobra.Command) int {
 		p, _ := cmd.Flags().GetInt("port")
 		return p
 	}
-	if cfgFile != "" {
-		if cfg, err := config.Load(cfgFile); err == nil && cfg.Port > 0 {
-			return cfg.Port
-		}
+	// loadConfigIfPresent: config.Load would write a default config.json
+	// into the working directory when --config does not exist.
+	if cfg := loadConfigIfPresent(cfgFile); cfg != nil && cfg.Port > 0 {
+		return cfg.Port
 	}
 	return defaultStatusPort
 }
@@ -74,7 +72,7 @@ var restartCmd = &cobra.Command{
 	Short: "Send restart signal to running Conduit process",
 	Long:  "Sends SIGHUP to the running Conduit process, triggering a graceful drain and restart.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		pid, err := readPidfile(resolvePidfilePath())
+		pid, _, err := readGatewayPidfile()
 		if err != nil {
 			return err
 		}
@@ -94,7 +92,7 @@ var stopCmd = &cobra.Command{
 	Short: "Send stop signal to running Conduit process",
 	Long:  "Sends SIGTERM to the running Conduit process, triggering a graceful shutdown.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		pid, err := readPidfile(resolvePidfilePath())
+		pid, _, err := readGatewayPidfile()
 		if err != nil {
 			return err
 		}
@@ -113,19 +111,18 @@ var processStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Check if Conduit is running",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		pidpath := resolvePidfilePath()
-		pid, err := readPidfile(pidpath)
+		pid, pidpath, err := readGatewayPidfile()
 		if err != nil {
-			fmt.Println("Conduit is not running (no pidfile)")
+			fmt.Printf("Conduit is not running (%v)\n", err)
 			os.Exit(1)
 			return nil
 		}
-		if err := syscall.Kill(pid, 0); err != nil {
+		if !processAlive(pid) {
 			fmt.Printf("Conduit is not running (stale pidfile at %s, PID %d)\n", pidpath, pid)
 			os.Exit(1)
 			return nil
 		}
-		fmt.Printf("Conduit is running (PID %d)\n", pid)
+		fmt.Printf("Conduit is running (PID %d, pidfile %s)\n", pid, pidpath)
 
 		statusPort := resolveStatusPort(cmd)
 		client := &http.Client{Timeout: 2 * time.Second}
@@ -162,13 +159,6 @@ func readPidfile(path string) (int, error) {
 		return 0, fmt.Errorf("invalid PID in %s", path)
 	}
 	return pid, nil
-}
-
-func resolvePidfilePath() string {
-	if p, _ := rootCmd.PersistentFlags().GetString("pidfile"); p != "" {
-		return p
-	}
-	return "/tmp/conduit.pid"
 }
 
 func init() {

@@ -1,0 +1,19 @@
+# Build context for Containerfile (docker and podman/buildah both read
+# .dockerignore). Keeps secrets, local state and worktrees out of the image
+# build context. vecgo/ must stay: go.mod replaces it with ./vecgo.
+.git
+.beads
+.claude
+.github
+bin
+coverage.*
+*.db
+*.db-*
+*.sqlite*
+*.env
+.env
+config.json
+config.live.json
+workspace
+logs
+*.log

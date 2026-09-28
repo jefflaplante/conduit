@@ -149,7 +149,7 @@ Hosts belong to a group if they list the group name in their `groups` array or m
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `default_tier` | string | `"dangerous"` | Tier for unclassified commands (must be `dangerous` or `blocked`) |
-| `require_approval` | string[] | `["dangerous", "blocked"]` | Tiers that require human approval |
+| `require_approval` | string[] | `["dangerous", "blocked"]` | Tiers that require human approval (an absent list uses the default; `[]` disables) |
 | `allowed_commands.read` | string[] | ~40 commands | Read-only commands (ls, ps, df, etc.) |
 | `allowed_commands.modify` | string[] | ~15 commands | State-changing commands (touch, mkdir, git, docker, etc.) |
 | `allowed_commands.dangerous` | string[] | ~15 commands | Potentially harmful commands (rm, kill, systemctl, etc.) |
@@ -158,7 +158,7 @@ Hosts belong to a group if they list the group name in their `groups` array or m
 | `allow_subshells` | bool | `false` | Permit `$()` and backtick command substitution |
 | `allow_pipes` | bool | `true` | Permit pipe chains |
 | `max_command_length` | int | `10000` | Maximum command string length |
-| `approval_timeout` | duration | `5m` | How long approval requests remain valid |
+| `approval_timeout` | duration | `5m` | Not yet honored: approvals use the gateway-wide 5 minute TTL |
 
 ### Pool Configuration
 
@@ -399,6 +399,35 @@ Every command is classified by the SecurityEngine before execution. The engine e
 | **blocked** | Never execute (rm -rf /, dd, mkfs, shutdown) | Rejected |
 
 Unknown commands default to the `default_tier` setting, which must be `dangerous` or `blocked` for safety.
+
+### Human Approval
+
+Commands in a `require_approval` tier (`exec`, `exec_group`, `session_send`,
+and gated `scp_upload`) never run inside the tool call (conduit-w3l7). The
+exact operation is frozen (host or resolved host list, session, command,
+timeout) and an approval prompt goes to the owner in the chat the turn came
+from:
+
+```
+APPROVAL NEEDED [K7M2QX]
+Run SSH command on web-1 (deploy@10.0.0.5:22)
+
+Host: web-1 (deploy@10.0.0.5:22)
+Command: systemctl restart nginx
+Timeout: 30s
+Risk: dangerous tier (classified as dangerous command)
+
+Reply "YES K7M2QX" to approve or "NO K7M2QX" to cancel. Expires in 5m0s (14:05:31).
+Only you can approve this; the agent cannot.
+```
+
+The model gets a "NOT RUN YET, awaiting the owner's approval" result; the
+frozen command runs once, only on `YES <code>`, and its output is posted back
+to the chat (audit entries carry `approved_by: "human-approval"`). Turns with
+no live human (cron, heartbeat, sub-agents, MCP) fail closed, as does a
+gateway without an approval channel. Secret-looking values in the command
+(`PASSWORD=...`, `--token ...`, URL passwords, `Authorization:` headers) are
+masked in the prompt; the real command still runs.
 
 ### Classification Flow
 

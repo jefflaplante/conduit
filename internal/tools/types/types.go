@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"conduit/internal/approval"
 	"conduit/internal/config"
 	"conduit/internal/fts"
 	"conduit/internal/sessions"
@@ -431,6 +432,11 @@ type ToolServices struct {
 	Reflection    ReflectionService // Optional SPAR reflection store
 	Vision        VisionAnalyzer    // Optional multimodal image analysis (Anthropic vision, etc.)
 
+	// Approvals gates risky tool operations behind a human "YES <code>"
+	// reply on the originating channel (conduit-c8ct, conduit-w3l7). Nil
+	// means no approval channel: gated operations fail closed.
+	Approvals approval.Requester
+
 	// Schema enhancement
 	SchemaBuilder *schema.Builder // For enhancing tool schemas with discovery data
 
@@ -454,6 +460,7 @@ const (
 	WakeSourceSubAgentAnnounced = "sub_agent_announced" // raw result already posted to channel
 	WakeSourceSubAgentSilent    = "sub_agent_silent"    // raw result NOT posted; parent must decide
 	WakeSourceSubAgentFailed    = "sub_agent_failed"    // sub-agent encountered an error
+	WakeSourceSubAgentCanceled  = "sub_agent_canceled"  // sub-agent canceled via SessionsCancel (conduit-38cz)
 	WakeSourceHeartbeat         = "heartbeat"
 )
 

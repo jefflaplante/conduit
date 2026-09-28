@@ -3,6 +3,7 @@ package gateway
 import (
 	"time"
 
+	"conduit/internal/ai"
 	"conduit/internal/middleware"
 	"conduit/internal/monitoring"
 )
@@ -26,6 +27,11 @@ type FuelGauge struct {
 	// values mean no traffic has been recorded in that window.
 	TokenUsage monitoring.TokenUsageSnapshot `json:"token_usage"`
 
+	// ProviderSlots is the per-provider/model concurrency view
+	// (conduit-38cz): configured limit, calls in flight and calls waiting
+	// for a slot. Unlimited pools appear once used, with limit 0.
+	ProviderSlots []ai.ProviderSlotStats `json:"provider_slots,omitempty"`
+
 	// TakenAt is the time at which the snapshot was assembled.
 	TakenAt time.Time `json:"taken_at"`
 }
@@ -42,8 +48,24 @@ func (f FuelGauge) HasTokenTraffic() bool {
 // forward it over the GatewayService interface without a direct import of
 // the middleware or monitoring packages.
 func (f FuelGauge) ToMap() map[string]interface{} {
+	slots := make([]map[string]interface{}, 0, len(f.ProviderSlots))
+	for _, s := range f.ProviderSlots {
+		slots = append(slots, map[string]interface{}{
+			"provider":        s.Provider,
+			"model":           s.Model,
+			"limit":           s.Limit,
+			"source":          s.Source,
+			"in_flight":       s.InFlight,
+			"waiting":         s.Waiting,
+			"acquired_total":  s.Acquired,
+			"queued_total":    s.Queued,
+			"abandoned_total": s.Abandoned,
+			"max_wait_ms":     s.MaxWaitMs,
+		})
+	}
 	return map[string]interface{}{
-		"taken_at": f.TakenAt,
+		"provider_slots": slots,
+		"taken_at":       f.TakenAt,
 		"rate_limit": map[string]interface{}{
 			"enabled":  f.RateLimit.Enabled,
 			"taken_at": f.RateLimit.TakenAt,
@@ -113,6 +135,10 @@ func (g *Gateway) GetFuelGauge(topN int) FuelGauge {
 		gauge.TokenUsage = g.monitoring.TokenWindow.Snapshot()
 	} else {
 		gauge.TokenUsage = monitoring.TokenUsageSnapshot{TakenAt: now}
+	}
+
+	if g.ai != nil {
+		gauge.ProviderSlots = g.ai.ProviderSlots() // conduit-38cz
 	}
 
 	return gauge

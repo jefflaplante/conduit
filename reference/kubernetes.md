@@ -77,6 +77,7 @@ Show logs from pod web-abc123
 | `clusters` | array | List of cluster configurations |
 | `defaults.namespace` | string | Default namespace when not specified |
 | `defaults.safety_level` | string | Default safety level for clusters |
+| `require_approval` | array | Tiers that need human approval before running (default `["dangerous"]`; `[]` disables) |
 
 ### Cluster Fields
 
@@ -95,10 +96,38 @@ Operations are classified into tiers, similar to the SSH tool:
 
 | Tier | Operations | Behavior |
 |------|------------|----------|
-| **read** | get, list, describe, logs, watch, events, top, clusters, namespaces | Auto-approved |
-| **modify** | scale, rollout, label, annotate, cordon, uncordon | Confirmation recommended |
-| **dangerous** | delete, apply, create, edit, drain, exec, patch | Requires approval |
+| **read** | get, list, describe, logs, watch, events, top, clusters, namespaces | Runs directly |
+| **modify** | scale, rollout, label, annotate, cordon, uncordon | Runs directly |
+| **dangerous** | delete, apply, create, edit, drain, exec, patch | Requires approval (default `require_approval`) |
 | **blocked** | Configurable | Always rejected |
+
+### Human Approval
+
+Operations in a `require_approval` tier never run inside the tool call
+(conduit-c8ct). The exact operation (cluster, namespace, verb, resource,
+arguments) is frozen and an approval prompt is sent to the owner in the chat
+the turn came from (Telegram, TUI, WebSocket):
+
+```
+APPROVAL NEEDED [K7M2QX]
+Kubernetes DELETE deployments/api in namespace prod on cluster prod-us-east
+
+Cluster: prod-us-east
+Namespace: prod
+Verb: delete
+Resource: deployments/api
+Risk: dangerous tier ("delete" is a dangerous operation); action "delete" can cause data loss or service disruption
+
+Reply "YES K7M2QX" to approve or "NO K7M2QX" to cancel. Expires in 5m0s (14:05:31).
+Only you can approve this; the agent cannot.
+```
+
+The model gets a "NOT RUN YET, awaiting the owner's approval" result. The
+frozen operation runs once, only when the owner replies `YES <code>`; the
+outcome is posted back to the chat. Turns with no live human (cron,
+heartbeat, sub-agents, MCP) fail closed, as does a gateway with no approval
+channel. Secret-looking values in arguments (e.g. `DB_PASSWORD=...`,
+`--token ...`) are masked in the prompt; the real values still run.
 
 ### Safety Level Enforcement
 
