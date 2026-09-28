@@ -325,6 +325,14 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Wire up token-aware history config
 	aiRouter.SetHistoryConfig(&cfg.Agent.History)
 
+	// conduit-2lzv: persistent metadata-only LLM call log (JSONL, rotated).
+	if callLog, err := ai.OpenCallLog(cfg.AI.CallLog, cfg.DataDir); err != nil {
+		logger.Warn("LLM call log disabled", "error", err)
+	} else if callLog != nil {
+		aiRouter.SetCallLog(callLog)
+		logger.Info("LLM call log enabled", "path", callLog.Path())
+	}
+
 	logger.Debug("tool execution engine wired up")
 
 	// Initialize MCP server and session mapper if a claude-code provider is configured.

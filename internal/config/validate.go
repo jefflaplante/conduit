@@ -193,8 +193,19 @@ func (c *Config) ValidateSemantic() error {
 	validateRateLimiting(&me, c.RateLimiting)
 	validateToolsList(&me, c.Tools)
 	validateRestartResume(&me, c.RestartResume)
+	validateCallLog(&me, c.AI.CallLog)
 
 	return me.toError()
+}
+
+// validateCallLog rejects negative ai.call_log sizes (conduit-2lzv).
+func validateCallLog(me *multiError, cl CallLogConfig) {
+	if cl.MaxSizeMB < 0 {
+		me.add("ai.call_log.max_size_mb must be >= 0 (got %d)", cl.MaxSizeMB)
+	}
+	if cl.MaxFiles < 0 {
+		me.add("ai.call_log.max_files must be >= 0 (got %d)", cl.MaxFiles)
+	}
 }
 
 // validateRestartResume rejects an unknown restart_resume value (conduit-31jg.88).

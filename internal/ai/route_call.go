@@ -106,8 +106,10 @@ type recoveryOpts struct {
 func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, req *GenerateRequest, opts recoveryOpts) (*GenerateResponse, providerRoute, int64, error) {
 	cur := primary
 	var served GenerateRequest
+	ctx = beginRecoveryCall(ctx) // conduit-2lzv: call-log phase depth0, attempt counter
 	attempt := func(ctx context.Context, rt providerRoute) (*GenerateResponse, int64, error) {
 		areq := *req
+		obs := &callObs{}
 		areq.Model = rt.model
 		trimRequestToFitContext(&areq, r.contextWindowForRoute(rt))
 		start := time.Now()
@@ -115,7 +117,7 @@ func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, re
 		var err error
 		if opts.stream != nil {
 			if sp, ok := rt.provider.(StreamingProvider); ok {
-				resp, err = sp.GenerateResponseStreaming(ctx, &areq, opts.stream.callback())
+				resp, err = sp.GenerateResponseStreaming(ctx, &areq, obs.stream(opts.stream.callback()))
 			} else {
 				// Non-streaming fallback route: the final content still
 				// reaches the client (the gateway delivers the final text).
@@ -126,7 +128,7 @@ func (r *Router) callWithRecovery(ctx context.Context, primary providerRoute, re
 			resp, err = rt.provider.GenerateResponse(ctx, &areq)
 		}
 		latency := time.Since(start).Milliseconds()
-		r.meterCall(rt.name, areq.Model, resp, err, latency) // conduit-31jg.64
+		r.meterCall(ctx, rt.name, areq.Model, resp, err, latency, obs) // conduit-31jg.64
 		if err == nil {
 			served = areq
 		}
@@ -383,7 +385,7 @@ func (g *contextGuardProvider) call(ctx context.Context, name string, p Provider
 		if req != nil {
 			model = req.Model
 		}
-		g.router.meterCall(name, model, resp, err, time.Since(start).Milliseconds())
+		g.router.meterCall(ctx, name, model, resp, err, time.Since(start).Milliseconds(), nil)
 	}
 	return resp, err
 }
@@ -406,6 +408,7 @@ func (g *contextGuardProvider) callTarget(ctx context.Context, t guardTarget, re
 }
 
 func (g *contextGuardProvider) GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+	ctx = beginGuardCall(ctx) // conduit-2lzv: call-log phase + attempt counter
 	g.mu.Lock()
 	sw, swWin := g.switched, g.switchedWin
 	g.mu.Unlock()
@@ -517,13 +520,15 @@ func (g *contextGuardProvider) recoverTimeout(ctx context.Context, cur guardTarg
 // usage tracker, or its tokens (cache included) plus cost. The call's cost
 // is stamped on resp.Usage (CostUSD, Priced/UnpricedCalls) so the turn's
 // Usage.Add sum carries the exact per-call total into the session cost.
-// model "" means the provider's configured default model.
-func (r *Router) meterCall(providerName, model string, resp *GenerateResponse, err error, latencyMs int64) {
+// model "" means the provider's configured default model. It also emits the
+// call's line to the persistent call log (call_log.go, conduit-2lzv).
+func (r *Router) meterCall(ctx context.Context, providerName, model string, resp *GenerateResponse, err error, latencyMs int64, obs *callObs) {
 	if model == "" {
 		r.mu.RLock()
 		model = r.providerMeta[providerName].DefaultModel
 		r.mu.RUnlock()
 	}
+	defer r.logCall(ctx, providerName, model, resp, err, latencyMs, obs) // conduit-2lzv: after cost is stamped
 	if err != nil {
 		if r.usageTracker != nil {
 			r.usageTracker.RecordError(providerName, model)

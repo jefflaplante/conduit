@@ -245,6 +245,70 @@ Keys are bare model IDs or provider-prefixed IDs; values are USD per million tok
 
 **Deprecated: `ai.smart_routing`.** Smart routing was removed (conduit-2avx); it had never been wired, so it was a no-op. The block is still accepted and logs a one-time warning at load. `enabled`, `track_usage` and `cost_budget_daily` are ignored; `smart_routing.pricing_overrides` is still merged into `ai.pricing_overrides` (which wins on conflicts). Move overrides to `ai.pricing_overrides` and delete the block.
 
+### LLM Call Log
+
+A persistent JSONL record of every LLM provider call (conduit-2lzv): one line per call, including each recovery retry, fallback handoff, EmptyGuard retry, length auto-continue, tool-loop depth and side call (vision). It's there so you can diagnose provider incidents (timeouts, fallbacks, stalled sub-agents) after the fact without digging through journalctl.
+
+```json
+{
+  "ai": {
+    "call_log": {
+      "enabled": true,
+      "path": "",
+      "max_size_mb": 20,
+      "max_files": 5
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | The log holds metadata only, so it's on by default. Set `false` to turn it off. |
+| `path` | string | `{data_dir}/logs/llm-calls.jsonl` | Path of the active file. Supports `~` and `${ENV}`. |
+| `max_size_mb` | int | `20` | The active file rotates before it would exceed this size. |
+| `max_files` | int | `5` | Total files kept, active file included: `llm-calls.jsonl`, `.1` … `.4`. The oldest file is deleted. |
+
+The default location is the data dir (`CONDUIT_DATA_DIR`, then `data_dir`, then `~/.conduit`) rather than the workspace. The data dir is gateway-private state (`0700`) that sits next to the auth and restart files, and the agent's file tools don't browse it. Log files are created with mode `0600`.
+
+**Metadata only.** A line never contains prompt text, response text, tool-call arguments or credentials. The record type has no field that could hold them. The error message is scrubbed with `internal/redact` (Telegram tokens and registered secrets), flattened to one line and truncated to 240 characters.
+
+**Non-blocking.** Records go through a 1024-entry buffer to a single writer goroutine. When the buffer is full, the record is dropped and counted. Write and open failures are also counted, and the log retries opening the file every 30s. A provider call is never blocked or failed by the log. On shutdown the log is flushed and closed last in the stop sequence, with at most 2s of the stop budget.
+
+Example line:
+
+```json
+{"ts":"2026-09-28T14:03:11.482Z","session_key":"telegram_42","session_label":"main-chat","agent_kind":"main","channel":"telegram","turn_id":"9f2c41d07a3e","provider":"fallbackprov","model":"fallbackprov/fb-model-x","phase":"depth1","attempt":3,"handed_off":true,"fallback_from":"glm-5.3","streaming":false,"finish_reason":"stop","tool_calls":1,"prompt_tokens":18234,"completion_tokens":412,"total_tokens":18646,"cache_creation_tokens":0,"cache_read_tokens":16000,"cost_usd":0.0071,"priced":true,"latency_ms":8123,"error_class":"none"}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `ts` | Time the call completed (UTC, RFC3339 with milliseconds). |
+| `session_key`, `session_label`, `agent_kind`, `channel` | The turn's session. `agent_kind` is `main` or `subagent`. `channel` is the channel kind (`telegram`, `tui`, `cron`, `subagent`, …). Empty for a side call made outside a turn. |
+| `turn_id`, `request_id` | `turn_id` is one ID per router turn and is shared by every call of that turn. `request_id` is the HTTP/logging request ID, when there is one. |
+| `provider`, `model` | The route that served this call. An empty model resolves to the provider default. |
+| `phase` | Where the call came from: `depth0` is the turn's first call, `depthN` is the Nth tool-loop round, `continue` is a length auto-continue, `empty-guard` is an EmptyGuard retry or failover, and `side-call[:vision]` is a side call. |
+| `attempt` | 1…n within one logical call: the first attempt, then the timeout retry, then quota or timeout handoffs. |
+| `handed_off`, `fallback_from` | `handed_off` is true when the call ran on a route other than the turn's first route. `fallback_from` is that first route's model. |
+| `streaming`, `ttft_ms` | Whether the attempt streamed. `ttft_ms` is the time to the first text delta, present only for streamed attempts that emitted text. |
+| `stop_reason`, `finish_reason`, `tool_calls`, `empty` | Provider stop condition, the number of tool calls (count only) and a flag for a raw-empty response. |
+| `prompt_tokens`, `completion_tokens`, `total_tokens`, `cache_creation_tokens`, `cache_read_tokens` | Token usage. |
+| `cost_usd`, `priced` | Per-call cost. `priced` is false when the model has no known price, and absent on errors. |
+| `latency_ms` | Wall time of the provider call. |
+| `error_class`, `http_status`, `error` | `error_class` is one of `none`, `timeout`, `rate_limit`, `quota`, `auth`, `server`, `context_cancel`, `context_length` or `other`. `error` is the redacted, truncated message. |
+
+Diagnosis recipes:
+
+```bash
+LOG=~/.conduit/logs/llm-calls.jsonl
+# Today's timeouts: count, latency distribution and affected sessions
+jq -c 'select(.error_class=="timeout" and (.ts|startswith("2026-09-28")))' $LOG | jq -s '{count:length, latency_ms:(map(.latency_ms)|sort), sessions:(map(.session_key)|unique)}'
+# Error rate by class
+jq -r .error_class $LOG | sort | uniq -c
+# Every call of one turn, in order
+jq -c 'select(.turn_id=="9f2c41d07a3e") | [.phase,.attempt,.provider,.model,.error_class,.latency_ms]' $LOG
+```
+
 ### Context Compaction
 
 Automatic summarization of long sessions when context usage exceeds a threshold.

@@ -94,6 +94,7 @@ type gatewayConfigSubtree struct {
 // it either has a JSON name IsSecretKey redacts, or is added here after
 // confirming it never holds a credential. conduit-31jg.56
 var reviewedNonSecretFields = map[string]bool{
+	".ai.call_log.path":                                 true, // conduit-2lzv: log file path
 	".ai.compaction.model":                              true,
 	".ai.default_provider":                              true,
 	".ai.model_aliases{}":                               true,

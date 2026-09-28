@@ -89,7 +89,7 @@ func (r *Router) GenerateSideCall(ctx context.Context, providerName string, req 
 	}
 	start := time.Now()
 	resp, err := provider.GenerateResponse(ctx, req)
-	r.meterCall(providerName, model, resp, err, time.Since(start).Milliseconds())
+	r.meterCall(beginSideCall(ctx), providerName, model, resp, err, time.Since(start).Milliseconds(), nil)
 	if err == nil && resp != nil {
 		SideCallLedgerFrom(ctx).add(resp.Usage)
 	}

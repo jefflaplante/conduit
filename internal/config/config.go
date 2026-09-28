@@ -518,6 +518,8 @@ type AIConfig struct {
 	// "openrouter/deepseek/deepseek-v4.1-flash") to per-MTok prices; they win
 	// over the built-in matrix. conduit-31jg.57 (was silently ignored).
 	PricingOverrides map[string]PricingOverride `json:"pricing_overrides,omitempty"`
+	// CallLog is the persistent per-provider-call JSONL log (conduit-2lzv).
+	CallLog CallLogConfig `json:"call_log,omitempty"`
 }
 
 // PromptCachingConfig holds configuration for Anthropic prompt caching.
