@@ -65,7 +65,7 @@ func ContinueLengthTruncated(ctx context.Context, provider Provider, req *Genera
 			ChatMessage{Role: "user", Content: "continue"},
 		)
 		start := time.Now()
-		contResp, contErr := provider.GenerateResponse(ctx, req)
+		contResp, contErr := provider.GenerateResponse(withCallPhase(ctx, "continue"), req) // conduit-2lzv
 		if contErr != nil {
 			log.Printf("[Router] (%s) auto-continue failed: %v — delivering truncated content (conduit-31jg.11)", label, contErr)
 			// Undo the continue prompt: the response we deliver is the

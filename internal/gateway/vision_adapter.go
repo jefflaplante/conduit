@@ -116,7 +116,7 @@ func (a *visionAdapter) AnalyzeImage(ctx context.Context, image []byte, mediaTyp
 	// it (req.Model "" = that provider's configured default), cache tokens
 	// included. Inside a turn the ctx carries the turn's SideCallLedger, so
 	// the cost is added to the turn's request cost and session_total_cost.
-	resp, err := a.router.GenerateSideCall(ctx, a.providerName, req)
+	resp, err := a.router.GenerateSideCall(ai.WithSideCallLabel(ctx, "vision"), a.providerName, req)
 	if err != nil {
 		return "", fmt.Errorf("vision: provider call failed: %w", err)
 	}

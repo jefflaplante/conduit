@@ -313,6 +313,21 @@ func (r *Router) acquireProviderSlot(ctx context.Context, providerName, model st
 	return r.throttle.Acquire(ctx, providerName, model)
 }
 
+// acquireProviderSlotObserved is acquireProviderSlot for the call choke
+// points that also feed the call log (conduit-2lzv): it records the time
+// spent waiting for the slot on obs (queue_wait_ms). Callers take the slot
+// BEFORE starting their latency clock, so latency_ms excludes queue wait.
+// An abandoned wait returns the error before any provider call; the caller
+// returns without metering, so it is neither metered nor logged.
+func (r *Router) acquireProviderSlotObserved(ctx context.Context, providerName, model string, obs *callObs) (func(), error) {
+	t0 := time.Now()
+	release, err := r.acquireProviderSlot(ctx, providerName, model)
+	if obs != nil {
+		obs.queueWait = time.Since(t0)
+	}
+	return release, err
+}
+
 // ProviderSlots returns the throttle pools' in-flight / waiting counts for
 // the fuel gauge and /status.
 func (r *Router) ProviderSlots() []ProviderSlotStats {

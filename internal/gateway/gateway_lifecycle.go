@@ -264,4 +264,9 @@ func (g *Gateway) stopAll(shutdownCtx context.Context, server *http.Server) {
 			g.logger.Error("error closing brain service", "error", err)
 		}
 	}
+
+	// conduit-2lzv: flush the LLM call log last — turns are drained by now.
+	if err := g.ai.CloseCallLog(shutdownCtx); err != nil {
+		g.logger.Warn("LLM call log close", "error", err)
+	}
 }
