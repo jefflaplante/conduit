@@ -299,6 +299,20 @@ func convertREMReport(r *rem.REMReport) *types.REMCycleReport {
 		}
 	}
 
+	// conduit-31jg.87: the Reflect phase ran (it is in the default phases)
+	// but its results were dropped from the rem_cycle tool output.
+	if r.Reflect != nil {
+		result.Reflect = map[string]interface{}{
+			"entries_processed": r.Reflect.EntriesProcessed,
+			"clusters_found":    r.Reflect.ClustersFound,
+			"scores_backfilled": r.Reflect.ScoresBackfilled,
+			"patterns_promoted": r.Reflect.PatternsPromoted,
+		}
+		if len(r.Reflect.PromotedKeys) > 0 {
+			result.Reflect["promoted_keys"] = r.Reflect.PromotedKeys
+		}
+	}
+
 	if r.Consolidation != nil {
 		result.Consolidation = map[string]interface{}{
 			"promoted":         r.Consolidation.Promoted,

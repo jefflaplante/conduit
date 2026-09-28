@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -136,6 +138,36 @@ func TestConvertREMReport_EmptyPhases(t *testing.T) {
 	}
 	if out.Triage != nil {
 		t.Error("expected nil triage when input is nil")
+	}
+	if out.Reflect != nil {
+		t.Error("expected nil reflect when input is nil")
+	}
+}
+
+// TestConvertREMReport_Reflect covers conduit-31jg.87: the Reflect phase
+// result reaches the rem_cycle tool output.
+func TestConvertREMReport_Reflect(t *testing.T) {
+	report := &rem.REMReport{
+		Date: time.Now(),
+		Reflect: &rem.ReflectResult{
+			EntriesProcessed: 12, ClustersFound: 3, ScoresBackfilled: 4,
+			PatternsPromoted: 1, PromotedKeys: []string{"reflect.tools.bash"},
+		},
+	}
+	out := convertREMReport(report)
+	if out.Reflect == nil {
+		t.Fatal("expected reflect section")
+	}
+	want := map[string]interface{}{
+		"entries_processed": 12, "clusters_found": 3, "scores_backfilled": 4,
+		"patterns_promoted": 1, "promoted_keys": []string{"reflect.tools.bash"},
+	}
+	if !reflect.DeepEqual(out.Reflect, want) {
+		t.Errorf("reflect = %v, want %v", out.Reflect, want)
+	}
+	b, _ := json.Marshal(out)
+	if !strings.Contains(string(b), `"reflect":{`) {
+		t.Errorf("reflect missing from JSON: %s", b)
 	}
 }
 
