@@ -72,6 +72,10 @@ func (pf *PortForwarder) Create(client *ClusterClient, pod, namespace string, lo
 	}
 	pf.mu.Unlock()
 
+	if client == nil || client.restConfig == nil {
+		return nil, fmt.Errorf("port forward requires a REST config (cluster client not fully initialized)")
+	}
+
 	ns := namespace
 	if ns == "" {
 		ns = "default"
