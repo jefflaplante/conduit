@@ -20,49 +20,65 @@ func (r *Router) initializeProviders(cfg config.AIConfig) error {
 	}
 
 	// Initialize providers
+	r.providerCfgs = make(map[string]config.ProviderConfig, len(cfg.Providers))
 	for _, providerCfg := range cfg.Providers {
-		var provider Provider
-		var err error
-
-		// conduit-3dru: provider-level prompt_caching overrides the ai-level
-		// block; unset providers inherit it.
-		if providerCfg.PromptCaching == nil && cfg.PromptCaching != (config.PromptCachingConfig{}) {
-			providerCfg.PromptCaching = &cfg.PromptCaching
-		}
-
-		switch providerCfg.Type {
-		case "anthropic":
-			provider, err = NewAnthropicProvider(providerCfg)
-		case "openai":
-			provider, err = NewOpenAIProvider(providerCfg)
-		case "ollama":
-			// Ollama is OpenAI-compatible with sensible defaults
-			if providerCfg.BaseURL == "" {
-				providerCfg.BaseURL = "http://localhost:11434/v1"
-			}
-			provider, err = NewOpenAIProvider(providerCfg)
-		case "claude-code":
-			// Session mapper is nil during init; set later via SetSessionMapper.
-			provider, err = NewClaudeCodeProvider(providerCfg, nil)
-		default:
-			return fmt.Errorf("unsupported provider type: %s", providerCfg.Type)
-		}
-
+		provider, err := newProviderInstance(cfg, providerCfg)
 		if err != nil {
-			return fmt.Errorf("failed to create provider %s: %w", providerCfg.Name, err)
+			return err
 		}
-
 		r.providers[providerCfg.Name] = provider
-		r.providerMeta[providerCfg.Name] = ProviderMeta{
-			Name:          providerCfg.Name,
-			Type:          providerCfg.Type,
-			DefaultModel:  providerCfg.Model,
-			ContextWindow: providerCfg.ContextWindow,
-			FallbackModel: providerCfg.FallbackModel, // bd-6tb
-		}
+		r.providerMeta[providerCfg.Name] = providerMetaFor(providerCfg)
+		r.providerCfgs[providerCfg.Name] = providerCfg
 	}
 
 	return nil
+}
+
+// newProviderInstance builds the Provider for one provider config. ai is
+// the whole AI section, for ai-level defaults the provider inherits.
+func newProviderInstance(ai config.AIConfig, providerCfg config.ProviderConfig) (Provider, error) {
+	var provider Provider
+	var err error
+
+	// conduit-3dru: provider-level prompt_caching overrides the ai-level
+	// block; unset providers inherit it.
+	if providerCfg.PromptCaching == nil && ai.PromptCaching != (config.PromptCachingConfig{}) {
+		pc := ai.PromptCaching
+		providerCfg.PromptCaching = &pc
+	}
+
+	switch providerCfg.Type {
+	case "anthropic":
+		provider, err = NewAnthropicProvider(providerCfg)
+	case "openai":
+		provider, err = NewOpenAIProvider(providerCfg)
+	case "ollama":
+		// Ollama is OpenAI-compatible with sensible defaults
+		if providerCfg.BaseURL == "" {
+			providerCfg.BaseURL = "http://localhost:11434/v1"
+		}
+		provider, err = NewOpenAIProvider(providerCfg)
+	case "claude-code":
+		// Session mapper is nil during init; set later via SetSessionMapper.
+		provider, err = NewClaudeCodeProvider(providerCfg, nil)
+	default:
+		return nil, fmt.Errorf("unsupported provider type: %s", providerCfg.Type)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to create provider %s: %w", providerCfg.Name, err)
+	}
+	return provider, nil
+}
+
+// providerMetaFor derives the router metadata for a provider config.
+func providerMetaFor(providerCfg config.ProviderConfig) ProviderMeta {
+	return ProviderMeta{
+		Name:          providerCfg.Name,
+		Type:          providerCfg.Type,
+		DefaultModel:  providerCfg.Model,
+		ContextWindow: providerCfg.ContextWindow,
+		FallbackModel: providerCfg.FallbackModel, // bd-6tb
+	}
 }
 
 // RegisterProvider adds a provider to the router (useful for testing with mocks)

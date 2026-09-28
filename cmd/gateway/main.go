@@ -221,6 +221,8 @@ func runServer() error {
 	if err != nil {
 		return fmt.Errorf("failed to create gateway: %w", err)
 	}
+	// conduit-rmho: the Gateway tool's update_config edits this file.
+	gw.SetConfigPath(cfgFile)
 
 	// Write pidfile (conduit-1qcg: $RUNTIME_DIRECTORY or {data_dir}, not /tmp,
 	// so CLI stop/status/restore can see it despite PrivateTmp=true).

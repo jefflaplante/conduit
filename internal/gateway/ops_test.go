@@ -295,10 +295,10 @@ func TestGetConfiguration(t *testing.T) {
 	}
 }
 
-func TestUpdateConfiguration_NotImplemented(t *testing.T) {
+func TestUpdateConfiguration_NoConfigPath(t *testing.T) {
 	gw := &Gateway{}
-	if err := gw.UpdateConfiguration(context.Background(), map[string]interface{}{}); err == nil {
-		t.Error("expected 'not implemented' error")
+	if err := gw.UpdateConfiguration(context.Background(), map[string]interface{}{"port": 18800.0}); err == nil {
+		t.Error("expected an error: the gateway has no config file to update (conduit-rmho)")
 	}
 }
 

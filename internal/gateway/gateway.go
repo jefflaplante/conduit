@@ -124,6 +124,10 @@ type Gateway struct {
 	// Human-in-the-loop approvals for risky tool actions (conduit-31jg.43).
 	approvals *approval.Manager
 
+	// Live config reload state for update_config (conduit-rmho); see
+	// config_reload.go. Read the effective config via currentConfig().
+	reload configReloader
+
 	// Shared turn pipeline (conduit-31jg.35); built lazily by turns().
 	turnRunnerOnce sync.Once
 	turnRunner     *TurnRunner
