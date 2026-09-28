@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -60,10 +61,44 @@ func NewWebSocketAuthenticator(storage *auth.TokenStorage, loggers ...*slog.Logg
 	}
 }
 
+// wsAuthResultKey is the context key under which Wrap stores the
+// WebSocketAuthResult for the request.
+type wsAuthResultKey struct{}
+
+// Wrap authenticates the /ws upgrade request once, up front, and passes it
+// on with the result in its context (conduit-31jg.85). On success it also
+// sets AuthContextKey — the same context the HTTP AuthMiddleware sets — so a
+// RateLimitMiddleware.Wrap placed after it applies the authenticated
+// (per-client) tier instead of the anonymous (per-IP) one.
+//
+// Wrap never rejects: failures pass through unauthenticated, and the handler
+// rejects them via Authenticate (which returns the stored result, so the
+// token is validated only once) + RejectUpgrade. Their 401/403 still reaches
+// WrapPreAuth and charges the per-IP auth-failure budget.
+func (a *WebSocketAuthenticator) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result := a.authenticate(r)
+		ctx := context.WithValue(r.Context(), wsAuthResultKey{}, &result)
+		if result.Authenticated && result.AuthInfo != nil {
+			ctx = context.WithValue(ctx, AuthContextKey, result.AuthInfo)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // Authenticate validates a WebSocket upgrade request
 // This should be called before upgrading the connection
-// Returns auth result with protocol to echo if using subprotocol auth
+// Returns auth result with protocol to echo if using subprotocol auth.
+// If the request already went through Wrap, the stored result is returned
+// without validating the token again.
 func (a *WebSocketAuthenticator) Authenticate(r *http.Request) WebSocketAuthResult {
+	if res, ok := r.Context().Value(wsAuthResultKey{}).(*WebSocketAuthResult); ok && res != nil {
+		return *res
+	}
+	return a.authenticate(r)
+}
+
+func (a *WebSocketAuthenticator) authenticate(r *http.Request) WebSocketAuthResult {
 	// Extract token from request (supports all sources including WS subprotocol)
 	extracted := a.extractor.Extract(r)
 

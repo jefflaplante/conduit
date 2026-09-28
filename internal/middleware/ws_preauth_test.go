@@ -40,7 +40,7 @@ func newWSTestServer(t *testing.T, anonMax int) (*httptest.Server, *auth.TokenSt
 		}
 		_ = conn.Close()
 	})
-	srv := httptest.NewServer(rl.WrapWebSocket(h))
+	srv := httptest.NewServer(rl.WrapWebSocket(wsAuth, h))
 	t.Cleanup(srv.Close)
 	return srv, storage, rl
 }
@@ -97,5 +97,72 @@ func TestWebSocket_ValidTokenUpgradesThroughPreAuth(t *testing.T) {
 	}
 	if used, _, _, _ := rl.authFailLimiter.PeekIdentifier("127.0.0.1"); used != 0 {
 		t.Fatalf("successful upgrades charged the auth-failure budget: used=%d", used)
+	}
+}
+
+// conduit-31jg.85: a valid /ws client is limited per client at the
+// authenticated tier, not per IP at the anonymous tier.
+func TestWebSocket_AuthenticatedClientGetsAuthenticatedTier(t *testing.T) {
+	srv, storage, rl := newWSTestServer(t, 3) // anonymous 3/min, authenticated 50/min
+	tok := createTestToken(t, storage, "owner", nil)
+	const dials = 10 // well past the anonymous limit
+	for i := 0; i < dials; i++ {
+		if code := dialWS(t, srv, tok); code != http.StatusSwitchingProtocols {
+			t.Fatalf("dial %d: status %d, want 101 (authenticated tier)", i, code)
+		}
+	}
+	if used, _, _, _ := rl.authenticatedLimiter.PeekIdentifier("owner"); used != dials {
+		t.Errorf("authenticated limiter used=%d for client, want %d", used, dials)
+	}
+	if used, _, _, _ := rl.anonymousLimiter.PeekIdentifier("127.0.0.1"); used != 0 {
+		t.Errorf("anonymous limiter charged for authenticated client: used=%d", used)
+	}
+}
+
+// Unauthenticated /ws requests stay on the anonymous (per-IP) tier and
+// still charge the pre-auth failure budget.
+func TestWebSocket_UnauthenticatedClientGetsAnonymousTier(t *testing.T) {
+	srv, _, rl := newWSTestServer(t, 5)
+	for i := 0; i < 2; i++ {
+		if code := dialWS(t, srv, ""); code != http.StatusUnauthorized {
+			t.Fatalf("dial %d: status %d, want 401", i, code)
+		}
+	}
+	if used, _, _, _ := rl.anonymousLimiter.PeekIdentifier("127.0.0.1"); used != 2 {
+		t.Errorf("anonymous limiter used=%d, want 2", used)
+	}
+	if used, _, _, _ := rl.authFailLimiter.PeekIdentifier("127.0.0.1"); used != 2 {
+		t.Errorf("auth-failure budget used=%d, want 2", used)
+	}
+}
+
+// A request that went through WebSocketAuthenticator.Wrap carries the HTTP
+// auth context, and Authenticate reuses the stored result (no second token
+// validation: deleting the token after Wrap must not change the outcome).
+func TestWebSocketAuthenticator_WrapSetsAuthContext(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	t.Cleanup(cleanup)
+	storage := auth.NewTokenStorage(db, "test-secret")
+	tok := createTestToken(t, storage, "owner", nil)
+	wsAuth := NewWebSocketAuthenticator(storage)
+
+	var ctxInfo *AuthInfo
+	var res WebSocketAuthResult
+	h := wsAuth.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctxInfo = GetAuthInfo(r.Context())
+		if _, err := db.Exec(`DELETE FROM auth_tokens`); err != nil {
+			t.Fatal(err)
+		}
+		res = wsAuth.Authenticate(r)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if ctxInfo == nil || ctxInfo.ClientName != "owner" {
+		t.Fatalf("auth context not set: %+v", ctxInfo)
+	}
+	if !res.Authenticated || res.AuthInfo != ctxInfo {
+		t.Fatalf("Authenticate did not reuse the Wrap result: %+v", res)
 	}
 }

@@ -72,7 +72,9 @@ func (g *Gateway) buildHTTPServer() *http.Server {
 	// WebSocket endpoint with custom authentication and rate limiting.
 	// conduit-31jg.73: pre-auth IP limiter too, so /ws auth failures (401/403
 	// before upgrade) charge the per-IP auth-failure budget.
-	mux.Handle("/ws", g.rateLimitMiddleware.WrapWebSocket(http.HandlerFunc(g.handleWebSocket)))
+	// conduit-31jg.85: WS auth runs before the per-client limiter so valid
+	// clients get the authenticated tier; handleWebSocket reuses its result.
+	mux.Handle("/ws", g.rateLimitMiddleware.WrapWebSocket(g.auth.WSAuthenticator, http.HandlerFunc(g.handleWebSocket)))
 
 	// Protected API endpoints - wrapped with auth middleware and rate limiting.
 	// Order (see protect): pre-auth IP limiter, auth (sets context),
