@@ -87,8 +87,10 @@ func (r *Router) GenerateSideCall(ctx context.Context, providerName string, req 
 	if req != nil {
 		model = req.Model
 	}
-	obs := &callObs{}                                                             // conduit-2lzv: queue_wait_ms
-	release, werr := r.acquireProviderSlotObserved(ctx, providerName, model, obs) // conduit-38cz
+	obs := &callObs{} // conduit-2lzv: queue_wait_ms
+	// conduit-38cz; the side-call scope gives an abandoned wait's queue_*
+	// record the side-call phase (conduit-3j08).
+	release, werr := r.acquireProviderSlotObserved(beginSideCall(ctx), providerName, model, obs)
 	if werr != nil {
 		return nil, werr
 	}
