@@ -709,6 +709,7 @@ func (t *SessionStatusTool) formatSessionStatus(status map[string]interface{}) s
 				builder.WriteString("  Rate limit: disabled\n")
 			}
 		}
+		builder.WriteString(formatProviderSlots(gauge)) // conduit-38cz
 	}
 
 	// Context info

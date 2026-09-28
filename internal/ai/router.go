@@ -51,6 +51,8 @@ type Router struct {
 
 	pricingResolver *PricingResolver // conduit-31jg.57
 
+	throttle *ProviderThrottle // per-provider/model concurrency slots (conduit-38cz)
+
 	// Per-session turn serialization: prevents concurrent LLM turns on the
 	// same session (e.g., a normal user message and an inter-session wake
 	// firing at the same time). Keys are session.Key; values are
@@ -489,6 +491,8 @@ func (r *Router) TurnCost(provider, model string, u Usage) (cost float64, priced
 
 // initializeProviders sets up AI providers
 func (r *Router) initializeProviders(cfg config.AIConfig) error {
+	r.throttle = NewProviderThrottle(cfg.Providers) // conduit-38cz
+
 	// Allow empty provider configs for testing
 	// The router will still be valid but GenerateResponse will fail if no providers exist
 	if len(cfg.Providers) == 0 {

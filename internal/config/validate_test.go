@@ -478,3 +478,18 @@ func TestValidateSemantic_RestartResume(t *testing.T) {
 		t.Errorf("nil config mode = %q", got)
 	}
 }
+
+// conduit-38cz: concurrency caps must be >= 0 (0 = unlimited).
+func TestValidateSemantic_ProviderConcurrency(t *testing.T) {
+	cfg := minimalValidConfig()
+	cfg.AI.Providers[0].MaxConcurrent = 5
+	cfg.AI.Providers[0].ModelMaxConcurrent = map[string]int{"glm-5.3": 5, "glm-5.3-flash": 0}
+	if err := cfg.ValidateSemantic(); err != nil {
+		t.Fatalf("valid caps rejected: %v", err)
+	}
+	cfg.AI.Providers[0].MaxConcurrent = -1
+	assertSemanticError(t, cfg, "max_concurrent must be >= 0")
+	cfg.AI.Providers[0].MaxConcurrent = 0
+	cfg.AI.Providers[0].ModelMaxConcurrent["glm-5.3"] = -2
+	assertSemanticError(t, cfg, "model_max_concurrent")
+}

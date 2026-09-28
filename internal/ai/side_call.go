@@ -87,6 +87,11 @@ func (r *Router) GenerateSideCall(ctx context.Context, providerName string, req 
 	if req != nil {
 		model = req.Model
 	}
+	release, werr := r.acquireProviderSlot(ctx, providerName, model) // conduit-38cz
+	if werr != nil {
+		return nil, werr
+	}
+	defer release()
 	start := time.Now()
 	resp, err := provider.GenerateResponse(ctx, req)
 	r.meterCall(providerName, model, resp, err, time.Since(start).Milliseconds())

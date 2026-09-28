@@ -4,9 +4,37 @@ import (
 	"context"
 	"testing"
 
+	"conduit/internal/ai"
+	"conduit/internal/config"
 	"conduit/internal/middleware"
 	"conduit/internal/monitoring"
 )
+
+// conduit-38cz: the fuel gauge shows per-provider/model concurrency slots.
+func TestGetFuelGauge_ExposesProviderSlots(t *testing.T) {
+	gw, _ := newTestGatewayWithSessions(t)
+	router, err := ai.NewRouter(config.AIConfig{DefaultProvider: "z-ai", Providers: []config.ProviderConfig{
+		{Name: "z-ai", Type: "openai", Model: "glm-5.3-flash", APIKey: "x", BaseURL: "http://127.0.0.1:1"},
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router.RegisterProvider("z-ai", ai.NewMockProvider("z-ai"))
+	gw.ai = router
+	if _, err := router.GenerateSideCall(context.Background(), "z-ai", &ai.GenerateRequest{Model: "z-ai/glm-5.3"}); err != nil {
+		t.Fatal(err)
+	}
+	slots := gw.GetFuelGauge(0).ProviderSlots
+	if len(slots) != 1 || slots[0].Provider != "z-ai" || slots[0].Model != "glm-5.3" || slots[0].Limit != 5 ||
+		slots[0].InFlight != 0 || slots[0].Acquired != 1 {
+		t.Fatalf("provider slots = %+v", slots)
+	}
+	m := gw.GetFuelGauge(0).ToMap()
+	ps, ok := m["provider_slots"].([]map[string]interface{})
+	if !ok || len(ps) != 1 || ps[0]["limit"] != 5 || ps[0]["in_flight"] != int64(0) {
+		t.Fatalf("provider_slots map = %#v", m["provider_slots"])
+	}
+}
 
 // TestFuelGaugeToMap_Shape verifies that ToMap returns the expected nested
 // structure and that all mandatory keys are present (conduit-zojv).

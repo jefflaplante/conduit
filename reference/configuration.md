@@ -228,6 +228,51 @@ Model aliases (for `/model` command):
 - `opus` - claude-opus-4-6
 - `glm` - z-ai/glm-4-flash (requires [z.ai setup](z-ai.md))
 
+#### Concurrency limits (`max_concurrent`, `model_max_concurrent`)
+
+Caps how many calls to a provider (or one of its models) are in flight at
+once, so a burst of sub-agents or a quota/timeout fallback storm cannot push
+a backend past its concurrency limit and into a 429 cascade (conduit-38cz).
+
+```json
+{
+  "name": "z-ai",
+  "type": "openai",
+  "model": "glm-5.3-flash",
+  "max_concurrent": 20,
+  "model_max_concurrent": { "glm-5.3": 5, "glm-5.3-flash": 50 }
+}
+```
+
+- `max_concurrent` — one pool shared by all of the provider's models. `0` or
+  omitted = unlimited.
+- `model_max_concurrent` — per-model pools, keyed by model name (matched
+  case-insensitively, with or without a `provider/` prefix, so `glm-5.3` and
+  `z-ai/glm-5.3` share one pool). A listed model uses its own pool **instead
+  of** `max_concurrent`. `0` = explicitly unlimited (use it to switch off a
+  built-in default).
+- Built-in defaults: providers named `z-ai`/`zai`/`z.ai`, or whose `base_url`
+  host is `z.ai` or a subdomain of it, get z.ai's documented limits
+  `glm-5.3` = 5 and `glm-5.3-flash` = 50 unless configured otherwise.
+  Precedence: `model_max_concurrent` entry, then built-in model default, then
+  `max_concurrent`, then unlimited.
+- Negative values are rejected at config load.
+
+A call over the cap waits for a slot. It holds the slot only while the
+provider call runs: tool execution in between doesn't hold it, and a streaming
+call releases it at stream end. The wait uses the call's own context, so
+`/stop` and the turn deadline (e.g. a sub-agent's `timeoutSeconds`) end it.
+The wait counts toward the turn's deadline. A same-model timeout retry that
+is still queued gives up in time to leave the fallback handoff its reserved
+slice, because the handoff goes to a different pool. A wait that is given up
+makes no provider call, so it isn't metered.
+
+The fuel gauge (`Gateway` tool status, `SessionStatus` → `fuel_gauge`) lists
+every pool under `provider_slots`: `limit`, `source`
+(`model_config`/`builtin`/`provider_config`/`unlimited`), `in_flight`,
+`waiting`, and totals `acquired_total`, `queued_total`, `abandoned_total`,
+`max_wait_ms`.
+
 ### Pricing Overrides
 
 ```json

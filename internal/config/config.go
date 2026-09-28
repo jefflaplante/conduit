@@ -637,6 +637,17 @@ type ProviderConfig struct {
 	PromptCaching  *PromptCachingConfig `json:"prompt_caching,omitempty"`  // conduit-3dru: Anthropic prompt caching; nil = inherit ai.prompt_caching, which defaults to enabled
 	TimeoutSeconds int                  `json:"timeout_seconds,omitempty"` // HTTP client timeout in seconds (default: 300); bd-29i
 	ClaudeCode     *ClaudeCodeConfig    `json:"claude_code,omitempty"`     // Settings for type="claude-code"
+
+	// MaxConcurrent caps the provider calls in flight at once across all of
+	// this provider's models (conduit-38cz). 0/omitted = unlimited. A call
+	// over the cap waits for a slot (bounded by its turn deadline).
+	MaxConcurrent int `json:"max_concurrent,omitempty"`
+	// ModelMaxConcurrent caps calls per model, keyed by model name (matched
+	// case-insensitively, with or without a "provider/" prefix). A model
+	// listed here gets its own pool INSTEAD of the provider-wide
+	// max_concurrent; 0 = explicitly unlimited (disables a built-in default,
+	// e.g. z.ai's glm-5.3=5 / glm-5.3-flash=50). conduit-38cz.
+	ModelMaxConcurrent map[string]int `json:"model_max_concurrent,omitempty"`
 }
 
 // ClaudeCodeConfig holds settings for the claude-code provider type.

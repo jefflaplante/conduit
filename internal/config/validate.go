@@ -91,6 +91,21 @@ func validateAICredentials(me *multiError, ai AIConfig) {
 	}
 }
 
+// validateProviderConcurrency rejects negative concurrency caps
+// (conduit-38cz); 0 means unlimited.
+func validateProviderConcurrency(me *multiError, ai AIConfig) {
+	for _, p := range ai.Providers {
+		if p.MaxConcurrent < 0 {
+			me.add("AI provider %q: max_concurrent must be >= 0 (0 = unlimited), got %d", p.Name, p.MaxConcurrent)
+		}
+		for model, n := range p.ModelMaxConcurrent {
+			if n < 0 {
+				me.add("AI provider %q: model_max_concurrent[%q] must be >= 0 (0 = unlimited), got %d", p.Name, model, n)
+			}
+		}
+	}
+}
+
 // isUnexpandedPlaceholder returns true when a value still looks like an
 // unexpanded ${ENV_VAR} token.  This only occurs when ValidateSemantic is
 // called directly (e.g., in unit tests) without going through config.Load,
@@ -188,6 +203,7 @@ func (c *Config) ValidateSemantic() error {
 
 	validatePort(&me, c.Port)
 	validateAICredentials(&me, c.AI)
+	validateProviderConcurrency(&me, c.AI) // conduit-38cz
 	validateChannels(&me, c.Channels)
 	validateWorkspacePaths(&me, c.Workspace)
 	validateRateLimiting(&me, c.RateLimiting)
