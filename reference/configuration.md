@@ -485,7 +485,7 @@ Agent heartbeat for automated tasks. See [agent-heartbeat.md](agent-heartbeat.md
 }
 ```
 
-`alert_queue_path` is deprecated (still accepted, warns at load; see [agent-heartbeat.md](agent-heartbeat.md)). `alert_retry_policy` drives background retries of failed heartbeat deliveries.
+`alert_queue_path` is deprecated (still accepted, warns at load; see [agent-heartbeat.md](agent-heartbeat.md)). `alert_targets[].type` accepts `telegram`, `webhook` and `mqtt`; `email` and `slack` were removed because no deliverer exists for them (email/SMTP is tracked separately) — existing configs that use them still load, with a one-time warning, and those targets are ignored. `alert_retry_policy` drives background retries of failed heartbeat deliveries.
 
 ### Skills
 
