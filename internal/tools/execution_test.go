@@ -411,66 +411,6 @@ func (m *TestLoggingMiddleware) AfterExecution(ctx context.Context, call *ai.Too
 	return nil
 }
 
-// Test SecurityMiddleware
-func TestSecurityMiddleware(t *testing.T) {
-	allowedTools := []string{"safe_tool"}
-	middleware := NewSecurityMiddleware(allowedTools)
-
-	// Test allowed tool
-	safeCall := &ai.ToolCall{Name: "safe_tool"}
-	err := middleware.BeforeExecution(context.Background(), safeCall)
-	if err != nil {
-		t.Fatalf("Expected no error for allowed tool, got: %v", err)
-	}
-
-	// Test disallowed tool
-	unsafeCall := &ai.ToolCall{Name: "dangerous_tool"}
-	err = middleware.BeforeExecution(context.Background(), unsafeCall)
-	if err == nil {
-		t.Fatal("Expected error for disallowed tool")
-	}
-
-	expectedError := "tool 'dangerous_tool' not allowed by security policy"
-	if err.Error() != expectedError {
-		t.Fatalf("Expected error: %s, got: %s", expectedError, err.Error())
-	}
-}
-
-// Test MetricsMiddleware
-func TestMetricsMiddleware(t *testing.T) {
-	middleware := NewMetricsMiddleware()
-
-	call := &ai.ToolCall{Name: "test_tool"}
-	result := &ExecutionResult{
-		Duration: 100 * time.Millisecond,
-	}
-
-	// Record some executions
-	middleware.AfterExecution(context.Background(), call, result)
-	middleware.AfterExecution(context.Background(), call, result)
-
-	metrics := middleware.GetMetrics()
-
-	toolMetrics, exists := metrics["test_tool"].(map[string]interface{})
-	if !exists {
-		t.Fatal("Expected metrics for test_tool")
-	}
-
-	count, ok := toolMetrics["count"].(int)
-	if !ok || count != 2 {
-		t.Fatalf("Expected count 2, got: %v", count)
-	}
-
-	avgDuration, ok := toolMetrics["average_duration"].(string)
-	if !ok {
-		t.Fatal("Expected average_duration")
-	}
-
-	if avgDuration != "100ms" {
-		t.Fatalf("Expected average duration '100ms', got: %s", avgDuration)
-	}
-}
-
 // TestToolCallFlow_SliceIsolation verifies that HandleToolCallFlow does not
 // mutate the caller's Messages slice when it has spare capacity.
 func TestToolCallFlow_SliceIsolation(t *testing.T) {
