@@ -61,10 +61,9 @@ brain schema/data migrations, as the gateway would.`,
 			// Initialize brain. Opening the DB runs pending brain
 			// migrations; carry the configured recency weight when a config
 			// is loadable so migration 9 matches the gateway (conduit-31jg.53).
-			var cfg *config.Config
-			if c, cfgErr := config.Load(cfgFile); cfgErr == nil {
-				cfg = c
-			}
+			// loadConfigIfPresent never writes a default config.json when the
+			// file is missing (conduit-31jg.87).
+			cfg := loadConfigIfPresent(cfgFile)
 			b, err := brain.New(dbPath, brainCLIOptions(cfg)...)
 			if err != nil {
 				return fmt.Errorf("failed to initialize brain at %s: %w", dbPath, err)

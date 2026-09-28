@@ -117,7 +117,7 @@ Examples:
 
 func runBriefingGenerate(sessionID string, outputJSON bool, limit int) error {
 	// Load config to find workspace and database paths.
-	cfg, err := config.Load(cfgFile)
+	cfg, err := loadExistingConfig(cfgFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -212,7 +212,7 @@ func runBriefingGenerate(sessionID string, outputJSON bool, limit int) error {
 }
 
 func runBriefingShow(id string, outputJSON bool) error {
-	cfg, err := config.Load(cfgFile)
+	cfg, err := loadExistingConfig(cfgFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -246,7 +246,7 @@ func runBriefingShow(id string, outputJSON bool) error {
 }
 
 func runBriefingList(outputJSON bool) error {
-	cfg, err := config.Load(cfgFile)
+	cfg, err := loadExistingConfig(cfgFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}

@@ -108,7 +108,7 @@ func init() {
 // Uses a lightweight approach - reads the JSON without full validation since the
 // gateway may not be fully configured for TUI purposes.
 func loadGatewayConfigForTUI(configPath string) (*config.Config, error) {
-	cfg, err := config.Load(configPath)
+	cfg, err := loadExistingConfig(configPath)
 	if err != nil {
 		return nil, err
 	}

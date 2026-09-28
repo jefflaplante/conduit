@@ -178,7 +178,7 @@ Examples:
 // --- command implementations ---
 
 func runChainList(outputJSON bool) error {
-	cfg, err := config.Load(cfgFile)
+	cfg, err := loadExistingConfig(cfgFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -217,7 +217,7 @@ func runChainList(outputJSON bool) error {
 }
 
 func runChainShow(name string, outputJSON bool) error {
-	cfg, err := config.Load(cfgFile)
+	cfg, err := loadExistingConfig(cfgFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -285,7 +285,7 @@ func runChainShow(name string, outputJSON bool) error {
 }
 
 func runChainCreate(name string, fromFile string) error {
-	cfg, err := config.Load(cfgFile)
+	cfg, err := loadExistingConfig(cfgFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -342,7 +342,7 @@ func runChainCreate(name string, fromFile string) error {
 }
 
 func runChainRun(name string, varFlags []string, outputJSON bool, dryRun bool) error {
-	cfg, err := config.Load(cfgFile)
+	cfg, err := loadExistingConfig(cfgFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -431,7 +431,7 @@ func runChainRun(name string, varFlags []string, outputJSON bool, dryRun bool) e
 }
 
 func runChainDelete(name string) error {
-	cfg, err := config.Load(cfgFile)
+	cfg, err := loadExistingConfig(cfgFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -446,7 +446,7 @@ func runChainDelete(name string) error {
 }
 
 func runChainValidate(name string) error {
-	cfg, err := config.Load(cfgFile)
+	cfg, err := loadExistingConfig(cfgFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
