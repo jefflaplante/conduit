@@ -8,7 +8,7 @@ import (
 )
 
 func TestPricingForModel_ExactMatch(t *testing.T) {
-	pricing := PricingForModel("claude-opus-4")
+	pricing := DefaultPricingResolver().PricingForModel("claude-opus-4")
 	if pricing.InputPerMToken != 15.0 {
 		t.Errorf("Expected InputPerMToken 15.0, got %f", pricing.InputPerMToken)
 	}
@@ -18,21 +18,21 @@ func TestPricingForModel_ExactMatch(t *testing.T) {
 }
 
 func TestPricingForModel_PrefixMatch(t *testing.T) {
-	pricing := PricingForModel("claude-sonnet-4-20250514")
+	pricing := DefaultPricingResolver().PricingForModel("claude-sonnet-4-20250514")
 	if pricing.InputPerMToken != 3.0 {
 		t.Errorf("Expected InputPerMToken 3.0 for sonnet, got %f", pricing.InputPerMToken)
 	}
 }
 
 func TestPricingForModel_Unknown(t *testing.T) {
-	pricing := PricingForModel("unknown-model")
+	pricing := DefaultPricingResolver().PricingForModel("unknown-model")
 	if pricing.InputPerMToken != 0.0 {
 		t.Errorf("Expected zero pricing for unknown model, got %f", pricing.InputPerMToken)
 	}
 }
 
 func TestPricingForModel_Empty(t *testing.T) {
-	pricing := PricingForModel("")
+	pricing := DefaultPricingResolver().PricingForModel("")
 	if pricing.InputPerMToken != 0.0 || pricing.OutputPerMToken != 0.0 {
 		t.Error("Expected zero pricing for empty model")
 	}

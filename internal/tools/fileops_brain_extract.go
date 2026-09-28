@@ -15,9 +15,10 @@ import (
 // overwhelmingly common case of files that contain no hints.
 const brainExtractMarker = "brain-extract"
 
-// extractLineRegex mirrors internal/brain.extract.go — duplicated here to avoid
-// importing the brain package from the tools package (we already depend on the
-// BrainService interface, not the concrete type).
+// extractBlockRegex matches a single brain-extract HTML comment block and
+// captures the body between the opening and closing markers ((?s) lets `.`
+// span newlines). extractLineRegex matches one `key: "value"` entry inside a
+// block; any line that does not match is silently skipped.
 var extractLineRegex = regexp.MustCompile(`^\s*([a-zA-Z0-9_.-]+)\s*:\s*"(.*)"\s*$`)
 var extractBlockRegex = regexp.MustCompile(`(?s)<!--\s*brain-extract\s*(.*?)\s*/brain-extract\s*-->`)
 
@@ -84,8 +85,10 @@ type extractedEntry struct {
 	Value string
 }
 
-// parseBrainExtractBlocks duplicates brain.ExtractBulkEntries so the tools
-// layer can avoid importing internal/brain directly.
+// parseBrainExtractBlocks scans content for `<!-- brain-extract ... /brain-extract -->`
+// blocks and returns one entry per well-formed `key: "value"` line inside them.
+// Malformed lines and unknown directives are ignored: the parser is
+// deliberately tolerant so a typo in one file cannot break the read path.
 func parseBrainExtractBlocks(content string) []extractedEntry {
 	matches := extractBlockRegex.FindAllStringSubmatch(content, -1)
 	if len(matches) == 0 {

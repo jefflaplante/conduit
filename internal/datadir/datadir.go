@@ -61,19 +61,9 @@ func (d *DataDir) DatabaseDir() string { return filepath.Join(d.root, databaseSu
 // WorkspaceDir returns {root}/workspace/.
 func (d *DataDir) WorkspaceDir() string { return filepath.Join(d.root, workspaceSubdir) }
 
-// FilePath returns the full path to a file directly inside the root directory.
-func (d *DataDir) FilePath(filename string) string {
-	return filepath.Join(d.root, filename)
-}
-
 // AuthFilePath returns the full path to a file inside the auth subdirectory.
 func (d *DataDir) AuthFilePath(filename string) string {
 	return filepath.Join(d.AuthDir(), filename)
-}
-
-// SSHFilePath returns the full path to a file inside the ssh subdirectory.
-func (d *DataDir) SSHFilePath(filename string) string {
-	return filepath.Join(d.SSHDir(), filename)
 }
 
 // subdirectories returns all managed subdirectory paths.

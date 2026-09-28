@@ -727,48 +727,6 @@ func TestCronToolGetStatus(t *testing.T) {
 	})
 }
 
-// TestTruncate tests the truncate helper function
-func TestTruncate(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		maxLen   int
-		expected string
-	}{
-		{
-			name:     "short string unchanged",
-			input:    "hello",
-			maxLen:   10,
-			expected: "hello",
-		},
-		{
-			name:     "exact length unchanged",
-			input:    "hello",
-			maxLen:   5,
-			expected: "hello",
-		},
-		{
-			name:     "long string truncated",
-			input:    "hello world this is a long string",
-			maxLen:   10,
-			expected: "hello w...",
-		},
-		{
-			name:     "empty string",
-			input:    "",
-			maxLen:   5,
-			expected: "",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			result := truncate(tc.input, tc.maxLen)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
 // TestHeartbeatJobDetectionAgentPrefix tests agent_heartbeat ID prefix detection
 func TestHeartbeatJobDetectionAgentPrefix(t *testing.T) {
 	job := &types.SchedulerJob{

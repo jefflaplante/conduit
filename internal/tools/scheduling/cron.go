@@ -139,13 +139,6 @@ func (t *CronTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 	}
 }
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}
-
 // SelfTest implements types.SelfTester for CronTool.
 func (t *CronTool) SelfTest(ctx context.Context, opts *types.SelfTestOptions) *types.SelfTestResult {
 	start := time.Now()

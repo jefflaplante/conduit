@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestTaskInterpreter_ReadHeartbeatTasks(t *testing.T) {
@@ -257,97 +256,6 @@ func TestTaskInterpreter_inferTaskPriority(t *testing.T) {
 		if result != test.expected {
 			t.Errorf("For title '%s', expected %s, got %s", test.title, test.expected, result)
 		}
-	}
-}
-
-func TestParsedHeartbeatTask_ToHeartbeatTask(t *testing.T) {
-	parsed := ParsedHeartbeatTask{
-		Title:        "Test Task",
-		Description:  "A test task",
-		Instructions: []string{"Do something", "Do something else"},
-		CodeBlocks: []CodeBlock{
-			{Language: "bash", Content: "echo test"},
-		},
-		Type:           TaskTypeAlerts,
-		Priority:       TaskPriorityHigh,
-		Conditions:     []string{"if alerts found"},
-		Actions:        []string{"send alert"},
-		IsImmediate:    true,
-		IsQuietAware:   true,
-		HasConditional: true,
-		LineStart:      5,
-		LineEnd:        10,
-	}
-
-	task := parsed.ToHeartbeatTask()
-
-	// Check basic fields
-	if task.Name != "Test Task" {
-		t.Errorf("Expected name 'Test Task', got '%s'", task.Name)
-	}
-
-	if task.Description != "A test task" {
-		t.Errorf("Expected description 'A test task', got '%s'", task.Description)
-	}
-
-	if task.Type != TaskTypeAlerts {
-		t.Errorf("Expected type %s, got %s", TaskTypeAlerts, task.Type)
-	}
-
-	if task.Priority != TaskPriorityHigh {
-		t.Errorf("Expected priority %s, got %s", TaskPriorityHigh, task.Priority)
-	}
-
-	if task.Status != TaskStatusPending {
-		t.Errorf("Expected status %s, got %s", TaskStatusPending, task.Status)
-	}
-
-	if task.MaxRetries != 3 {
-		t.Errorf("Expected max retries 3, got %d", task.MaxRetries)
-	}
-
-	// Check payload
-	if task.Payload == nil {
-		t.Fatal("Expected payload to be set")
-	}
-
-	if instructions, ok := task.Payload["instructions"].([]string); !ok {
-		t.Error("Expected payload to contain instructions")
-	} else if len(instructions) != 2 {
-		t.Errorf("Expected 2 instructions in payload, got %d", len(instructions))
-	}
-
-	// Check timeout
-	if task.TimeoutDuration == nil {
-		t.Fatal("Expected timeout duration to be set")
-	}
-
-	if *task.TimeoutDuration != 60*time.Second {
-		t.Errorf("Expected 60s timeout for high priority, got %v", *task.TimeoutDuration)
-	}
-
-	// Check tags
-	expectedTags := []string{"immediate", "quiet_aware", "conditional"}
-	if len(task.Tags) != len(expectedTags) {
-		t.Errorf("Expected %d tags, got %d", len(expectedTags), len(task.Tags))
-	}
-
-	for _, expectedTag := range expectedTags {
-		found := false
-		for _, tag := range task.Tags {
-			if tag == expectedTag {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("Expected tag '%s' not found in task tags", expectedTag)
-		}
-	}
-
-	// Check quiet hours behavior
-	if !task.SkipQuietHours {
-		t.Error("Expected immediate/critical task to skip quiet hours")
 	}
 }
 

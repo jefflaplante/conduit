@@ -7,7 +7,7 @@ This document describes the diagnostic heartbeat system implemented in OCGO-014.
 The heartbeat system provides continuous monitoring of the gateway's health and performance through:
 - **Background goroutine** that runs on configurable intervals
 - **Metrics collection** from sessions, WebSocket connections, and system resources
-- **Event emission** for external monitoring systems
+- **Event recording** into an in-memory store served by `/diagnostics`
 - **Idle detection** to prevent unnecessary heartbeat spam
 - **Graceful lifecycle management** with proper resource cleanup
 
@@ -108,16 +108,6 @@ This prevents log spam during quiet periods while ensuring monitoring during act
 - **Type**: `heartbeat`
 - **Frequency**: Every heartbeat cycle (when not idle)
 - **Content**: Full metrics snapshot with system health
-
-### Status Change Events
-- **Type**: `status_change`
-- **Trigger**: Gateway status transitions (healthy ↔ degraded ↔ error)
-- **Content**: Old and new status information
-
-### Metric Alert Events
-- **Type**: `metric_alert`
-- **Trigger**: Metrics exceed configured thresholds
-- **Content**: Metric name, value, and threshold
 
 ### System Events
 - **Type**: `system_event`

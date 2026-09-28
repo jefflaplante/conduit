@@ -100,24 +100,3 @@ func TestProcessReplyTags_PreservesExistingMetadata(t *testing.T) {
 	assert.Equal(t, "55", msg.Metadata["reply_to_message_id"])
 	assert.Equal(t, "some_value", msg.Metadata["some_key"])
 }
-
-func TestStripReplyTags(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"no tags", "Hello world", "Hello world"},
-		{"reply_to_current at end", "Here is my reply [[reply_to_current]]", "Here is my reply"},
-		{"reply_to_current at start", "[[reply_to_current]] Here is my reply", "Here is my reply"},
-		{"reply_to with ID", "Text [[reply_to:123]]", "Text"},
-		{"with whitespace", "Text [[ reply_to_current ]]", "Text"},
-		{"empty after strip", "[[reply_to_current]]", ""},
-		{"multiple tags", "[[reply_to_current]] text [[reply_to:456]]", "text"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, StripReplyTags(tt.input))
-		})
-	}
-}

@@ -25,13 +25,12 @@ type MediaType string
 const (
 	MediaTypeVoice MediaType = "voice" // Voice message (OGG/OPUS)
 	MediaTypeAudio MediaType = "audio" // Audio file (MP3/M4A)
-	MediaTypeTTS   MediaType = "tts"   // Text-to-speech (placeholder for now)
 	MediaTypePath  MediaType = "path"  // Local file path
 )
 
 // MediaLine represents a parsed MEDIA protocol line
 type MediaLine struct {
-	Type    MediaType // voice, audio, tts, path
+	Type    MediaType // voice, audio, path
 	Content string    // base64 data, URL, text, or file path
 	Caption string    // optional caption for the media
 }
@@ -90,17 +89,9 @@ func ParseMediaLines(text string) ([]MediaLine, string) {
 
 // MediaSender handles sending media messages via Telegram
 type MediaSender struct {
-	bot         botAPI
-	ctx         context.Context
-	httpClient  *http.Client
-	ttsProvider TTSProvider
-}
-
-// TTSProvider interface for text-to-speech conversion
-// This is a placeholder that can be implemented later with actual TTS services
-type TTSProvider interface {
-	// GenerateAudio converts text to audio and returns the path to the audio file
-	GenerateAudio(ctx context.Context, text string) (string, error)
+	bot        botAPI
+	ctx        context.Context
+	httpClient *http.Client
 }
 
 // NewMediaSender creates a new MediaSender instance
@@ -114,11 +105,6 @@ func NewMediaSender(bot botAPI, ctx context.Context) *MediaSender {
 	}
 }
 
-// SetTTSProvider sets the TTS provider for text-to-speech conversion
-func (s *MediaSender) SetTTSProvider(provider TTSProvider) {
-	s.ttsProvider = provider
-}
-
 // SendMedia sends a media line to the specified chat
 // Returns an error message to append to the text response, or empty string on success
 func (s *MediaSender) SendMedia(chatID int64, media MediaLine) (string, error) {
@@ -129,8 +115,6 @@ func (s *MediaSender) SendMedia(chatID int64, media MediaLine) (string, error) {
 		return s.sendAudioFromURL(chatID, media.Content, media.Caption)
 	case MediaTypePath:
 		return s.sendVoiceFromPath(chatID, media.Content, media.Caption)
-	case MediaTypeTTS:
-		return s.sendTTS(chatID, media.Content, media.Caption)
 	default:
 		return fmt.Sprintf("[Unsupported media type: %s]", media.Type), fmt.Errorf("unsupported media type: %s", media.Type)
 	}
@@ -274,25 +258,6 @@ func (s *MediaSender) sendAudioFromURLFallback(chatID int64, url, caption string
 
 	log.Printf("[Telegram/Media] Audio sent (fallback) to chat %d (%d bytes)", chatID, len(audioData))
 	return "", nil
-}
-
-// sendTTS converts text to speech and sends as voice message
-func (s *MediaSender) sendTTS(chatID int64, text, caption string) (string, error) {
-	if s.ttsProvider == nil {
-		// TTS not configured - return a message indicating this
-		log.Printf("[Telegram/Media] TTS requested but no provider configured")
-		return "[TTS not available]", fmt.Errorf("TTS provider not configured")
-	}
-
-	// Generate audio using TTS provider
-	audioPath, err := s.ttsProvider.GenerateAudio(s.ctx, text)
-	if err != nil {
-		log.Printf("[Telegram/Media] TTS generation failed: %v", err)
-		return "[TTS generation failed]", err
-	}
-
-	// Send the generated audio as voice message
-	return s.sendVoiceFromPath(chatID, audioPath, caption)
 }
 
 // ProcessAndSendMedia processes a response text for MEDIA lines,

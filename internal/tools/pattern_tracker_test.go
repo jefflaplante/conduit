@@ -267,17 +267,6 @@ func TestReset(t *testing.T) {
 	}
 }
 
-func TestInjectWarning(t *testing.T) {
-	warning := InjectWarning("a -> b")
-	if warning == "" {
-		t.Error("expected non-empty warning")
-	}
-	// Check it mentions the pattern
-	if !patternContains(warning, "a -> b") {
-		t.Error("warning should contain the pattern")
-	}
-}
-
 func TestInjectThinkStep(t *testing.T) {
 	msg := InjectThinkStep("Bash -> Bash")
 	if msg == "" {

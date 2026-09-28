@@ -111,11 +111,11 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 ### Timing-Safe Validation
 
-Token validation uses constant-time comparison to prevent timing attacks. The underlying `ValidateTokenTiming()` function in `pkg/tokens` uses `crypto/subtle.ConstantTimeCompare`.
+Raw tokens are never compared directly: `TokenStorage.ValidateToken` computes an HMAC-SHA256 of the presented token and looks the hash up in the database, so validation time does not depend on how much of a stored token matches.
 
 ### Logging Security
 
-- Error logs sanitize token values using `SanitizeTokenForLogging()`
+- Token values are never logged
 - Token sources are logged for debugging without exposing values
 - Client names are logged on successful authentication
 
@@ -170,11 +170,6 @@ Retrieve using:
 authInfo := middleware.GetAuthInfo(r.Context())
 if authInfo != nil {
     // Use authInfo.ClientName, authInfo.TokenID, etc.
-}
-
-// Or check boolean
-if middleware.IsAuthenticated(r.Context()) {
-    // Request is authenticated
 }
 ```
 

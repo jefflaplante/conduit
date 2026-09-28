@@ -268,7 +268,7 @@ description: Home Assistant skill
 	}
 }
 
-func TestBuildDependencyContext_IncludesContent(t *testing.T) {
+func TestBuildDependencyContextCapped_NoCapIncludesContent(t *testing.T) {
 	skills := []Skill{
 		{
 			Name: "hass",
@@ -280,7 +280,7 @@ func TestBuildDependencyContext_IncludesContent(t *testing.T) {
 		},
 	}
 
-	got := BuildDependencyContext(skills)
+	got := BuildDependencyContextCapped(skills, 0)
 	if !strings.Contains(got, "ENTITIES_BODY") {
 		t.Errorf("expected dep content inlined, got: %s", got)
 	}
@@ -296,7 +296,7 @@ func TestBuildDependencyContext_IncludesContent(t *testing.T) {
 }
 
 func TestBuildSkillsContext_IncludesDependencies(t *testing.T) {
-	integrator := NewSkillIntegrator(NewExecutor(ExecutionConfig{TimeoutSeconds: 5}))
+	integrator := NewSkillIntegratorWithConfig(NewExecutor(ExecutionConfig{TimeoutSeconds: 5}), nil)
 	skills := []Skill{
 		{
 			Name:        "hass",

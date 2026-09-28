@@ -31,9 +31,12 @@ type gateProvider struct {
 func (p *gateProvider) Name() string { return "gate" }
 
 func (p *gateProvider) GenerateResponse(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	o, _ := approval.OriginFrom(ctx)
+	o, ok := approval.OriginFrom(ctx)
+	// A turn can be prompted when it carries a live interactive origin with
+	// a notifier and session/user identity (the checks Manager.Request makes).
+	promptable := ok && o.Interactive && o.Notify != nil && o.SessionKey != "" && o.UserID != ""
 	p.mu.Lock()
-	p.interactive = append(p.interactive, approval.IsInteractive(ctx))
+	p.interactive = append(p.interactive, promptable)
 	p.sources = append(p.sources, o.Source)
 	p.mu.Unlock()
 	if p.entered != nil {

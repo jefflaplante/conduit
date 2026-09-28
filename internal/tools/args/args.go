@@ -99,25 +99,3 @@ func GetBool(args map[string]interface{}, key string, defaultVal bool) bool {
 	}
 	return defaultVal
 }
-
-// GetStringSlice extracts a []string from args. Handles both []string and []interface{}.
-// Returns nil if not found or wrong type.
-func GetStringSlice(args map[string]interface{}, key string) []string {
-	if v, ok := args[key]; ok {
-		// Direct []string
-		if ss, ok := v.([]string); ok {
-			return ss
-		}
-		// JSON-decoded []interface{}
-		if arr, ok := v.([]interface{}); ok {
-			result := make([]string, 0, len(arr))
-			for _, item := range arr {
-				if s, ok := item.(string); ok {
-					result = append(result, s)
-				}
-			}
-			return result
-		}
-	}
-	return nil
-}

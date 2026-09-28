@@ -325,19 +325,6 @@ func formatAliasKeys(aliases map[string]string) string {
 	return strings.Join(keys, ", ")
 }
 
-// formatAliasDisplay returns a multi-line display string of aliases and their targets.
-func formatAliasDisplay(aliases map[string]string, prefix, arrow string) string {
-	var lines []string
-	for alias, model := range aliases {
-		display := model
-		if display == "" {
-			display = "reset to default"
-		}
-		lines = append(lines, fmt.Sprintf("%s%s %s %s", prefix, alias, arrow, display))
-	}
-	return strings.Join(lines, "\n")
-}
-
 // formatAliasDisplayWithProvider returns a multi-line display string of aliases,
 // their targets, and the resolved provider for each.
 func (g *Gateway) formatAliasDisplayWithProvider(aliases map[string]string, prefix, arrow string) string {

@@ -121,7 +121,7 @@ func (g *Gateway) wakeParentCanceled(sessionKey string, sp subAgentSpawn, info S
 
 // isOwnerTurn reports whether ctx is a turn started by a live human message
 // (the gateway's human inbound paths set the interactive origin; wakes,
-// cron, heartbeats and sub-agents never do). Unlike approval.IsInteractive
+// cron, heartbeats and sub-agents never do). Unlike Manager.Request
 // it does not require a channel that can prompt.
 func isOwnerTurn(ctx context.Context) bool {
 	o, ok := approval.OriginFrom(ctx)

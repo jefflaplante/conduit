@@ -104,31 +104,26 @@ func TestLoadEnv_PriorityOrder(t *testing.T) {
 	os.Unsetenv("TEST_LOAD_ENV_PRIO")
 }
 
-func TestFindEnvFiles(t *testing.T) {
+func TestFindEnvPaths(t *testing.T) {
 	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".env"), []byte("K=V\n"), 0600))
+	extra := t.TempDir()
 
 	t.Setenv(EnvFileEnvVar, "")
 
-	files := FindEnvFiles(root)
-	// Should include root .env (and possibly cwd if it exists).
-	found := false
-	for _, f := range files {
-		if f == filepath.Join(root, ".env") {
-			found = true
-		}
-	}
-	assert.True(t, found, "should find %s in %v", filepath.Join(root, ".env"), files)
+	paths := findEnvPaths(root, extra)
+	// {datadir}/.env comes first, then cwd, then the extra directories.
+	require.NotEmpty(t, paths)
+	assert.Equal(t, filepath.Join(root, ".env"), paths[0])
+	assert.Equal(t, filepath.Join(extra, ".env"), paths[len(paths)-1])
 }
 
-func TestFindEnvFiles_Override(t *testing.T) {
+func TestFindEnvPaths_Override(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "custom.env")
-	require.NoError(t, os.WriteFile(f, []byte("K=V\n"), 0600))
 
 	t.Setenv(EnvFileEnvVar, f)
 
-	files := FindEnvFiles("/ignored")
-	assert.Equal(t, []string{f}, files)
+	paths := findEnvPaths("/ignored", "/also-ignored")
+	assert.Equal(t, []string{f}, paths)
 }
 
 func TestDedupPaths(t *testing.T) {

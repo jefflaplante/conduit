@@ -53,36 +53,6 @@ type SummaryEntry struct {
 	Model string `json:"model"`
 }
 
-// DefaultSummaryConfig returns sensible defaults for summarization
-func DefaultSummaryConfig() SummaryConfig {
-	return SummaryConfig{
-		Enabled:            false, // Opt-in feature
-		Model:              "claude-haiku-4-5-20251001",
-		TargetRatio:        0.25,
-		CacheDir:           ".summaries",
-		CacheTTLHours:      168, // 7 days
-		FallbackToTruncate: true,
-		FileConfigs: map[string]SummaryFileConfig{
-			"SOUL.md": {
-				Ratio:        0.40,
-				PreserveKeys: []string{"personality", "tone", "voice", "style"},
-			},
-			"USER.md": {
-				Ratio:        0.30,
-				PreserveKeys: []string{"preferences", "constraints", "requirements"},
-			},
-			"AGENTS.md": {
-				Ratio:        0.25,
-				PreserveKeys: []string{"rules", "restrictions", "mandatory", "never"},
-			},
-			"TOOLS.md": {
-				Ratio:        0.20,
-				PreserveKeys: []string{"usage", "commands", "examples"},
-			},
-		},
-	}
-}
-
 // GetTargetRatio returns the compression ratio for a file
 func (c *SummaryConfig) GetTargetRatio(filename string) float64 {
 	if fc, ok := c.FileConfigs[filename]; ok && fc.Ratio > 0 {

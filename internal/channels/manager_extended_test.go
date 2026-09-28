@@ -453,28 +453,6 @@ func TestReplyTagRe(t *testing.T) {
 	}
 }
 
-func TestStripReplyTags_Extended(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"preserves normal text", "Hello world", "Hello world"},
-		{"strips single tag", "Hello [[reply_to_current]] world", "Hello  world"},
-		{"strips tag with ID", "Reply [[reply_to:123]] here", "Reply  here"},
-		{"strips multiple tags", "[[reply_to_current]] text [[reply_to:456]]", "text"},
-		{"handles whitespace in tag", "Test [[ reply_to_current ]]", "Test"},
-		{"empty result trimmed", "[[reply_to_current]]", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := StripReplyTags(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestProcessReplyTags_Extended(t *testing.T) {
 	tests := []struct {
 		name                  string

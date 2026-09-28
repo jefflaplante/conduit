@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
@@ -685,31 +684,4 @@ func (t *SRETool) getSuggestionsForType(incidentType string) []InvestigationSugg
 	}
 
 	return suggestions
-}
-
-// parseTimeRange converts a time range string to duration.
-func parseTimeRange(tr string) time.Duration {
-	// Default to 1 hour
-	if tr == "" {
-		return time.Hour
-	}
-
-	// Simple parsing for common formats
-	var value int
-	var unit byte
-	_, err := fmt.Sscanf(tr, "%d%c", &value, &unit)
-	if err != nil {
-		return time.Hour
-	}
-
-	switch unit {
-	case 'm':
-		return time.Duration(value) * time.Minute
-	case 'h':
-		return time.Duration(value) * time.Hour
-	case 'd':
-		return time.Duration(value) * 24 * time.Hour
-	default:
-		return time.Hour
-	}
 }

@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+// shellStateIn returns a default ShellState positioned in dir (an absolute
+// test directory).
+func shellStateIn(dir string) ShellState {
+	s := NewShellState()
+	s.CurrentDir = dir
+	s.PrevDir = dir
+	return s
+}
+
 func TestNewShellState(t *testing.T) {
 	state := NewShellState()
 
@@ -27,34 +36,6 @@ func TestNewShellState(t *testing.T) {
 	// Should have Jobs manager
 	if state.Jobs == nil {
 		t.Error("Expected Jobs manager to be initialized")
-	}
-}
-
-func TestNewShellStateWithDir(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	state := NewShellStateWithDir(tmpDir)
-
-	if state.CurrentDir != tmpDir {
-		t.Errorf("Expected CurrentDir to be %q, got %q", tmpDir, state.CurrentDir)
-	}
-
-	if state.PrevDir != tmpDir {
-		t.Errorf("Expected PrevDir to be %q, got %q", tmpDir, state.PrevDir)
-	}
-}
-
-func TestNewShellStateWithDir_Empty(t *testing.T) {
-	// Empty string should fall back to default (home directory)
-	state := NewShellStateWithDir("")
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("Cannot get home directory: %v", err)
-	}
-
-	if state.CurrentDir != homeDir {
-		t.Errorf("Expected CurrentDir to be %q (home), got %q", homeDir, state.CurrentDir)
 	}
 }
 
@@ -92,7 +73,7 @@ func TestIsCdCommand(t *testing.T) {
 
 func TestHandleCdCommand_NoArgs(t *testing.T) {
 	tmpDir := t.TempDir()
-	state := NewShellStateWithDir(tmpDir)
+	state := shellStateIn(tmpDir)
 
 	newState, errMsg := state.HandleCdCommand("")
 	if errMsg != "" {
@@ -115,7 +96,7 @@ func TestHandleCdCommand_NoArgs(t *testing.T) {
 
 func TestHandleCdCommand_Tilde(t *testing.T) {
 	tmpDir := t.TempDir()
-	state := NewShellStateWithDir(tmpDir)
+	state := shellStateIn(tmpDir)
 
 	newState, errMsg := state.HandleCdCommand("~")
 	if errMsg != "" {
@@ -134,7 +115,7 @@ func TestHandleCdCommand_Tilde(t *testing.T) {
 
 func TestHandleCdCommand_TildeExpansion(t *testing.T) {
 	tmpDir := t.TempDir()
-	state := NewShellStateWithDir(tmpDir)
+	state := shellStateIn(tmpDir)
 
 	// Create a test subdirectory in home
 	homeDir, err := os.UserHomeDir()
@@ -203,7 +184,7 @@ func TestHandleCdCommand_RelativePath(t *testing.T) {
 		t.Fatalf("Failed to create subdir: %v", err)
 	}
 
-	state := NewShellStateWithDir(tmpDir)
+	state := shellStateIn(tmpDir)
 
 	newState, errMsg := state.HandleCdCommand("subdir")
 	if errMsg != "" {
@@ -224,7 +205,7 @@ func TestHandleCdCommand_DotDot(t *testing.T) {
 		t.Fatalf("Failed to create subdir: %v", err)
 	}
 
-	state := NewShellStateWithDir(subDir)
+	state := shellStateIn(subDir)
 
 	newState, errMsg := state.HandleCdCommand("..")
 	if errMsg != "" {
@@ -238,7 +219,7 @@ func TestHandleCdCommand_DotDot(t *testing.T) {
 
 func TestHandleCdCommand_NonexistentDir(t *testing.T) {
 	tmpDir := t.TempDir()
-	state := NewShellStateWithDir(tmpDir)
+	state := shellStateIn(tmpDir)
 
 	newState, errMsg := state.HandleCdCommand("nonexistent")
 	if errMsg == "" {
@@ -260,7 +241,7 @@ func TestHandleCdCommand_NotADirectory(t *testing.T) {
 		t.Fatalf("Failed to create file: %v", err)
 	}
 
-	state := NewShellStateWithDir(tmpDir)
+	state := shellStateIn(tmpDir)
 
 	newState, errMsg := state.HandleCdCommand("file.txt")
 	if errMsg == "" {
@@ -284,7 +265,7 @@ func TestHandleCdCommand_ComplexRelativePath(t *testing.T) {
 		t.Fatalf("Failed to create directories: %v", err)
 	}
 
-	state := NewShellStateWithDir(bDir)
+	state := shellStateIn(bDir)
 
 	// cd ../a/b/c should work
 	newState, errMsg := state.HandleCdCommand("../b/c")
@@ -360,7 +341,7 @@ func TestHandleCdCommand_PreservesPrevDir(t *testing.T) {
 	}
 
 	// Start in dir1
-	state := NewShellStateWithDir(dir1)
+	state := shellStateIn(dir1)
 
 	// cd to dir2
 	state, _ = state.HandleCdCommand(dir2)

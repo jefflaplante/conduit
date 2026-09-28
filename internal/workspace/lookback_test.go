@@ -116,9 +116,3 @@ func TestWorkspaceContext_Lookback_NegativeFallsBackToDefault(t *testing.T) {
 	assert.Contains(t, files, keys[1])
 	assert.NotContains(t, files, keys[2])
 }
-
-// The config-level default must remain 2 (today + yesterday).
-func TestConfig_DefaultDailyLookbackIsTwo(t *testing.T) {
-	cfg := DefaultConfig()
-	assert.Equal(t, 2, cfg.Files.Memory.DailyLookbackDays)
-}

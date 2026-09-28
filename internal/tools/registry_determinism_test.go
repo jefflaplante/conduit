@@ -41,8 +41,4 @@ func TestRegistry_ModelVisibleNameListsSorted(t *testing.T) {
 			t.Fatalf("available values changed between calls: %v vs %v", first, got)
 		}
 	}
-
-	if names := ListAvailableOptionalTools(); !sort.StringsAreSorted(names) {
-		t.Fatalf("ListAvailableOptionalTools not sorted: %v", names)
-	}
 }

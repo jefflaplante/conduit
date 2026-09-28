@@ -133,9 +133,7 @@ func TestDataDir_FilePaths(t *testing.T) {
 	dd, err := New("")
 	require.NoError(t, err)
 
-	assert.Equal(t, filepath.Join(root, "somefile"), dd.FilePath("somefile"))
 	assert.Equal(t, filepath.Join(root, "auth", "tokens.json"), dd.AuthFilePath("tokens.json"))
-	assert.Equal(t, filepath.Join(root, "ssh", "host_key"), dd.SSHFilePath("host_key"))
 }
 
 func TestDataDir_EnsureDirs(t *testing.T) {

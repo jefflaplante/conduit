@@ -86,10 +86,3 @@ func OriginFrom(ctx context.Context) (Origin, bool) {
 	o, ok := ctx.Value(ctxKeyOrigin{}).(Origin)
 	return o, ok
 }
-
-// IsInteractive reports whether ctx is a live human turn that can be
-// prompted. Unknown origin => false (fail closed).
-func IsInteractive(ctx context.Context) bool {
-	o, ok := OriginFrom(ctx)
-	return ok && o.Interactive && o.Notify != nil && o.SessionKey != "" && o.UserID != ""
-}

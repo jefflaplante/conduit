@@ -26,31 +26,6 @@ func WithTTL(d time.Duration) StoreOption {
 	return func(o *storeOpts) { o.ttl = d }
 }
 
-// ParseDuration parses a duration string with Go's standard units plus
-// the convenience suffixes "d" (days) and "w" (weeks), which time.ParseDuration
-// does not natively support. Example: "24h", "7d", "2w", "90m".
-func ParseDuration(s string) (time.Duration, error) {
-	if s == "" {
-		return 0, nil
-	}
-	// Check for trailing d or w (days/weeks); otherwise defer to stdlib.
-	if n := len(s); n >= 2 {
-		last := s[n-1]
-		if last == 'd' || last == 'w' {
-			var count int
-			if _, err := fmt.Sscanf(s[:n-1], "%d", &count); err != nil {
-				return 0, fmt.Errorf("parse duration %q: %w", s, err)
-			}
-			mult := 24 * time.Hour
-			if last == 'w' {
-				mult = 7 * 24 * time.Hour
-			}
-			return time.Duration(count) * mult, nil
-		}
-	}
-	return time.ParseDuration(s)
-}
-
 func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source string, opts ...StoreOption) error {
 	if err := ValidateSource(source); err != nil {
 		log.Printf("Brain: warning: %v (key=%q)", err, key)

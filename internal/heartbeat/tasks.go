@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // TaskInterpreter reads and interprets HEARTBEAT.md files into executable tasks
@@ -359,54 +358,6 @@ func (p *ParsedHeartbeatTask) Validate() error {
 	}
 
 	return nil
-}
-
-// ToHeartbeatTask converts a parsed task to a HeartbeatTask for execution
-func (p *ParsedHeartbeatTask) ToHeartbeatTask() HeartbeatTask {
-	now := time.Now()
-
-	task := HeartbeatTask{
-		ID:          fmt.Sprintf("heartbeat_%s_%d", strings.ToLower(strings.ReplaceAll(p.Title, " ", "_")), now.UnixNano()),
-		Type:        p.Type,
-		Name:        p.Title,
-		Description: p.Description,
-		CreatedAt:   now,
-		ScheduledAt: now,
-		Status:      TaskStatusPending,
-		Priority:    p.Priority,
-		MaxRetries:  3,
-		Payload: map[string]interface{}{
-			"instructions": p.Instructions,
-			"code_blocks":  p.CodeBlocks,
-			"conditions":   p.Conditions,
-			"actions":      p.Actions,
-		},
-	}
-
-	// Set timeout based on task type and priority
-	timeoutDuration := 60 * time.Second
-	if p.Priority == TaskPriorityCritical {
-		timeoutDuration = 30 * time.Second
-	} else if p.Priority == TaskPriorityLow {
-		timeoutDuration = 120 * time.Second
-	}
-	task.TimeoutDuration = &timeoutDuration
-
-	// Set quiet hours behavior
-	task.SkipQuietHours = p.IsImmediate || p.Priority == TaskPriorityCritical
-
-	// Add tags based on analysis
-	if p.IsImmediate {
-		task.Tags = append(task.Tags, "immediate")
-	}
-	if p.IsQuietAware {
-		task.Tags = append(task.Tags, "quiet_aware")
-	}
-	if p.HasConditional {
-		task.Tags = append(task.Tags, "conditional")
-	}
-
-	return task
 }
 
 // String returns a string representation of the parsed task

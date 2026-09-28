@@ -18,17 +18,6 @@ func RegisterOptional(name string, factory types.OptionalToolFactory) {
 	optionalFactories[name] = factory
 }
 
-// ListAvailableOptionalTools returns names of optional tools that were compiled in.
-// This reflects what factories are registered, not what tools are enabled.
-func ListAvailableOptionalTools() []string {
-	names := make([]string, 0, len(optionalFactories))
-	for name := range optionalFactories {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
 // registerOptionalTools instantiates optional tools from registered factories.
 // Factories are registered via RegisterOptional() from init() functions with build tags.
 func (r *Registry) registerOptionalTools() {

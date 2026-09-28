@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -61,24 +60,6 @@ func NewShellState() ShellState {
 	return ShellState{
 		CurrentDir: homeDir,
 		PrevDir:    homeDir,
-		EnvVars:    inheritEnvironment(),
-		Jobs:       NewJobManager(),
-	}
-}
-
-// NewShellStateWithDir creates a ShellState with a specific starting directory
-func NewShellStateWithDir(dir string) ShellState {
-	if dir == "" {
-		return NewShellState()
-	}
-	// Resolve to absolute path
-	absDir, err := filepath.Abs(dir)
-	if err != nil {
-		return NewShellState()
-	}
-	return ShellState{
-		CurrentDir: absDir,
-		PrevDir:    absDir,
 		EnvVars:    inheritEnvironment(),
 		Jobs:       NewJobManager(),
 	}

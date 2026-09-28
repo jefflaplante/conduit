@@ -238,6 +238,20 @@ func (m *MockRegistry) GetAvailableTools() []ai.Tool {
 	return availableTools
 }
 
+// demoLoggingMiddleware shows the ExecutionEngine middleware hook by
+// printing each tool call before and after it runs.
+type demoLoggingMiddleware struct{}
+
+func (demoLoggingMiddleware) BeforeExecution(ctx context.Context, call *ai.ToolCall) error {
+	fmt.Printf("   [middleware] executing %s\n", call.Name)
+	return nil
+}
+
+func (demoLoggingMiddleware) AfterExecution(ctx context.Context, call *ai.ToolCall, result *tools.ExecutionResult) error {
+	fmt.Printf("   [middleware] %s finished in %v\n", call.Name, result.Duration)
+	return nil
+}
+
 func main() {
 	fmt.Println("🔧 Conduit Tool Execution Demo")
 	fmt.Println("================================")
@@ -254,8 +268,7 @@ func main() {
 	)
 
 	// Add middleware
-	executionEngine.AddMiddleware(tools.NewLoggingMiddleware())
-	executionEngine.AddMiddleware(tools.NewMetricsMiddleware())
+	executionEngine.AddMiddleware(demoLoggingMiddleware{})
 
 	// Create execution engine adapter
 	engineAdapter := tools.NewExecutionEngineAdapter(executionEngine)

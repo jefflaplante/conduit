@@ -39,25 +39,6 @@ type SummaryFileConfig struct {
 	PreserveKeys []string `json:"preserve_keys,omitempty"`
 }
 
-// DefaultWorkspaceSummaryConfig returns sensible defaults
-func DefaultWorkspaceSummaryConfig() WorkspaceSummaryConfig {
-	fallbackTrue := true
-	return WorkspaceSummaryConfig{
-		Enabled:            false,
-		Model:              "claude-haiku-4-5-20251001",
-		TargetRatio:        0.25,
-		CacheDir:           ".summaries",
-		CacheTTLHours:      168,
-		FallbackToTruncate: &fallbackTrue,
-		FileConfigs: map[string]SummaryFileConfig{
-			"SOUL.md":   {Ratio: 0.40, PreserveKeys: []string{"personality", "tone", "voice"}},
-			"USER.md":   {Ratio: 0.30, PreserveKeys: []string{"preferences", "constraints"}},
-			"AGENTS.md": {Ratio: 0.25, PreserveKeys: []string{"rules", "restrictions"}},
-			"TOOLS.md":  {Ratio: 0.20, PreserveKeys: []string{"usage", "commands"}},
-		},
-	}
-}
-
 // WorkspaceFilesConfig defines which files to load
 type WorkspaceFilesConfig struct {
 	Core   []string              `json:"core"`

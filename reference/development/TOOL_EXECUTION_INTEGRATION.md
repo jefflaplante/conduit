@@ -50,7 +50,7 @@ The tool execution integration connects AI providers with the tool system for fu
 - **Parallel Execution**: Controlled concurrency with semaphore
 - **Error Handling**: Graceful degradation and user-friendly error messages
 - **Timeout Support**: Configurable timeouts to prevent hanging
-- **Middleware Pipeline**: Pluggable middleware for logging, security, metrics
+- **Middleware Pipeline**: Pluggable `Middleware` hooks (BeforeExecution/AfterExecution) via `AddMiddleware`
 
 ### ✅ Tool Chaining & Conversation Flow
 - **Multi-turn Execution**: AI calls tools, receives results, makes follow-up calls
@@ -59,10 +59,7 @@ The tool execution integration connects AI providers with the tool system for fu
 - **Usage Tracking**: Combined token usage across multiple AI calls
 
 ### ✅ Middleware System
-- **Logging Middleware**: Comprehensive execution logging
-- **Security Middleware**: Policy-based tool access control  
-- **Metrics Middleware**: Performance tracking and statistics
-- **Custom Middleware**: Easy to extend with custom logic
+- **Custom Middleware**: Implement `tools.Middleware` (BeforeExecution/AfterExecution) and register it with `ExecutionEngine.AddMiddleware`. No built-in middleware is shipped; see `examples/tool-execution` for a minimal logging example.
 
 ### ✅ Error Handling & Resilience
 - **Graceful Failures**: Tool errors don't break conversation flow
@@ -100,9 +97,8 @@ Final Response
 // Create execution engine
 engine := tools.NewExecutionEngine(registry, 3, 30*time.Second)
 
-// Add middleware
-engine.AddMiddleware(tools.NewLoggingMiddleware())
-engine.AddMiddleware(tools.NewSecurityMiddleware([]string{"safe_tool"}))
+// Add middleware (any tools.Middleware implementation)
+engine.AddMiddleware(myLoggingMiddleware{})
 
 // Create router with execution engine
 adapter := tools.NewExecutionEngineAdapter(engine)
@@ -135,7 +131,6 @@ AI: "Here's the Seattle weather: 65°F, partly cloudy. And 10 × 5 = 50."
 - ✅ Middleware pipeline testing
 - ✅ Error handling and timeouts
 - ✅ Tool result formatting
-- ✅ Security and metrics middleware
 
 ### Integration Tests (`router_integration_test.go`) 
 - ✅ End-to-end tool execution flow
@@ -153,11 +148,7 @@ AI: "Here's the Seattle weather: 65°F, partly cloudy. And 10 × 5 = 50."
 ## 🔐 Security Features
 
 ### Tool Access Control
-```go
-// Only allow specific tools
-security := NewSecurityMiddleware([]string{"read_file", "calculate"})
-engine.AddMiddleware(security)
-```
+Tool availability is controlled by `tools.enabled_tools` in the config and the registry's sandbox checks.
 
 ### Timeout Protection
 ```go
@@ -196,7 +187,6 @@ engine := NewExecutionEngine(registry, 3, 30*time.Second)
     "execution": {
       "max_parallel": 3,
       "timeout_seconds": 30,
-      "middleware": ["logging", "security", "metrics"],
       "chain_depth_limit": 5
     }
   }
@@ -224,7 +214,7 @@ engine := NewExecutionEngine(registry, 3, 30*time.Second)
 - ✅ **Tool calls appear in chat history** - Context preservation implemented
 - ✅ **Error handling with graceful fallbacks** - Comprehensive error handling
 - ✅ **Support for parallel tool execution** - Controlled concurrency implemented
-- ✅ **Tool execution middleware** - Logging, security, metrics middleware ready
+- ✅ **Tool execution middleware** - Pluggable Before/After hooks via `AddMiddleware`
 
 ## 🔮 Future Enhancements
 
