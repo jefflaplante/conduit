@@ -11,7 +11,7 @@ func TestSessionStateTracker(t *testing.T) {
 	sessionKey := "test-session-123"
 
 	// Test initial state
-	state, exists := tracker.GetState(sessionKey)
+	_, exists := tracker.GetState(sessionKey)
 	if exists {
 		t.Errorf("Expected session to not exist initially")
 	}
@@ -22,7 +22,7 @@ func TestSessionStateTracker(t *testing.T) {
 		t.Fatalf("Failed to update state: %v", err)
 	}
 
-	state, exists = tracker.GetState(sessionKey)
+	state, exists := tracker.GetState(sessionKey)
 	if !exists {
 		t.Fatalf("Expected session to exist after update")
 	}

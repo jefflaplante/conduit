@@ -29,9 +29,11 @@ func newCallbackServer(preferredPort int) (*callbackServer, error) {
 	var listener net.Listener
 	var err error
 
-	// Try preferred port first.
+	// Try preferred port first; on failure fall through to the range below.
 	if preferredPort > 0 {
-		listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", preferredPort))
+		if l, lerr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", preferredPort)); lerr == nil {
+			listener = l
+		}
 	}
 
 	// If preferred port failed, try a range.

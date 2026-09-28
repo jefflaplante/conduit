@@ -193,7 +193,7 @@ func TestRouter_UsageRecording_ZeroUsageSkipped(t *testing.T) {
 // initialResp.Usage).
 func TestRouter_UsageRecording_WithToolFlow(t *testing.T) {
 	store := newUsageStore(t)
-	router, mock := newUsageTestRouter(t, store)
+	_, mock := newUsageTestRouter(t, store)
 	session := newStoredSession(t, store, "usage_toolflow_1")
 
 	mock.AddResponse("I'll help", []ToolCall{{ID: "tc1", Name: "test_tool", Args: map[string]interface{}{}}})

@@ -793,7 +793,6 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 	if err != nil {
 		return nil, err
 	}
-	providerName = served.name
 	provider = r.guardedProvider(served) // conduit-31jg.18(b): later calls re-trim
 
 	// conduit-31jg.11: length-truncated reply → auto-continue (bd-1k3o parity).
@@ -933,7 +932,6 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 	// provider that served the response (bd-27ud: anthropic 404
 	// not_found_error, 2026-09-04 sub-agent death), and every later round
 	// is re-trimmed to that route's window (conduit-31jg.18(b)).
-	providerName = served.name
 	provider = r.guardedProvider(served)
 	// conduit-31jg.64: usage for this and every later call of the turn is
 	// recorded per call by the metering hook, not here.
@@ -942,6 +940,13 @@ func (r *Router) generateResponseWithToolsLocked(ctx context.Context, session *s
 	// never complete a turn silently — retry once, then deliver a visible
 	// fallback so every turn ends with SOMETHING.
 	response, err = GuardEmptyResponse(ctx, provider, req, response, err, "initial")
+	if err != nil {
+		// Unreachable today (err is nil here and the guard only propagates
+		// the incoming error), but mirror the streaming path so a future
+		// guard error can never reach the response.Usage deref below.
+		chainErr = fmt.Errorf("AI provider error: %w", err)
+		return nil, chainErr
+	}
 
 	// conduit-31jg.11: honor FinishReason on the first round trip too — the
 	// bd-1k3o length guard previously only ran after tool execution.
@@ -1173,7 +1178,6 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 	}
 	// Keep the tool-loop continuation on the provider that actually served
 	// the response (bd-27ud), re-trimming every later round (conduit-31jg.18(b)).
-	providerName = served.name
 	provider = r.guardedProvider(served)
 
 	// conduit-14qr: the streaming path never went through the empty guard —
