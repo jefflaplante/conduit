@@ -1,0 +1,59 @@
+name: Leak guard
+
+# Backstop for the local .githooks: catches secrets and personal data in
+# commits that skipped them (a clone without core.hooksPath, a web edit,
+# --no-verify). Built-in credential patterns always run; the private
+# denylist runs when the LEAK_DENYLIST repository secret holds the contents
+# of ~/.config/conduit/leak-denylist. Findings print as file:line and rule
+# name only; matched values are never printed.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Write private denylist
+        env:
+          LEAK_DENYLIST: ${{ secrets.LEAK_DENYLIST }}
+        run: |
+          umask 077
+          if [ -n "$LEAK_DENYLIST" ]; then
+            printf '%s\n' "$LEAK_DENYLIST" > "$RUNNER_TEMP/leak-denylist"
+          else
+            echo "::warning::LEAK_DENYLIST secret not set; only built-in credential patterns are checked"
+            : > "$RUNNER_TEMP/leak-denylist"
+          fi
+
+      - name: Scan work tree
+        run: python3 scripts/leak-guard.py --all --denylist "$RUNNER_TEMP/leak-denylist"
+
+      - name: Scan new commits
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            range="$BASE..$HEAD"
+          elif [ -n "$BEFORE" ] && ! printf '%s' "$BEFORE" | grep -qx '0*' && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..$HEAD"
+          else
+            range="$HEAD"   # new branch/tag or rewritten history: scan everything reachable
+          fi
+          python3 scripts/leak-guard.py --range "$range" --denylist "$RUNNER_TEMP/leak-denylist"
+
+      - name: Remove denylist
+        if: always()
+        run: rm -f "$RUNNER_TEMP/leak-denylist"

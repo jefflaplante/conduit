@@ -13,7 +13,9 @@ Sources (all optional; missing files are skipped):
                 not ${ENV}), every e-mail address, chat_id/user_id numbers
   --file FILE   whole-file secret (e.g. a token file)
   --db FILE     gateway.db: Telegram pairing user/chat IDs (read-only)
-  --extra FILE  hand-maintained literals (names, addresses, ...), one per line
+  --extra FILE  hand-maintained values, one per line: plain lines are
+                substrings; `word:VALUE` lines are whole-word, case-
+                insensitive (use for names, pets, places, employer)
 
 Defaults match the single-owner deployment under ~/ocgo; the script itself
 contains no private values and is safe to publish.

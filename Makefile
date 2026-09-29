@@ -4,7 +4,7 @@
         run test test-full test-coverage clean deps format lint \
         install-deps channel-deps install init dev health help \
         container-core container-full container-sre container-iot \
-        vet vet-full test-race test-race-full staticcheck staticcheck-report fmt-check ci
+        vet vet-full test-race test-race-full staticcheck staticcheck-report fmt-check ci hooks leak-check
 
 # Build configuration
 BINARY_NAME=conduit
@@ -42,8 +42,22 @@ LDFLAGS += -X 'conduit/internal/version.BuildDate=$(BUILD_DATE)'
 # Default target
 all: deps build
 
+# Enable the leak-guard commit/push hooks in this clone. The repo is
+# public; build and test depend on this so every working copy (including
+# agent worktrees) has them without a separate setup step.
+hooks:
+	@if git rev-parse --git-dir >/dev/null 2>&1 && \
+	   [ "$$(git config --get core.hooksPath)" != ".githooks" ]; then \
+		git config core.hooksPath .githooks && \
+		echo "Enabled leak-guard hooks (core.hooksPath=.githooks)"; \
+	fi
+
+# Scan the whole work tree for secrets and private denylist values
+leak-check:
+	python3 scripts/leak-guard.py --all
+
 # Build the gateway binary
-build:
+build: hooks
 	@echo "Building $(BINARY_NAME)..."
 	@echo "Version: $(VERSION)"
 	@mkdir -p $(BUILD_DIR)
@@ -164,7 +178,7 @@ run-telegram: build
 	./$(BUILD_DIR)/$(BINARY_NAME) --config config.telegram.json --verbose
 
 # Run tests
-test:
+test: hooks
 	@echo "Running tests..."
 	$(GOTEST) -v ./...
 
@@ -250,7 +264,7 @@ init-config:
 	fi
 
 # Full initialization for new setup
-init: deps channel-deps init-workspace init-config
+init: hooks deps channel-deps init-workspace init-config
 	@echo ""
 	@echo "Conduit Gateway initialized!"
 	@echo ""

@@ -132,3 +132,7 @@ credentials.json
 token.json
 client_secret*.json
 .claude/settings.local.json
+
+# Python bytecode
+__pycache__/
+*.pyc

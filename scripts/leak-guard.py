@@ -6,9 +6,13 @@ when it finds either:
 
   * a built-in credential pattern (Anthropic/OpenAI/OpenRouter keys,
     Telegram bot tokens, GitHub tokens, private keys, JWTs), or
-  * any literal value from a private denylist kept OUTSIDE the repo
+  * any value from a private denylist kept OUTSIDE the repo
     (default ~/.config/conduit/leak-denylist, override with
     $CONDUIT_LEAK_DENYLIST). Build it with scripts/leak-denylist-build.py.
+    A plain line is a case-sensitive substring (secrets, IDs, e-mails; at
+    least 6 chars). A line `word:VALUE` matches VALUE as a whole word,
+    ignoring case (personal names, pets, places, employer; at least 3
+    chars), so short terms do not fire inside unrelated words.
 
 Findings print as file:line and a rule name; matched values are never printed.
 
@@ -45,7 +49,7 @@ PATTERNS = [
 PLACEHOLDER = re.compile(r"(?i)(REDACTED|EXAMPLE|PLACEHOLDER|x{8,}|0{16,}|your[-_]?(api[-_]?)?key)")
 
 # Binary or vendored paths that are never scanned.
-SKIP_PATH = re.compile(r"\.(png|jpe?g|gif|ico|pdf|woff2?|ttf|gz|zip|tar|db|sqlite)$|(^|/)vendor/|\.min\.js$")
+SKIP_PATH = re.compile(r"\.(png|jpe?g|gif|ico|pdf|woff2?|ttf|gz|zip|tar|db|sqlite|pyc)$|(^|/)vendor/|\.min\.js$")
 
 
 def default_denylist_path():
@@ -53,7 +57,9 @@ def default_denylist_path():
 
 
 def load_denylist(path):
-    """One literal value per line; '#' comments. Returns (values, warning)."""
+    """One value per line; '#' comments. Returns (matchers, warning).
+
+    A matcher is a str (substring) or a compiled pattern (`word:` entry)."""
     if not os.path.exists(path):
         return [], f"leak-guard: denylist {path} not found; only built-in patterns are checked " \
                    f"(run scripts/leak-denylist-build.py)"
@@ -61,17 +67,26 @@ def load_denylist(path):
     warn = None
     if mode & 0o077:
         warn = f"leak-guard: warning: {path} is mode {oct(mode)}; it should be 0600"
-    values = []
+    values, words = [], []
     with open(path, encoding="utf-8") as f:
         for line in f:
             v = line.rstrip("\n")
-            if v and not v.startswith("#") and len(v) >= 6:
+            if not v or v.startswith("#"):
+                continue
+            if v.startswith("word:"):
+                w = v[len("word:"):].strip()
+                if len(w) >= 3:
+                    words.append(re.escape(w))
+            elif len(v) >= 6:
                 values.append(v)
+    if words:
+        # One alternation keeps history-wide scans fast.
+        values.append(re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(words) + r")(?![A-Za-z0-9])", re.I))
     return values, warn
 
 
 def git(*args):
-    return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["git", *args], capture_output=True, text=True, errors="replace", check=True).stdout
 
 
 def added_lines_from_diff(diff):
@@ -101,7 +116,7 @@ def scan_lines(items, denylist):
         if SKIP_PATH.search(path):
             continue
         for v in denylist:
-            if v in text:
+            if (v in text) if isinstance(v, str) else v.search(text):
                 findings.append((path, lineno, "private-denylist value"))
                 break
         if ALLOW_MARKER in text:
