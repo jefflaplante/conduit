@@ -174,24 +174,49 @@ Restore refuses to run while the gateway is live (the `--pidfile` names a runnin
 
 ### maintenance
 
-Database maintenance operations.
+Database maintenance: prune old automated sessions and optimise the gateway database.
 
 ```bash
-# Run maintenance tasks
+# See exactly what would be deleted (changes nothing)
+conduit maintenance run --dry-run
+
+# Run all tasks: session_cleanup, then database_maintenance
 conduit maintenance run
 
-# Run specific task
+# Run one task
 conduit maintenance run-task session_cleanup
 conduit maintenance run-task database_maintenance
 
-# Check maintenance status
+# Database size, sessions/messages per key prefix, and what a run would prune (read-only)
 conduit maintenance status
 
-# View maintenance configuration
+# Effective settings (config file "maintenance" section over defaults)
 conduit maintenance config
 ```
 
-Tasks run only when invoked: there is no background schedule and no maintenance window (use a system timer to run `conduit maintenance run` periodically). Settings are the built-in defaults (`maintenance.DefaultConfig`); the config file has no maintenance section. `--force` is deprecated and has no effect. Note: `run` and `run-task` do not yet open the gateway database (`initDatabase` in cmd/gateway/maintenance.go is unimplemented), so they currently exit with an error.
+| Flag | Commands | Description |
+|------|----------|-------------|
+| `--dry-run` | run, run-task | Report what would be deleted/optimised; change nothing |
+| `--no-backup` | run, run-task | Skip the pre-delete / pre-VACUUM backup |
+| `--retention-days N` | run, run-task, status | Override `maintenance.retention_days` (N >= 1) |
+| `--json` | all | JSON output |
+| `--verbose` | all | Task log lines |
+| `--force` | run, run-task | Deprecated, no effect |
+
+**Database.** `database.path` from `--config`, or the global `--database` (same resolution as the server, `token` and `pairing`). The file must exist; the command never creates a database or runs migrations. It is opened with the server's DSN (WAL, 5 s busy timeout), so it can run while the gateway is running.
+
+**session_cleanup** deletes a session, with its messages, only when:
+
+- its key starts with a prunable prefix (default `cron_`, `heartbeat_`, `subagent_`, `test_`: cron jobs, HEARTBEAT.md runs, sub-agents and the `/api/test/message` HTTP endpoint). Matching is on the literal key prefix, and
+- its last activity (the later of `sessions.updated_at` and its newest message) is older than the retention window (default 30 days).
+
+Telegram (`telegram_`) and TUI (`tui_`) sessions, and any key with another prefix, are never deleted. `--dry-run` and `status` print what is kept as well: the old sessions and messages that are protected. Timestamps are parsed in Go (stored values mix Go `time.String()` text with a zone and `m=+…` suffix, RFC 3339 and SQLite `CURRENT_TIMESTAMP`); a session with an unparseable timestamp is kept.
+
+Before deleting anything a `VACUUM INTO` backup is written next to the database (or to `maintenance.backup_dir`) as `<db>.backup.<UTC timestamp>` with mode 0600, and its path is printed; `--no-backup` skips it. Deletes run in transactions of `maintenance.batch_size` sessions (default 500). Each session is re-checked inside its transaction and skipped if it changed since the plan. Rows keyed by the session are removed too: messages (gateway.db `messages_fts` follows through its triggers), and `session_summaries` / `claude_code_sessions` rows where those tables exist. If search is enabled and search.db exists, the pruned sessions' rows are removed from its `messages_fts` mirror as well (otherwise the gateway rebuilds the mirror at its next start, when the counts differ).
+
+**database_maintenance** runs `ANALYZE`/`PRAGMA optimize`, and when the file exceeds the vacuum threshold (100 MB) a backup (same rules as above) followed by a WAL checkpoint and `VACUUM`. If the running gateway keeps the database busy, `VACUUM` is skipped. There is no fallback to copying the raw database file.
+
+Tasks run only when invoked: there is no background schedule and no maintenance window. To run maintenance periodically, call `conduit maintenance run` from a system timer (cron, systemd). A run that has a failed task exits non-zero.
 
 ### tools
 

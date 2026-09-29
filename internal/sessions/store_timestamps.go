@@ -46,6 +46,15 @@ var legacyTimeLayouts = []string{
 	"2006-01-02",
 }
 
+// ParseStoredTime parses a timestamp as stored in gateway.db text columns:
+// the canonical updated_at layout, Go time.Time.String() output from the
+// driver's default time binding (including a trailing monotonic "m=+..."
+// reading, as in messages.timestamp and sessions.created_at), RFC 3339, and
+// SQLite CURRENT_TIMESTAMP. Zone-less forms are UTC. conduit-2cxu: the
+// maintenance CLI compares these in Go because the mixed text formats do
+// not sort chronologically.
+func ParseStoredTime(v string) (time.Time, bool) { return parseLegacyTime(v) }
+
 // parseLegacyTime parses a legacy updated_at string. Zone-less forms are
 // UTC (that is what SQLite's CURRENT_TIMESTAMP produces).
 func parseLegacyTime(v string) (time.Time, bool) {

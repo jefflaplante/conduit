@@ -95,6 +95,16 @@ func (s *SearchDB) configurePool() {
 	s.db.SetConnMaxLifetime(0)
 }
 
+// ResolvePath returns the search.db path the gateway opens: searchPath when
+// set, otherwise derived from the gateway.db path. conduit-2cxu: used by the
+// maintenance CLI to drop pruned sessions from the mirrored messages_fts.
+func ResolvePath(searchPath, gatewayDBPath string) string {
+	if searchPath != "" {
+		return searchPath
+	}
+	return deriveSearchDBPath(gatewayDBPath)
+}
+
 // deriveSearchDBPath creates a search.db path from the gateway.db path.
 // Examples:
 //   - gateway.db → gateway.search.db

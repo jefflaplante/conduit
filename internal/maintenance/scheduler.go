@@ -19,6 +19,7 @@ type Scheduler struct {
 	db     *sql.DB
 	config Config
 	tasks  map[string]Task
+	order  []string // registration order; RunNow runs tasks in this order
 	status map[string]TaskStatus
 	mu     sync.RWMutex
 	logger *log.Logger
@@ -45,6 +46,9 @@ func (s *Scheduler) RegisterTask(task Task) error {
 	defer s.mu.Unlock()
 
 	name := task.Name()
+	if _, exists := s.tasks[name]; !exists {
+		s.order = append(s.order, name)
+	}
 	s.tasks[name] = task
 
 	// Initialize status
@@ -59,9 +63,12 @@ func (s *Scheduler) RegisterTask(task Task) error {
 	return nil
 }
 
-// RunNow executes all maintenance tasks immediately
+// RunNow executes all maintenance tasks immediately, in registration order
+// (session cleanup before database optimisation, so VACUUM sees the freed
+// pages).
 func (s *Scheduler) RunNow(ctx context.Context) error {
 	s.mu.RLock()
+	order := append([]string(nil), s.order...)
 	tasks := make(map[string]Task, len(s.tasks))
 	for name, task := range s.tasks {
 		tasks[name] = task
@@ -70,8 +77,8 @@ func (s *Scheduler) RunNow(ctx context.Context) error {
 
 	s.logger.Printf("[Maintenance] Running %d tasks immediately", len(tasks))
 
-	for name, task := range tasks {
-		s.executeTask(ctx, name, task)
+	for _, name := range order {
+		s.executeTask(ctx, name, tasks[name])
 	}
 
 	return nil
@@ -89,6 +96,13 @@ func (s *Scheduler) RunTask(ctx context.Context, taskName string) error {
 
 	s.executeTask(ctx, taskName, task)
 	return nil
+}
+
+// TaskNames returns the registered task names in registration order.
+func (s *Scheduler) TaskNames() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string(nil), s.order...)
 }
 
 // GetStatus returns the current status of all maintenance tasks

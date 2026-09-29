@@ -976,6 +976,28 @@ Bearer-token policy for the MCP endpoint the claude-code provider exposes on `12
 | `require_auth` | unset = warn | unset: serve unauthenticated requests but log them, reject wrong tokens (transition mode, becomes enforce in a future release); `true`: 401 without a valid token; `false`: no auth |
 | `token_file` | `{data_dir}/auth/mcp_token` | 0600 token file, generated on first start. Exported to the gateway's environment as `CONDUIT_MCP_TOKEN` |
 
+### Maintenance
+
+Optional settings for the `conduit maintenance` CLI (conduit-2cxu). The gateway itself never runs maintenance; see [cli-reference.md](cli-reference.md#maintenance).
+
+```json
+{
+  "maintenance": {
+    "retention_days": 30,
+    "prunable_prefixes": ["cron", "heartbeat", "subagent", "test"],
+    "batch_size": 500,
+    "backup_dir": ""
+  }
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `retention_days` | `30` | Automated sessions whose last activity is older than this are deleted by `maintenance run` |
+| `prunable_prefixes` | `cron`, `heartbeat`, `subagent`, `test` | Session-key prefixes that may be deleted. Default-deny: nothing else is ever deleted. A trailing `_` is implied (`cron` matches `cron_…`, not `cronjob_…`); values are literal, no wildcards. A prefix that could match `telegram_` or `tui_` keys is a config error |
+| `batch_size` | `500` | Sessions deleted per transaction (keeps each write lock short while the gateway runs) |
+| `backup_dir` | next to the database | Where the pre-delete / pre-VACUUM `VACUUM INTO` backup (mode 0600) is written |
+
 ### Debug
 
 ```json
