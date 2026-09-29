@@ -360,11 +360,7 @@ func ExecutePrune(ctx context.Context, db *sql.DB, rep *PruneReport, batchSize i
 	start := time.Now()
 	defer func() { rep.ExecuteDuration = time.Since(start) }()
 
-	hasSummaries, err := tableExists(ctx, db, "session_summaries")
-	if err != nil {
-		return err
-	}
-	hasMappings, err := tableExists(ctx, db, "claude_code_sessions")
+	tables, err := sessions.DetectDependentTables(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -377,7 +373,7 @@ func ExecutePrune(ctx context.Context, db *sql.DB, rep *PruneReport, batchSize i
 		var b batchResult
 		err := database.RetryOnBusy(5, func() error {
 			var err error
-			b, err = pruneBatch(ctx, db, batch, rep.PrunablePrefixes, hasSummaries, hasMappings)
+			b, err = pruneBatch(ctx, db, batch, rep.PrunablePrefixes, tables)
 			return err
 		})
 		if err != nil {
@@ -397,7 +393,7 @@ type batchResult struct {
 	sessions, messages, summaries, mappings, skipped int
 }
 
-func pruneBatch(ctx context.Context, db *sql.DB, batch []pruneCandidate, prefixes []string, hasSummaries, hasMappings bool) (batchResult, error) {
+func pruneBatch(ctx context.Context, db *sql.DB, batch []pruneCandidate, prefixes []string, tables sessions.DependentTables) (batchResult, error) {
 	var r batchResult
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -411,16 +407,6 @@ func pruneBatch(ctx context.Context, db *sql.DB, batch []pruneCandidate, prefixe
 		return r, err
 	}
 	defer check.Close()
-	delMsgs, err := tx.PrepareContext(ctx, `DELETE FROM messages WHERE session_key = ?`)
-	if err != nil {
-		return r, err
-	}
-	defer delMsgs.Close()
-	delSess, err := tx.PrepareContext(ctx, `DELETE FROM sessions WHERE key = ?`)
-	if err != nil {
-		return r, err
-	}
-	defer delSess.Close()
 
 	for _, c := range batch {
 		if matchPrefix(c.key, prefixes) == "" {
@@ -440,32 +426,16 @@ func pruneBatch(ctx context.Context, db *sql.DB, batch []pruneCandidate, prefixe
 			r.skipped++ // active since the plan
 			continue
 		}
-		if n > 0 {
-			res, err := delMsgs.ExecContext(ctx, c.key)
-			if err != nil {
-				return r, err
-			}
-			r.messages += rowsAffected(res)
-		}
-		if hasSummaries {
-			res, err := tx.ExecContext(ctx, `DELETE FROM session_summaries WHERE session_key = ?`, c.key)
-			if err != nil {
-				return r, err
-			}
-			r.summaries += rowsAffected(res)
-		}
-		if hasMappings {
-			res, err := tx.ExecContext(ctx, `DELETE FROM claude_code_sessions WHERE conduit_session_id = ?`, c.key)
-			if err != nil {
-				return r, err
-			}
-			r.mappings += rowsAffected(res)
-		}
-		res, err := delSess.ExecContext(ctx, c.key)
+		// conduit-385r: the same deletion the scheduler's end-of-run
+		// cleanup uses (messages, summaries, Claude Code mapping, row).
+		d, err := sessions.DeleteSessionTx(ctx, tx, c.key, tables)
 		if err != nil {
 			return r, err
 		}
-		r.sessions += rowsAffected(res)
+		r.messages += d.Messages
+		r.summaries += d.Summaries
+		r.mappings += d.Mappings
+		r.sessions += d.Sessions
 	}
 	return r, tx.Commit()
 }
