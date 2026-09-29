@@ -46,7 +46,8 @@ type Config struct {
 	Brain          BrainConfig                  `json:"brain,omitempty"`
 	Reflection     *reflection.ReflectionConfig `json:"reflection,omitempty"`
 	STT            STTConfig                    `json:"stt,omitempty"`
-	MCP            MCPConfig                    `json:"mcp,omitempty"` // conduit-31jg.8
+	MCP            MCPConfig                    `json:"mcp,omitempty"`         // conduit-31jg.8
+	Maintenance    MaintenanceConfig            `json:"maintenance,omitempty"` // conduit-2cxu: `conduit maintenance` CLI only
 	// RestartResume selects what happens after a restart to interactive
 	// turns the shutdown drain cut off: "notice" (default), "auto" or "off".
 	// See RestartResumeMode. conduit-31jg.88
