@@ -978,7 +978,7 @@ Bearer-token policy for the MCP endpoint the claude-code provider exposes on `12
 
 ### Maintenance
 
-Optional settings for the `conduit maintenance` CLI (conduit-2cxu). The gateway itself never runs maintenance; see [cli-reference.md](cli-reference.md#maintenance).
+Optional settings for the `conduit maintenance` CLI (conduit-2cxu). The gateway itself never runs maintenance; see [cli-reference.md](cli-reference.md#maintenance). Cron and heartbeat runs that give no reply delete their own session when they end (conduit-385r, [agent-heartbeat.md](agent-heartbeat.md#run-sessions)), so session cleanup mostly removes automated sessions that do hold a transcript (runs that replied, sub-agents, test requests), plus any a failed cleanup left behind.
 
 ```json
 {

@@ -227,6 +227,10 @@ When no action is needed, the AI responds with `HEARTBEAT_OK`. This is detected 
 - Phrases like "no alerts", "nothing needs attention", "all clear"
 - Short responses indicating no issues
 
+### Run Sessions
+
+Each heartbeat run gets its own session (`heartbeat_<nanos>_heartbeat_<id>`). The run's turn stores the prompt, and stores a reply only when the model gives one, so a `HEARTBEAT_OK` run (or a run that fails or is stopped) leaves a session holding just the prompt. When the run ends, after its last retry, the gateway deletes such a session with its context and messages (conduit-385r). A session is kept when it holds a reply, received an inter-session message, still has a turn running or queued, or spawned sub-agents: a sub-agent reports back into its parent session through a wake, often minutes after the run ended. Cron prompt jobs follow the same rule for their `cron_…` sessions. Sessions that are kept are pruned by `conduit maintenance run` once they are older than the retention window ([cli-reference.md](cli-reference.md#maintenance)). If the cleanup fails, a warning is logged and the run's result is unaffected.
+
 ## Quiet Hours
 
 Quiet hours prevent non-critical alerts from disturbing you during sleep/off hours.
