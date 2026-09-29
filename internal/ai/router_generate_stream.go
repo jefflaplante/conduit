@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"conduit/internal/sessions"
@@ -29,35 +28,10 @@ func (r *Router) GenerateResponseStreaming(ctx context.Context, session *session
 		}
 	}()
 
-	// Handle bare provider name used as model (e.g., model="ghost" where "ghost" is a provider)
-	if modelOverride != "" && !strings.Contains(modelOverride, "/") {
-		resolved := r.ResolveProviderForModel(modelOverride)
-		if resolved != "" && strings.EqualFold(resolved, modelOverride) {
-			log.Printf("[Router] Bare provider name %q used as model — routing to provider with its default model", modelOverride)
-			providerName = resolved
-			modelOverride = ""
-		}
-	}
-
-	// Resolve provider from model only when:
-	// 1. No provider explicitly specified, OR
-	// 2. Model has explicit provider prefix (e.g., "ghost/model")
-	if modelOverride != "" && (providerName == "" || strings.Contains(modelOverride, "/")) {
-		resolved := r.ResolveProviderForModel(modelOverride)
-		if resolved != "" {
-			if providerName != "" && providerName != resolved {
-				log.Printf("[Router] Streaming: overriding provider %q → %q (from model %q)", providerName, resolved, modelOverride)
-			}
-			providerName = resolved
-		}
-	}
-	if providerName == "" {
-		providerName = r.default_
-	}
-
-	provider, exists := r.getProvider(providerName)
-	if !exists {
-		chainErr = fmt.Errorf("provider not found: %s", providerName)
+	// no-anthropic-routing: resolution + the routable=false refusal.
+	providerName, modelOverride, provider, err := r.resolveTurnRoute("Streaming", providerName, modelOverride)
+	if err != nil {
+		chainErr = err
 		return nil, chainErr
 	}
 

@@ -87,6 +87,10 @@ func (r *Router) GenerateSideCall(ctx context.Context, providerName string, req 
 	if req != nil {
 		model = req.Model
 	}
+	// no-anthropic-routing: side calls (vision) obey routable=false too.
+	if err := r.CheckRoutable(providerName, model); err != nil {
+		return nil, fmt.Errorf("side call: %w", err)
+	}
 	obs := &callObs{} // conduit-2lzv: queue_wait_ms
 	// conduit-38cz; the side-call scope gives an abandoned wait's queue_*
 	// record the side-call phase (conduit-3j08).

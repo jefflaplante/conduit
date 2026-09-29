@@ -30,7 +30,14 @@ type ProviderMeta struct {
 	DefaultModel  string
 	ContextWindow int    // Configured context window override (0 = auto-detect from model)
 	FallbackModel string // Fallback model for quota/auth errors (bd-6tb)
+	// NotRoutable mirrors ai.providers[].routable=false: the provider is
+	// listed and priced but the router never calls it. Stored negated so
+	// the zero value (mocks, tests) stays routable. no-anthropic-routing
+	NotRoutable bool
 }
+
+// Routable reports whether the router may send calls to this provider.
+func (m ProviderMeta) Routable() bool { return !m.NotRoutable }
 
 // Router handles AI model interactions
 type Router struct {

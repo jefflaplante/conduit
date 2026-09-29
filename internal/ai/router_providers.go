@@ -3,6 +3,7 @@ package ai
 import (
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	"conduit/internal/config"
@@ -78,6 +79,7 @@ func providerMetaFor(providerCfg config.ProviderConfig) ProviderMeta {
 		DefaultModel:  providerCfg.Model,
 		ContextWindow: providerCfg.ContextWindow,
 		FallbackModel: providerCfg.FallbackModel, // bd-6tb
+		NotRoutable:   !providerCfg.IsRoutable(), // no-anthropic-routing
 	}
 }
 
@@ -171,6 +173,12 @@ func (r *Router) providerMetaKeys() []string {
 
 // ResolveProviderForModel attempts to find the best provider for a given model name.
 // Returns the provider name, or "" if no match is found (caller should use default).
+//
+// no-anthropic-routing: when several providers match a tier, a routable one
+// wins. A name that matches ONLY a routable=false provider still resolves
+// to it, so the caller's routableProvider check refuses it with a clear
+// error instead of silently sending e.g. a claude-* model to the default
+// provider.
 func (r *Router) ResolveProviderForModel(model string) string {
 	if model == "" {
 		return ""
@@ -191,33 +199,16 @@ func (r *Router) ResolveProviderForModel(model string) string {
 		log.Printf("[Router] ResolveProvider: prefix %q NOT in providerMeta (keys: %v) for model %q", prefix, r.providerMetaKeys(), model)
 	}
 
-	// Tier 1: prefix heuristics → provider type
-	var targetType string
-	switch {
-	case strings.HasPrefix(lower, "claude-"):
-		targetType = "anthropic"
-	case strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o1-") || strings.HasPrefix(lower, "o3-"):
-		targetType = "openai"
-	case strings.HasPrefix(lower, "llama") || strings.HasPrefix(lower, "mistral") ||
-		strings.HasPrefix(lower, "mixtral") || strings.HasPrefix(lower, "codellama") ||
-		strings.HasPrefix(lower, "deepseek") || strings.HasPrefix(lower, "qwen") ||
-		strings.HasPrefix(lower, "phi-") || strings.HasPrefix(lower, "gemma"):
-		targetType = "ollama"
-	}
-
-	if targetType != "" {
-		for name, meta := range r.providerMeta {
-			if meta.Type == targetType {
-				return name
-			}
+	// Tier 1: prefix heuristics → provider type (config.InferProviderType)
+	if targetType := config.InferProviderType(model); targetType != "" {
+		if name := r.pickProviderLocked(func(m ProviderMeta) bool { return m.Type == targetType }); name != "" {
+			return name
 		}
 	}
 
 	// Tier 2: check if model matches any provider's default model
-	for name, meta := range r.providerMeta {
-		if meta.DefaultModel == model {
-			return name
-		}
+	if name := r.pickProviderLocked(func(m ProviderMeta) bool { return m.DefaultModel == model }); name != "" {
+		return name
 	}
 
 	// Tier 3: model string is itself a known provider name
@@ -225,6 +216,28 @@ func (r *Router) ResolveProviderForModel(model string) string {
 		return lower
 	}
 
+	return ""
+}
+
+// pickProviderLocked returns the name of a provider whose meta matches,
+// preferring routable providers (then name order, for determinism), or "".
+// Caller holds r.mu. no-anthropic-routing
+func (r *Router) pickProviderLocked(match func(ProviderMeta) bool) string {
+	names := make([]string, 0, len(r.providerMeta))
+	for name, meta := range r.providerMeta {
+		if match(meta) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if r.providerMeta[name].Routable() {
+			return name
+		}
+	}
+	if len(names) > 0 {
+		return names[0]
+	}
 	return ""
 }
 
@@ -244,6 +257,13 @@ func (r *Router) resolveFallbackRoute(failedProvider string) (string, Provider, 
 
 	fallbackProviderName := r.ResolveProviderForModel(fallbackModel)
 	if fallbackProviderName == "" {
+		return "", nil, false
+	}
+	// no-anthropic-routing: a fallback chain never picks a routable=false
+	// provider — the fallback is skipped (as if none resolved), not an error.
+	if !r.IsRoutable(fallbackProviderName) {
+		log.Printf("[Router] fallback model %q for provider %q resolves to provider %q, which is configured with routable=false — skipping the fallback (no-anthropic-routing)",
+			fallbackModel, failedProvider, fallbackProviderName)
 		return "", nil, false
 	}
 	p, exists := r.GetProvider(fallbackProviderName)

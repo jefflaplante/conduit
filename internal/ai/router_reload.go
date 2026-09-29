@@ -29,6 +29,12 @@ import (
 // provider, changing its type, or changing a claude-code provider (its MCP
 // server and session mapper are wired once at startup) is refused here; the
 // gateway classifies such changes as restart-only before it gets this far.
+//
+// Routability (no-anthropic-routing): a change of ai.providers[].routable
+// alone is always live, for every provider type including claude-code: the
+// instance is kept and only its metadata is swapped, so the next routing
+// decision (new turns, fallback resolution, vision, side calls) sees it. A
+// turn already running on the provider finishes there.
 
 // ProviderReload is a prepared, not yet applied, provider reload.
 type ProviderReload struct {
@@ -38,7 +44,10 @@ type ProviderReload struct {
 	meta      map[string]ProviderMeta
 	cfgs      map[string]config.ProviderConfig
 	changed   []string
-	committed bool
+	// routability: providers whose routable setting alone changed; only
+	// their metadata is swapped (no-anthropic-routing).
+	routability []string
+	committed   bool
 }
 
 // PrepareProviderReload builds new instances for every provider whose
@@ -82,6 +91,15 @@ func (r *Router) PrepareProviderReload(cfg config.AIConfig) (*ProviderReload, er
 		if reflect.DeepEqual(oc, nc) {
 			continue
 		}
+		// no-anthropic-routing: a change of routable alone is a routing
+		// decision, not a provider change — swap the metadata, keep the
+		// instance (and its state, e.g. a refreshed OAuth token). This also
+		// holds for claude-code providers.
+		if sameExceptRoutable(oc, nc) {
+			pr.meta[name] = providerMetaFor(nc)
+			pr.routability = append(pr.routability, name)
+			continue
+		}
 		if oc.Type != nc.Type {
 			return nil, fmt.Errorf("changing the type of provider %q requires a restart", name)
 		}
@@ -97,7 +115,24 @@ func (r *Router) PrepareProviderReload(cfg config.AIConfig) (*ProviderReload, er
 		pr.changed = append(pr.changed, name)
 	}
 	sort.Strings(pr.changed)
+	sort.Strings(pr.routability)
 	return pr, nil
+}
+
+// sameExceptRoutable reports whether two provider configs differ at most in
+// their routable setting.
+func sameExceptRoutable(a, b config.ProviderConfig) bool {
+	a.Routable, b.Routable = nil, nil
+	return reflect.DeepEqual(a, b)
+}
+
+// RoutabilityChanged returns the names of the providers whose routable
+// setting alone changed (metadata swapped, instance kept), sorted.
+func (p *ProviderReload) RoutabilityChanged() []string {
+	if p == nil {
+		return nil
+	}
+	return append([]string(nil), p.routability...)
 }
 
 // Changed returns the names of the providers the reload rebuilds, sorted.
@@ -123,13 +158,15 @@ func (p *ProviderReload) Commit() {
 	r.mu.Lock()
 	for name, inst := range p.providers {
 		r.providers[name] = inst
-		r.providerMeta[name] = p.meta[name]
+	}
+	for name, meta := range p.meta { // rebuilt providers + routable-only changes
+		r.providerMeta[name] = meta
 	}
 	r.providerCfgs = p.cfgs
 	r.mu.Unlock()
 
 	throttled := r.throttle.SetLimits(p.cfg.Providers)
-	if len(p.changed) > 0 || len(throttled) > 0 {
-		log.Printf("[Router] Live provider reload: rebuilt=%v throttle_limits_changed=%v (conduit-rmho)", p.changed, throttled)
+	if len(p.changed) > 0 || len(throttled) > 0 || len(p.routability) > 0 {
+		log.Printf("[Router] Live provider reload: rebuilt=%v routable_changed=%v throttle_limits_changed=%v (conduit-rmho)", p.changed, p.routability, throttled)
 	}
 }
