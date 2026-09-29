@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -65,6 +66,24 @@ func (t *DatabaseMaintenanceTask) Execute(ctx context.Context) TaskResult {
 	}
 
 	dbSizeMB := dbSize / (1024 * 1024)
+
+	if t.config.DryRun {
+		var would []string
+		if t.config.VacuumEnabled && dbSizeMB > t.config.VacuumThreshold {
+			if t.config.BackupBeforeVacuum {
+				would = append(would, "backup")
+			}
+			would = append(would, "VACUUM")
+		}
+		if t.config.OptimizeIndexes {
+			would = append(would, "ANALYZE")
+		}
+		msg := fmt.Sprintf("Dry run: database %d MB (VACUUM threshold %d MB)", dbSizeMB, t.config.VacuumThreshold)
+		if len(would) > 0 {
+			msg += "; would run " + strings.Join(would, ", ")
+		}
+		return TaskResult{Success: true, Message: msg}
+	}
 
 	// Only vacuum if database is above threshold
 	if t.config.VacuumEnabled && dbSizeMB > t.config.VacuumThreshold {
@@ -140,61 +159,16 @@ func (t *DatabaseMaintenanceTask) getDatabaseSize() (int64, error) {
 	return stat.Size(), nil
 }
 
-// createBackup creates a backup of the database before performing VACUUM
+// createBackup writes a VACUUM INTO backup (0600) before VACUUM. There is
+// no raw file-copy fallback: copying the main file of a WAL database while
+// the gateway runs does not produce a consistent copy. conduit-2cxu
 func (t *DatabaseMaintenanceTask) createBackup(ctx context.Context) TaskResult {
-	if t.dbPath == "" {
-		return TaskResult{
-			Success: false,
-			Message: "Cannot create backup: database path not available",
-		}
-	}
-
-	// Generate backup filename with timestamp
-	backupPath := fmt.Sprintf("%s.backup.%s", t.dbPath, time.Now().Format("20060102-150405"))
-
-	// Use SQLite's built-in backup API if available, otherwise copy file
-	backupQuery := fmt.Sprintf("VACUUM INTO '%s'", backupPath)
-
-	_, err := t.db.ExecContext(ctx, backupQuery)
+	path, err := BackupDatabase(ctx, t.db, t.dbPath, t.config.BackupDir, time.Now())
 	if err != nil {
-		// Fallback to file copy
-		return t.copyFileBackup(backupPath)
+		return TaskResult{Success: false, Message: "Backup before VACUUM failed", Error: err}
 	}
-
-	t.logger.Printf("[DatabaseMaintenance] Created backup: %s", backupPath)
-
-	return TaskResult{
-		Success: true,
-		Message: fmt.Sprintf("Created backup: %s", backupPath),
-	}
-}
-
-// copyFileBackup creates a backup by copying the database file
-func (t *DatabaseMaintenanceTask) copyFileBackup(backupPath string) TaskResult {
-	input, err := os.ReadFile(t.dbPath)
-	if err != nil {
-		return TaskResult{
-			Success: false,
-			Message: "Failed to read database file for backup",
-			Error:   err,
-		}
-	}
-
-	err = os.WriteFile(backupPath, input, 0644)
-	if err != nil {
-		return TaskResult{
-			Success: false,
-			Message: "Failed to write backup file",
-			Error:   err,
-		}
-	}
-
-	t.logger.Printf("[DatabaseMaintenance] Created file backup: %s", backupPath)
-
-	return TaskResult{
-		Success: true,
-		Message: fmt.Sprintf("Created backup: %s", backupPath),
-	}
+	t.logger.Printf("[DatabaseMaintenance] Created backup: %s", path)
+	return TaskResult{Success: true, Message: fmt.Sprintf("Created backup: %s", path)}
 }
 
 // performVacuum runs a WAL checkpoint first (lighter), then attempts VACUUM.
