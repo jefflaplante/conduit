@@ -197,3 +197,21 @@ func TestDeleteSessionIfPromptOnly_ConcurrentDelivery(t *testing.T) {
 		}
 	}
 }
+
+// An interactive session whose replies all failed looks prompt-only; the
+// store itself must refuse it regardless of the caller's own guard.
+func TestDeleteSessionIfPromptOnly_RefusesNonSchedulerSessions(t *testing.T) {
+	s := newDeleteTestStore(t)
+	for _, ch := range []string{"telegram", "tui", "test", "subagent_1"} {
+		sess, err := s.GetOrCreateSession("owner", ch)
+		require.NoError(t, err)
+		_, err = s.AddMessage(sess.Key, "user", "hello", nil)
+		require.NoError(t, err)
+
+		deleted, err := s.DeleteSessionIfPromptOnly(context.Background(), sess.Key)
+		require.Error(t, err, ch)
+		assert.False(t, deleted, ch)
+		_, err = s.GetSession(sess.Key)
+		assert.NoError(t, err, "%s session must survive", ch)
+	}
+}

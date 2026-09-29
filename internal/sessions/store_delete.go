@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"conduit/internal/database"
 )
@@ -118,6 +119,12 @@ func rowsAffected(res sql.Result) int {
 // error. After commit the deleted messages are dropped from the search.db
 // mirror (MessagesDeletedCallback) and the session from the state tracker.
 func (s *Store) DeleteSessionIfPromptOnly(ctx context.Context, key string) (bool, error) {
+	// Defense in depth: only scheduler run sessions are ever eligible, even
+	// if a caller forgets its own check. An interactive session whose
+	// replies all failed must never be deleted by this path.
+	if !strings.HasPrefix(key, "cron_") && !strings.HasPrefix(key, "heartbeat_") {
+		return false, fmt.Errorf("delete prompt-only session %s: refusing non-scheduler session", key)
+	}
 	tables, err := DetectDependentTables(ctx, s.db)
 	if err != nil {
 		return false, err
