@@ -112,4 +112,5 @@ issues-bak.jsonl
 *.bak-*
 *.db.backup.*
 *.db.pre-*
-leak-denylist*
+leak-denylist
+leak-denylist.extra
