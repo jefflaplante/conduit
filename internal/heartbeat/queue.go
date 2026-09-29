@@ -15,6 +15,19 @@ import (
 type SharedAlertQueue struct {
 	filePath string
 	mutex    sync.RWMutex
+	now      func() time.Time // expiry clock; nil = wall clock
+}
+
+// SetClock makes expiry checks use now instead of the wall clock, so a queue
+// fed by an injected clock (Integration.now in tests) judges expiry by the
+// same clock that stamped ExpiresAt.
+func (q *SharedAlertQueue) SetClock(now func() time.Time) { q.now = now }
+
+func (q *SharedAlertQueue) clock() time.Time {
+	if q.now != nil {
+		return q.now()
+	}
+	return time.Now()
 }
 
 // NewSharedAlertQueue creates a new shared alert queue instance
@@ -295,7 +308,7 @@ func (q *SharedAlertQueue) GetPendingAlerts() ([]Alert, error) {
 		return nil, fmt.Errorf("failed to load queue for getting pending alerts: %w", err)
 	}
 
-	return queue.GetPendingAlerts(), nil
+	return queue.GetPendingAlertsAt(q.clock()), nil
 }
 
 // UpdateAlert applies fn to the persisted alert with the given ID under the
@@ -325,7 +338,7 @@ func (q *SharedAlertQueue) GetRetryableAlerts() ([]Alert, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load queue for getting retryable alerts: %w", err)
 	}
-	return queue.GetRetryableAlerts(), nil
+	return queue.GetRetryableAlertsAt(q.clock()), nil
 }
 
 // UpdateAlertStatus updates the status of a specific alert
@@ -372,7 +385,7 @@ func (q *SharedAlertQueue) RemoveProcessedAlerts() error {
 	originalCount := len(queue.Alerts)
 
 	// Remove expired alerts
-	queue.RemoveExpiredAlerts()
+	queue.RemoveExpiredAlertsAt(q.clock())
 
 	// Clean up suppression entries
 	queue.CleanupExpiredSuppression()

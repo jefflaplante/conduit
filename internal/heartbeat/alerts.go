@@ -252,12 +252,16 @@ func (l AlertLink) Validate() error {
 }
 
 // IsExpired checks if the alert has expired
-func (a Alert) IsExpired() bool {
+func (a Alert) IsExpired() bool { return a.IsExpiredAt(time.Now()) }
+
+// IsExpiredAt reports whether the alert has expired as of now. Callers with
+// an injected clock (the deferred queue) must use this, not IsExpired: an
+// alert stamped with a fake clock looks expired to the wall clock.
+func (a Alert) IsExpiredAt(now time.Time) bool {
 	if a.ExpiresAt == nil {
 		return false
 	}
-
-	return time.Now().After(*a.ExpiresAt)
+	return now.After(*a.ExpiresAt)
 }
 
 // CanRetry checks if the alert can be retried
@@ -343,11 +347,14 @@ func (q AlertQueue) Validate() error {
 }
 
 // GetPendingAlerts returns alerts that are pending delivery
-func (q AlertQueue) GetPendingAlerts() []Alert {
+func (q AlertQueue) GetPendingAlerts() []Alert { return q.GetPendingAlertsAt(time.Now()) }
+
+// GetPendingAlertsAt is GetPendingAlerts judged at now.
+func (q AlertQueue) GetPendingAlertsAt(now time.Time) []Alert {
 	var pending []Alert
 
 	for _, alert := range q.Alerts {
-		if alert.Status == AlertStatusPending && !alert.IsExpired() {
+		if alert.Status == AlertStatusPending && !alert.IsExpiredAt(now) {
 			pending = append(pending, alert)
 		}
 	}
@@ -357,10 +364,13 @@ func (q AlertQueue) GetPendingAlerts() []Alert {
 
 // GetRetryableAlerts returns failed, unexpired alerts with retries left.
 // conduit-31jg.33: previously nothing ever selected failed alerts again.
-func (q AlertQueue) GetRetryableAlerts() []Alert {
+func (q AlertQueue) GetRetryableAlerts() []Alert { return q.GetRetryableAlertsAt(time.Now()) }
+
+// GetRetryableAlertsAt is GetRetryableAlerts judged at now.
+func (q AlertQueue) GetRetryableAlertsAt(now time.Time) []Alert {
 	var out []Alert
 	for _, alert := range q.Alerts {
-		if alert.CanRetry() && !alert.IsExpired() {
+		if alert.CanRetry() && !alert.IsExpiredAt(now) {
 			out = append(out, alert)
 		}
 	}
@@ -432,12 +442,15 @@ func (q *AlertQueue) UpdateAlertStatus(alertID string, status AlertStatus) error
 }
 
 // RemoveExpiredAlerts removes alerts that have expired or been successfully sent
-func (q *AlertQueue) RemoveExpiredAlerts() {
+func (q *AlertQueue) RemoveExpiredAlerts() { q.RemoveExpiredAlertsAt(time.Now()) }
+
+// RemoveExpiredAlertsAt is RemoveExpiredAlerts judged at now.
+func (q *AlertQueue) RemoveExpiredAlertsAt(now time.Time) {
 	var activeAlerts []Alert
 
 	for _, alert := range q.Alerts {
 		// Keep alert if it's not expired and not successfully sent
-		if !alert.IsExpired() && alert.Status != AlertStatusSent {
+		if !alert.IsExpiredAt(now) && alert.Status != AlertStatusSent {
 			activeAlerts = append(activeAlerts, alert)
 		}
 	}

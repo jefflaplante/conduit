@@ -45,6 +45,7 @@ func (g *GatewayIntegration) SetAgentHeartbeatConfig(cfg config.AgentHeartbeatCo
 	c := cfg
 	g.hbCfg = &c
 	g.deferred = NewSharedAlertQueue(deferredQueuePath(g.workspaceDir, cfg.AlertQueuePath))
+	g.deferred.SetClock(g.clock)
 }
 
 func deferredQueuePath(workspaceDir, alertQueuePath string) string {

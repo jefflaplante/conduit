@@ -93,7 +93,7 @@ func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, a
 	delivery := NewDeliveryRegistry()
 	delivery.Register(NewChannelSenderDeliverer(channelSender))
 
-	return &GatewayIntegration{
+	g := &GatewayIntegration{
 		executor:         executor,
 		aiRouter:         aiRouter,
 		scheduler:        scheduler,
@@ -104,6 +104,8 @@ func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, a
 		delivery:         delivery,
 		retries:          newRetryState(),
 	}
+	g.deferred.SetClock(g.clock) // expiry judged by the same clock as deferAction
+	return g
 }
 
 // SetBrainWriter sets the optional BrainWriter for persisting alerts to Brain's
