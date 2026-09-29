@@ -28,6 +28,19 @@ type AIConfig struct {
 	PricingOverrides map[string]PricingOverride `json:"pricing_overrides,omitempty"`
 	// CallLog is the persistent per-provider-call JSONL log (conduit-2lzv).
 	CallLog CallLogConfig `json:"call_log,omitempty"`
+	// Vision pins the provider (and optionally the model) used for image
+	// analysis (the Image tool's vision side call). nil = the built-in
+	// heuristic (no-anthropic-routing). Restart-required.
+	Vision *VisionConfig `json:"vision,omitempty"`
+}
+
+// VisionConfig is the ai.vision section: which provider and model analyze
+// images. Provider must name a routable, image-capable entry of
+// ai.providers (not type claude-code, which sends text only). Model "" =
+// that provider's configured default model. (no-anthropic-routing)
+type VisionConfig struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model,omitempty"`
 }
 
 // PromptCachingConfig holds configuration for Anthropic prompt caching.
@@ -138,6 +151,20 @@ type ProviderConfig struct {
 	// max_concurrent; 0 = explicitly unlimited (disables a built-in default,
 	// e.g. z.ai's glm-5.3=5 / glm-5.3-flash=50). conduit-38cz.
 	ModelMaxConcurrent map[string]int `json:"model_max_concurrent,omitempty"`
+
+	// Routable=false keeps the provider configured (constructed, listed,
+	// priced, visible in the fuel gauge) but the router never sends a call
+	// to it: not as the default, not via a model alias, a bare or
+	// "provider/"-prefixed model name, a sub-agent or cron model, a
+	// fallback/failover chain, a side call or vision. nil/omitted = true.
+	// (no-anthropic-routing)
+	Routable *bool `json:"routable,omitempty"`
+}
+
+// IsRoutable reports whether the router may send calls to this provider
+// (routable omitted or true).
+func (p ProviderConfig) IsRoutable() bool {
+	return p.Routable == nil || *p.Routable
 }
 
 // ClaudeCodeConfig holds settings for the claude-code provider type.

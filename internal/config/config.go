@@ -262,6 +262,7 @@ func Parse(data []byte) (*Config, error) {
 	// alias into ai.pricing_overrides.
 	cfg.AI.normalizePricingOverrides()
 	cfg.warnDeprecatedKeys()
+	cfg.warnRouting()          // no-anthropic-routing: aliases etc. pointing at routable=false
 	cfg.applyDerivedDefaults() // conduit-31jg.40
 
 	// Validate configuration

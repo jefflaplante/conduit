@@ -204,6 +204,7 @@ func (c *Config) ValidateSemantic() error {
 	validatePort(&me, c.Port)
 	validateAICredentials(&me, c.AI)
 	validateProviderConcurrency(&me, c.AI) // conduit-38cz
+	validateAIRouting(&me, c.AI)           // no-anthropic-routing
 	validateChannels(&me, c.Channels)
 	validateWorkspacePaths(&me, c.Workspace)
 	validateRateLimiting(&me, c.RateLimiting)

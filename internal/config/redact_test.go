@@ -97,6 +97,8 @@ var reviewedNonSecretFields = map[string]bool{
 	".ai.call_log.path":                                 true, // conduit-2lzv: log file path
 	".ai.compaction.model":                              true,
 	".ai.default_provider":                              true,
+	".ai.vision.model":                                  true, // no-anthropic-routing: model name
+	".ai.vision.provider":                               true, // no-anthropic-routing: provider name
 	".ai.model_aliases{}":                               true,
 	".ai.providers[].auth.client_id":                    true, // OAuth client IDs are public
 	".ai.providers[].auth.type":                         true,
