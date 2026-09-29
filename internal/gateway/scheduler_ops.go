@@ -51,6 +51,9 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
 	}
+	// conduit-385r: however the run ends (silent reply, error, /stop,
+	// drain, panic), drop the session if it holds nothing but the prompt.
+	defer g.releaseScheduledSession(session.Key, "cron")
 
 	// Resolve model alias.
 	model := job.Model

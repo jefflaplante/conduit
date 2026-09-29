@@ -24,6 +24,12 @@ type turnProvider struct {
 	entered  chan int           // receives the 1-based call number on entry
 	gates    map[int]chan error // call number → gate; nil entry = no gate
 	usage    ai.Usage
+	// content, when set, returns call n's reply text (default "reply <n>").
+	// It runs inside GenerateResponse, so it may panic to simulate a
+	// provider panic.
+	content func(n int) string
+	// fail, when set and returning non-nil, fails call n with that error.
+	fail func(n int) error
 }
 
 func newTurnProvider() *turnProvider {
@@ -54,6 +60,7 @@ func (p *turnProvider) GenerateResponse(ctx context.Context, req *ai.GenerateReq
 	p.requests = append(p.requests, msgs)
 	gate := p.gates[n]
 	usage := p.usage
+	content, fail := p.content, p.fail
 	p.mu.Unlock()
 	p.entered <- n
 	if gate != nil {
@@ -66,7 +73,16 @@ func (p *turnProvider) GenerateResponse(ctx context.Context, req *ai.GenerateReq
 			return nil, ctx.Err()
 		}
 	}
-	return &ai.GenerateResponse{Content: fmt.Sprintf("reply %d", n), FinishReason: "stop", Usage: usage}, nil
+	if fail != nil {
+		if err := fail(n); err != nil {
+			return nil, err
+		}
+	}
+	text := fmt.Sprintf("reply %d", n)
+	if content != nil {
+		text = content(n)
+	}
+	return &ai.GenerateResponse{Content: text, FinishReason: "stop", Usage: usage}, nil
 }
 
 func (p *turnProvider) request(n int) []ai.ChatMessage {

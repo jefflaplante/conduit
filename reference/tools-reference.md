@@ -335,6 +335,8 @@ Schedule recurring tasks and reminders, and manage heartbeat jobs.
 | `jobId` | string | Conditional | Job for `cancel`/`run`/`enable`/`disable` |
 | `target` | string | No | Leave unset (defaults to the current chat); only for cross-channel routing |
 
+Each Go-job run gets a fresh `cron_<job>_…` session. When the run gives no reply (`NO_REPLY`/`HEARTBEAT_OK`, empty, failed or stopped), that session is deleted at the end of the run unless the run spawned sub-agents, which report back into it later (conduit-385r; see [agent-heartbeat.md](agent-heartbeat.md#run-sessions)).
+
 Go-job expressions are evaluated in the top-level `timezone` (else server local time). A `CRON_TZ=<zone> ` prefix pins one job to a zone, so its wall-clock time survives DST changes. System jobs run in the cron daemon's zone. To convert existing jobs, use `conduit cron migrate-tz` (see [CLI Reference](cli-reference.md#cron)).
 
 ```json

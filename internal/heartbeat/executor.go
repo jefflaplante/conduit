@@ -99,6 +99,12 @@ func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExec
 	if err != nil {
 		return nil, fmt.Errorf("failed to create heartbeat session: %w", err)
 	}
+	// conduit-385r: tell the AI executor when this run is done with its
+	// session — on success, error, cancellation and panic alike — so it can
+	// drop a session the run left without a reply.
+	if f, ok := aiExecutor.(SessionFinalizer); ok {
+		defer f.FinalizeSession(session)
+	}
 
 	// Execute AI prompt with retries
 	var response AIResponse
@@ -153,6 +159,15 @@ func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExec
 // This allows the executor to work with different AI backends
 type AIExecutor interface {
 	ExecutePrompt(ctx context.Context, session *sessions.Session, prompt, model string) (AIResponse, error)
+}
+
+// SessionFinalizer is optionally implemented by an AIExecutor.
+// ExecuteHeartbeatJob calls FinalizeSession exactly once per run that
+// created a session, after the last attempt, whatever the outcome (deferred,
+// so also on panic). The gateway's executor uses it to delete the run's
+// session when it holds nothing but the heartbeat prompt (conduit-385r).
+type SessionFinalizer interface {
+	FinalizeSession(session *sessions.Session)
 }
 
 // AIResponse represents the response from an AI execution
