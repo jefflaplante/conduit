@@ -365,13 +365,13 @@ Complete this checklist to verify the authentication system is production-ready 
 
 - [x] **Database file has restricted permissions**
   - Check: `ls -l gateway.db`
-  - Expected: `-rw-r--r--` (644) or more restrictive
+  - Expected: `-rw-------` (600)
   - Actual: 
   - Result: 
 
 - [x] **Database directory has restricted permissions**
   - Check: `ls -ld` containing directory
-  - Expected: `drwxr-xr-x` (755) or more restrictive
+  - Expected: `drwx------` (700)
   - Actual: 
   - Result: 
 

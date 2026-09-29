@@ -83,11 +83,11 @@ func TestConsolidate_MergeDuplicates(t *testing.T) {
 
 	// Store duplicate entries with keys that normalize to the same value
 	// "solar.panel-count" and "solar.panel  count" both normalize to "solar.panel count"
-	require.NoError(t, b.Store(ctx, "solar.panel-count", "30", brain.TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "solar.panel-count", "24", brain.TierLongTerm, "test"))
 	_, err := rem.db.Exec(`
 		INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
 		VALUES (?, ?, ?, datetime('now'), datetime('now'), 1, 0.3)
-	`, "solar.panel  count", "30", "test")
+	`, "solar.panel  count", "24", "test")
 	require.NoError(t, err)
 
 	result, err := rem.Consolidate(ctx, false)

@@ -52,8 +52,11 @@ make build
 # Start server
 ./bin/conduit server
 
-# Launch terminal UI
-./bin/conduit tui --token "conduit_v1_..."
+# Launch terminal UI. The first run needs the token; read it into a variable
+# so it stays out of shell history. It is saved to ~/.conduit/tui.json (0600)
+# and reused, so later runs are just `./bin/conduit tui`.
+read -rsp 'Token: ' CONDUIT_TOKEN; echo
+./bin/conduit tui --token "$CONDUIT_TOKEN"
 ```
 
 See [Getting Started](reference/getting-started.md) for detailed setup instructions.
@@ -79,7 +82,7 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 - **[REM Sleep Cycle](reference/brain.md#rem-sleep-cycle)** — A 5-phase memory consolidation process inspired by biological sleep. Phases: **Triage** (identify valuable working memory), **Consolidation** (promote high-value entries to LTM), **Pruning** (evict stale/low-value entries), **Integration** (cross-reference with workspace files), and **Grooming** (staleness tracking across all sources). Runs on a configurable schedule to keep long-term memory lean and relevant
 - **[SPAR Reflect](reference/spar.md)** — Cross-session learning loop. Tool outcomes are captured automatically on every execution, session summaries are written on idle/farewell/context budget, and the nightly REM Reflect phase clusters patterns (e.g., "WebFetch fails frequently") and feeds them back into the agent's Situation Awareness prompt section
 - **FTS5 Full-Text Search** — SQLite-based document, message, and brain LTM search
-- **[Vecgo (Semantic Search)](reference/vecgo.md)** — Hybrid vector+keyword search via MemorySearch. **Batteries-included**: auto-detects Ollama at localhost and enables semantic embeddings with zero config. Searches like "power setup" find "Acme 10kW" even without exact keyword match. Supports Ollama (local) and OpenAI embedders. Results merged with FTS5 via Reciprocal Rank Fusion
+- **[Vecgo (Semantic Search)](reference/vecgo.md)** — Hybrid vector+keyword search via MemorySearch. **Batteries-included**: auto-detects Ollama at localhost and enables semantic embeddings with zero config. Searches like "power setup" find "solar inverter" even without exact keyword match. Supports Ollama (local) and OpenAI embedders. Results merged with FTS5 via Reciprocal Rank Fusion
 - **Web Search** — Brave Search API via the WebSearch tool
 
 ### Communication & Vision

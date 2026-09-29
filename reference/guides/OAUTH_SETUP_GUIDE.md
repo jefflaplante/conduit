@@ -137,14 +137,14 @@ The Go version needs to implement:
    conduit models auth login --provider anthropic
    ```
 
-2. **Extract token** from auth-profiles.json:
+2. **Check the token is present** in auth-profiles.json (without printing it):
    ```bash
-   cat ~/.conduit/agents/main/agent/auth-profiles.json | jq '.profiles."anthropic:default".access_token'
+   jq -e '.profiles."anthropic:default".access_token' ~/.conduit/agents/main/agent/auth-profiles.json >/dev/null && echo "token present"
    ```
 
 3. **Use with Go version**:
    ```bash
-   export ANTHROPIC_OAUTH_TOKEN="extracted_token_here"
+   export ANTHROPIC_OAUTH_TOKEN="$(jq -r '.profiles."anthropic:default".access_token' ~/.conduit/agents/main/agent/auth-profiles.json)"
    cd ~/projects/conduit && make run
    ```
 

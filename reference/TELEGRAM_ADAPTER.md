@@ -282,7 +282,7 @@ No benchmark for the adapter lives in this repo, so none is quoted here. Through
 {
   \"config\": {
     \"webhook_mode\": true,
-    \"webhook_url\": \"https://yourdomain.com/webhook\",
+    \"webhook_url\": \"https://example.com/webhook\",
     \"debug\": false
   }
 }

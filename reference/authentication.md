@@ -535,7 +535,7 @@ The `?token=` query parameter is accepted **only on the `/ws` WebSocket upgrade*
 
 2. Check database permissions:
    ```bash
-   chmod 644 gateway.db
+   chmod 600 gateway.db   # owner (the conduit process user) only
    ```
 
 3. Point the CLI at the server's config (this sets both the database and the

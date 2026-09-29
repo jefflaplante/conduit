@@ -15,10 +15,10 @@ func TestCronMigrateTZCmd_IncludeSystem(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cron_jobs.json")
 	orig := `[
-  {"id": "aaaa0001", "name": "Weekday job", "schedule": "10 15 * * 1-5", "type": "system", "command": "python3 cal.py >> log 2>&1", "enabled": true, "created_at": "2026-08-31T14:57:12Z", "run_count": 0},
-  {"id": "aaaa0002", "name": "Clock job", "schedule": "0 3,15,19 * * *", "type": "system", "command": "clock.sh", "enabled": true, "created_at": "2026-08-31T14:57:12Z", "run_count": 0},
-  {"id": "aaaa0003", "name": "Alert Flush Backstop (2h)", "schedule": "5 */2 * * *", "type": "system", "command": "alert-flush.sh", "enabled": true, "created_at": "2026-08-31T14:57:12Z", "run_count": 0},
-  {"id": "aaaa0004", "name": "Email Fast Check", "schedule": "*/10 * * * *", "type": "system", "command": "fast.sh", "enabled": true, "created_at": "2026-08-31T14:57:12Z", "run_count": 0}
+  {"id": "aaaa0001", "name": "Job A", "schedule": "10 15 * * 1-5", "type": "system", "command": "python3 cal.py >> log 2>&1", "enabled": true, "created_at": "2026-08-31T14:57:12Z", "run_count": 0},
+  {"id": "aaaa0002", "name": "Job B", "schedule": "0 3,15,19 * * *", "type": "system", "command": "clock.sh", "enabled": true, "created_at": "2026-08-31T14:57:12Z", "run_count": 0},
+  {"id": "aaaa0003", "name": "Job C", "schedule": "5 */2 * * *", "type": "system", "command": "alert-flush.sh", "enabled": true, "created_at": "2026-08-31T14:57:12Z", "run_count": 0},
+  {"id": "aaaa0004", "name": "Job D", "schedule": "*/10 * * * *", "type": "system", "command": "fast.sh", "enabled": true, "created_at": "2026-08-31T14:57:12Z", "run_count": 0}
 ]
 `
 	if err := os.WriteFile(path, []byte(orig), 0644); err != nil {
@@ -68,7 +68,7 @@ func TestCronMigrateTZCmd_IncludeSystem(t *testing.T) {
 		"`CRON_TZ=America/Los_Angeles 10 8 * * 1-5`",
 		"Mon 2026-11-02 08:10 PST", // simulated crontab behaviour after DST ends
 		`+ 10 15,16 * * 1-5 case "$(TZ=America/Los_Angeles date +\%H)" in 08) ;; *) exit 0 ;; esac; python3 cal.py >> log 2>&1 # CONDUIT-MANAGED CONDUIT-JOB-ID:aaaa0001`,
-		"aaaa0002 Clock job [not-installed]",
+		"aaaa0002 Job B [not-installed]",
 		"'*/N' interval",
 	} {
 		if !strings.Contains(out, want) {

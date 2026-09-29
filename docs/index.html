@@ -77,7 +77,7 @@
                             <div class="feature-icon">&#x2630;</div>
                             <h3>Terminal UI</h3>
                             <p>Full-featured chat client built with BubbleTea. Streaming responses, tool activity display, and beautiful Lipgloss styling. Your AI, your terminal.</p>
-                            <code>./bin/conduit tui --token "conduit_v1_..."</code>
+                            <code>./bin/conduit tui</code>
                         </div>
                     </div>
 
@@ -86,7 +86,7 @@
                             <div class="feature-icon">&#x1F5DD;</div>
                             <h3>SSH Access</h3>
                             <p>Remote TUI access via Wish library. Connect from anywhere with SSH key authentication. Secure, encrypted, and instant.</p>
-                            <code>ssh -p 2222 user@your-server.com</code>
+                            <code>ssh -p 2222 user@your-server.example.com</code>
                         </div>
                     </div>
 
@@ -298,7 +298,8 @@
 <span class="prompt">$</span> ./bin/conduit server
 
 <span class="comment"># Launch terminal UI</span>
-<span class="prompt">$</span> ./bin/conduit tui --token "conduit_v1_..."</pre>
+<span class="prompt">$</span> read -rsp 'Token: ' CONDUIT_TOKEN; echo
+<span class="prompt">$</span> ./bin/conduit tui --token "$CONDUIT_TOKEN"</pre>
                 </div>
             </div>
 

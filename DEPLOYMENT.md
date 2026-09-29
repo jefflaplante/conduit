@@ -14,23 +14,22 @@ Throughout this guide, replace these placeholders with values for your environme
 ## Standard Deployment Process
 
 ### Prerequisites
-- Sudoers permissions configured in `/etc/sudoers.d/conduit`:
+- Install the systemd unit once, as an administrator (not as `$BUILD_USER`):
   ```bash
-  # Conduit-Go binary installation (local self-contained approach)
+  sudo install -m 644 $PROJECT_DIR/deploy/conduit.service /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable conduit.service
+  ```
+- Optional passwordless rules for the build user in `/etc/sudoers.d/conduit` (edit with `visudo -f`). Keep them to installing the binary as the service user and restarting/checking the service:
+  ```bash
+  # Conduit-Go binary installation (runs as the service user, not root)
   $BUILD_USER ALL = ($SERVICE_USER) NOPASSWD: /usr/bin/install -m 755 $PROJECT_DIR/conduit $INSTALL_DIR/bin/conduit
 
-  # Service file in-place editing
-  $BUILD_USER ALL = (root) NOPASSWD: /usr/bin/tee /etc/systemd/system/conduit.service
-
-  # Systemd operations for conduit service only
-  $BUILD_USER ALL = (root) NOPASSWD: /bin/systemctl daemon-reload
-  $BUILD_USER ALL = (root) NOPASSWD: /bin/systemctl enable conduit.service
-  $BUILD_USER ALL = (root) NOPASSWD: /bin/systemctl disable conduit.service
-  $BUILD_USER ALL = (root) NOPASSWD: /bin/systemctl start conduit.service
-  $BUILD_USER ALL = (root) NOPASSWD: /bin/systemctl stop conduit.service
+  # Restart and inspect the conduit service only
   $BUILD_USER ALL = (root) NOPASSWD: /bin/systemctl restart conduit.service
   $BUILD_USER ALL = (root) NOPASSWD: /bin/systemctl status conduit.service
   ```
+- Do **not** grant `NOPASSWD` for `tee /etc/systemd/system/conduit.service` (or any other way to write the unit). Whoever can write that unit can set `User=root` and an arbitrary `ExecStart`, so together with `daemon-reload`/`restart` it is full root access for the build user. Unit changes (and the `daemon-reload` that goes with them) should be done by an administrator.
 
 ### Deployment Steps
 
@@ -81,9 +80,9 @@ When updating the service file:
 #### 1. Update Template First
 Edit `$PROJECT_DIR/deploy/conduit.service` with changes
 
-#### 2. Apply to System
+#### 2. Apply to System (as an administrator)
 ```bash
-cat $PROJECT_DIR/deploy/conduit.service | sudo tee /etc/systemd/system/conduit.service > /dev/null
+sudo install -m 644 $PROJECT_DIR/deploy/conduit.service /etc/systemd/system/
 ```
 
 #### 3. Reload and Restart
@@ -189,7 +188,7 @@ $PROJECT_DIR/
 ### Security
 
 - Service runs as a dedicated service user (not root)
-- Limited sudo permissions for deployment only
+- Limited sudo permissions for deployment only (binary install as the service user, restart/status); unit-file changes need an administrator
 - Self-contained in `$INSTALL_DIR/` directory
 - No system-wide file pollution
 - Systemd security hardening enabled

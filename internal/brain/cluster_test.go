@@ -108,7 +108,7 @@ func TestClusterNeighbours_BFSExpand(t *testing.T) {
 	require.NoError(t, b.Store(ctx, "solar.battery.config", "2x 10 kWh", TierLongTerm, "config"))
 	require.NoError(t, b.Store(ctx, "solar.battery.plan", "charge from grid overnight", TierLongTerm, "config"))
 	require.NoError(t, b.Store(ctx, "solar.inverter", "Acme 10kW", TierLongTerm, "config"))
-	require.NoError(t, b.Store(ctx, "solar.system_specs", "30 panels, 11.4 kW array", TierLongTerm, "config"))
+	require.NoError(t, b.Store(ctx, "solar.system_specs", "24 panels, 8 kW array", TierLongTerm, "config"))
 	require.NoError(t, b.Store(ctx, "solar.net_metering", "ExampleUtility", TierLongTerm, "config"))
 
 	// Seed with solar.battery.config. At depth 0, it finds solar.battery.plan

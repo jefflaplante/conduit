@@ -18,7 +18,7 @@ type REMConfig struct {
 	IntegrationDay       int     // 0 = Sunday
 	GroomWithLLM         bool
 	LogPath              string // Relative to WorkspaceDir if not absolute
-	WorkspaceDir         string // Absolute path to workspace root (e.g. /home/jules/ocgo/workspace)
+	WorkspaceDir         string // Absolute path to workspace root (e.g. /path/to/workspace)
 	MaxLTMEntries        int    // When LTM count is below this, skip pruning/decay (default 10000)
 }
 

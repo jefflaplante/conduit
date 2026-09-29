@@ -90,8 +90,8 @@ The framework parses standard Markdown with specific patterns:
 
 ## Check shared alert queue
 Read `memory/alerts/pending.json`. If it contains any alerts:
-- **critical** severity: Deliver to Jeff immediately via Telegram
-- **warning** severity: Deliver to Jeff if he's likely awake (8 AM - 10 PM PT)
+- **critical** severity: Deliver to the owner immediately via Telegram
+- **warning** severity: Deliver to the owner during configured awake hours
 - **info** severity: Skip — save for the next briefing
 
 After delivering, clear the queue:
@@ -167,7 +167,7 @@ Messages that may respect quiet hours:
 HeartbeatAction{
     Type:     ActionTypeDelivery,
     Target:   "telegram", 
-    Content:  "Found 3 warning alerts for Jeff",
+    Content:  "Found 3 warning alerts for the owner",
     Priority: TaskPriorityHigh,
     Metadata: map[string]interface{}{
         "quiet_aware": true,

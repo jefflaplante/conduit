@@ -50,6 +50,9 @@
       }
     ]
   },
+  "mcp": {
+    "require_auth": true
+  },
   "tools": {
     "enabled_tools": [
       "read_file",
@@ -91,7 +94,7 @@
       "config": {
         "bot_token": "${TELEGRAM_BOT_TOKEN}",
         "webhook_mode": false,
-        "debug": true
+        "debug": false
       }
     },
     {

@@ -25,22 +25,22 @@ func TestParseBrainExtractBlocks(t *testing.T) {
 			name: "single entry",
 			content: `# Notes
 <!-- brain-extract
-panel_count: "30"
+panel_count: "24"
 /brain-extract -->
 more text`,
 			want: []extractedEntry{
-				{Key: "panel_count", Value: "30"},
+				{Key: "panel_count", Value: "24"},
 			},
 		},
 		{
 			name: "multi-entry",
 			content: `<!-- brain-extract
-solar.panels: "30"
+solar.panels: "24"
 solar.inverter: "Enphase IQ8+"
 home.sqft: "2400"
 /brain-extract -->`,
 			want: []extractedEntry{
-				{Key: "solar.panels", Value: "30"},
+				{Key: "solar.panels", Value: "24"},
 				{Key: "solar.inverter", Value: "Enphase IQ8+"},
 				{Key: "home.sqft", Value: "2400"},
 			},

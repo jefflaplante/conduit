@@ -132,7 +132,7 @@ Configure the agent with your custom domain:
   "agent": {
     "name": "Assistant",
     "email": {
-      "address": "ai@yourdomain.com",
+      "address": "ai@example.com",
       "display_name": "AI Assistant"
     }
   }
@@ -148,10 +148,10 @@ Use aliases to handle multiple domains:
   "agent": {
     "name": "Conduit",
     "email": {
-      "address": "conduit@primary.com",
+      "address": "conduit@example.com",
       "aliases": [
-        "conduit@secondary.com",
-        "assistant@primary.com"
+        "conduit@example.org",
+        "assistant@example.com"
       ],
       "display_name": "Conduit"
     }
@@ -168,8 +168,8 @@ Configure the agent to respond to a team mailbox:
   "agent": {
     "name": "TeamBot",
     "email": {
-      "address": "team-bot@company.com",
-      "aliases": ["support@company.com"],
+      "address": "team-bot@example.net",
+      "aliases": ["support@example.net"],
       "display_name": "Team Assistant"
     }
   }

@@ -38,13 +38,13 @@ func TestStoreGetWorkingMemory(t *testing.T) {
 	b := newTestBrain(t)
 	ctx := testCtx("user1")
 
-	err := b.Store(ctx, "solar.panel_count", "30", TierWorking, "test")
+	err := b.Store(ctx, "solar.panel_count", "24", TierWorking, "test")
 	require.NoError(t, err)
 
 	entry, err := b.Get(ctx, "solar.panel_count")
 	require.NoError(t, err)
 	require.NotNil(t, entry)
-	assert.Equal(t, "30", entry.Value)
+	assert.Equal(t, "24", entry.Value)
 	assert.Equal(t, TierWorking, entry.Tier)
 	assert.Equal(t, "test", entry.Source)
 	assert.GreaterOrEqual(t, entry.AccessCount, 1)
@@ -85,7 +85,7 @@ func TestRecallByKey(t *testing.T) {
 	ctx := testCtx("user1")
 
 	require.NoError(t, b.Store(ctx, "solar.today", "4.2kWh", TierWorking, ""))
-	require.NoError(t, b.Store(ctx, "solar.panel_count", "30", TierLongTerm, ""))
+	require.NoError(t, b.Store(ctx, "solar.panel_count", "24", TierLongTerm, ""))
 	require.NoError(t, b.Store(ctx, "pets.rex", "golden retriever", TierWorking, ""))
 
 	results, err := b.Recall(ctx, "solar", 10)
@@ -114,7 +114,7 @@ func TestList(t *testing.T) {
 	ctx := testCtx("user1")
 
 	require.NoError(t, b.Store(ctx, "solar.today", "4.2kWh", TierWorking, ""))
-	require.NoError(t, b.Store(ctx, "solar.panel_count", "30", TierLongTerm, ""))
+	require.NoError(t, b.Store(ctx, "solar.panel_count", "24", TierLongTerm, ""))
 	require.NoError(t, b.Store(ctx, "pets.rex", "golden", TierWorking, ""))
 
 	results, err := b.List(ctx, "solar.", "")
@@ -176,7 +176,7 @@ func TestPromote(t *testing.T) {
 	b := newTestBrain(t)
 	ctx := testCtx("user1")
 
-	require.NoError(t, b.Store(ctx, "solar.panel_count", "30", TierWorking, "file"))
+	require.NoError(t, b.Store(ctx, "solar.panel_count", "24", TierWorking, "file"))
 
 	// Promote from working to longterm.
 	require.NoError(t, b.Promote(ctx, "solar.panel_count"))
@@ -187,7 +187,7 @@ func TestPromote(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	assert.Equal(t, TierLongTerm, entry.Tier)
-	assert.Equal(t, "30", entry.Value)
+	assert.Equal(t, "24", entry.Value)
 }
 
 func TestConsolidate(t *testing.T) {
@@ -416,7 +416,7 @@ func TestSubAgentWMRecall(t *testing.T) {
 	childCtx = WithParentUserID(childCtx, "parent")
 
 	require.NoError(t, b.Store(parentCtx, "solar.production", "5000W", TierWorking, "test"))
-	require.NoError(t, b.Store(parentCtx, "solar.panels", "30", TierWorking, "test"))
+	require.NoError(t, b.Store(parentCtx, "solar.panels", "24", TierWorking, "test"))
 
 	results, err := b.Recall(childCtx, "solar", 10)
 	require.NoError(t, err)
@@ -879,7 +879,7 @@ func TestStoreWithTTL_LTMExpiry(t *testing.T) {
 	// if we are provably still inside it, and poll for expiry.
 	const ttl = 250 * time.Millisecond
 	start := time.Now()
-	require.NoError(t, b.StoreWithTTL(ctx, "pet.grooming_next", "April 23", TierLongTerm, "user", ttl))
+	require.NoError(t, b.StoreWithTTL(ctx, "pet.grooming_next", "March 3", TierLongTerm, "user", ttl))
 
 	entry, err := b.Get(ctx, "pet.grooming_next")
 	require.NoError(t, err)
@@ -899,7 +899,7 @@ func TestRecallSkipsExpired(t *testing.T) {
 	ctx := testCtx("user1")
 
 	// One long-lived entry, one expiring entry, both match the query.
-	require.NoError(t, b.Store(ctx, "solar.panels", "30", TierLongTerm, ""))
+	require.NoError(t, b.Store(ctx, "solar.panels", "24", TierLongTerm, ""))
 	require.NoError(t, b.StoreWithTTL(ctx, "solar.today", "38kWh", TierLongTerm, "", 50*time.Millisecond))
 
 	time.Sleep(80 * time.Millisecond)
@@ -915,7 +915,7 @@ func TestListSkipsExpired(t *testing.T) {
 	b := newTestBrain(t)
 	ctx := testCtx("user1")
 
-	require.NoError(t, b.Store(ctx, "solar.panels", "30", TierLongTerm, ""))
+	require.NoError(t, b.Store(ctx, "solar.panels", "24", TierLongTerm, ""))
 	require.NoError(t, b.StoreWithTTL(ctx, "solar.today", "38kWh", TierWorking, "", 50*time.Millisecond))
 
 	time.Sleep(80 * time.Millisecond)

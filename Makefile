@@ -243,6 +243,7 @@ init-config:
 	@if [ ! -f config.json ]; then \
 		echo "Creating config.json from example..."; \
 		cp configs/examples/config.example.json config.json; \
+		chmod 600 config.json; \
 		echo "Edit config.json with your API keys"; \
 	else \
 		echo "config.json already exists"; \

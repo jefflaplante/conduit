@@ -67,7 +67,7 @@ The API key approach better meets the immediate requirements for easy revocation
 ### Token Format
 ```
 Format: conduit_<version>_<base58(16-byte-random)>
-Example: conduit_v1_8KzABCdefghijk123456789
+Example: conduit_v1_EXAMPLEEXAMPLEEXAMPLE
 ```
 
 - **Prefix**: `conduit_` for easy identification
@@ -79,8 +79,8 @@ Example: conduit_v1_8KzABCdefghijk123456789
 ```json
 {
   "tokens": {
-    "conduit_v1_8KzABCdefghijk123456789": {
-      "client_name": "jules-main",
+    "conduit_v1_EXAMPLEEXAMPLEEXAMPLE": {
+      "client_name": "my-agent",
       "created_at": "2026-02-07T19:46:00Z",
       "expires_at": "2027-02-07T19:46:00Z",
       "last_used": "2026-02-07T20:15:33Z",
@@ -94,7 +94,7 @@ Example: conduit_v1_8KzABCdefghijk123456789
   },
   "revoked": [
     {
-      "token_id": "conduit_v1_oldtoken123456789",
+      "token_id": "conduit_v1_EXAMPLEREVOKEDEXAMPLE",
       "revoked_at": "2026-02-07T19:30:00Z",
       "reason": "rotation"
     }
@@ -118,7 +118,7 @@ Example: conduit_v1_8KzABCdefghijk123456789
 ### Token Management Commands
 ```bash
 # Generate new token
-conduit token create --client-name "jules-main" --expires-in "1y" --permissions "websocket,api"
+conduit token create --client-name "my-agent" --expires-in "1y" --permissions "websocket,api"
 
 # List tokens
 conduit token list [--client-name filter] [--show-expired]
@@ -130,7 +130,7 @@ conduit token show <token_prefix>
 conduit token revoke <token_prefix> --reason "rotation"
 
 # Rotate token (revoke old, create new)
-conduit token rotate <token_prefix> --client-name "jules-main"
+conduit token rotate <token_prefix> --client-name "my-agent"
 
 # Cleanup expired/revoked
 conduit token cleanup [--dry-run]
@@ -141,22 +141,22 @@ conduit token export <token_prefix> [--format env|json|curl]
 
 ### Example Usage
 ```bash
-# Create token for Jules
-$ conduit token create --client-name "jules-main" --expires-in "1y"
-Created token for client 'jules-main':
-  Token: conduit_v1_8KzABCdefghijk123456789
+# Create token for an AI agent
+$ conduit token create --client-name "my-agent" --expires-in "1y"
+Created token for client 'my-agent':
+  Token: conduit_v1_EXAMPLEEXAMPLEEXAMPLE
   Expires: 2027-02-07 19:46:00 UTC
   
 # Export for easy setup
-$ conduit token export conduit_v1_8KzABCdefghijk123456789 --format env
-export CONDUIT_TOKEN="conduit_v1_8KzABCdefghijk123456789"
+$ conduit token export conduit_v1_EXAMPLEEXAMPLEEXAMPLE --format env
+export CONDUIT_TOKEN="conduit_v1_EXAMPLEEXAMPLEEXAMPLE"
 export CONDUIT_URL="ws://localhost:18789/ws"
 
 # List all tokens
 $ conduit token list
 CLIENT NAME    TOKEN PREFIX      CREATED              EXPIRES              LAST USED
-jules-main     conduit_v1_8KzABC... 2026-02-07 19:46    2027-02-07 19:46    2026-02-07 20:15
-human-browser  conduit_v1_9LbDEF... 2026-02-06 10:30    2027-02-06 10:30    never
+my-agent       conduit_v1_EXAMPLE... 2026-02-07 19:46    2027-02-07 19:46    2026-02-07 20:15
+human-browser  conduit_v1_EXAMPLE2.. 2026-02-06 10:30    2027-02-06 10:30    never
 ```
 
 ## Authentication Middleware Architecture
@@ -333,10 +333,10 @@ func rateLimitMiddleware(limit int, window time.Duration) func(http.Handler) htt
 ```
 
 ### Environment Override
-```bash
-# Disable auth for development
-CONDUIT_AUTH_REQUIRE_AUTH=false
 
+_Proposed in this design; not implemented. The gateway reads none of these variables, and there is no environment switch that disables auth._
+
+```bash
 # Custom token file location
 CONDUIT_AUTH_TOKEN_FILE=/custom/path/tokens.json
 
@@ -346,17 +346,19 @@ CONDUIT_RATELIMIT_HEALTH_RPM=200
 
 ## Easy Setup Flow
 
-### For AI Clients (Jules)
+### For AI Clients
 ```bash
 # 1. Generate token
-conduit token create --client-name "jules-main" --expires-in "1y"
+conduit token create --client-name "my-agent" --expires-in "1y"
 
 # 2. Export configuration
-conduit token export conduit_v1_8KzABCdefghijk123456789 --format env > jules.env
+conduit token export conduit_v1_EXAMPLEEXAMPLEEXAMPLE --format env > my-agent.env
+chmod 600 my-agent.env
 
 # 3. Add to secrets
-echo "export CONDUIT_TOKEN=conduit_v1_8KzABCdefghijk123456789" >> ~/.conduit-secrets.env
+echo "export CONDUIT_TOKEN=conduit_v1_EXAMPLEEXAMPLEEXAMPLE" >> ~/.conduit-secrets.env
 echo "export CONDUIT_URL=ws://localhost:18789/ws" >> ~/.conduit-secrets.env
+chmod 600 ~/.conduit-secrets.env
 ```
 
 ### For Humans (Browser/Postman)
@@ -365,19 +367,15 @@ echo "export CONDUIT_URL=ws://localhost:18789/ws" >> ~/.conduit-secrets.env
 conduit token create --client-name "my-browser" --expires-in "1y"
 
 # 2. Export as curl examples
-conduit token export conduit_v1_9LbDEF123456789 --format curl
+conduit token export conduit_v1_EXAMPLE2EXAMPLE2EXAMPLE2 --format curl
 # Outputs:
-# WebSocket: wscat -c "ws://localhost:18789/ws" -H "Authorization: Bearer conduit_v1_9LbDEF123456789"
-# API: curl -H "Authorization: Bearer conduit_v1_9LbDEF123456789" http://localhost:18789/api/channels/status
+# WebSocket: wscat -c "ws://localhost:18789/ws" -H "Authorization: Bearer conduit_v1_EXAMPLE2EXAMPLE2EXAMPLE2"
+# API: curl -H "Authorization: Bearer conduit_v1_EXAMPLE2EXAMPLE2EXAMPLE2" http://localhost:18789/api/channels/status
 ```
 
 ### For Development
 ```bash
-# Disable auth entirely
-export CONDUIT_AUTH_REQUIRE_AUTH=false
-conduit serve
-
-# Or use dev token
+# Use a short-lived dev token (there is no switch to disable auth)
 conduit token create --client-name "dev" --expires-in "1d"
 ```
 
@@ -447,7 +445,7 @@ Example JWT claims structure:
 ```json
 {
   "iss": "conduit-gateway",
-  "sub": "jules-main",
+  "sub": "my-agent",
   "iat": 1738966800,
   "exp": 1770502800,
   "permissions": ["websocket", "api"],

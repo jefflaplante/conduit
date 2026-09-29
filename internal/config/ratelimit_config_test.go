@@ -111,7 +111,7 @@ func TestRateLimitingConfig_LoadAndSave(t *testing.T) {
 func TestRateLimitingConfig_CustomValues(t *testing.T) {
 	// Test loading config with custom rate limiting values
 	customConfigJSON := `{
-  "port": 18789,
+  "port": 19999,
   "database": {"path": "test.db"},
   "ai": {
     "default_provider": "anthropic",

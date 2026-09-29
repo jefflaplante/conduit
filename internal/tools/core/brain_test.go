@@ -182,7 +182,7 @@ func TestBrainTool_StoreWithTTL(t *testing.T) {
 	res, err := tool.Execute(context.Background(), map[string]interface{}{
 		"action": "store",
 		"key":    "pet.grooming_next",
-		"value":  "April 23",
+		"value":  "March 3",
 		"tier":   "longterm",
 		"ttl":    "7d",
 	})

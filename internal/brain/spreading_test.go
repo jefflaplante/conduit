@@ -15,7 +15,7 @@ func TestSpreadActivationWithNamespaceEdges(t *testing.T) {
 	ctx := testCtx("user1")
 
 	// Store keys in LTM with known salience.
-	require.NoError(t, b.Store(ctx, "solar.panel_count", "30", TierLongTerm, "config"))
+	require.NoError(t, b.Store(ctx, "solar.panel_count", "24", TierLongTerm, "config"))
 	require.NoError(t, b.Store(ctx, "solar.battery_soc", "85", TierLongTerm, "config"))
 	require.NoError(t, b.Store(ctx, "house.address", "123 Main St", TierLongTerm, "user"))
 
@@ -55,7 +55,7 @@ func TestSpreadActivationNoEdges(t *testing.T) {
 	b := newTestBrain(t)
 	ctx := testCtx("user1")
 
-	require.NoError(t, b.Store(ctx, "solar.panel_count", "30", TierLongTerm, "config"))
+	require.NoError(t, b.Store(ctx, "solar.panel_count", "24", TierLongTerm, "config"))
 
 	// No edges exist — should return no error.
 	err := b.spreadActivation([]string{"solar.panel_count"})
@@ -73,7 +73,7 @@ func TestSpreadActivationDisabled(t *testing.T) {
 	b := newTestBrain(t, WithSpreadingEnabled(false))
 	ctx := testCtx("user1")
 
-	require.NoError(t, b.Store(ctx, "solar.panel_count", "30", TierLongTerm, "config"))
+	require.NoError(t, b.Store(ctx, "solar.panel_count", "24", TierLongTerm, "config"))
 	require.NoError(t, b.Store(ctx, "solar.battery_soc", "85", TierLongTerm, "config"))
 	require.NoError(t, b.StoreRelationship("solar.panel_count", "solar.battery_soc", "namespace", 0.9))
 
@@ -104,7 +104,7 @@ func TestDecayWarmthThreshold(t *testing.T) {
 	b := newTestBrain(t)
 	ctx := testCtx("user1")
 
-	require.NoError(t, b.Store(ctx, "solar.panel_count", "30", TierLongTerm, "config"))
+	require.NoError(t, b.Store(ctx, "solar.panel_count", "24", TierLongTerm, "config"))
 	require.NoError(t, b.Store(ctx, "solar.battery_soc", "85", TierLongTerm, "config"))
 
 	// Set warmth directly via spread activation with an edge.
@@ -133,7 +133,7 @@ func TestDecayWarmthPreservesAboveThreshold(t *testing.T) {
 	b := newTestBrain(t)
 	ctx := testCtx("user1")
 
-	require.NoError(t, b.Store(ctx, "solar.panel_count", "30", TierLongTerm, "config"))
+	require.NoError(t, b.Store(ctx, "solar.panel_count", "24", TierLongTerm, "config"))
 	require.NoError(t, b.Store(ctx, "solar.battery_soc", "85", TierLongTerm, "config"))
 
 	require.NoError(t, b.StoreRelationship("solar.panel_count", "solar.battery_soc", "namespace", 1.0))

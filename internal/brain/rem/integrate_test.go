@@ -20,7 +20,7 @@ func TestIntegrate_NamespaceRelationships(t *testing.T) {
 
 	// Store entries with shared namespaces
 	require.NoError(t, b.Store(ctx, "solar.production", "45kWh", brain.TierLongTerm, "test"))
-	require.NoError(t, b.Store(ctx, "solar.panels", "30", brain.TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "solar.panels", "24", brain.TierLongTerm, "test"))
 	require.NoError(t, b.Store(ctx, "solar.efficiency", "85%", brain.TierLongTerm, "test"))
 
 	// Configure to run on current weekday
@@ -267,7 +267,7 @@ func TestIntegrate_RelationshipConfidence(t *testing.T) {
 
 	// Store entries with shared namespace (high confidence)
 	require.NoError(t, b.Store(ctx, "solar.prod", "45kWh", brain.TierLongTerm, "test"))
-	require.NoError(t, b.Store(ctx, "solar.panels", "30", brain.TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "solar.panels", "24", brain.TierLongTerm, "test"))
 
 	rem.config.IntegrationDay = int(time.Now().Weekday())
 

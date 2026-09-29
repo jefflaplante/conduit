@@ -16,8 +16,10 @@ The TUI is a full-featured terminal chat client powered by [BubbleTea](https://g
 ./bin/conduit token create --client-name "tui"
 # Save the token output
 
-# 3. Launch the TUI (in another terminal)
-./bin/conduit tui --token "conduit_v1_..."
+# 3. Launch the TUI (in another terminal). Read the token into a variable
+#    rather than pasting it after --token, so it stays out of shell history.
+read -rsp 'Token: ' CONDUIT_TOKEN; echo
+./bin/conduit tui --token "$CONDUIT_TOKEN"
 ```
 
 On subsequent runs, the token is saved to `~/.conduit/tui.json` and reused automatically:

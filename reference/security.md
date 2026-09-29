@@ -99,7 +99,7 @@ WARNING: rejected workspace/link.conf: symlink entry not allowed: workspace/link
 - A symlink inside a root that points outside all roots is now denied. At startup the gateway logs a `[Sandbox] WARNING: <link> -> <target> ...` line for each such top-level link. To keep access through a link like that, add its target to `allowed_paths`, for example:
 
 ```json
-{ "tools": { "sandbox": { "allowed_paths": ["/home/me/ocgo", "/mnt/tank/shared-folder"] } } }
+{ "tools": { "sandbox": { "allowed_paths": ["/srv/agent", "/mnt/shared"] } } }
 ```
 
 > **This sandbox is defense-in-depth, not a security boundary, whenever the Bash tool is enabled.** A shell can read or write anything the gateway's OS user can reach, including creating new symlinks. The file sandbox stops an agent from wandering by accident through the structured file tools, and it blocks escapes planted through symlinks in cloned repos or unpacked archives. It cannot contain an agent that has shell access. For a hard boundary, run the gateway as a dedicated low-privilege user (the systemd units already set `UMask=0077`), or disable Bash.
@@ -319,7 +319,7 @@ UPDATE auth_tokens SET is_active = 0 WHERE token_id = 'uuid-here';
 - [ ] Tokens stored in environment variables or secrets manager
 - [ ] Never committed to version control
 - [ ] Never logged or printed to stdout
-- [ ] File permissions restricted (644 or better)
+- [ ] File permissions restricted (600 for secrets files)
 - [ ] In production, use secrets manager (e.g., HashiCorp Vault, AWS Secrets Manager)
 - [ ] Tokens rotated every 90 days or sooner
 - [ ] Old tokens revoked after rotation overlap period
@@ -532,14 +532,14 @@ CREATE INDEX idx_auth_tokens_client_name ON auth_tokens(client_name);
 
 ```bash
 # Database file permissions
--rw-r--r-- 1 conduit developers gateway.db  # Readable by process only
+-rw------- 1 conduit developers gateway.db  # Readable/writable by the conduit user only
 
 # Ensure proper ownership
 sudo chown conduit:developers /path/to/gateway.db
-sudo chmod 644 /path/to/gateway.db
+sudo chmod 600 /path/to/gateway.db   # also applies to gateway.db-wal / gateway.db-shm
 
 # Directory permissions
-drwxr-xr-x conduit developers /path/to/data/dir
+drwx------ conduit developers /path/to/data/dir   # chmod 700
 ```
 
 ### Backup Security
@@ -713,7 +713,7 @@ echo ".env" >> .gitignore
 
 - [ ] **Database initialized** - Tables created with proper schema
 - [ ] **Admin token created** - For initial setup
-- [ ] **File permissions correct** - 644 for DB, 600 for config
+- [ ] **File permissions correct** - 600 for DB, 600 for config
 - [ ] **Service account created** - Limited privileges
 - [ ] **Process running as unprivileged user** - Not root
 - [ ] **SSL/TLS configured** - Certificate valid and not self-signed

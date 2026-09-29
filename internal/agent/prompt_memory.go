@@ -64,7 +64,7 @@ You have a tiered memory system beyond the context window. USE IT.
 Before reading any file for a fact you've accessed before this session:
 1. ` + "`Brain(action=\"get\", key=\"likely.key.name\")`" + ` — check if it's cached
 2. Hit? Use it. Done. Miss? Read the file, then cache the key fact:
-   ` + "`Brain(action=\"store\", key=\"solar.panel_count\", value=\"30\", tier=\"working\")`" + `
+   ` + "`Brain(action=\"store\", key=\"solar.panel_count\", value=\"24\", tier=\"working\")`" + `
 
 ### What Goes Where
 
@@ -89,7 +89,7 @@ Use dot-separated namespaces: ` + "`domain.subject.attribute`" + `
 ### When to Promote (working → longterm)
 - Facts true across sessions (birthdays, counts, preferences)
 - Learned patterns ("user prefers X over Y")
-- Infrastructure facts ("solar system has 30 panels")
+- Infrastructure facts ("the NAS has 4 drive bays")
 
 ### When NOT to Store
 - Entire file contents (that's what files are for)

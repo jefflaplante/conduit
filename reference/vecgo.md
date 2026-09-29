@@ -1,13 +1,14 @@
 # Vecgo (Semantic Vector Search)
 
-Vecgo adds semantic search to Conduit's MemorySearch tool. While FTS5 finds exact keyword matches, vecgo finds conceptually related content — a search for "power setup" returns results mentioning "Acme 10kW inverter" even without shared keywords.
+Vecgo adds semantic search to Conduit's MemorySearch tool. While FTS5 finds exact keyword matches, vecgo finds conceptually related content — a search for "power setup" returns results mentioning "solar inverter" even without shared keywords.
 
 ## Quick Start (Batteries-Included)
 
 If Ollama is running on localhost, vecgo enables automatically. No config changes needed.
 
 ```bash
-# 1. Install Ollama (https://ollama.com)
+# 1. Install Ollama (https://ollama.com). Review the script before piping it
+#    to sh, or install Ollama from your package manager instead.
 curl -fsSL https://ollama.com/install.sh | sh
 
 # 2. Pull the embedding model

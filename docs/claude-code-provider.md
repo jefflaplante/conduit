@@ -118,9 +118,14 @@ The claude-code provider can coexist with direct API providers. Select it explic
         }
       }
     ]
+  },
+  "mcp": {
+    "require_auth": true
   }
 }
 ```
+
+With `bypassPermissions`, Claude Code runs Bash and file writes without asking, so pair it with MCP auth (`mcp.require_auth: true`, see [Authentication](#authentication)) and a sandbox: a narrow `working_dir` and a dedicated low-privilege OS user for the gateway. Conduit's `tools.sandbox` only covers Conduit's own tools, not Claude Code's built-in ones.
 
 ### Config Reference
 
@@ -292,7 +297,7 @@ The `permission_mode` setting controls how Claude Code handles tool permissions:
 | `bypassPermissions` | No permission prompts. Use this for fully automated operation. |
 | `plan` | Read-only mode. Claude Code cannot write files or execute commands. |
 
-For server/automated use, `bypassPermissions` is typically appropriate since Conduit is already managing the conversation.
+For server/automated use, `bypassPermissions` is typically appropriate since Conduit is already managing the conversation. Only use it together with `mcp.require_auth: true` and a sandbox (narrow `working_dir`, gateway running as a dedicated low-privilege user): MCP auth keeps other local processes from driving Conduit's tools through the MCP port, and the sandbox limits what an unprompted shell (for example after a prompt injection) can reach.
 
 ## Error Handling
 

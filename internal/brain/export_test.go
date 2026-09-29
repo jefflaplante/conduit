@@ -30,7 +30,7 @@ func TestExportGraphJSON(t *testing.T) {
 		tier   Tier
 		source string
 	}{
-		{"solar.panel_count", "30", TierLongTerm, "file:solar.md"},
+		{"solar.panel_count", "24", TierLongTerm, "file:solar.md"},
 		{"jeff.birthday", "January 1", TierLongTerm, "user"},
 		{"solar.inverter", "Acme 10kW", TierLongTerm, "file:infrastructure.md"},
 		{"jeff.favorite_color", "Navy blue", TierLongTerm, "user"},

@@ -14,7 +14,7 @@ func TestWarmthInject_HappyPath(t *testing.T) {
 	ctx := testCtx("user1")
 
 	// Keyword-matching entry.
-	require.NoError(t, b.Store(ctx, "solar.panel_count", "30", TierLongTerm, "tool"))
+	require.NoError(t, b.Store(ctx, "solar.panel_count", "24", TierLongTerm, "tool"))
 	// High-warmth entry in an unrelated namespace — no keyword overlap with "solar".
 	require.NoError(t, b.Store(ctx, "travel.paris", "trip details", TierLongTerm, "tool"))
 	_, err := b.db.Exec(`UPDATE brain_ltm SET warmth = 0.95 WHERE key = 'travel.paris'`)
@@ -57,7 +57,7 @@ func TestWarmthInject_RespectsLimitAndSeen_Real(t *testing.T) {
 	b := newTestBrain(t)
 	ctx := testCtx("user1")
 
-	require.NoError(t, b.Store(ctx, "solar.panel_count", "30", TierLongTerm, "tool"))
+	require.NoError(t, b.Store(ctx, "solar.panel_count", "24", TierLongTerm, "tool"))
 	// Three warm entries, no keyword overlap with "solar".
 	for _, k := range []string{"a.alpha_note", "b.beta_note", "c.gamma_note"} {
 		require.NoError(t, b.Store(ctx, k, "note "+k, TierLongTerm, "tool"))
@@ -95,7 +95,7 @@ func TestWarmthInject_DisabledByZero(t *testing.T) {
 	b := newTestBrain(t, WithWarmthInjectLimit(0))
 	ctx := testCtx("user1")
 
-	require.NoError(t, b.Store(ctx, "solar.panel_count", "30", TierLongTerm, "tool"))
+	require.NoError(t, b.Store(ctx, "solar.panel_count", "24", TierLongTerm, "tool"))
 	require.NoError(t, b.Store(ctx, "travel.paris", "trip details", TierLongTerm, "tool"))
 	_, err := b.db.Exec(`UPDATE brain_ltm SET warmth = 0.95 WHERE key = 'travel.paris'`)
 	require.NoError(t, err)

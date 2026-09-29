@@ -196,7 +196,7 @@ Tiered cognitive memory: store, retrieve, search, and manage facts across long-t
 | `status` | Report entry counts, scratchpad depth, hottest keys | — |
 
 ```json
-{"action": "store", "key": "solar.panel_count", "value": "30", "tier": "working"}
+{"action": "store", "key": "solar.panel_count", "value": "24", "tier": "working"}
 {"action": "get", "key": "solar.panel_count"}
 {"action": "recall", "query": "solar", "limit": 10}
 {"action": "push", "value": "TODO: check inverter status"}

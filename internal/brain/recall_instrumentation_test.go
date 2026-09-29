@@ -104,7 +104,7 @@ func TestRecallWithInstrumentation(t *testing.T) {
 	defer b.Close()
 
 	ctx := context.Background()
-	if err := b.Store(ctx, "solar.panel_count", "30", TierLongTerm, "test"); err != nil {
+	if err := b.Store(ctx, "solar.panel_count", "24", TierLongTerm, "test"); err != nil {
 		t.Fatalf("Failed to store entry: %v", err)
 	}
 	if err := b.Store(ctx, "solar.battery", "10kWh", TierLongTerm, "test"); err != nil {

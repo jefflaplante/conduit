@@ -41,7 +41,7 @@
       "config": {
         "bot_token": "${TELEGRAM_BOT_TOKEN}",
         "webhook_mode": false,
-        "debug": true
+        "debug": false
       }
     }
   ]

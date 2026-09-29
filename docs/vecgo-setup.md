@@ -46,7 +46,7 @@ You need an embedding model. Vecgo supports two options:
 ### Option A: Ollama (local, free, recommended for self-hosting)
 
 ```bash
-# Install Ollama
+# Install Ollama (review the script before piping it to sh, or use your package manager)
 curl -fsSL https://ollama.com/install.sh | sh
 
 # Pull a small embedding model

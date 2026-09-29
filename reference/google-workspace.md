@@ -77,7 +77,7 @@ Search Gmail using Gmail query syntax.
 
 ```json
 {"action": "email_search", "query": "is:unread", "limit": 5}
-{"action": "email_search", "query": "from:boss@company.com subject:urgent"}
+{"action": "email_search", "query": "from:boss@example.com subject:urgent"}
 ```
 
 ### email_read

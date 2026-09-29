@@ -9,11 +9,11 @@
 # turns and exits 0, and systemd (Restart=always) relaunches the new binary.
 # No sudo needed because the service runs as this user. No HTTP restart.
 #
-# Override with env: CONDUIT_HOME (default /home/jules/ocgo), SERVICE (conduit).
+# Override with env: CONDUIT_HOME (default $HOME/ocgo), SERVICE (conduit).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONDUIT_HOME="${CONDUIT_HOME:-/home/jules/ocgo}"
+CONDUIT_HOME="${CONDUIT_HOME:-$HOME/ocgo}"
 SERVICE="${SERVICE:-conduit}"
 BIN="$CONDUIT_HOME/bin/conduit"
 CONFIG="$CONDUIT_HOME/config.json"

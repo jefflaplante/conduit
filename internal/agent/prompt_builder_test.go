@@ -124,7 +124,7 @@ func TestBuildToolingSection_SpawnDoesNotInstructPolling(t *testing.T) {
 func TestBuildToolingSection_SkillToolsCompressed(t *testing.T) {
 	tools := append(newTestPromptBuilder().tools, ai.Tool{
 		Name:        "skill_solar",
-		Description: "Generate daily solar reports for Jeff's Acme 10kW system. Primary data from lux CLI (direct inverter Modbus), fallback to Home Assistant. Use for solar status checks, daily report cron, or any solar/energy question.",
+		Description: "Generate daily solar reports. Use for solar status checks or the daily report cron.",
 	})
 	pb := NewPromptBuilder(
 		"conduit", "helpful assistant",
@@ -139,7 +139,7 @@ func TestBuildToolingSection_SkillToolsCompressed(t *testing.T) {
 	if !strings.Contains(section, "skill_*: 1 skill-derived") {
 		t.Errorf("skill tools should compress to one summary line:\n%s", section)
 	}
-	if strings.Contains(section, "Acme 10kW") {
+	if strings.Contains(section, "Generate daily solar reports") {
 		t.Errorf("skill tool description leaked into Tooling section:\n%s", section)
 	}
 	if !strings.Contains(section, "Bash") {

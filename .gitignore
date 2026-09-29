@@ -114,3 +114,21 @@ issues-bak.jsonl
 *.db.pre-*
 leak-denylist
 leak-denylist.extra
+
+# Backups, keys and credential files that commonly land in a checkout.
+# `conduit backup create` writes its archive (DB, config, SSH keys,
+# workspace) to the current directory.
+conduit-backup-*.tar.gz
+*.bak
+.env.*
+*.pem
+*.key
+id_rsa*
+id_ecdsa*
+id_ed25519*
+ssh_host_*_key*
+authorized_keys
+credentials.json
+token.json
+client_secret*.json
+.claude/settings.local.json

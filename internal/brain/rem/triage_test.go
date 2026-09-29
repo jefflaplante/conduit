@@ -53,7 +53,7 @@ func TestTriage_WithDailyLog(t *testing.T) {
 ## Activities
 - Learned: Jeff's favorite bourbon is Maker's Mark
 - Noted: Solar production today was 45kWh
-- Updated: panel_count is now 32 (was 30)
+- Updated: panel_count is now 26 (was 24)
 - Remembered: Rex is a golden retriever
 `
 	require.NoError(t, os.WriteFile(dailyLogPath, []byte(logContent), 0644))
@@ -70,7 +70,7 @@ func TestTriage_WithDailyLog(t *testing.T) {
 
 	// Should detect updated facts
 	assert.GreaterOrEqual(t, len(result.UpdatedFacts), 1, "should find at least 1 updated fact")
-	assert.Contains(t, result.UpdatedFacts, "panel_count is now 32 (was 30)")
+	assert.Contains(t, result.UpdatedFacts, "panel_count is now 26 (was 24)")
 
 	// Should have scanned the daily log
 	assert.Equal(t, dailyLogPath, result.DailyLogScanned)

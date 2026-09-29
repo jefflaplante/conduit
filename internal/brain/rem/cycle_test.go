@@ -21,7 +21,7 @@ func TestCycle_FullRun(t *testing.T) {
 
 	// Setup: Create some LTM entries
 	require.NoError(t, b.Store(ctx, "solar.production", "45kWh", brain.TierLongTerm, "test"))
-	require.NoError(t, b.Store(ctx, "solar.panels", "30", brain.TierLongTerm, "test"))
+	require.NoError(t, b.Store(ctx, "solar.panels", "24", brain.TierLongTerm, "test"))
 
 	// Create old low-salience entry for pruning
 	oldTime := time.Now().Add(-40 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")

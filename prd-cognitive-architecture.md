@@ -43,7 +43,7 @@ A cognitive architecture that mirrors how human memory works: tiered storage wit
 |  Source: Populated from MEMORY.md + reference files at boot       |
 |  Lifetime: Persists across sessions (backed to disk)              |
 |  Access: O(1) key lookup, prefix scan, search                    |
-|  Examples: "jeff.birthday=Jan 1", "solar.panel_count=30"          |
+|  Examples: "jeff.birthday=Jan 1", "solar.panel_count=24"          |
 |  Eviction: Manual or consolidation sweep                          |
 |                                                                   |
 +-------------------------------------------------------------------+
@@ -97,7 +97,7 @@ One tool — `Brain` — with actions that span all tiers.
 
 ```
 Brain(action="store", key="solar.today", value="4.2kWh", tier="working")
-Brain(action="store", key="jeff.birthday", value="January 1", tier="longterm")
+Brain(action="store", key="jeff.birthday", value="Jan 1", tier="longterm")
 Brain(action="get", key="solar.today")                    # returns value + tier + metadata
 Brain(action="recall", query="solar production")           # searches all tiers by relevance
 Brain(action="list", prefix="solar.")                      # list keys matching prefix, any tier
@@ -164,7 +164,7 @@ LTM needs to persist across sessions (and gateway restarts). Two options:
   "version": 1,
   "entries": {
     "jeff.birthday": {
-      "value": "January 1",
+      "value": "Jan 1",
       "created_at": "2026-04-04T12:00:00Z",
       "accessed_at": "2026-04-04T18:30:00Z",
       "access_count": 12,
@@ -271,7 +271,7 @@ You have a tiered memory system beyond the context window. USE IT.
 Before reading any file for a fact you've accessed before this session:
 1. `Brain(action="get", key="likely.key.name")` — check if it's cached
 2. Hit? Use it. Done. Miss? Read the file, then cache the key fact:
-   `Brain(action="store", key="solar.panel_count", value="30", tier="working")`
+   `Brain(action="store", key="solar.panel_count", value="24", tier="working")`
 
 ### What Goes Where
 
@@ -297,7 +297,7 @@ Use dot-separated namespaces: `domain.subject.attribute`
 ### When to Promote (working -> longterm)
 - Facts that are true across sessions (birthdays, counts, preferences)
 - Learned patterns ("Jeff prefers X over Y")
-- Infrastructure facts ("solar system has 30 panels")
+- Infrastructure facts ("solar system has 24 panels")
 
 ### When NOT to Store
 - Entire file contents (that's what files are for)

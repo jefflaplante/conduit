@@ -121,10 +121,10 @@ func TestResolveStatusPort(t *testing.T) {
 	})
 
 	t.Run("reads port from config when flag unset", func(t *testing.T) {
-		cfgFile = writeTestConfig(t, 18789)
+		cfgFile = writeTestConfig(t, 19999)
 		cmd := newCmd()
-		if got := resolveStatusPort(cmd); got != 18789 {
-			t.Errorf("resolveStatusPort() = %d, want 18789 (from config)", got)
+		if got := resolveStatusPort(cmd); got != 19999 {
+			t.Errorf("resolveStatusPort() = %d, want 19999 (from config)", got)
 		}
 	})
 
@@ -153,7 +153,7 @@ func TestResolveStatusPort(t *testing.T) {
 	})
 
 	t.Run("explicit flag overrides config", func(t *testing.T) {
-		cfgFile = writeTestConfig(t, 18789)
+		cfgFile = writeTestConfig(t, 19999)
 		cmd := newCmd()
 		if err := cmd.Flags().Set("port", "9999"); err != nil {
 			t.Fatal(err)
