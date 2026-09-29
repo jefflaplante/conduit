@@ -283,6 +283,15 @@ All ~30 tools implement SelfTest: ExecTool (Bash), ReadFileTool, WriteFileTool, 
 
 ## Agent Gotchas
 
+### This repo is PUBLIC — never commit private deployment data
+
+github.com/jefflaplante/conduit is public. The live deployment's config, secrets and data live outside the repo (`~/ocgo/config.json`, `~/ocgo/.secrets`, `~/ocgo/.ocgo-secrets.env`, `~/ocgo/*.db`, `~/.conduit/`) and must stay there. In 2026-09 a leaked OAuth token and the owner's e-mails/Telegram IDs had to be purged from history.
+
+- Never copy real values into code, tests, docs, fixtures or beads: API keys/tokens, e-mail addresses, Telegram chat/user IDs, hostnames/IPs of the owner's network, names. Use placeholders (`owner@example.com`, `123456789`, `${ENV_VAR}`) and put real values in `~/ocgo/config.json`.
+- Don't build test fixtures from the live DB (session keys embed real Telegram user IDs).
+- `.githooks/` (enabled via `git config core.hooksPath .githooks`) runs `scripts/leak-guard.py` on every commit (staged changes) and push (every pushed commit). It checks credential patterns plus a private denylist at `~/.config/conduit/leak-denylist` (rebuild with `scripts/leak-denylist-build.py` after rotating secrets). **Never bypass it with `--no-verify`**; fix the content instead. A genuine placeholder that trips a pattern can carry `leak-guard:allow` on the same line.
+- Beads text is exported from `.beads/beads.db` by `br sync` and committed as `.beads/issues.jsonl` — bead descriptions are public too.
+
 ### "File was modified" system-reminder is NOT a revert (conduit-358j)
 
 When you `Edit` or `Write` a file, you may later see a system-reminder like:

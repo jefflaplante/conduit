@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+# pre-push: scan every commit about to be published (catches --no-verify commits).
+# stdin: <local ref> <local sha> <remote ref> <remote sha>
+guard="$(git rev-parse --show-toplevel)/scripts/leak-guard.py"
+zero=0000000000000000000000000000000000000000
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue          # deleting a remote ref
+    if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "$remote_sha" 2>/dev/null; then
+        range="$local_sha --not --remotes"          # new branch / unknown remote tip
+    else
+        range="$remote_sha..$local_sha"
+    fi
+    # shellcheck disable=SC2086
+    python3 "$guard" --range "$range" || status=1
+done
+exit $status

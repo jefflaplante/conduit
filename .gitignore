@@ -102,3 +102,14 @@ PRIVATE/
 issues-bak.jsonl
 .claude/worktrees/
 /gateway
+
+# Private deployment data must never be committed (public repo; see scripts/leak-guard.py)
+/config.*.json
+/config.local*.json
+.secrets
+*.secrets
+*secrets*.env
+*.bak-*
+*.db.backup.*
+*.db.pre-*
+leak-denylist*

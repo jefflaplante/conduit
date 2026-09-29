@@ -27,7 +27,7 @@ func TestDupUserMsg_CurrentStoredThenAppendedAgain(t *testing.T) {
 
 	// Session as the gateway would have it: prior history + the current user
 	// message already stored (gateway.go:1028) before the AI request.
-	session, err := store.GetOrCreateSession("333333333", "telegram")
+	session, err := store.GetOrCreateSession("1000000001", "telegram")
 	if err != nil {
 		t.Fatalf("GetOrCreateSession: %v", err)
 	}

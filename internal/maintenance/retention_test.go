@@ -111,8 +111,8 @@ func seed(t *testing.T, db *sql.DB) (pruned, kept []string) {
 	}
 
 	// Protected, very old.
-	addSession(t, db, "telegram_333333333_caaaffa7", daysAgo(400))
-	addMessage(t, db, "telegram_333333333_caaaffa7", "zebratelegram hello", goString(daysAgo(400)))
+	addSession(t, db, "telegram_1000000001_caaaffa7", daysAgo(400))
+	addMessage(t, db, "telegram_1000000001_caaaffa7", "zebratelegram hello", goString(daysAgo(400)))
 	addSession(t, db, "tui_owner_client_0a1b2c3d", daysAgo(400))
 	addMessage(t, db, "tui_owner_client_0a1b2c3d", "tui hello", goString(daysAgo(400)))
 	addSession(t, db, "tui_jeff_empty_1", daysAgo(400)) // empty protected
@@ -129,7 +129,7 @@ func seed(t *testing.T, db *sql.DB) (pruned, kept []string) {
 	addSession(t, db, "test_alerts-flush_6d81874f", daysAgo(60))
 	addMessage(t, db, "test_alerts-flush_6d81874f", "flush", goString(daysAgo(2)))
 	kept = []string{
-		"telegram_333333333_caaaffa7", "tui_owner_client_0a1b2c3d", "tui_jeff_empty_1",
+		"telegram_1000000001_caaaffa7", "tui_owner_client_0a1b2c3d", "tui_jeff_empty_1",
 		"ws_user_abcd", "nounderscore", "cronjob_1_x", "testing_1_x", "CRON_upper_1",
 		"heartbeat_recent_heartbeat_1", "test_alerts-flush_6d81874f",
 	}
@@ -297,7 +297,7 @@ func TestPrune_RelatedTablesAndFTS(t *testing.T) {
 	if _, err := db.Exec(`CREATE TABLE session_summaries (id INTEGER PRIMARY KEY, session_key TEXT NOT NULL, summary TEXT);
 		CREATE TABLE claude_code_sessions (conduit_session_id TEXT PRIMARY KEY, cc_session_id TEXT NOT NULL);
 		INSERT INTO session_summaries (session_key, summary) VALUES
-			('cron_43e3b7bb_1770937740057151230_cron_2a54cb2d', 's'), ('telegram_333333333_caaaffa7', 's');
+			('cron_43e3b7bb_1770937740057151230_cron_2a54cb2d', 's'), ('telegram_1000000001_caaaffa7', 's');
 		INSERT INTO claude_code_sessions VALUES
 			('subagent_1771029792753060494_subagent_50ed2c01', 'cc1'), ('tui_owner_client_0a1b2c3d', 'cc2');`); err != nil {
 		t.Fatal(err)

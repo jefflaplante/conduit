@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+# pre-commit: keep beads JSONL in sync, then block secrets/personal data.
+# Enabled via: git config core.hooksPath .githooks
+
+if command -v br >/dev/null 2>&1; then
+    br sync --flush-only 2>/dev/null
+    if [ -f .beads/issues.jsonl ]; then
+        git add .beads/issues.jsonl
+    fi
+else
+    echo "Warning: br command not found, skipping beads export" >&2
+fi
+
+exec python3 "$(git rev-parse --show-toplevel)/scripts/leak-guard.py" --staged
