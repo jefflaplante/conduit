@@ -81,13 +81,20 @@ func (s *syncBuffer) String() string {
 
 func newReloadFixture(t *testing.T) *reloadFixture {
 	t.Helper()
+	return newReloadFixtureFrom(t, reloadConfigJSON)
+}
+
+// newReloadFixtureFrom is newReloadFixture over another config document
+// ("BASEURL" is replaced by a stub OpenAI-compatible server's URL).
+func newReloadFixtureFrom(t *testing.T, doc string) *reloadFixture {
+	t.Helper()
 	t.Setenv("CONDUIT_TEST_ZAI_KEY", reloadSecret)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
 	}))
 	t.Cleanup(srv.Close)
-	orig := strings.Replace(reloadConfigJSON, "BASEURL", srv.URL, 1)
+	orig := strings.Replace(doc, "BASEURL", srv.URL, 1)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(path, []byte(orig), 0o600); err != nil {

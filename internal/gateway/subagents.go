@@ -45,6 +45,15 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 	// Capture the parent session key now (before the goroutine), so we can wake it when done.
 	parentSessionKey := types.RequestSessionKey(ctx)
 
+	// Resolve model (explicit model wins; empty uses configured sub-agent
+	// default, falling back to the gateway default). no-anthropic-routing:
+	// refuse up front — before a session exists — when it resolves to a
+	// routable=false provider; the router would refuse every turn anyway.
+	modelToUse := g.getSubagentModel(model)
+	if err := checkModelRoutable(g.ai, modelToUse); err != nil {
+		return "", fmt.Errorf("cannot spawn sub-agent: %w", err)
+	}
+
 	// Create a unique session key for the sub-agent
 	sessionKey := fmt.Sprintf("subagent_%d", time.Now().UnixNano())
 
@@ -58,11 +67,9 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 	// brain adapter scopes the parent's turn to). conduit-31jg.30
 	parentBrainUID := effectiveBrainUserID(ctx)
 
-	// Resolve model (explicit model wins; empty uses configured sub-agent
-	// default, falling back to the gateway default) and persist it with the
-	// skill filter: the TurnRunner re-reads the session inside the turn lock
-	// and takes the model override from its context (conduit-31jg.66).
-	modelToUse := g.getSubagentModel(model)
+	// Persist the resolved model with the skill filter: the TurnRunner
+	// re-reads the session inside the turn lock and takes the model override
+	// from its context (conduit-31jg.66).
 	subContext := map[string]string{"model": modelToUse}
 	if len(skills) > 0 {
 		subContext["skill_filter"] = strings.Join(skills, ",")

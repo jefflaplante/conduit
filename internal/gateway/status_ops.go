@@ -36,12 +36,22 @@ func (g *Gateway) GetSessionStatus(ctx context.Context, sessionKey string) (map[
 
 // GetGatewayStatus returns gateway status
 func (g *Gateway) GetGatewayStatus() (map[string]interface{}, error) {
-	return map[string]interface{}{
+	status := map[string]interface{}{
 		"status":  "running",
 		"version": version.Info(),
 		// conduit-2qes: update_config outcomes (counts only, no keys/values).
 		"config_updates": g.ConfigUpdateMetrics().ToMap(),
-	}, nil
+	}
+	// no-anthropic-routing: every configured provider with its routable
+	// flag, and where image analysis runs.
+	if g.ai != nil {
+		status["providers"] = providerStatusList(g.ai)
+		status["non_routable_providers"] = nonRoutableProviders(g.ai)
+		if v := g.visionStatus(); v != nil {
+			status["vision"] = v
+		}
+	}
+	return status, nil
 }
 
 // RestartGateway initiates a graceful restart via the ShutdownManager.

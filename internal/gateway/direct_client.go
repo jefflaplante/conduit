@@ -437,7 +437,7 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 			providers := c.ai.ListProviders()
 			var lines []string
 			for _, p := range providers {
-				lines = append(lines, fmt.Sprintf("  %s — %s (model: %s)", p.Name, p.Type, p.DefaultModel))
+				lines = append(lines, fmt.Sprintf("  %s — %s (model: %s)%s", p.Name, p.Type, p.DefaultModel, routableSuffix(p)))
 			}
 			sendResponse(fmt.Sprintf("Current Provider: %s\n\nAvailable providers:\n%s\n\nUse /provider <name> to switch.", currentProvider, strings.Join(lines, "\n")))
 			return
@@ -452,6 +452,10 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 				names = append(names, p.Name)
 			}
 			sendResponse(fmt.Sprintf("Unknown provider: %s\n\nAvailable: %s", requested, strings.Join(names, ", ")))
+			return
+		}
+		if err := c.ai.CheckRoutable(requested, ""); err != nil { // no-anthropic-routing
+			sendResponse(err.Error())
 			return
 		}
 
@@ -507,6 +511,9 @@ func (c *DirectClient) handleCommand(sessionKey, text string) {
 
 		// Helper to set model and auto-resolve provider
 		dcSetModelAndResolve := func(model string) (string, error) {
+			if err := checkModelRoutable(c.ai, model); err != nil { // no-anthropic-routing
+				return "", err
+			}
 			if err := c.sessions.SetSessionContext(sessionKey, "model", model); err != nil {
 				return "", err
 			}
@@ -566,11 +573,7 @@ func (c *DirectClient) formatAliasDisplayWithProvider(aliases map[string]string,
 		if display == "" {
 			display = "reset to default"
 		}
-		providerName := c.ai.ResolveProviderForModel(model)
-		if providerName == "" {
-			providerName = c.ai.DefaultProviderName()
-		}
-		lines = append(lines, fmt.Sprintf("%s%s %s %s (%s)", prefix, alias, arrow, display, providerName))
+		lines = append(lines, fmt.Sprintf("%s%s %s %s (%s)", prefix, alias, arrow, display, aliasProviderLabel(c.ai, model)))
 	}
 	return strings.Join(lines, "\n")
 }

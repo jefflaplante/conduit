@@ -30,6 +30,8 @@ import (
 //   - live: applied to the running gateway at once —
 //     ai.providers.<name>.* for an existing, non-claude-code provider
 //     (instance rebuilt, throttle limits and pricing rebuilt),
+//     ai.providers.<name>.routable for ANY existing provider (metadata
+//     swap only, no-anthropic-routing),
 //     ai.pricing_overrides (and the deprecated
 //     ai.smart_routing.pricing_overrides), ai.call_log.* and
 //     ai.subagent_default_model;
@@ -136,14 +138,17 @@ func (g *Gateway) currentConfig() *config.Config {
 
 // liveKind records which live subsystems a plan touches.
 type liveKind struct {
-	providers     map[string]bool
+	providers map[string]bool
+	// routable: providers whose ai.providers.<name>.routable changed
+	// (metadata-only swap, any provider type). no-anthropic-routing
+	routable      map[string]bool
 	pricing       bool
 	callLog       bool
 	subagentModel bool
 }
 
 func (k liveKind) any() bool {
-	return len(k.providers) > 0 || k.pricing || k.callLog || k.subagentModel
+	return len(k.providers) > 0 || len(k.routable) > 0 || k.pricing || k.callLog || k.subagentModel
 }
 
 // configPlan is a validated, not yet applied update.
@@ -223,13 +228,17 @@ func (g *Gateway) applyConfigUpdate(ctx context.Context, patch map[string]interf
 	next := *running
 	next.AI.Providers = append([]config.ProviderConfig(nil), running.AI.Providers...)
 	var prep *ai.ProviderReload
-	if len(plan.live.providers) > 0 {
+	if len(plan.live.providers) > 0 || len(plan.live.routable) > 0 {
 		if g.ai == nil {
 			return nil, 0, errors.New("config update: no AI router to reload providers on")
 		}
 		for i, p := range next.AI.Providers {
 			if plan.live.providers[p.Name] {
 				next.AI.Providers[i] = *findProvider(plan.candidate.AI.Providers, p.Name)
+			} else if plan.live.routable[p.Name] {
+				// Only routable is applied live; any other change to this
+				// entry (e.g. a claude-code provider) waits for the restart.
+				next.AI.Providers[i].Routable = findProvider(plan.candidate.AI.Providers, p.Name).Routable
 			}
 		}
 		if prep, err = g.ai.PrepareProviderReload(next.AI); err != nil {
@@ -400,6 +409,17 @@ func classifyLive(path []string, running, candidate *config.Config, k *liveKind)
 		}
 		rp := findProvider(running.AI.Providers, path[2])
 		cp := findProvider(candidate.AI.Providers, path[2])
+		// no-anthropic-routing: routable is a routing decision, live for
+		// every existing provider (claude-code included) — the router swaps
+		// the provider's metadata and keeps its instance.
+		if path[3] == "routable" && len(path) == 4 && rp != nil && cp != nil &&
+			rp.Type == cp.Type && len(running.AI.Providers) == len(candidate.AI.Providers) {
+			if k.routable == nil {
+				k.routable = map[string]bool{}
+			}
+			k.routable[path[2]] = true
+			return true
+		}
 		if rp == nil || cp == nil || rp.Type != cp.Type || rp.Type == "claude-code" {
 			return false
 		}
@@ -422,6 +442,10 @@ func classifyLive(path []string, running, candidate *config.Config, k *liveKind)
 	case "call_log":
 		k.callLog = true
 		return true
+	case "vision":
+		// no-anthropic-routing: ai.vision is read once when the vision
+		// adapter is built at startup — restart-required, explicitly.
+		return false
 	case "subagent_default_model":
 		if len(path) == 2 {
 			k.subagentModel = true

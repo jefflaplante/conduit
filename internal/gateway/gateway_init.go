@@ -111,11 +111,11 @@ func (g *Gateway) buildToolServices(
 	}
 
 	// Wire a vision analyzer backed by the AI router so the ImageTool can
-	// perform real multimodal analysis via the configured provider (typically
-	// Anthropic Claude vision). nil when no provider is configured.
+	// perform real multimodal analysis via ai.vision (or, unset, a routable
+	// heuristic pick). nil when no provider is configured.
 	var visionAnalyzer types.VisionAnalyzer
 	if aiRouter != nil && aiRouter.HasProviders() {
-		visionAnalyzer = newVisionAdapter(aiRouter)
+		visionAnalyzer = newVisionAdapter(aiRouter, cfg.AI.Vision) // no-anthropic-routing: ai.vision
 	}
 
 	// conduit-c8ct/w3l7: approval gate for K8s/SSH. Assigned only when set

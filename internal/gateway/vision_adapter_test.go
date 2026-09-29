@@ -27,7 +27,7 @@ func TestVisionAdapter_AnalyzeImage_Success(t *testing.T) {
 	mock.AddResponse("A serene mountain lake at dusk.", nil)
 
 	router := newVisionTestRouter(t, mock, "anthropic")
-	adapter := newVisionAdapter(router)
+	adapter := newVisionAdapter(router, nil)
 	require.NotNil(t, adapter)
 
 	result, err := adapter.AnalyzeImage(
@@ -57,7 +57,7 @@ func TestVisionAdapter_AnalyzeImage_DefaultMediaTypeAndPrompt(t *testing.T) {
 	mock.AddResponse("Some description.", nil)
 
 	router := newVisionTestRouter(t, mock, "anthropic")
-	adapter := newVisionAdapter(router)
+	adapter := newVisionAdapter(router, nil)
 
 	_, err := adapter.AnalyzeImage(context.Background(), []byte{0x00, 0x01}, "", "")
 	require.NoError(t, err)
@@ -76,7 +76,7 @@ func TestVisionAdapter_AnalyzeImage_ProviderError(t *testing.T) {
 	mock.AddErrorResponse(errors.New("rate limited"))
 
 	router := newVisionTestRouter(t, mock, "anthropic")
-	adapter := newVisionAdapter(router)
+	adapter := newVisionAdapter(router, nil)
 
 	_, err := adapter.AnalyzeImage(context.Background(), []byte{0xFF, 0xD8}, "image/jpeg", "prompt")
 	require.Error(t, err)
@@ -86,7 +86,7 @@ func TestVisionAdapter_AnalyzeImage_ProviderError(t *testing.T) {
 func TestVisionAdapter_AnalyzeImage_EmptyImage(t *testing.T) {
 	mock := ai.NewMockProvider("anthropic")
 	router := newVisionTestRouter(t, mock, "anthropic")
-	adapter := newVisionAdapter(router)
+	adapter := newVisionAdapter(router, nil)
 
 	_, err := adapter.AnalyzeImage(context.Background(), nil, "image/jpeg", "prompt")
 	require.Error(t, err)
@@ -101,7 +101,7 @@ func TestVisionAdapter_AnalyzeImage_EmptyResponse(t *testing.T) {
 	mock.AddResponse("   ", nil) // whitespace only
 
 	router := newVisionTestRouter(t, mock, "anthropic")
-	adapter := newVisionAdapter(router)
+	adapter := newVisionAdapter(router, nil)
 
 	_, err := adapter.AnalyzeImage(context.Background(), []byte{0xFF}, "image/jpeg", "prompt")
 	require.Error(t, err)
@@ -119,9 +119,9 @@ func TestVisionAdapter_AnalyzeImage_NilRouter(t *testing.T) {
 func TestVisionAdapter_AnalyzeImage_MissingProvider(t *testing.T) {
 	mock := ai.NewMockProvider("anthropic")
 	router := newVisionTestRouter(t, mock, "anthropic")
-	adapter := newVisionAdapter(router)
+	adapter := newVisionAdapter(router, nil)
 	// Override to point at a non-existent provider.
-	adapter.providerName = "nonexistent"
+	adapter.cfg = &config.VisionConfig{Provider: "nonexistent"}
 
 	_, err := adapter.AnalyzeImage(context.Background(), []byte{0xFF}, "image/jpeg", "prompt")
 	require.Error(t, err)
@@ -130,5 +130,5 @@ func TestVisionAdapter_AnalyzeImage_MissingProvider(t *testing.T) {
 }
 
 func TestNewVisionAdapter_NilRouter(t *testing.T) {
-	assert.Nil(t, newVisionAdapter(nil))
+	assert.Nil(t, newVisionAdapter(nil, nil))
 }

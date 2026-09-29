@@ -172,6 +172,10 @@ func (g *Gateway) handleStatusCommand(msg *protocol.IncomingMessage, session *se
 		currentProvider,
 		version.Info(),
 	)
+	// no-anthropic-routing: providers kept in config but never routed to.
+	if names := nonRoutableProviders(g.ai); len(names) > 0 {
+		status += "\n\n*Not routed (routable=false):* " + strings.Join(names, ", ")
+	}
 	// conduit-2six: surface scheduled jobs on a failure streak.
 	if failing := g.failingJobsSummary(); failing != "" {
 		status += "\n\n*Failing jobs (consecutive failures):* " + failing
@@ -334,11 +338,7 @@ func (g *Gateway) formatAliasDisplayWithProvider(aliases map[string]string, pref
 		if display == "" {
 			display = "reset to default"
 		}
-		providerName := g.ai.ResolveProviderForModel(model)
-		if providerName == "" {
-			providerName = g.ai.DefaultProviderName()
-		}
-		lines = append(lines, fmt.Sprintf("%s%s %s %s (%s)", prefix, alias, arrow, display, providerName))
+		lines = append(lines, fmt.Sprintf("%s%s %s %s (%s)", prefix, alias, arrow, display, aliasProviderLabel(g.ai, model)))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -357,7 +357,7 @@ func (g *Gateway) handleProviderCommand(msg *protocol.IncomingMessage, text stri
 		providers := g.ai.ListProviders()
 		var lines []string
 		for _, p := range providers {
-			lines = append(lines, fmt.Sprintf("• *%s* — %s (model: %s)", p.Name, p.Type, p.DefaultModel))
+			lines = append(lines, fmt.Sprintf("• *%s* — %s (model: %s)%s", p.Name, p.Type, p.DefaultModel, routableSuffix(p)))
 		}
 		response := fmt.Sprintf("🔌 *Current Provider*\n\n*Active:* %s\n\n*Available providers:*\n%s\n\nUse /provider <name> to switch.", currentProvider, strings.Join(lines, "\n"))
 		g.sendCommandResponse(msg, response)
@@ -373,6 +373,10 @@ func (g *Gateway) handleProviderCommand(msg *protocol.IncomingMessage, text stri
 			names = append(names, p.Name)
 		}
 		g.sendCommandResponse(msg, fmt.Sprintf("❌ Unknown provider: %s\n\nAvailable: %s", requested, strings.Join(names, ", ")))
+		return
+	}
+	if err := g.ai.CheckRoutable(requested, ""); err != nil { // no-anthropic-routing
+		g.sendCommandResponse(msg, fmt.Sprintf("❌ %v", err))
 		return
 	}
 
@@ -445,6 +449,9 @@ func (g *Gateway) handleModelCommand(msg *protocol.IncomingMessage, text string,
 	// setModelAndResolveProvider stores the model in session context,
 	// auto-resolves the provider, and returns the resolved provider name.
 	setModelAndResolveProvider := func(model string) (string, error) {
+		if err := checkModelRoutable(g.ai, model); err != nil { // no-anthropic-routing
+			return "", err
+		}
 		if err := g.sessions.SetSessionContext(session.Key, "model", model); err != nil {
 			return "", err
 		}

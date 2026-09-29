@@ -167,7 +167,7 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			providers := g.ai.ListProviders()
 			var lines []string
 			for _, p := range providers {
-				lines = append(lines, fmt.Sprintf("  %s — %s (model: %s)", p.Name, p.Type, p.DefaultModel))
+				lines = append(lines, fmt.Sprintf("  %s — %s (model: %s)%s", p.Name, p.Type, p.DefaultModel, routableSuffix(p)))
 			}
 			sendResponse(fmt.Sprintf("Current Provider: %s\n\nAvailable providers:\n%s\n\nUse /provider <name> to switch.", currentProvider, strings.Join(lines, "\n")))
 			return
@@ -182,6 +182,10 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 				names = append(names, p.Name)
 			}
 			sendResponse(fmt.Sprintf("Unknown provider: %s\n\nAvailable: %s", requested, strings.Join(names, ", ")))
+			return
+		}
+		if err := g.ai.CheckRoutable(requested, ""); err != nil { // no-anthropic-routing
+			sendResponse(err.Error())
 			return
 		}
 
@@ -239,6 +243,9 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 
 		// Helper to set model and auto-resolve provider
 		wsSetModelAndResolve := func(model string) (string, error) {
+			if err := checkModelRoutable(g.ai, model); err != nil { // no-anthropic-routing
+				return "", err
+			}
 			if err := g.sessions.SetSessionContext(sessionKey, "model", model); err != nil {
 				return "", err
 			}
