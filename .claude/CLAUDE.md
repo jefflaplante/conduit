@@ -137,7 +137,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/monitoring/ — Gateway metrics, event tracking, metric aggregation, heartbeat metrics. TokenWindowTracker (token_usage.go) records API token usage in rolling hour/day windows.
 - internal/heartbeat/ — HEARTBEAT.md task execution, result processing, task types, quiet-hours deferral (deferred.go, SharedAlertQueue-backed deferred.json). All delivery goes through DeliveryRegistry (delivery.go: CircuitBreaker + AlertAuditor → alert_history) with a ChannelSenderDeliverer (delivery_channel.go) and bounded background retries per alert_retry_policy (delivery_dispatch.go).
 - internal/skills/ — Skill discovery from SKILL.md files, loading, validation, tool adaptation, manager
-- internal/maintenance/ — On-demand database cleanup/optimization tasks behind `conduit maintenance` (no background schedule or maintenance window)
+- internal/maintenance/ — On-demand database cleanup/optimization tasks behind `conduit maintenance` (no background schedule or maintenance window). Session cleanup prunes only automated sessions (key prefixes cron_/heartbeat_/subagent_/test_, config `maintenance` section; telegram_/tui_ are never prunable), plan/execute share one selection (retention.go), VACUUM INTO backups are 0600 (backup.go)
 - internal/scheduler/ — Cron job scheduling with interfaces
 - internal/ssh/ — SSH server via Wish with key management (server.go, keys.go)
 - internal/tui/ — BubbleTea terminal UI: chat view, sidebar, tab bar, status bar, tool activity display, Lipgloss styling, client interface
