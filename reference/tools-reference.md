@@ -421,6 +421,23 @@ Analyze images using vision models.
 {"path": "diagram.jpg", "prompt": "Describe the architecture shown"}
 ```
 
+**Which provider analyzes the image.** The analysis is a one-shot, metered
+side call: no session history, system prompt or tools. Its cost goes into the
+current turn's cost.
+
+- With [`ai.vision`](configuration.md#vision-provider-aivision) set, it always
+  goes to that provider and model, for example
+  `{"provider": "z-ai", "model": "glm-5.3-flash"}`. OpenAI-compatible
+  providers receive the image as an `image_url` block with a base64 `data:`
+  URI; Anthropic providers receive a native image block.
+- Without it, a fallback rule picks the provider: the default provider if it
+  is `anthropic`/`claude-code`, otherwise the first anthropic-type provider,
+  otherwise the default provider.
+- A provider configured with
+  [`"routable": false`](configuration.md#non-routable-providers-routable) is
+  never used. The fallback rule skips it, and `ai.vision` cannot name it.
+- The `Gateway` tool's status reports the current choice under `vision`.
+
 ## IoT / Home Automation
 
 ### MQTT

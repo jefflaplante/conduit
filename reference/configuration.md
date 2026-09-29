@@ -228,6 +228,88 @@ Model aliases (for `/model` command):
 - `opus` - claude-opus-4-6
 - `glm` - z-ai/glm-4-flash (requires [z.ai setup](z-ai.md))
 
+#### Non-routable providers (`routable`)
+
+`"routable": false` on a provider entry keeps the provider in the config but
+stops the router from ever sending it a call. Use it for a provider whose
+credentials were revoked, or that you want to keep for pricing and history
+without it serving traffic.
+
+```json
+{
+  "ai": {
+    "default_provider": "z-ai",
+    "providers": [
+      { "name": "z-ai", "type": "openai", "base_url": "https://api.z.ai/api/coding/paas/v4", "api_key": "${ZAI_API_KEY}", "model": "glm-5.3-flash" },
+      { "name": "anthropic", "type": "anthropic", "model": "claude-sonnet-4-6", "routable": false }
+    ]
+  }
+}
+```
+
+- Omitted or `true` means routable (the default).
+- The provider is still built and listed: `/provider`, the `Gateway` tool's
+  status (`providers[].routable`, `non_routable_providers`), `/status`
+  ("Not routed"), pricing and the fuel gauge all show it.
+- The router refuses it wherever the provider comes from: the default
+  provider, a session pinned with `/provider`, a model alias, a bare model
+  name inferred to it (`claude-sonnet-4-6` → the anthropic-type provider), an
+  explicit `anthropic/...` model string, a sub-agent's model or
+  `subagent_default_model`, a cron job model, side calls and vision. The error
+  reads `provider "anthropic" is configured with routable=false (requested
+  model "..."): Conduit never routes calls to it ...`. `/provider` and `/model`
+  switches to it, and sub-agent spawns whose model resolves to it, fail right
+  away.
+- Fallback chains **skip** it without an error. That covers the quota
+  fallback, timeout handoff, empty-response failover and the tool loop's
+  sticky switch: if a provider's `fallback_model` resolves to a non-routable
+  provider, there is simply no fallback and the original error stands.
+- Model-name inference prefers a routable provider when several match (for
+  example a second, routable anthropic-type provider serves `claude-*`). When
+  only non-routable providers match, the request is refused. It is never
+  quietly sent to another backend.
+- Validation: `ai.default_provider` or `ai.vision.provider` naming a
+  non-routable provider is a fatal config error. `ai.model_aliases` (or the
+  built-in `haiku`/`sonnet`/`opus`/`default` aliases when none are
+  configured), `ai.subagent_default_model` and `fallback_model` values that
+  resolve to a non-routable provider only log a `[Config] WARNING`, so the
+  config still loads and the problem shows at startup.
+- Live update: changing `routable` on an existing provider (any type,
+  including `claude-code`) applies live. Only the router's metadata is
+  swapped and the provider instance is kept (see
+  [live config updates](#what-applies-live-and-what-needs-a-restart)).
+
+#### Vision provider (`ai.vision`)
+
+Picks the provider, and optionally the model, that the Image tool uses for
+image analysis:
+
+```json
+{
+  "ai": {
+    "vision": { "provider": "z-ai", "model": "glm-5.3-flash" }
+  }
+}
+```
+
+- `provider` (required when the section is present) must be one of
+  `ai.providers`, must be routable, and must not be of type `claude-code`
+  (the Claude Code CLI provider only sends text).
+- `model` is optional. Empty means the provider's configured `model`. A
+  `provider/` prefix, if you use one, must name the same provider. The model
+  is sent with the request and is what the call is metered and priced as (fuel
+  gauge, call log `side-call` lines, turn cost).
+- Anthropic providers get native image blocks. OpenAI-compatible providers
+  (z.ai, OpenAI, vLLM, Ollama) get `image_url` blocks carrying a base64
+  `data:` URI. z.ai's `glm-5.3-flash` accepts these.
+- When `ai.vision` is unset, a fallback rule picks the provider: the default
+  provider if it is `anthropic`/`claude-code` and routable, otherwise the
+  first routable anthropic-type provider, otherwise the default provider.
+  Non-routable providers are never picked.
+- Restart required: `ai.vision` is read when the gateway starts. The
+  `Gateway` tool's status shows the active choice under `vision`
+  (`provider`, `model`, `source`: `ai.vision` or `heuristic`).
+
 #### Concurrency limits (`max_concurrent`, `model_max_concurrent`)
 
 Caps how many calls to a provider (or one of its models) are in flight at
@@ -1067,11 +1149,12 @@ rejected, and so is the `[redacted]` marker from the `config` action.
 | Key | Mode | How it is applied |
 |-----|------|-------------------|
 | `ai.providers.<name>.*` of an existing provider that is not `claude-code` (model, `timeout_seconds`, `fallback_model`, `max_concurrent`, `model_max_concurrent`, `context_window`, `thinking`, `prompt_caching`, `base_url`, `api_key` ref, `auth`, ...) | live | The provider instance is rebuilt from its new config; throttle limits and pricing are rebuilt. Unchanged providers keep their instance. |
+| `ai.providers.<name>.routable` of any existing provider, `claude-code` included | live | Only the router's metadata for that provider is swapped; the instance (and e.g. a refreshed OAuth token) is kept. The next routing decision sees it; a turn already running on the provider finishes there. Setting it to `false` on `ai.default_provider` or `ai.vision.provider` is rejected by validation. |
 | `ai.pricing_overrides`, deprecated `ai.smart_routing.pricing_overrides` | live | New pricing resolver for the router, the usage tracker and the package default. |
 | `ai.call_log.*` | live | A new call log is opened; the old one is flushed and closed. |
 | `ai.subagent_default_model` | live | Read by the next sub-agent spawn. |
 | `ai.providers` itself, a whole provider entry, a provider's `name`/`type`/`claude_code`, any `claude-code` provider | restart | Adding, removing, renaming or retyping providers changes wiring built at startup (MCP server, session mapper). |
-| Everything else: `port`, `ssh`, `database`, `data_dir`, `channels` (tokens and enable flags), `tools` (enabled list, sandbox `allowed_paths`, denylist), `auth`, `mcp`, `agent`, `heartbeat`/`agent_heartbeat` (quiet hours), `restart_resume`, `ai.default_provider`, `ai.model_aliases`, `ai.max_tokens`, `ai.prompt_caching`, `ai.compaction`, ... | restart | Saved to the file; the result lists these keys under "REQUIRES A RESTART". `restart_resume` is only read at startup, so it is restart-only by nature. |
+| Everything else: `port`, `ssh`, `database`, `data_dir`, `channels` (tokens and enable flags), `tools` (enabled list, sandbox `allowed_paths`, denylist), `auth`, `mcp`, `agent`, `heartbeat`/`agent_heartbeat` (quiet hours), `restart_resume`, `ai.default_provider`, `ai.vision`, `ai.model_aliases`, `ai.max_tokens`, `ai.prompt_caching`, `ai.compaction`, ... | restart | Saved to the file; the result lists these keys under "REQUIRES A RESTART". `restart_resume` is only read at startup, so it is restart-only by nature. |
 
 In-flight turns keep the provider instance they started with; new turns use
 the new one. Lookups by name that happen later in a turn (quota fallback,
