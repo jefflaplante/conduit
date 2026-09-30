@@ -1,9 +1,11 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -89,6 +91,18 @@ func TestKubernetesConfig_Validate_RequireApproval(t *testing.T) {
 	assert.Contains(t, err.Error(), "require_approval")
 
 	assert.Equal(t, []string{"dangerous"}, DefaultKubernetesConfig().RequireApproval)
+}
+
+func TestKubernetesConfig_ApprovalTimeout(t *testing.T) {
+	var cfg KubernetesConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"enabled": true, "approval_timeout": "10m"}`), &cfg))
+	assert.Equal(t, 10*time.Minute, cfg.ApprovalTimeout.Duration())
+	require.NoError(t, cfg.Validate())
+
+	cfg.ApprovalTimeout = Duration(-time.Second)
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "approval_timeout")
 }
 
 func TestKubernetesConfig_Validate_InvalidSafetyLevel(t *testing.T) {

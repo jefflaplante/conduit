@@ -22,6 +22,10 @@ type KubernetesConfig struct {
 	// originating chat before they run; non-interactive turns fail closed
 	// (conduit-c8ct). Default: ["dangerous"]. Set [] to disable.
 	RequireApproval []string `json:"require_approval,omitempty"`
+
+	// ApprovalTimeout is how long an approval prompt stays valid, e.g.
+	// "10m". 0 uses the gateway default (5m); capped at 1h (conduit-17yf).
+	ApprovalTimeout Duration `json:"approval_timeout,omitempty"`
 }
 
 // KubernetesCluster defines a known Kubernetes cluster
@@ -84,6 +88,10 @@ func (c *KubernetesConfig) Validate() error {
 		default:
 			return fmt.Errorf("invalid tier in kubernetes.require_approval: %q (valid: read, modify, dangerous)", tier)
 		}
+	}
+
+	if c.ApprovalTimeout < 0 {
+		return fmt.Errorf("kubernetes.approval_timeout cannot be negative")
 	}
 
 	// Validate clusters

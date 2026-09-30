@@ -102,11 +102,17 @@ func riskText(cls *OperationClassification) string {
 // which case the operation is frozen and handed to the approval manager:
 // run executes later, exactly once, only if the human approves
 // (conduit-c8ct). Non-interactive turns and a missing approver fail closed.
+// The approval stays valid for kubernetes.approval_timeout (0 = the
+// gateway default, capped at approval.MaxTTL; conduit-17yf).
 func (t *K8sTool) authorize(ctx context.Context, cls *OperationClassification, op k8sOp, run approvalgate.Run) (*types.ToolResult, error) {
 	if cls == nil || !cls.RequiresApproval {
 		return run(ctx)
 	}
-	return approvalgate.Request(ctx, t.approver(), op.operation(cls), run), nil
+	gated := op.operation(cls)
+	if t.config != nil {
+		gated.TTL = t.config.ApprovalTimeout.Duration()
+	}
+	return approvalgate.Request(ctx, t.approver(), gated, run), nil
 }
 
 func (t *K8sTool) approver() approval.Requester {

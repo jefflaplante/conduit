@@ -78,6 +78,7 @@ Show logs from pod web-abc123
 | `defaults.namespace` | string | Default namespace when not specified |
 | `defaults.safety_level` | string | Default safety level for clusters |
 | `require_approval` | array | Tiers that need human approval before running (default `["dangerous"]`; `[]` disables) |
+| `approval_timeout` | duration | How long an approval prompt stays valid, e.g. `"10m"` (default `"5m"`, capped at 1h) |
 
 ### Cluster Fields
 

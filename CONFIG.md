@@ -1183,6 +1183,8 @@ Kubernetes cluster management. See [Kubernetes Reference](reference/kubernetes.m
 | `clusters[].context` | string | `""` | Kubeconfig context (empty = current) |
 | `clusters[].allowed_namespaces` | string array | `[]` | Restrict to these namespaces (empty = all) |
 | `clusters[].safety_level` | string | `"read"` | `"read"`, `"modify"`, or `"dangerous"` |
+| `require_approval` | string array | `["dangerous"]` | Tiers that need a human `YES <code>` approval; `[]` disables |
+| `approval_timeout` | duration | `"5m"` | How long an approval prompt stays valid (e.g. `"10m"`); capped at 1h |
 
 ---
 

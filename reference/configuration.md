@@ -982,6 +982,7 @@ Multi-cluster Kubernetes configuration for the K8s tool. Kubeconfig paths suppor
 | `defaults.namespace` | string | `"default"` | Default namespace |
 | `defaults.safety_level` | string | `"read"` | Default safety level |
 | `require_approval` | array | `["dangerous"]` | Tiers whose operations need a human `YES <code>` reply in the originating chat before running; non-interactive turns fail closed. `[]` disables |
+| `approval_timeout` | duration | `"5m"` | How long an approval prompt stays valid, e.g. `"10m"`; capped at 1h |
 
 **Safety Levels:**
 - `read` — get, list, describe, logs, watch, events, top, clusters, namespaces
