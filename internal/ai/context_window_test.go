@@ -39,8 +39,32 @@ func TestLookupContextWindow_ReportsDefault(t *testing.T) {
 	if _, known := LookupContextWindow("gpt-4o-2024-08-06"); !known {
 		t.Error("gpt-4o-2024-08-06 should be a known model")
 	}
-	if w, known := LookupContextWindow("glm-5.3"); known || w != DefaultContextWindow {
-		t.Errorf("glm-5.3: got (%d, %v), want (%d, false)", w, known, DefaultContextWindow)
+	if w, known := LookupContextWindow("glm-4-unlisted"); known || w != DefaultContextWindow {
+		t.Errorf("glm-4-unlisted: got (%d, %v), want (%d, false)", w, known, DefaultContextWindow)
+	}
+}
+
+// conduit-31jg.82: GLM-5.3 (Z.ai) and DeepSeek V4.1 Flash (OpenRouter) are
+// published as "1M" context. They must resolve as known models: gateway
+// context usage, the prompt builder and compaction look the window up by
+// model name and never see a provider's context_window override.
+func TestLookupContextWindow_GLMAndDeepSeekV41Flash(t *testing.T) {
+	cases := map[string]int{
+		"glm-5.3":                            1000000,
+		"glm-5.3-flash":                      1000000,
+		"glm-5.3-flashx":                     1000000,
+		"z-ai/glm-5.3":                       1000000, // OpenRouter ID
+		"z-ai/glm-5.3:batch":                 1000000,
+		"deepseek-v4.1-flash":                1000000,
+		"deepseek/deepseek-v4.1-flash":       1000000, // OpenRouter ID
+		"deepseek/deepseek-v4.1-flash:batch": 1000000,
+		"deepseek-coder-v2":                  16384, // unaffected
+	}
+	for model, want := range cases {
+		got, known := LookupContextWindow(model)
+		if !known || got != want {
+			t.Errorf("LookupContextWindow(%q) = (%d, %v), want (%d, true)", model, got, known, want)
+		}
 	}
 }
 

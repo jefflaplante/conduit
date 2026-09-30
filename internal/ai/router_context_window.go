@@ -36,6 +36,19 @@ var ContextWindowSizes = map[string]int{
 	"qwen3.5":         131072,
 	"phi-3":           128000,
 	"gemma2":          8192,
+	// Z.ai GLM (conduit-31jg.82). docs.z.ai/guides/llm/glm-5.3 and
+	// docs.z.ai/guides/vlm/glm-5.3-flash publish "1M" context (input+output,
+	// per docs.z.ai/guides/overview/concept-param) and 128K max output for
+	// glm-5.3, glm-5.3-flash and glm-5.3-flashx. OpenRouter lists 1,048,576
+	// for most hosts but 1,000,000 for some (and for z-ai/glm-5.3-prime), so
+	// use the literal 1,000,000: it fits every host that advertises "1M".
+	"glm-5.3": 1000000,
+	// DeepSeek V4.1 Flash (conduit-31jg.82). api-docs.deepseek.com
+	// quick_start/pricing publishes "1M" context and 384K max output;
+	// OpenRouter's deepseek/deepseek-v4.1-flash hosts advertise between
+	// 1,000,000 and 1,048,576 (DeepSeek's own endpoint: 1,048,576). Same
+	// conservative 1,000,000 as GLM.
+	"deepseek-v4.1-flash": 1000000,
 }
 
 // ContextWindowForModel returns the context window size for a given model.
