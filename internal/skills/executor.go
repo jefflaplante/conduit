@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"math"
 	"os"
 	"os/exec"
@@ -38,6 +39,9 @@ type Executor struct {
 	// runApproved overrides how an approved owner send is executed. Tests
 	// only (never shell out to the real gog binary); nil => e.execute.
 	runApproved func(ctx context.Context, skill Skill, action string, args map[string]interface{}) (*ExecutionResult, error)
+	// gateLog receives email sender-gate audit records (conduit-1nfq).
+	// Nil => slog.Default().
+	gateLog *slog.Logger
 }
 
 // NewExecutor creates a new skill executor

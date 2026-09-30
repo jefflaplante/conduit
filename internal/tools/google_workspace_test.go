@@ -2,6 +2,10 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -476,6 +480,110 @@ func TestGoogleWorkspaceTool_SelfTest_VerboseMode(t *testing.T) {
 		}
 		if _, ok := result.Details["user_id"]; !ok {
 			t.Error("Expected user_id in details")
+		}
+	}
+}
+
+// fakeGws writes a stand-in gws binary that reports profile as the signed-in
+// mailbox and records each messages.send call's --json payload in sentLog.
+func fakeGws(t *testing.T, profile string) (tool *GoogleWorkspaceTool, sentLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	sentLog = filepath.Join(dir, "sent.log")
+	script := `#!/bin/sh
+case "$*" in
+  *"users getProfile"*) printf '{"emailAddress":"` + profile + `"}' ;;
+  *"messages send"*) shift 6; printf '%s\n' "$2" >> "` + sentLog + `"; printf '{"id":"m1"}' ;;
+  *) exit 1 ;;
+esac
+`
+	bin := filepath.Join(dir, "gws")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry := &Registry{
+		services: &types.ToolServices{
+			ConfigMgr: &config.Config{
+				Agent: config.AgentConfig{Email: config.AgentEmail{
+					Address: "agent@example.com",
+					Aliases: []string{"alias@example.com"},
+				}},
+				Tools: config.ToolsConfig{Services: map[string]map[string]interface{}{
+					"google_workspace": {"gws_path": bin},
+				}},
+			},
+		},
+	}
+	return &GoogleWorkspaceTool{registry: registry}, sentLog
+}
+
+func sendArgs() map[string]interface{} {
+	return map[string]interface{}{"to": "bob@example.com", "subject": "Hi", "body": "Hello"}
+}
+
+// conduit-1nfq: mail only leaves from the agent's own mailbox.
+func TestGoogleWorkspaceTool_EmailSend_SenderGate(t *testing.T) {
+	t.Run("agent account sends with explicit From", func(t *testing.T) {
+		tool, sentLog := fakeGws(t, "Agent@Example.com")
+		res, err := tool.emailSend(context.Background(), sendArgs())
+		if err != nil || !res.Success {
+			t.Fatalf("agent send should pass: %+v %v", res, err)
+		}
+		raw, err := os.ReadFile(sentLog)
+		if err != nil {
+			t.Fatal("send was not issued")
+		}
+		var payload struct{ Raw string }
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatal(err)
+		}
+		msg, err := base64.URLEncoding.DecodeString(payload.Raw)
+		if err != nil {
+			msg, err = base64.RawURLEncoding.DecodeString(payload.Raw)
+		}
+		if err != nil || !strings.HasPrefix(string(msg), "From: agent@example.com\r\n") {
+			t.Fatalf("want explicit agent From header, got %q (%v)", msg, err)
+		}
+	})
+
+	t.Run("owner-signed-in gws is blocked", func(t *testing.T) {
+		tool, sentLog := fakeGws(t, "owner@example.com")
+		res, _ := tool.emailSend(context.Background(), sendArgs())
+		if res.Success || res.ErrorDetails == nil || res.ErrorDetails.Type != "sender_blocked" {
+			t.Fatalf("want sender_blocked, got %+v", res)
+		}
+		if !strings.Contains(res.Error, "owner's approval") {
+			t.Errorf("error should tell the agent to ask: %s", res.Error)
+		}
+		if _, err := os.Stat(sentLog); err == nil {
+			t.Fatal("blocked send reached gws")
+		}
+	})
+
+	t.Run("no agent address fails closed", func(t *testing.T) {
+		tool, sentLog := fakeGws(t, "agent@example.com")
+		tool.registry.services.ConfigMgr.Agent.Email = config.AgentEmail{}
+		res, _ := tool.emailSend(context.Background(), sendArgs())
+		if res.Success || res.ErrorDetails.Type != "sender_blocked" {
+			t.Fatalf("want sender_blocked, got %+v", res)
+		}
+		if _, err := os.Stat(sentLog); err == nil {
+			t.Fatal("blocked send reached gws")
+		}
+	})
+}
+
+func TestGoogleWorkspaceTool_EmailSend_RejectsHeaderInjection(t *testing.T) {
+	for _, key := range []string{"to", "cc", "bcc", "subject", "from_alias"} {
+		tool, sentLog := fakeGws(t, "agent@example.com")
+		args := sendArgs()
+		args[key] = "x@example.com\r\nFrom: owner@example.com"
+		res, _ := tool.emailSend(context.Background(), args)
+		if res.Success || res.ErrorDetails == nil || res.ErrorDetails.Type != "invalid_header" {
+			t.Fatalf("%s: want invalid_header, got %+v", key, res)
+		}
+		if _, err := os.Stat(sentLog); err == nil {
+			t.Fatalf("%s: injected send reached gws", key)
 		}
 	}
 }

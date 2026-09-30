@@ -46,13 +46,37 @@ func (m *Manager) SetApprover(a Approver) {
 	m.executor.SetApprover(a)
 }
 
+// isEmailSend reports whether this call sends mail via the gog/email skill.
+// Reads/searches/lists are intentionally not gated.
+func isEmailSend(skill Skill, action string) bool {
+	return (skill.Name == "email" || skill.Name == "gog") && normalizeAction(action) == "send"
+}
+
 // isOwnerEmailSend reports whether this call would send mail as the owner.
-// Reads/searches/lists of the owner inbox are intentionally not gated.
 func (e *Executor) isOwnerEmailSend(skill Skill, action string, args map[string]interface{}) bool {
-	if skill.Name != "email" && skill.Name != "gog" {
-		return false
+	return isEmailSend(skill, action) && e.gog.sendUsesOwner(args)
+}
+
+// auditSenderGate records one email sender-gate decision (conduit-1nfq).
+// decision is "allow", "approval_required" or "deny"; identity is "agent" or
+// "owner". Recipient is loggable; subject and body never are here (the
+// approval audit carries the subject for owner sends).
+func (e *Executor) auditSenderGate(ctx context.Context, skill Skill, decision, identity, reason string, args map[string]interface{}) {
+	logger := e.gateLog
+	if logger == nil {
+		logger = slog.Default()
 	}
-	return normalizeAction(action) == "send" && e.gog.sendUsesOwner(args)
+	to, _ := args["to"].(string)
+	o, _ := approval.OriginFrom(ctx)
+	source := o.Source
+	if source == "" {
+		source = "unknown"
+	}
+	logger.Info("email sender gate",
+		"component", "approval", "event", "email.sender_gate",
+		"path", "skill:"+skill.Name, "decision", decision, "identity", identity,
+		"reason", reason, "to", to, "origin", source,
+		"session_key", o.SessionKey, "channel_id", o.ChannelID, "user_id", o.UserID)
 }
 
 // gateOwnerSend diverts owner-account email sends to human approval
@@ -60,17 +84,23 @@ func (e *Executor) isOwnerEmailSend(skill Skill, action string, args map[string]
 // should run normally. When gated, the returned result is what the model
 // sees; the send itself happens only if and when the human approves.
 func (e *Executor) gateOwnerSend(ctx context.Context, skill Skill, action string, args map[string]interface{}) (*ExecutionResult, bool) {
-	if !e.isOwnerEmailSend(skill, action, args) {
+	if !isEmailSend(skill, action) {
+		return nil, false
+	}
+	if !e.gog.sendUsesOwner(args) {
+		e.auditSenderGate(ctx, skill, "allow", "agent", "agent_account", args)
 		return nil, false
 	}
 	// Validate before prompting a human about a request that cannot run.
 	for _, key := range []string{"account", "inbox"} {
 		if err := e.gog.validateAccountArg(args, key); err != nil {
+			e.auditSenderGate(ctx, skill, "deny", "owner", "invalid_account", args)
 			return &ExecutionResult{Success: false, Error: fmt.Sprintf("invalid arguments for action %s: %v", action, err)}, true
 		}
 	}
 	to, _ := args["to"].(string)
 	if to == "" {
+		e.auditSenderGate(ctx, skill, "deny", "owner", "missing_to", args)
 		return &ExecutionResult{Success: false, Error: "send requires a non-empty 'to'"}, true
 	}
 
@@ -78,11 +108,13 @@ func (e *Executor) gateOwnerSend(ctx context.Context, skill Skill, action string
 	// else, and the fingerprint is computed over it.
 	frozen, fp, err := freezeArgs(skill.Name, action, args)
 	if err != nil {
+		e.auditSenderGate(ctx, skill, "deny", "owner", "unencodable_args", args)
 		return &ExecutionResult{Success: false, Error: fmt.Sprintf("owner send refused: %v", err)}, true
 	}
 
 	approver := e.getApprover()
 	if approver == nil {
+		e.auditSenderGate(ctx, skill, "deny", "owner", "no_approver", args)
 		slog.Warn("owner email send refused: no approver configured",
 			"component", "approval", "event", "approval.refused_no_approver", "kind", ApprovalKindOwnerEmailSend)
 		return &ExecutionResult{Success: false, Error: "NOT SENT: sending as the owner's account requires human approval, but no approval channel is configured."}, true
@@ -145,6 +177,7 @@ func (e *Executor) gateOwnerSend(ctx context.Context, skill Skill, action string
 	if err != nil {
 		var ni *approval.NonInteractiveError
 		if errors.As(err, &ni) {
+			e.auditSenderGate(ctx, skill, "deny", "owner", "non_interactive", args)
 			return &ExecutionResult{
 				Success: false,
 				Error: fmt.Sprintf("NOT SENT: sending as the owner's account needs live human approval, but this turn is non-interactive (origin: %s). "+
@@ -152,6 +185,7 @@ func (e *Executor) gateOwnerSend(ctx context.Context, skill Skill, action string
 				Data: map[string]interface{}{"approval_status": "refused_noninteractive", "origin": ni.Source},
 			}, true
 		}
+		e.auditSenderGate(ctx, skill, "deny", "owner", "approval_unavailable", args)
 		return &ExecutionResult{
 			Success: false,
 			Error:   fmt.Sprintf("NOT SENT: sending as the owner's account needs human approval, which could not be requested: %v", err),
@@ -159,6 +193,7 @@ func (e *Executor) gateOwnerSend(ctx context.Context, skill Skill, action string
 		}, true
 	}
 
+	e.auditSenderGate(ctx, skill, "approval_required", "owner", "owner_account", args)
 	// conduit-31jg.43: the code is deliberately withheld from the model.
 	return &ExecutionResult{
 		Success: true,

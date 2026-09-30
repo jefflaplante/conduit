@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"reflect"
@@ -305,5 +306,66 @@ func TestOwnerSend_InvalidArgsNoPrompt(t *testing.T) {
 	res, _ = h.e.ExecuteSkill(h.ctx, h.skill, "send", map[string]interface{}{"account": "jeff"})
 	if res.Success || len(h.ch.all()) != 0 {
 		t.Fatalf("missing to must fail without prompting: %+v", res)
+	}
+}
+
+// conduit-1nfq: every send decision leaves one sender-gate audit record.
+func TestSenderGate_AuditsEveryDecision(t *testing.T) {
+	cases := []struct {
+		name                       string
+		ctx                        func(h *harness) context.Context
+		args                       map[string]interface{}
+		decision, identity, reason string
+		sessionKey                 string
+	}{
+		{"agent send", func(h *harness) context.Context { return approval.WithNonInteractive(context.Background(), "cron") },
+			map[string]interface{}{"to": "bob@x.com"}, "allow", "agent", "agent_account", ""},
+		{"owner non-interactive", func(h *harness) context.Context {
+			return approval.WithNonInteractive(context.Background(), "heartbeat")
+		},
+			ownerSendArgs("bob@x.com"), "deny", "owner", "non_interactive", ""},
+		{"owner interactive", func(h *harness) context.Context { return h.ctx },
+			ownerSendArgs("bob@x.com"), "approval_required", "owner", "owner_account", "s1"},
+		{"owner missing to", func(h *harness) context.Context { return h.ctx },
+			map[string]interface{}{"account": "jeff"}, "deny", "owner", "missing_to", "s1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			var buf strings.Builder
+			h.e.gateLog = slog.New(slog.NewJSONHandler(&buf, nil))
+			h.e.runApproved = nil // an agent send must not reach the real gog binary
+			if _, gated := h.e.gateOwnerSend(c.ctx(h), h.skill, "send", c.args); gated == (c.decision == "allow") {
+				t.Fatalf("gated=%v for decision %s", gated, c.decision)
+			}
+			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+			if len(lines) != 1 {
+				t.Fatalf("want exactly one audit record, got %d: %s", len(lines), buf.String())
+			}
+			var rec map[string]interface{}
+			if err := json.Unmarshal([]byte(lines[0]), &rec); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]interface{}{"event": "email.sender_gate", "path": "skill:email",
+				"decision": c.decision, "identity": c.identity, "reason": c.reason, "session_key": c.sessionKey}
+			for k, v := range want {
+				if rec[k] != v {
+					t.Errorf("%s = %v, want %v", k, rec[k], v)
+				}
+			}
+			if _, ok := rec["body"]; ok {
+				t.Error("body must never be logged")
+			}
+		})
+	}
+}
+
+func TestSenderGate_ReadsNotAudited(t *testing.T) {
+	h := newHarness(t)
+	var buf strings.Builder
+	h.e.gateLog = slog.New(slog.NewJSONHandler(&buf, nil))
+	h.e.gateOwnerSend(h.ctx, h.skill, "search", map[string]interface{}{"account": "jeff"})
+	if buf.Len() != 0 {
+		t.Fatalf("reads must not produce sender-gate records: %s", buf.String())
 	}
 }

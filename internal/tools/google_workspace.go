@@ -5,10 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"time"
 
+	"conduit/internal/config"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
@@ -263,38 +265,57 @@ func (t *GoogleWorkspaceTool) emailSend(ctx context.Context, args map[string]int
 	if to == "" || subject == "" || body == "" {
 		return types.NewErrorResult("missing_args", "to, subject, and body are required for email_send"), nil
 	}
-
-	// Determine from address
-	fromAddr := ""
-	fromAlias := toolargs.GetString(args, "from_alias", "")
-	services := t.registry.GetServices()
-
-	if services != nil && services.ConfigMgr != nil {
-		agentEmail := services.ConfigMgr.Agent.Email
-		if fromAlias != "" {
-			// Validate alias
-			valid := fromAlias == agentEmail.Address
-			for _, alias := range agentEmail.Aliases {
-				if fromAlias == alias {
-					valid = true
-					break
-				}
-			}
-			if !valid {
-				return types.NewErrorResult("invalid_alias",
-					fmt.Sprintf("from_alias '%s' not in configured addresses/aliases", fromAlias)), nil
-			}
-			fromAddr = fromAlias
-		} else if agentEmail.Address != "" {
-			fromAddr = agentEmail.Address
+	// conduit-1nfq: a CR/LF in any header value would let the model inject
+	// headers (a second From:, extra recipients) into the raw message.
+	for _, key := range []string{"to", "cc", "bcc", "subject", "from_alias"} {
+		if strings.ContainsAny(toolargs.GetString(args, key, ""), "\r\n") {
+			return types.NewErrorResult("invalid_header", fmt.Sprintf("%s must not contain line breaks", key)), nil
 		}
 	}
 
+	// Sender gate (conduit-1nfq): mail may only leave from the agent's
+	// account. The owner-account path with human approval is the email
+	// skill; this tool never sends as anyone else.
+	var agentEmail config.AgentEmail
+	if services := t.registry.GetServices(); services != nil && services.ConfigMgr != nil {
+		agentEmail = services.ConfigMgr.Agent.Email
+	}
+	if agentEmail.Address == "" {
+		t.auditSenderGate(ctx, "deny", "unknown", "no_agent_address", to)
+		return types.NewErrorResult("sender_blocked",
+			"blocked: email_send needs agent.email.address configured so the sending account can be verified"), nil
+	}
+	fromAddr := agentEmail.Address
+	if fromAlias := toolargs.GetString(args, "from_alias", ""); fromAlias != "" {
+		if !isAgentAddress(agentEmail, fromAlias) {
+			t.auditSenderGate(ctx, "deny", "unknown", "invalid_alias", to)
+			return types.NewErrorResult("invalid_alias",
+				fmt.Sprintf("from_alias '%s' not in configured addresses/aliases", fromAlias)), nil
+		}
+		fromAddr = fromAlias
+	}
+
+	userID := t.getUserID()
+
+	// Gmail sends as the authenticated mailbox whatever the From header
+	// says, so verify the account gws is signed in as, on every send.
+	sender, err := t.sendingAccount(ctx, userID)
+	if err != nil {
+		t.auditSenderGate(ctx, "deny", "unknown", "profile_unavailable", to)
+		return types.NewErrorResult("sender_blocked",
+			fmt.Sprintf("blocked: could not verify the sending account: %v", err)), nil
+	}
+	if !isAgentAddress(agentEmail, sender) {
+		t.auditSenderGate(ctx, "deny", "owner", "non_agent_account", to)
+		return types.NewErrorResult("sender_blocked",
+			fmt.Sprintf("blocked: gws is signed in as %s, which is not the agent's account. "+
+				"Sending as the owner requires the owner's approval: ask the owner, then use the email skill with the owner account (it prompts them). Do not retry here.", sender)), nil
+	}
+	t.auditSenderGate(ctx, "allow", "agent", "agent_account", to)
+
 	// Build RFC 2822 message
 	var msg strings.Builder
-	if fromAddr != "" {
-		msg.WriteString(fmt.Sprintf("From: %s\r\n", fromAddr))
-	}
+	msg.WriteString(fmt.Sprintf("From: %s\r\n", fromAddr))
 	msg.WriteString(fmt.Sprintf("To: %s\r\n", to))
 	if cc := toolargs.GetString(args, "cc", ""); cc != "" {
 		msg.WriteString(fmt.Sprintf("Cc: %s\r\n", cc))
@@ -306,8 +327,6 @@ func (t *GoogleWorkspaceTool) emailSend(ctx context.Context, args map[string]int
 	msg.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
 	msg.WriteString("\r\n")
 	msg.WriteString(body)
-
-	userID := t.getUserID()
 
 	// gws gmail users messages send --params '{"userId":"me"}' --json '{"raw":"base64..."}'
 	params := map[string]interface{}{"userId": userID}
@@ -326,6 +345,48 @@ func (t *GoogleWorkspaceTool) emailSend(ctx context.Context, args map[string]int
 
 	output, _ := json.MarshalIndent(result, "", "  ")
 	return &types.ToolResult{Success: true, Content: string(output)}, nil
+}
+
+// sendingAccount returns the mailbox address gws is authenticated as for
+// userID (Gmail users.getProfile).
+func (t *GoogleWorkspaceTool) sendingAccount(ctx context.Context, userID string) (string, error) {
+	paramsJSON, _ := json.Marshal(map[string]interface{}{"userId": userID})
+	profile, err := t.runGws(ctx, "gmail", "users", "getProfile", "--params", string(paramsJSON))
+	if err != nil {
+		return "", err
+	}
+	addr, _ := profile["emailAddress"].(string)
+	if addr == "" {
+		return "", fmt.Errorf("gws profile has no emailAddress")
+	}
+	return addr, nil
+}
+
+// isAgentAddress reports whether addr is the agent's address or an alias
+// (case-insensitive).
+func isAgentAddress(e config.AgentEmail, addr string) bool {
+	if addr == "" {
+		return false
+	}
+	if strings.EqualFold(addr, e.Address) {
+		return true
+	}
+	for _, a := range e.Aliases {
+		if strings.EqualFold(addr, a) {
+			return true
+		}
+	}
+	return false
+}
+
+// auditSenderGate records one email sender-gate decision (conduit-1nfq),
+// matching the email skill's email.sender_gate records.
+func (t *GoogleWorkspaceTool) auditSenderGate(ctx context.Context, decision, identity, reason, to string) {
+	slog.Info("email sender gate",
+		"component", "approval", "event", "email.sender_gate",
+		"path", "tool:google_workspace", "decision", decision, "identity", identity,
+		"reason", reason, "to", to,
+		"session_key", types.RequestSessionKey(ctx), "channel_id", types.RequestChannelID(ctx), "user_id", types.RequestUserID(ctx))
 }
 
 func (t *GoogleWorkspaceTool) emailTrash(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
