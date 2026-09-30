@@ -101,8 +101,9 @@ type goldenScenario struct {
 }
 
 func goldenScenarios() []goldenScenario {
-	// deep: 22 alternating rounds so the conduit-8ba7 refocus (depth 20) and
-	// circular-pattern think-step both fire, then a plain final.
+	// deep: 22 alternating rounds so the circular-pattern think-step fires
+	// (depths 6/12/18) and the golden proves depth 20 carries NO injection
+	// after the conduit-8ba7 sunset.
 	var deep []scriptStep
 	for i := 1; i <= 22; i++ {
 		name := "ok_a"

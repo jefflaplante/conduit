@@ -118,15 +118,11 @@ func (cs *chainState) recordOutcome(call ai.ToolCall, result *ToolResult, err er
 // crossing (FailureTracker.OnPivot), and the pattern tracker is reset after a
 // detection so the same trailing calls cannot re-trigger it.
 //
-// lead parts (the conduit-8ba7 progress reminder, conduit-31jg.14) come first
-// and are emitted even when cs is nil.
-func (cs *chainState) takeGuidance(lead ...string) string {
+// The conduit-8ba7 progress reminder that used to arrive as a lead part was
+// removed by the sunset review (2026-09-30); pivot and think-step guidance
+// are the remaining triggers.
+func (cs *chainState) takeGuidance() string {
 	var parts []string
-	for _, l := range lead {
-		if l != "" {
-			parts = append(parts, l)
-		}
-	}
 	if cs == nil {
 		if len(parts) == 0 {
 			return ""

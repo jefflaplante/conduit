@@ -4835,10 +4835,6 @@
             "role": "tool",
             "content": "b",
             "tool_call_id": "tc-120-0"
-          },
-          {
-            "role": "user",
-            "content": "[Tool-loop guidance] Turn progress: depth 20 of max 25. Original request: do the deep_refocus thing"
           }
         ],
         "model": "claude-sonnet-4-6",

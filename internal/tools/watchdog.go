@@ -63,7 +63,7 @@ type turnBudget struct {
 	coderToolRounds int       // rounds that included at least one coder-class tool
 	totalRounds     int
 	started         time.Time
-	injected        bool        // conduit-8ba7: progress reminder already injected this chain
+	deepLogged      bool        // conduit-8ba7 sunset: first_deep telemetry logged this chain
 	chain           *chainState // conduit-31jg.13: per-turn failure/pattern trackers (nil-safe)
 	usage           ai.Usage    // conduit-31jg.15: every billed round trip this turn
 }

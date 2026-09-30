@@ -30,7 +30,7 @@ type turnState struct {
 	resp       *ai.GenerateResponse
 	depth      int
 	chainStart time.Time
-	budget     *turnBudget // trackers (budget.chain), usage, extensions, refocus one-shot
+	budget     *turnBudget // trackers (budget.chain), usage, extensions, deep-chain telemetry
 }
 
 // request builds the round's provider request over the current history.
@@ -47,7 +47,7 @@ func (ts *turnState) request() *ai.GenerateRequest {
 // advance carries the round's request history into the next round and makes
 // resp the reply to execute. guidanceAt is the index of this round's
 // ephemeral guidance message (-1 when none): it existed for this round trip
-// only and is dropped (conduit-8ba7, conduit-31jg.13). The request itself is
+// only and is dropped (conduit-31jg.13). The request itself is
 // never modified: its pointer may already be recorded by mocks/telemetry.
 func (ts *turnState) advance(req *ai.GenerateRequest, guidanceAt int, resp *ai.GenerateResponse) {
 	msgs := req.Messages
@@ -128,7 +128,7 @@ func (e *ExecutionEngine) runToolLoop(ctx context.Context, ts *turnState) (*Conv
 			return e.chainLimitResponse(ts), nil
 		}
 
-		refocusMessage := e.refocusMessage(ts)
+		e.logChainDepth(depth, tb) // conduit-8ba7 sunset: log-only telemetry
 
 		// This round: the reply's tool calls, then their results.
 		ts.history = append(ts.history, ai.ChatMessage{
@@ -167,11 +167,13 @@ func (e *ExecutionEngine) runToolLoop(ctx context.Context, ts *turnState) (*Conv
 		// that hoist system messages (anthropic.go, openai.go) don't rewrite
 		// the system prefix and bust the prompt cache. The Anthropic
 		// converter puts it in the same user message as the tool_results,
-		// after them (conduit-31jg.45). conduit-31jg.14: the one-per-chain
-		// conduit-8ba7 progress reminder rides in this same message. It is
-		// dropped again before the next round (turnState.advance).
+		// after them (conduit-31jg.45). It is dropped again before the next
+		// round (turnState.advance). The conduit-8ba7 progress reminder that
+		// used to ride here was removed by the 2-week sunset review
+		// (2026-09-30): deep chains keep log-only chain_depth telemetry
+		// instead, at zero token cost.
 		guidanceAt := -1
-		if guidance := tb.chain.takeGuidance(refocusMessage); guidance != "" {
+		if guidance := tb.chain.takeGuidance(); guidance != "" {
 			log.Printf("[ExecutionEngine] Injecting tool-loop guidance at depth %d (conduit-31jg.13)", depth)
 			guidanceAt = len(ts.history)
 			ts.history = append(ts.history, ai.ChatMessage{Role: "user", Content: guidance, Injected: true})
@@ -263,30 +265,23 @@ func (e *ExecutionEngine) chainLimitResponse(ts *turnState) *ConversationRespons
 	}
 }
 
-// refocusDepthThreshold is the depth of the one mid-chain progress reminder.
-const refocusDepthThreshold = 20
+// deepDepthThreshold is the depth at which per-chain deep-chain telemetry
+// starts (conduit-8ba7 sunset: log-only, nothing is injected anymore).
+const deepDepthThreshold = 20
 
-// refocusMessage returns the conduit-8ba7 mid-chain progress reminder for
-// this round, or "". The old every-10-depth verbatim goal reminder is gone;
-// deep chains get exactly one progress-aware user-role guidance message at
-// the first depth >= 20, and depth milestones 30/40/50 emit chain_depth
-// telemetry (log only, no injection).
-func (e *ExecutionEngine) refocusMessage(ts *turnState) string {
-	depth, tb := ts.depth, ts.budget
-	var msg string
-	if depth >= refocusDepthThreshold && !tb.injected {
-		if originalGoal := e.extractOriginalGoal(ts.history); originalGoal != "" {
-			msg = fmt.Sprintf("%s%d of max %d. Original request: %s",
-				progressReminderMarker, depth, e.maxChains, originalGoal)
-			tb.injected = true
-			log.Printf("[ExecutionEngine] operation=refocus_inject depth=%d max=%d goal=%q (conduit-8ba7)", depth, e.maxChains, originalGoal)
-		}
+// logChainDepth emits the conduit-8ba7 deep-chain telemetry: at the first
+// depth >= 20 in a chain, one first_deep line (replacing the old
+// refocus_inject log so the deep-chain distribution stays measurable), and at
+// depth milestones 30/40/50 a milestone line — exactly as before the sunset.
+func (e *ExecutionEngine) logChainDepth(depth int, tb *turnBudget) {
+	if depth >= deepDepthThreshold && !tb.deepLogged {
+		tb.deepLogged = true
+		log.Printf("[ExecutionEngine] operation=chain_depth first_deep=%d max=%d (conduit-8ba7)", depth, e.maxChains)
 	}
 	switch depth {
 	case 30, 40, 50:
 		log.Printf("[ExecutionEngine] operation=chain_depth milestone=%d max=%d (conduit-8ba7)", depth, e.maxChains)
 	}
-	return msg
 }
 
 // maybeSendExtensionNotice delivers the extension announcement via the
@@ -327,27 +322,6 @@ func (e *ExecutionEngine) checkTurnWindow(ctx context.Context, chainStart time.T
 	return nil
 }
 
-// extractOriginalGoal finds the original user goal from the message history.
-// It looks for the last user message in the conversation, which typically
-// contains the original request that initiated the tool chain. Messages the
-// gateway injected mid-turn (length auto-continue "continue", tool-loop
-// guidance) are skipped: they are not the user's request (conduit-31jg.87).
-func (e *ExecutionEngine) extractOriginalGoal(messages []ai.ChatMessage) string {
-	// Search backwards to find the most recent user-authored message
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" && messages[i].Content != "" && !messages[i].Injected {
-			goal := messages[i].Content
-			// Truncate long goals to keep the reminder concise
-			const maxGoalLen = 200
-			if len(goal) > maxGoalLen {
-				goal = goal[:maxGoalLen] + "..."
-			}
-			return goal
-		}
-	}
-	return ""
-}
-
-// progressReminderMarker is the stable prefix of the conduit-8ba7 mid-chain
-// progress reminder (tests match on it).
-const progressReminderMarker = "Turn progress: depth "
+// extractOriginalGoal removed with the conduit-8ba7 progress injection
+// (2026-09-30 sunset review): nothing reads the original goal mid-chain
+// anymore. Find the removal in git history if a future feature needs it.

@@ -1,22 +1,23 @@
 package tools
 
-// Tests for conduit-8ba7: replace the every-10-depth verbatim goal-refocus
-// reminder with a single progress-aware injection per chain.
+// Tests for the conduit-8ba7 sunset review: the mid-chain progress injection
+// is REMOVED. What remains is log-only, zero-token chain_depth telemetry.
 //
-// New behavior:
-//   - NO injection at depth 10 (or any depth < 20).
-//   - FIRST time depth >= 20 in a chain: exactly one user-role guidance message (conduit-31jg.14)
-//     "Turn progress: depth N of max M. Original request: <first 200 chars>"
-//   - No second injection at depths 25/30/40+ in the same chain.
-//   - Each chain (HandleToolCallFlow call) gets its own injection at its own
-//     depth 20.
-//   - Depth milestones 30/40/50 log operation=chain_depth telemetry (no
-//     injection attached).
-//   - SetRefocusInterval is removed (compile-level: tested by refocusing_test.go
-//     being deleted / not existing).
+// Behavior after removal:
+//   - NO message is ever injected into the conversation at depth >= 20: no
+//     request, at any depth, ever contains "Turn progress:" in any role.
+//   - At the FIRST depth >= 20 in a chain, exactly one log line:
+//     [ExecutionEngine] operation=chain_depth first_deep=20 max=<M> (conduit-8ba7)
+//   - Depth milestones 30/40/50 keep logging
+//     operation=chain_depth milestone=N max=<M> exactly as before.
+//   - operation=refocus_inject never appears anywhere.
+//   - Each chain (HandleToolCallFlow call) logs its own first_deep line.
 
 import (
+	"bytes"
 	"context"
+	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -24,10 +25,31 @@ import (
 	"conduit/internal/ai"
 )
 
-const refocusMarkerOld = "Reminder: Your original goal was:"
-const refocusMarkerNew = "Turn progress: depth"
+// progressMarker is the content prefix the removed injection used to carry.
+// No request may contain it, ever.
+const progressMarker = "Turn progress: depth"
 
-func newRefocusTestEngine(t *testing.T, maxChains int) (*ExecutionEngine, *ai.MockProvider) {
+// captureLogs redirects the standard logger for one test and restores it after.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	log.SetOutput(buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return buf
+}
+
+// countLogLines counts log lines containing sub.
+func countLogLines(buf *bytes.Buffer, sub string) int {
+	n := 0
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(line, sub) {
+			n++
+		}
+	}
+	return n
+}
+
+func newDeepChainTestEngine(t *testing.T, maxChains int) (*ExecutionEngine, *ai.MockProvider) {
 	t.Helper()
 	registry := NewMockRegistry()
 	tool := &MockTool{
@@ -41,12 +63,11 @@ func newRefocusTestEngine(t *testing.T, maxChains int) (*ExecutionEngine, *ai.Mo
 	registry.AddTool(tool)
 
 	engine := NewExecutionEngine(registry, 3, 30*time.Second, maxChains)
-
 	provider := ai.NewMockProvider("test")
 	return engine, provider
 }
 
-func refocusTestRequest(goal string) (*ai.GenerateRequest, *ai.GenerateResponse) {
+func deepChainRequest(goal string) (*ai.GenerateRequest, *ai.GenerateResponse) {
 	initialReq := &ai.GenerateRequest{
 		Messages:  []ai.ChatMessage{{Role: "user", Content: goal}},
 		Model:     "test-model",
@@ -60,236 +81,109 @@ func refocusTestRequest(goal string) (*ai.GenerateRequest, *ai.GenerateResponse)
 	return initialReq, initialResp
 }
 
-// isProgressInjection reports whether msg is the progress reminder.
-// conduit-31jg.14: it is a USER-role loop-guidance message now; a
-// system-role one would rewrite the cached system prefix.
-func isProgressInjection(msg ai.ChatMessage) bool {
-	if msg.Role == "system" && strings.Contains(msg.Content, refocusMarkerNew) {
-		panic("progress reminder must not be system-role (conduit-31jg.14): " + msg.Content)
-	}
-	return msg.Role == "user" && strings.HasPrefix(msg.Content, loopGuidanceMarker) &&
-		strings.Contains(msg.Content, refocusMarkerNew)
-}
-
-// chainProgressInjections returns the recorded provider calls whose request
-// contains the progress reminder.
-func chainProgressInjections(calls []ai.MockCall) []string {
-	var found []string
-	for _, call := range calls {
-		for _, msg := range call.Request.Messages {
-			if isProgressInjection(msg) {
-				found = append(found, msg.Content)
-			}
-		}
-	}
-	return found
-}
-
-// (a) depth 10 produces NO injection (old behavior injected every 10).
-func TestProgressInjection_NoneAtDepth10(t *testing.T) {
-	engine, provider := newRefocusTestEngine(t, 25)
-
-	// Depths 0..9 tool calls, final content at depth 10.
-	for i := 0; i < 10; i++ {
-		provider.AddResponse("", []ai.ToolCall{{ID: "c" + string(rune('a'+i)), Name: "test_tool", Args: map[string]interface{}{}}})
-	}
-	provider.AddResponse("final answer", nil)
-
-	initialReq, initialResp := refocusTestRequest("Please analyze this complex data")
-	if _, err := engine.HandleToolCallFlow(context.Background(), provider, initialReq, initialResp); err != nil {
-		t.Fatalf("HandleToolCallFlow failed: %v", err)
-	}
-
-	calls := provider.GetCalls()
-	if len(calls) != 11 {
-		t.Fatalf("Expected 11 provider calls, got %d", len(calls))
-	}
-	if got := chainProgressInjections(calls); len(got) != 0 {
-		t.Errorf("Expected NO progress injection at depth 10, got: %v", got)
-	}
-	for _, call := range calls {
-		for _, msg := range call.Request.Messages {
-			if msg.Role == "system" && strings.Contains(msg.Content, refocusMarkerOld) {
-				t.Errorf("Old verbatim reminder must no longer be injected, got: %s", msg.Content)
-			}
-		}
-	}
-}
-
-// (b) depth 20 produces exactly ONE progress injection with the correct text.
-func TestProgressInjection_OnceAtDepth20(t *testing.T) {
-	engine, provider := newRefocusTestEngine(t, 25)
-
-	// Depth 0 initial response + depths 1..20 tool-calling responses; the
-	// depth-20 round trip (21st provider call) carries the injection.
-	for i := 0; i < 20; i++ {
-		provider.AddResponse("", []ai.ToolCall{{ID: "c" + string(rune('a'+i)), Name: "test_tool", Args: map[string]interface{}{}}})
-	}
-	provider.AddResponse("final answer", nil)
-
-	goal := "Please analyze this complex data"
-	initialReq, initialResp := refocusTestRequest(goal)
-	if _, err := engine.HandleToolCallFlow(context.Background(), provider, initialReq, initialResp); err != nil {
-		t.Fatalf("HandleToolCallFlow failed: %v", err)
-	}
-
-	calls := provider.GetCalls()
-	if len(calls) != 21 {
-		t.Fatalf("Expected 21 provider calls, got %d", len(calls))
-	}
-
-	injections := chainProgressInjections(calls)
-	if len(injections) != 1 {
-		t.Fatalf("Expected exactly 1 progress injection, got %d: %v", len(injections), injections)
-	}
-
-	// Verify it appeared in the depth-20 request (call index 20).
-	depth20 := calls[20].Request
-	foundAt20 := false
-	for _, msg := range depth20.Messages {
-		if isProgressInjection(msg) {
-			foundAt20 = true
-			if !strings.Contains(msg.Content, "depth 20 of max 25") {
-				t.Errorf("Injection should report depth 20 of max 25, got: %s", msg.Content)
-			}
-			if !strings.Contains(msg.Content, "Original request: "+goal) {
-				t.Errorf("Injection should contain original request, got: %s", msg.Content)
-			}
-		}
-	}
-	if !foundAt20 {
-		t.Error("Expected progress injection in depth-20 request")
-	}
-}
-
-// (c) depths 25 and 30+ within the same chain produce NO second injection.
-func TestProgressInjection_NoSecondInjectionAtDeeperDepths(t *testing.T) {
-	engine, provider := newRefocusTestEngine(t, 40)
-
-	// Chain to depth 40: injection only at depth 20, none at 25/30/40.
-	for i := 0; i < 40; i++ {
-		provider.AddResponse("", []ai.ToolCall{{ID: "c" + string(rune('a'+i)), Name: "test_tool", Args: map[string]interface{}{}}})
-	}
-	provider.AddResponse("final answer", nil)
-
-	initialReq, initialResp := refocusTestRequest("Long running chain")
-	if _, err := engine.HandleToolCallFlow(context.Background(), provider, initialReq, initialResp); err != nil {
-		t.Fatalf("HandleToolCallFlow failed: %v", err)
-	}
-
-	calls := provider.GetCalls()
-	// Depths 0..39 complete normally (40 provider calls); at depth 40 the
-	// chain limit trips before another round trip, so the chain ends there.
-	if len(calls) != 40 {
-		t.Fatalf("Expected 40 provider calls (maxChains=40), got %d", len(calls))
-	}
-
-	injections := chainProgressInjections(calls)
-	if len(injections) != 1 {
-		t.Fatalf("Expected exactly 1 progress injection for the whole chain, got %d: %v", len(injections), injections)
-	}
-	if !strings.Contains(injections[0], "depth 20 of max 40") {
-		t.Errorf("Injection should report depth 20 of max 40, got: %s", injections[0])
-	}
-}
-
-// (d) a second independent chain gets its own injection at its own depth 20.
-func TestProgressInjection_SecondChainGetsOwnInjection(t *testing.T) {
-	engine, provider := newRefocusTestEngine(t, 25)
-
-	// Chain 1: 21 tool calls then final (injection at its depth 20).
-	for i := 0; i < 21; i++ {
-		provider.AddResponse("", []ai.ToolCall{{ID: "c1-" + string(rune('a'+i%26)), Name: "test_tool", Args: map[string]interface{}{}}})
-	}
-	provider.AddResponse("chain1 done", nil)
-	// Chain 2: 21 tool calls then final (own injection at its depth 20).
-	for i := 0; i < 21; i++ {
-		provider.AddResponse("", []ai.ToolCall{{ID: "c2-" + string(rune('a'+i%26)), Name: "test_tool", Args: map[string]interface{}{}}})
-	}
-	provider.AddResponse("chain2 done", nil)
-
-	initialReq, initialResp := refocusTestRequest("Two chains")
-	for i := 0; i < 2; i++ {
-		if _, err := engine.HandleToolCallFlow(context.Background(), provider, initialReq, initialResp); err != nil {
-			t.Fatalf("HandleToolCallFlow (chain %d) failed: %v", i+1, err)
-		}
-	}
-
-	calls := provider.GetCalls()
-	if len(calls) != 44 {
-		t.Fatalf("Expected 44 provider calls across both chains, got %d", len(calls))
-	}
-
-	if got := chainProgressInjections(calls); len(got) != 2 {
-		t.Fatalf("Expected exactly 2 progress injections (one per chain), got %d: %v", len(got), got)
-	}
-}
-
-// (e) milestone telemetry: depth crossing 30/40/50 logs operation=chain_depth
-// exactly once per chain per milestone, with no injection attached.
-func TestProgressInjection_MilestoneTelemetryAtDepths(t *testing.T) {
-	engine, provider := newRefocusTestEngine(t, 60)
-
-	for i := 0; i < 55; i++ {
+// runDeepChain drives one chain: rounds tool-calling responses then a final
+// answer, returning the recorded provider calls.
+func runDeepChain(t *testing.T, engine *ExecutionEngine, provider *ai.MockProvider, rounds int, goal string) []ai.MockCall {
+	t.Helper()
+	for i := 0; i < rounds; i++ {
 		provider.AddResponse("", []ai.ToolCall{{ID: "c" + string(rune('a'+i%26)), Name: "test_tool", Args: map[string]interface{}{}}})
 	}
 	provider.AddResponse("final answer", nil)
 
-	initialReq, initialResp := refocusTestRequest("Deep chain for milestones")
+	initialReq, initialResp := deepChainRequest(goal)
 	if _, err := engine.HandleToolCallFlow(context.Background(), provider, initialReq, initialResp); err != nil {
 		t.Fatalf("HandleToolCallFlow failed: %v", err)
 	}
+	return provider.GetCalls()
+}
 
-	if got := chainProgressInjections(provider.GetCalls()); len(got) != 1 {
-		t.Errorf("Expected exactly 1 injection even past milestones, got %d", len(got))
-	}
-	// The milestone log lines themselves are verified via the log output test
-	// below; here we assert the chain completed past 30/40/50 so those code
-	// paths executed at all.
-	calls := provider.GetCalls()
-	if len(calls) < 51 {
-		t.Fatalf("Chain should reach depth 50+, got %d provider calls", len(calls))
+// assertNoProgressContent fails if ANY recorded request carries the removed
+// injection content, in any message role — the strong form of behavior 1.
+func assertNoProgressContent(t *testing.T, calls []ai.MockCall) {
+	t.Helper()
+	for i, call := range calls {
+		for _, msg := range call.Request.Messages {
+			if strings.Contains(msg.Content, progressMarker) {
+				t.Errorf("Request %d (role %q) carries removed injection content: %s", i, msg.Role, msg.Content)
+			}
+			if msg.Role == "system" && strings.Contains(msg.Content, "Original request:") {
+				t.Errorf("Request %d carries system-role progress reminder: %s", i, msg.Content)
+			}
+		}
 	}
 }
 
-// (f) ephemerality: the reminder must be visible in exactly ONE round trip.
-// The next request after the injection must NOT carry it — otherwise the
-// single injection re-appears in every subsequent depth's request and the
-// model sees the same reminder dozens of times (the exact artifact
-// conduit-8ba7 exists to kill).
-func TestProgressInjection_Ephemeral_NotCarriedForward(t *testing.T) {
-	engine, provider := newRefocusTestEngine(t, 40)
+// (1) Behavior 1: a chain well past depth 20 injects NOTHING. No request at
+// any depth contains "Turn progress:".
+func TestChainDepth_NoInjectionAtAnyDepth(t *testing.T) {
+	engine, provider := newDeepChainTestEngine(t, 30)
+	calls := runDeepChain(t, engine, provider, 25, "Please analyze this complex data")
 
-	// 25 tool-calling rounds then a final answer: depths 0..25.
-	for i := 0; i < 25; i++ {
-		provider.AddResponse("", []ai.ToolCall{{ID: "c" + string(rune('a'+i%26)), Name: "test_tool", Args: map[string]interface{}{}}})
-	}
-	provider.AddResponse("final answer", nil)
-
-	initialReq, initialResp := refocusTestRequest("Ephemeral reminder check")
-	if _, err := engine.HandleToolCallFlow(context.Background(), provider, initialReq, initialResp); err != nil {
-		t.Fatalf("HandleToolCallFlow failed: %v", err)
-	}
-
-	calls := provider.GetCalls()
 	if len(calls) != 26 {
 		t.Fatalf("Expected 26 provider calls, got %d", len(calls))
 	}
+	assertNoProgressContent(t, calls)
+}
 
-	injections := chainProgressInjections(calls)
-	if len(injections) != 1 {
-		t.Fatalf("Reminder must appear in exactly 1 request, appeared in %d", len(injections))
+// (2) Behavior 2: first depth >= 20 logs first_deep telemetry exactly once,
+// and the old refocus_inject line is gone.
+func TestChainDepth_FirstDeepLoggedOnce(t *testing.T) {
+	engine, provider := newDeepChainTestEngine(t, 25)
+	buf := captureLogs(t)
+
+	calls := runDeepChain(t, engine, provider, 21, "Deep chain telemetry")
+
+	if len(calls) != 22 {
+		t.Fatalf("Expected 22 provider calls, got %d", len(calls))
 	}
-	// Pin it to the depth-20 request (call index 20): no other request may
-	// contain the marker.
-	for i, call := range calls {
-		if i == 20 {
-			continue
+	if got := countLogLines(buf, "operation=chain_depth first_deep=20 max=25"); got != 1 {
+		t.Errorf("Expected exactly 1 first_deep=20 max=25 log line, got %d:\n%s", got, buf.String())
+	}
+	if got := countLogLines(buf, "operation=refocus_inject"); got != 0 {
+		t.Errorf("operation=refocus_inject must never appear, got %d lines:\n%s", got, buf.String())
+	}
+	assertNoProgressContent(t, calls)
+}
+
+// (3) Behavior 2: milestone telemetry at 30/40/50 is unchanged — each logged
+// exactly once, with the first_deep line alongside, and still no injection.
+func TestChainDepth_Milestones30_40_50(t *testing.T) {
+	engine, provider := newDeepChainTestEngine(t, 60)
+	buf := captureLogs(t)
+
+	calls := runDeepChain(t, engine, provider, 55, "Deep chain for milestones")
+
+	if len(calls) != 56 {
+		t.Fatalf("Expected 56 provider calls, got %d", len(calls))
+	}
+	for _, want := range []string{
+		"operation=chain_depth first_deep=20 max=60",
+		"operation=chain_depth milestone=30 max=60",
+		"operation=chain_depth milestone=40 max=60",
+		"operation=chain_depth milestone=50 max=60",
+	} {
+		if got := countLogLines(buf, want); got != 1 {
+			t.Errorf("Expected exactly 1 log line %q, got %d:\n%s", want, got, buf.String())
 		}
-		for _, msg := range call.Request.Messages {
-			if isProgressInjection(msg) {
-				t.Errorf("Reminder leaked into request %d (must be visible only at index 20): %s", i, msg.Content)
-			}
-		}
+	}
+	if got := countLogLines(buf, "operation=refocus_inject"); got != 0 {
+		t.Errorf("operation=refocus_inject must never appear, got %d lines", got)
+	}
+	assertNoProgressContent(t, calls)
+}
+
+// (4) Per-chain reset: a second independent chain logs its own first_deep
+// line — deep-chain distribution stays measurable per chain.
+func TestChainDepth_PerChainReset(t *testing.T) {
+	engine, provider := newDeepChainTestEngine(t, 25)
+	buf := captureLogs(t)
+
+	for i := 0; i < 2; i++ {
+		runDeepChain(t, engine, provider, 21, "Two chains")
+		provider.Reset() // isolate call records; log buffer accumulates across chains
+	}
+
+	if got := countLogLines(buf, "operation=chain_depth first_deep=20 max=25"); got != 2 {
+		t.Errorf("Expected exactly 2 first_deep lines (one per chain), got %d:\n%s", got, buf.String())
 	}
 }
