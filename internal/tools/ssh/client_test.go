@@ -20,7 +20,7 @@ func testDefaults() config.SSHHostDefaults {
 	return config.SSHHostDefaults{
 		Port:           22,
 		User:           "defaultuser",
-		ConnectTimeout: 10 * time.Second,
+		ConnectTimeout: config.Duration(10 * time.Second),
 	}
 }
 
@@ -29,9 +29,9 @@ func testPoolConfig() config.SSHPoolConfig {
 	return config.SSHPoolConfig{
 		MaxConnectionsPerHost: 5,
 		MaxTotalConnections:   50,
-		IdleTimeout:           5 * time.Minute,
-		ConnectTimeout:        30 * time.Second,
-		HealthCheckInterval:   1 * time.Minute,
+		IdleTimeout:           config.Duration(5 * time.Minute),
+		ConnectTimeout:        config.Duration(30 * time.Second),
+		HealthCheckInterval:   config.Duration(1 * time.Minute),
 		StrictHostKeyChecking: "no", // For testing
 	}
 }
@@ -153,14 +153,14 @@ func TestSSHHostConfig_GetConnectTimeout(t *testing.T) {
 	}{
 		{
 			name:     "host timeout specified",
-			host:     config.SSHHostConfig{ConnectTimeout: 60 * time.Second},
-			defaults: config.SSHHostDefaults{ConnectTimeout: 30 * time.Second},
+			host:     config.SSHHostConfig{ConnectTimeout: config.Duration(60 * time.Second)},
+			defaults: config.SSHHostDefaults{ConnectTimeout: config.Duration(30 * time.Second)},
 			want:     60 * time.Second,
 		},
 		{
 			name:     "use default timeout",
 			host:     config.SSHHostConfig{},
-			defaults: config.SSHHostDefaults{ConnectTimeout: 45 * time.Second},
+			defaults: config.SSHHostDefaults{ConnectTimeout: config.Duration(45 * time.Second)},
 			want:     45 * time.Second,
 		},
 		{

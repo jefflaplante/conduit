@@ -80,7 +80,7 @@ func NewSessionManager(cfg config.SSHSessionConfig, hosts []config.SSHHostConfig
 		maxSessions = 5
 	}
 
-	idleTimeout := cfg.SessionIdleTimeout
+	idleTimeout := cfg.SessionIdleTimeout.Duration()
 	if idleTimeout <= 0 {
 		idleTimeout = 10 * time.Minute
 	}

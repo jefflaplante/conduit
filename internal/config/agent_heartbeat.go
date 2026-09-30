@@ -82,9 +82,9 @@ var removedAlertTargetTypes = map[string]bool{"email": true, "slack": true}
 
 // AlertRetryPolicy defines how failed alert deliveries should be retried
 type AlertRetryPolicy struct {
-	MaxRetries    int           `json:"max_retries"`
-	RetryInterval time.Duration `json:"retry_interval"`
-	BackoffFactor float64       `json:"backoff_factor"`
+	MaxRetries    int      `json:"max_retries"`
+	RetryInterval Duration `json:"retry_interval"`
+	BackoffFactor float64  `json:"backoff_factor"`
 }
 
 // Validate validates the agent heartbeat configuration
@@ -266,7 +266,7 @@ func DefaultAgentHeartbeatConfig() AgentHeartbeatConfig {
 		AlertTargets: []AlertTarget{},
 		AlertRetryPolicy: AlertRetryPolicy{
 			MaxRetries:    3,
-			RetryInterval: 5 * time.Minute,
+			RetryInterval: Duration(5 * time.Minute),
 			BackoffFactor: 2.0,
 		},
 

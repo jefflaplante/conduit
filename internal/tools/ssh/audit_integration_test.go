@@ -174,7 +174,7 @@ func TestAuditIntegration_SessionCommand(t *testing.T) {
 		},
 		Sessions: config.SSHSessionConfig{
 			MaxConcurrentSessions: 5,
-			SessionIdleTimeout:    10 * time.Minute,
+			SessionIdleTimeout:    config.Duration(10 * time.Minute),
 			DefaultShell:          "/bin/sh",
 		},
 		Audit: config.SSHAuditConfig{
@@ -186,7 +186,7 @@ func TestAuditIntegration_SessionCommand(t *testing.T) {
 			RetentionDays:    30,
 		},
 		Pool: config.SSHPoolConfig{
-			ConnectTimeout: 30 * time.Second,
+			ConnectTimeout: config.Duration(30 * time.Second),
 		},
 		Defaults: config.SSHHostDefaults{
 			Port: 22,

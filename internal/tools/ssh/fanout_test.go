@@ -33,8 +33,8 @@ func setupTestPool(t *testing.T, hostCount int) *Pool {
 	poolConfig := config.SSHPoolConfig{
 		MaxConnectionsPerHost: 5,
 		MaxTotalConnections:   50,
-		IdleTimeout:           5 * time.Minute,
-		ConnectTimeout:        30 * time.Second,
+		IdleTimeout:           config.Duration(5 * time.Minute),
+		ConnectTimeout:        config.Duration(30 * time.Second),
 		// A missing known_hosts file makes every connect fail before any
 		// network I/O: these tests only check result structure, and must
 		// never dial (or authenticate to) real hosts (conduit-enf0).

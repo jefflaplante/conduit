@@ -58,7 +58,7 @@ func Connect(host config.SSHHostConfig, defaults config.SSHHostDefaults, poolCon
 
 	timeout := host.GetConnectTimeout(defaults)
 	if poolConfig.ConnectTimeout > 0 {
-		timeout = poolConfig.ConnectTimeout
+		timeout = poolConfig.ConnectTimeout.Duration()
 	}
 
 	// Build auth methods
@@ -155,7 +155,7 @@ func connectViaJumpHost(host config.SSHHostConfig, defaults config.SSHHostDefaul
 		User:            jumpUser,
 		Auth:            jumpAuthMethods,
 		HostKeyCallback: hostKeyCallback,
-		Timeout:         poolConfig.ConnectTimeout,
+		Timeout:         poolConfig.ConnectTimeout.Duration(),
 	}
 
 	// Connect to jump host

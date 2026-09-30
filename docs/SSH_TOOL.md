@@ -61,10 +61,9 @@ The SSH tool enables Conduit to execute commands on remote hosts via SSH. It sup
 
 See [reference/remote-ssh.md](../reference/remote-ssh.md#enabling-remote-execution) for the authoritative enablement checklist.
 
-> **Durations are nanoseconds.** Duration fields are Go `time.Duration`
-> values and must be JSON integers in nanoseconds (`300000000000` = 5m).
-> The examples below that show strings such as `"5m"` are illustrative; the
-> config loader currently rejects them.
+> **Durations are strings.** Duration fields take Go duration strings such
+> as `"30s"`, `"5m"` or `"1h30m"`. Plain integers are still accepted as
+> nanoseconds (`300000000000` = 5m) for older configs.
 
 Minimal config to get started:
 
@@ -250,7 +249,7 @@ The security section is the most critical part of the configuration. The `defaul
 | `allow_subshells` | bool | `false` | Allow `$()` and backtick command substitution |
 | `allow_pipes` | bool | `true` | Allow pipe chains (`cmd1 \| cmd2`) |
 | `max_command_length` | int | 10000 | Maximum command string length in bytes |
-| `approval_timeout` | duration (ns) | gateway default (5m) | How long an SSH approval prompt stays valid (capped at 1h) |
+| `approval_timeout` | duration | gateway default (5m) | How long an SSH approval prompt stays valid (capped at 1h) |
 | `allowed_commands` | object | see below | Commands whitelisted at each tier |
 | `blocked_patterns` | []string | see below | Regex patterns that always block commands |
 

@@ -690,7 +690,7 @@ Agent heartbeat for automated tasks. See [agent-heartbeat.md](agent-heartbeat.md
     ],
     "alert_retry_policy": {
       "max_retries": 3,
-      "retry_interval": 300000000000,
+      "retry_interval": "5m",
       "backoff_factor": 2.0
     },
     "job_failure_alert_threshold": 3

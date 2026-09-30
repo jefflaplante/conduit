@@ -94,7 +94,7 @@ func classificationData(c *ClassificationResult) map[string]interface{} {
 // stays valid for security.approval_timeout (0 = the gateway default, capped
 // at approval.MaxTTL; conduit-enf0).
 func (t *SSHTool) gate(ctx context.Context, op approvalgate.Operation, run approvalgate.Run) (*types.ToolResult, error) {
-	op.TTL = t.config.Security.ApprovalTimeout
+	op.TTL = t.config.Security.ApprovalTimeout.Duration()
 	return approvalgate.Request(ctx, t.approver(), op, run), nil
 }
 

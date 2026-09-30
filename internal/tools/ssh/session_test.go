@@ -16,7 +16,7 @@ import (
 func testSessionConfig() config.SSHSessionConfig {
 	return config.SSHSessionConfig{
 		MaxConcurrentSessions: 5,
-		SessionIdleTimeout:    10 * time.Minute,
+		SessionIdleTimeout:    config.Duration(10 * time.Minute),
 		DefaultShell:          "/bin/sh",
 		OutputBoundaryMarker:  "___TEST_BOUNDARY___",
 	}
@@ -359,7 +359,7 @@ func TestSessionManager_MaxSessions_Limit(t *testing.T) {
 	// Create manager with max 2 sessions for testing
 	cfg := config.SSHSessionConfig{
 		MaxConcurrentSessions: 2,
-		SessionIdleTimeout:    10 * time.Minute,
+		SessionIdleTimeout:    config.Duration(10 * time.Minute),
 	}
 	sm := NewSessionManager(cfg, testHostsConfig(), config.SSHHostDefaults{}, config.SSHPoolConfig{})
 	defer sm.Close()
