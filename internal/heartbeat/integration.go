@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"conduit/internal/ai"
 	"conduit/internal/channels"
 	"conduit/internal/config"
 	"conduit/internal/scheduler"
@@ -18,7 +17,6 @@ import (
 // GatewayIntegration provides integration between heartbeat execution and the gateway
 type GatewayIntegration struct {
 	executor         *JobExecutor
-	aiRouter         *ai.Router
 	scheduler        scheduler.SchedulerInterface
 	channelSender    ChannelSender
 	metricsCollector MetricsCollector
@@ -43,9 +41,8 @@ type GatewayIntegration struct {
 	delivery *DeliveryRegistry
 	retries  retryState
 
-	// aiExecutor, when set, runs the heartbeat prompt (the gateway installs
-	// one backed by its TurnRunner, conduit-31jg.66); nil calls aiRouter
-	// directly.
+	// aiExecutor runs the heartbeat prompt; the gateway installs one backed
+	// by its TurnRunner (conduit-31jg.66). ExecuteHeartbeat fails without it.
 	aiExecutor AIExecutor
 }
 
@@ -77,7 +74,7 @@ type MetricsCollector interface {
 // NewGatewayIntegration creates a new gateway integration.
 // model overrides the default AI model; timeoutSeconds overrides the per-execution timeout.
 // Pass "" / 0 for built-in defaults.
-func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, aiRouter *ai.Router, scheduler scheduler.SchedulerInterface, channelSender ChannelSender, metricsCollector MetricsCollector, model string, timeoutSeconds int) *GatewayIntegration {
+func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, scheduler scheduler.SchedulerInterface, channelSender ChannelSender, metricsCollector MetricsCollector, model string, timeoutSeconds int) *GatewayIntegration {
 	config := DefaultExecutorConfig()
 	if model != "" {
 		config.DefaultModel = model
@@ -95,7 +92,6 @@ func NewGatewayIntegration(workspaceDir string, sessionsStore *sessions.Store, a
 
 	g := &GatewayIntegration{
 		executor:         executor,
-		aiRouter:         aiRouter,
 		scheduler:        scheduler,
 		channelSender:    channelSender,
 		metricsCollector: metricsCollector,
@@ -115,10 +111,10 @@ func (g *GatewayIntegration) SetBrainWriter(bw BrainWriter) {
 	g.brainWriter = bw
 }
 
-// SetAIExecutor overrides how the heartbeat prompt is executed. The gateway
-// uses it to run heartbeat turns on its shared TurnRunner (transcript in the
-// turn lock, ActiveRequests registration, usage/cost; conduit-31jg.66).
-// Call before the scheduler starts.
+// SetAIExecutor sets how the heartbeat prompt is executed; ExecuteHeartbeat
+// requires one. The gateway uses it to run heartbeat turns on its shared
+// TurnRunner (transcript in the turn lock, ActiveRequests registration,
+// usage/cost; conduit-31jg.66). Call before the scheduler starts.
 func (g *GatewayIntegration) SetAIExecutor(e AIExecutor) {
 	g.aiExecutor = e
 }
@@ -135,16 +131,17 @@ func (g *GatewayIntegration) ExecuteHeartbeat(ctx context.Context, job *schedule
 		log.Printf("[HeartbeatIntegration] Delivered %d deferred action(s)", n)
 	}
 
-	// Create AI executor adapter
-	var aiExecutor AIExecutor = &gatewayAIExecutor{
-		aiRouter: g.aiRouter,
-	}
-	if g.aiExecutor != nil {
-		aiExecutor = g.aiExecutor
+	// conduit-2hke: there is no fallback; running the prompt any other way
+	// stores no transcript and leaves an empty session row behind.
+	if g.aiExecutor == nil {
+		if g.metricsCollector != nil {
+			g.metricsCollector.MarkHeartbeatError()
+		}
+		return fmt.Errorf("heartbeat execution failed: no AI executor installed (SetAIExecutor)")
 	}
 
 	// Execute the heartbeat
-	result, err := g.executor.ExecuteHeartbeatJob(ctx, aiExecutor)
+	result, err := g.executor.ExecuteHeartbeatJob(ctx, g.aiExecutor)
 	if err != nil {
 		log.Printf("[HeartbeatIntegration] Heartbeat execution failed: %v", err)
 
@@ -542,36 +539,6 @@ func (g *GatewayIntegration) ScheduleHeartbeatJob(schedule, target, model string
 	}
 
 	return g.scheduler.AddJob(job)
-}
-
-// gatewayAIExecutor adapts the gateway's AI router to the AIExecutor interface
-type gatewayAIExecutor struct {
-	aiRouter *ai.Router
-}
-
-// ExecutePrompt executes an AI prompt using the gateway's AI router
-func (g *gatewayAIExecutor) ExecutePrompt(ctx context.Context, session *sessions.Session, prompt, model string) (AIResponse, error) {
-	response, err := g.aiRouter.GenerateResponseWithTools(ctx, session, prompt, "", model)
-	if err != nil {
-		return nil, err
-	}
-
-	return &aiResponseAdapter{response: response}, nil
-}
-
-// aiResponseAdapter adapts ai.ConversationResponse to AIResponse interface
-type aiResponseAdapter struct {
-	response ai.ConversationResponse
-}
-
-// GetContent returns the response content
-func (a *aiResponseAdapter) GetContent() string {
-	return a.response.GetContent()
-}
-
-// GetUsage returns the response usage information
-func (a *aiResponseAdapter) GetUsage() interface{} {
-	return a.response.GetUsage()
 }
 
 // IsHeartbeatJob checks if a scheduler job is a heartbeat job

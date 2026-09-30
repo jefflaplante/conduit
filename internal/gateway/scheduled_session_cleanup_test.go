@@ -414,7 +414,7 @@ func TestHeartbeatJob_SilentRunViaSchedulerPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := scheduler.New(t.TempDir(), gw.executeScheduledJob)
-	hb := heartbeat.NewGatewayIntegration(ws, gw.sessions, gw.ai, s, nil, nil, "llama3", 30)
+	hb := heartbeat.NewGatewayIntegration(ws, gw.sessions, s, nil, nil, "llama3", 30)
 	hb.SetAIExecutor(newTurnAIExecutor(gw))
 	t.Cleanup(func() { _ = hb.Close() })
 	gw.monitoring = &MonitoringService{HeartbeatIntegration: hb}

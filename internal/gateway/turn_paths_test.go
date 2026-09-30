@@ -464,7 +464,7 @@ func TestHeartbeatJob_DrainInterruptKeepsRerunMarker(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, "HEARTBEAT.md"), []byte("# HEARTBEAT.md\n\n## Check status\nCheck the system status.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	hb := heartbeat.NewGatewayIntegration(ws, gw.sessions, gw.ai, s, nil, nil, "llama3", 30)
+	hb := heartbeat.NewGatewayIntegration(ws, gw.sessions, s, nil, nil, "llama3", 30)
 	hb.SetAIExecutor(newTurnAIExecutor(gw))
 	t.Cleanup(func() { _ = hb.Close() })
 	gw.monitoring = &MonitoringService{HeartbeatIntegration: hb}

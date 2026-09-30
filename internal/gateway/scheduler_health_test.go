@@ -47,7 +47,7 @@ func TestJobHealthNotifier_EndToEndAlertHistory(t *testing.T) {
 	hbCfg.AlertTargets = []config.AlertTarget{{Name: "owner", Type: "telegram", Config: map[string]string{"chat_id": "4242"}}}
 
 	sender := &captureSender{}
-	hb := heartbeat.NewGatewayIntegration(t.TempDir(), nil, nil, nil, sender, nil, "", 0)
+	hb := heartbeat.NewGatewayIntegration(t.TempDir(), nil, nil, sender, nil, "", 0)
 	t.Cleanup(func() { _ = hb.Close() })
 	hb.SetAgentHeartbeatConfig(hbCfg)
 	hb.SetDeliveryRegistry(gw.monitoring.DeliveryRegistry)

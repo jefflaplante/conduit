@@ -53,7 +53,7 @@ func newAuditedIntegration(t *testing.T, sender ChannelSender, policy config.Ale
 	reg := NewDeliveryRegistry()
 	reg.SetAuditor(auditor)
 
-	g := NewGatewayIntegration(t.TempDir(), nil, nil, nil, sender, nil, "", 0)
+	g := NewGatewayIntegration(t.TempDir(), nil, nil, sender, nil, "", 0)
 	cfg := liveLikeCfg()
 	cfg.AlertRetryPolicy = policy
 	g.SetAgentHeartbeatConfig(cfg)

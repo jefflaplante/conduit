@@ -70,7 +70,7 @@ func TestHeartbeatDeliveryWiring(t *testing.T) {
 	gw, store := newTestGatewayWithSessions(t)
 	gw.monitoring.WireDeliveryRegistry(store.DB())
 
-	hb := heartbeat.NewGatewayIntegration(t.TempDir(), nil, nil, nil, &nopSender{}, nil, "", 0)
+	hb := heartbeat.NewGatewayIntegration(t.TempDir(), nil, nil, &nopSender{}, nil, "", 0)
 	t.Cleanup(func() { _ = hb.Close() })
 	hb.SetDeliveryRegistry(gw.monitoring.DeliveryRegistry)
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"conduit/internal/scheduler"
 	"conduit/internal/sessions"
 )
 
@@ -551,5 +553,42 @@ func TestHeartbeatResult_GetDelayedActions(t *testing.T) {
 
 	if !foundLow {
 		t.Error("Expected to find low priority action in delayed actions")
+	}
+}
+
+// Without an installed AIExecutor, ExecuteHeartbeat fails instead of running
+// the prompt some other way and leaving a session behind (conduit-2hke).
+func TestGatewayIntegration_ExecuteHeartbeat_RequiresAIExecutor(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "HEARTBEAT.md"), []byte("# HEARTBEAT.md\n\n## Check status\nCheck the system status.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := sessions.NewStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	job := &scheduler.Job{ID: "agent_heartbeat_main", Command: "heartbeat"}
+
+	g := NewGatewayIntegration(ws, store, nil, nil, nil, "", 10)
+	if err := g.ExecuteHeartbeat(context.Background(), job); err == nil || !strings.Contains(err.Error(), "AI executor") {
+		t.Fatalf("err = %v, want a missing-AI-executor error", err)
+	}
+	if got, err := store.GetSessionsByUser("heartbeat", 10); err != nil || len(got) != 0 {
+		t.Fatalf("sessions = %v (err %v), want none", got, err)
+	}
+
+	var prompts int
+	g.SetAIExecutor(&funcMockAIExecutor{
+		execFunc: func(ctx context.Context, session *sessions.Session, prompt, model string) (AIResponse, error) {
+			prompts++
+			return &mockAIResponse{content: "HEARTBEAT_OK"}, nil
+		},
+	})
+	if err := g.ExecuteHeartbeat(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if prompts != 1 {
+		t.Fatalf("installed executor ran %d prompts, want 1", prompts)
 	}
 }

@@ -36,10 +36,14 @@ HEARTBEAT.md → TaskInterpreter → JobExecutor → ResultProcessor → Actions
 integration := heartbeat.NewGatewayIntegration(
     workspaceDir, 
     sessionsStore, 
-    aiRouter, 
     scheduler, 
     channelSender,
+    metricsCollector,
+    model,          // "" for the default
+    timeoutSeconds, // 0 for the default
 )
+// Required: runs the heartbeat prompt (the gateway's is TurnRunner-backed).
+integration.SetAIExecutor(aiExecutor)
 
 // Gateway automatically routes heartbeat jobs
 func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) error {

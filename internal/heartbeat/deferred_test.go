@@ -48,7 +48,7 @@ func liveLikeCfg() config.AgentHeartbeatConfig {
 
 func newTestIntegration(t *testing.T, dir string, sender ChannelSender, now time.Time) *GatewayIntegration {
 	t.Helper()
-	g := NewGatewayIntegration(dir, nil, nil, nil, sender, nil, "", 0)
+	g := NewGatewayIntegration(dir, nil, nil, sender, nil, "", 0)
 	g.SetAgentHeartbeatConfig(liveLikeCfg())
 	g.now = func() time.Time { return now }
 	return g
