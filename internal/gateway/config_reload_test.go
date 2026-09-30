@@ -89,6 +89,7 @@ func newReloadFixture(t *testing.T) *reloadFixture {
 func newReloadFixtureFrom(t *testing.T, doc string) *reloadFixture {
 	t.Helper()
 	t.Setenv("CONDUIT_TEST_ZAI_KEY", reloadSecret)
+	stubClaudeBinary(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
@@ -113,6 +114,19 @@ func newReloadFixtureFrom(t *testing.T, doc string) *reloadFixture {
 	gw := &Gateway{config: cfg, ai: router, logger: slog.New(slog.NewTextHandler(logs, nil))}
 	gw.SetConfigPath(path)
 	return &reloadFixture{gw: gw, router: router, path: path, orig: orig, logs: logs}
+}
+
+// stubClaudeBinary puts a no-op `claude` first on PATH for the test.
+// NewClaudeCodeProvider only checks that the binary resolves, so the
+// claude-code providers in these fixtures build on machines without Claude
+// Code installed (CI runners) and never reach a real install where it is.
+func stubClaudeBinary(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func (f *reloadFixture) file(t *testing.T) string {

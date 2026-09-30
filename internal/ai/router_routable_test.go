@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,6 +16,19 @@ import (
 // listed, but the router never sends it a call.
 
 func boolp(b bool) *bool { return &b }
+
+// stubClaudeBinary puts a no-op `claude` first on PATH for the test.
+// NewClaudeCodeProvider only checks that the binary resolves, so a
+// claude-code provider builds on machines without Claude Code installed
+// (CI runners) and never reaches a real install where it is.
+func stubClaudeBinary(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
 
 // newRoutableTestRouter builds a router from a live-shaped config (z-ai
 // default, anthropic kept but routable=false unless anthropicRoutable) and
@@ -209,6 +224,7 @@ func TestRouter_NonRoutable_RoutableSameTypeProviderPreferred(t *testing.T) {
 }
 
 func TestProviderReload_RoutableOnlyChangeIsMetadataSwap(t *testing.T) {
+	stubClaudeBinary(t)
 	cfg := config.AIConfig{
 		DefaultProvider: "z-ai",
 		Providers: []config.ProviderConfig{
