@@ -94,6 +94,11 @@ Minimal config to get started:
 }
 ```
 
+The `remote_ssh` block is merged key by key onto the built-in defaults
+shown in the tables below: omitted keys keep their defaults, and anything
+you set (including `false`, `0` or `[]`) wins. A list you set replaces the
+default list.
+
 ---
 
 ## Configuration
@@ -216,7 +221,7 @@ Controls how SSH connections are managed:
 
 ### Security
 
-The security section is the most critical part of the configuration. The `default_tier` field is **required** and must be `"dangerous"` or `"blocked"` -- you cannot set it to `"read"` or `"modify"` for safety reasons.
+The security section is the most critical part of the configuration. The `default_tier` field defaults to `"dangerous"` and must be `"dangerous"` or `"blocked"` -- you cannot set it to `"read"` or `"modify"` for safety reasons.
 
 ```json
 {
@@ -244,7 +249,7 @@ The security section is the most critical part of the configuration. The `defaul
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `default_tier` | string | *required* | Tier for unrecognized commands (`"dangerous"` or `"blocked"`) |
+| `default_tier` | string | `"dangerous"` | Tier for unrecognized commands (`"dangerous"` or `"blocked"`) |
 | `require_approval` | []string | `["dangerous", "blocked"]` | Tiers that require human approval |
 | `allow_subshells` | bool | `false` | Allow `$()` and backtick command substitution |
 | `allow_pipes` | bool | `true` | Allow pipe chains (`cmd1 \| cmd2`) |

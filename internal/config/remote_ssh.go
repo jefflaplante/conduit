@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -33,6 +35,25 @@ type RemoteSSHConfig struct {
 
 	// Default settings applied to hosts without explicit configuration
 	Defaults SSHHostDefaults `json:"defaults,omitempty"`
+}
+
+// UnmarshalJSON decodes a remote_ssh block on top of DefaultRemoteSSHConfig,
+// so every key the block omits keeps its default (allowed command lists,
+// audit, pool, sessions) while explicit values, including false, 0 and [],
+// win. Previously the block replaced the defaults wholesale: omitting
+// allowed_commands made even `ls` need approval and audit was off unless
+// configured (conduit-6wjo). Lists are replaced, never appended to.
+func (c *RemoteSSHConfig) UnmarshalJSON(b []byte) error {
+	if bytes.Equal(bytes.TrimSpace(b), []byte("null")) {
+		return nil
+	}
+	type plain RemoteSSHConfig // no UnmarshalJSON: avoids recursion
+	merged := plain(DefaultRemoteSSHConfig())
+	if err := json.Unmarshal(b, &merged); err != nil {
+		return err
+	}
+	*c = RemoteSSHConfig(merged)
+	return nil
 }
 
 // SSHHostConfig defines a known SSH host

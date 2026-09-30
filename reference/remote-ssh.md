@@ -93,13 +93,14 @@ Minimal enablement:
 }
 ```
 
-The `remote_ssh` block is decoded onto zero values, not merged with the
-built-in defaults, so anything you omit is empty. Two safety defaults are
-re-applied when absent (`null`): `require_approval` (`["dangerous",
-"blocked"]`) and the hard blocks (`blocked_patterns` and
-`allowed_commands.blocked`); an explicit `[]` still means none. Omitting
-`allowed_commands.read`/`modify` makes every command fall to `default_tier`
-(so even `ls` needs approval) — copy the lists below to relax that.
+The `remote_ssh` block is merged key by key onto the built-in defaults
+(the tables below): anything you omit keeps its default, including the
+`allowed_commands` lists, `default_tier` (`"dangerous"`), audit logging
+(on, `logs/ssh_audit.jsonl`) and the pool and session settings. Anything
+you set wins, including an explicit `false`, `0` or `[]`; a list you set
+replaces the default list rather than extending it. `require_approval`
+and the hard blocks (`blocked_patterns`, `allowed_commands.blocked`) also
+fall back to their defaults when set to `null`.
 
 > **Durations are strings.** Duration fields (`approval_timeout`,
 > `idle_timeout`, `connect_timeout`, `session_idle_timeout`, ...) take Go
