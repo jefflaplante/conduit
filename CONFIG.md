@@ -818,7 +818,7 @@ Agent heartbeat — periodic task processing loop. Every N minutes, the agent re
     "alert_targets": [],
     "alert_retry_policy": {
       "max_retries": 3,
-      "retry_interval": 300000000000,
+      "retry_interval": "5m",
       "backoff_factor": 2.0
     }
   }
@@ -854,7 +854,7 @@ During quiet hours, critical/high-priority heartbeat actions are still delivered
 | `alert_queue_path` | string | unset | **Deprecated** (warns at load). The gateway no longer processes this queue; `pending.json` belongs to `alert-flush.sh` and the HEARTBEAT.md prompt. If set, only its directory is used to place `deferred.json`. |
 | `alert_targets` | array | `[]` | Validated but not currently used for routing: heartbeat messages go to the heartbeat job's target (`telegram:<chat_id>`) |
 | `alert_retry_policy.max_retries` | int | `3` | Background retries after a failed live heartbeat delivery. Range: 0–10 |
-| `alert_retry_policy.retry_interval` | duration (ns) | `300000000000` (5m) | Wait before the first retry |
+| `alert_retry_policy.retry_interval` | duration | `"5m"` | Wait before the first retry |
 | `alert_retry_policy.backoff_factor` | float | `2.0` | Multiplier applied to the wait after each retry. Range: 1.0–5.0 |
 
 Heartbeat delivery goes through the gateway's channel sender (output sanitized) via a delivery registry: each destination has a circuit breaker (3 consecutive failures open it for 5 minutes, and skipped sends are not retried), and every attempt is recorded in the `alert_history` table. Retries run in the background and never block the heartbeat loop. Deferred (quiet-hours) actions are not retried in the background; they stay queued in `deferred.json` and are retried on the next cycle.
@@ -1183,6 +1183,8 @@ Kubernetes cluster management. See [Kubernetes Reference](reference/kubernetes.m
 | `clusters[].context` | string | `""` | Kubeconfig context (empty = current) |
 | `clusters[].allowed_namespaces` | string array | `[]` | Restrict to these namespaces (empty = all) |
 | `clusters[].safety_level` | string | `"read"` | `"read"`, `"modify"`, or `"dangerous"` |
+| `require_approval` | string array | `["dangerous"]` | Tiers that need a human `YES <code>` approval; `[]` disables |
+| `approval_timeout` | duration | `"5m"` | How long an approval prompt stays valid (e.g. `"10m"`); capped at 1h |
 
 ---
 
@@ -1241,7 +1243,7 @@ Datadog integration. See [SRE Tools Reference](reference/sre-tools.md).
 
 ## `remote_ssh`
 
-Remote SSH execution with security tiers. Requires a `with_ssh` build, `"Ssh"` in `tools.enabled_tools`, and host keys in known_hosts; see [Enabling Remote Execution](reference/remote-ssh.md#enabling-remote-execution). Duration fields are integer nanoseconds.
+Remote SSH execution with security tiers. Requires a `with_ssh` build, `"Ssh"` in `tools.enabled_tools`, and host keys in known_hosts; see [Enabling Remote Execution](reference/remote-ssh.md#enabling-remote-execution). Duration fields take strings such as `"30s"` or `"5m"` (integers are read as nanoseconds for older configs).
 
 ```json
 {
@@ -1257,7 +1259,7 @@ Remote SSH execution with security tiers. Requires a `with_ssh` build, `"Ssh"` i
         "security_tier": "modify"
       }
     ],
-    "defaults": { "port": 22, "user": "deploy", "connect_timeout": 30000000000 },
+    "defaults": { "port": 22, "user": "deploy", "connect_timeout": "30s" },
     "security": { "default_tier": "dangerous", "allow_subshells": false },
     "audit": { "enabled": true, "log_path": "logs/ssh_audit.jsonl" }
   }
@@ -1543,7 +1545,7 @@ Enable the agent task loop with alert delivery to Telegram:
     ],
     "alert_retry_policy": {
       "max_retries": 3,
-      "retry_interval": 300000000000,
+      "retry_interval": "5m",
       "backoff_factor": 2.0
     }
   }

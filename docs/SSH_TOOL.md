@@ -61,10 +61,9 @@ The SSH tool enables Conduit to execute commands on remote hosts via SSH. It sup
 
 See [reference/remote-ssh.md](../reference/remote-ssh.md#enabling-remote-execution) for the authoritative enablement checklist.
 
-> **Durations are nanoseconds.** Duration fields are Go `time.Duration`
-> values and must be JSON integers in nanoseconds (`300000000000` = 5m).
-> The examples below that show strings such as `"5m"` are illustrative; the
-> config loader currently rejects them.
+> **Durations are strings.** Duration fields take Go duration strings such
+> as `"30s"`, `"5m"` or `"1h30m"`. Plain integers are still accepted as
+> nanoseconds (`300000000000` = 5m) for older configs.
 
 Minimal config to get started:
 
@@ -94,6 +93,11 @@ Minimal config to get started:
   }
 }
 ```
+
+The `remote_ssh` block is merged key by key onto the built-in defaults
+shown in the tables below: omitted keys keep their defaults, and anything
+you set (including `false`, `0` or `[]`) wins. A list you set replaces the
+default list.
 
 ---
 
@@ -217,7 +221,7 @@ Controls how SSH connections are managed:
 
 ### Security
 
-The security section is the most critical part of the configuration. The `default_tier` field is **required** and must be `"dangerous"` or `"blocked"` -- you cannot set it to `"read"` or `"modify"` for safety reasons.
+The security section is the most critical part of the configuration. The `default_tier` field defaults to `"dangerous"` and must be `"dangerous"` or `"blocked"` -- you cannot set it to `"read"` or `"modify"` for safety reasons.
 
 ```json
 {
@@ -245,12 +249,12 @@ The security section is the most critical part of the configuration. The `defaul
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `default_tier` | string | *required* | Tier for unrecognized commands (`"dangerous"` or `"blocked"`) |
+| `default_tier` | string | `"dangerous"` | Tier for unrecognized commands (`"dangerous"` or `"blocked"`) |
 | `require_approval` | []string | `["dangerous", "blocked"]` | Tiers that require human approval |
 | `allow_subshells` | bool | `false` | Allow `$()` and backtick command substitution |
 | `allow_pipes` | bool | `true` | Allow pipe chains (`cmd1 \| cmd2`) |
 | `max_command_length` | int | 10000 | Maximum command string length in bytes |
-| `approval_timeout` | duration (ns) | gateway default (5m) | How long an SSH approval prompt stays valid (capped at 1h) |
+| `approval_timeout` | duration | gateway default (5m) | How long an SSH approval prompt stays valid (capped at 1h) |
 | `allowed_commands` | object | see below | Commands whitelisted at each tier |
 | `blocked_patterns` | []string | see below | Regex patterns that always block commands |
 

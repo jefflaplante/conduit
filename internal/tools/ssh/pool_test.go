@@ -346,8 +346,8 @@ func TestPool_CleanupIdleConnections(t *testing.T) {
 	poolConfig := config.SSHPoolConfig{
 		MaxConnectionsPerHost: 5,
 		MaxTotalConnections:   50,
-		IdleTimeout:           1 * time.Millisecond,
-		HealthCheckInterval:   10 * time.Millisecond,
+		IdleTimeout:           config.Duration(1 * time.Millisecond),
+		HealthCheckInterval:   config.Duration(10 * time.Millisecond),
 		StrictHostKeyChecking: "no",
 	}
 

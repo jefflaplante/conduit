@@ -5,6 +5,7 @@ package ssh
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -23,10 +24,17 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
+// defaultConnectTimeout bounds a connection attempt (TCP connect plus SSH
+// handshake) when no connect_timeout is configured.
+const defaultConnectTimeout = 30 * time.Second
+
 // SSHClient wraps an SSH connection with session management
 type SSHClient struct {
-	mu         sync.Mutex
-	conn       *ssh.Client
+	mu   sync.Mutex
+	conn *ssh.Client
+	// jump is the bastion connection conn is tunnelled through, if any;
+	// Close closes it with conn (conduit-uanm).
+	jump       *ssh.Client
 	host       config.SSHHostConfig
 	defaults   config.SSHHostDefaults
 	poolConfig config.SSHPoolConfig
@@ -58,14 +66,19 @@ func Connect(host config.SSHHostConfig, defaults config.SSHHostDefaults, poolCon
 
 	timeout := host.GetConnectTimeout(defaults)
 	if poolConfig.ConnectTimeout > 0 {
-		timeout = poolConfig.ConnectTimeout
+		timeout = poolConfig.ConnectTimeout.Duration()
+	}
+	if timeout <= 0 {
+		timeout = defaultConnectTimeout
 	}
 
-	// Build auth methods
-	authMethods, err := buildAuthMethods(host, defaults)
+	// Build auth methods. The ssh-agent socket is only needed for the
+	// handshake; closing it here stops a leak of one socket per connect.
+	authMethods, closeAgent, err := buildAuthMethods(host, defaults)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build auth methods: %w", err)
 	}
+	defer closeAgent()
 
 	if len(authMethods) == 0 {
 		return nil, fmt.Errorf("no authentication methods available")
@@ -86,12 +99,12 @@ func Connect(host config.SSHHostConfig, defaults config.SSHHostDefaults, poolCon
 	}
 
 	// Connect through jump host if specified
-	var conn *ssh.Client
+	var conn, jump *ssh.Client
 	if host.JumpHost != "" {
-		conn, err = connectViaJumpHost(host, defaults, poolConfig, sshConfig)
+		conn, jump, err = connectViaJumpHost(host, defaults, poolConfig, sshConfig)
 	} else {
 		addr := fmt.Sprintf("%s:%d", host.Hostname, port)
-		conn, err = ssh.Dial("tcp", addr, sshConfig)
+		conn, err = dialSSH(addr, sshConfig)
 	}
 
 	if err != nil {
@@ -100,6 +113,7 @@ func Connect(host config.SSHHostConfig, defaults config.SSHHostDefaults, poolCon
 
 	return &SSHClient{
 		conn:       conn,
+		jump:       jump,
 		host:       host,
 		defaults:   defaults,
 		poolConfig: poolConfig,
@@ -108,8 +122,44 @@ func Connect(host config.SSHHostConfig, defaults config.SSHHostDefaults, poolCon
 	}, nil
 }
 
-// connectViaJumpHost establishes a connection through a bastion/jump host
-func connectViaJumpHost(host config.SSHHostConfig, defaults config.SSHHostDefaults, poolConfig config.SSHPoolConfig, targetConfig *ssh.ClientConfig) (*ssh.Client, error) {
+// dialSSH connects to addr and runs the SSH handshake, both bounded by
+// cfg.Timeout (ssh.Dial only bounds the TCP connect, so a peer that
+// accepts but never speaks SSH used to hang the caller).
+func dialSSH(addr string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
+	conn, err := net.DialTimeout("tcp", addr, cfg.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	return clientOver(conn, addr, cfg)
+}
+
+// clientOver runs the SSH client handshake on conn, closing conn if it has
+// not finished within cfg.Timeout. conn is closed on any error.
+func clientOver(conn net.Conn, addr string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
+	var timer *time.Timer
+	if cfg.Timeout > 0 {
+		timer = time.AfterFunc(cfg.Timeout, func() { _ = conn.Close() })
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if timer != nil && !timer.Stop() {
+		if err == nil {
+			_ = c.Close()
+		}
+		_ = conn.Close()
+		return nil, fmt.Errorf("ssh handshake with %s timed out after %v", addr, cfg.Timeout)
+	}
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// connectViaJumpHost establishes a connection through a bastion/jump host.
+// It returns the target client and the jump client it is tunnelled
+// through; the caller owns both and must close the jump client after the
+// target (conduit-uanm).
+func connectViaJumpHost(host config.SSHHostConfig, defaults config.SSHHostDefaults, poolConfig config.SSHPoolConfig, targetConfig *ssh.ClientConfig) (*ssh.Client, *ssh.Client, error) {
 	// For simplicity, we support a single jump host specification
 	// The jump host is expected to be a "user@host:port" string or just "host"
 	jumpSpec := host.JumpHost
@@ -128,41 +178,48 @@ func connectViaJumpHost(host config.SSHHostConfig, defaults config.SSHHostDefaul
 		portStr := jumpHost[colonIdx+1:]
 		jumpHost = jumpHost[:colonIdx]
 		if _, err := fmt.Sscanf(portStr, "%d", &jumpPort); err != nil {
-			return nil, fmt.Errorf("invalid jump host port: %s", portStr)
+			return nil, nil, fmt.Errorf("invalid jump host port: %s", portStr)
 		}
 	}
 
 	if jumpUser == "" {
 		currentUser, err := user.Current()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get current user for jump host: %w", err)
+			return nil, nil, fmt.Errorf("failed to get current user for jump host: %w", err)
 		}
 		jumpUser = currentUser.Username
 	}
 
 	// Build auth methods for jump host (use same methods as target for now)
-	jumpAuthMethods, err := buildAuthMethods(host, defaults)
+	jumpAuthMethods, closeAgent, err := buildAuthMethods(host, defaults)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build jump host auth methods: %w", err)
+		return nil, nil, fmt.Errorf("failed to build jump host auth methods: %w", err)
 	}
+	defer closeAgent()
 
 	hostKeyCallback, err := buildHostKeyCallback(poolConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build jump host key callback: %w", err)
+		return nil, nil, fmt.Errorf("failed to build jump host key callback: %w", err)
 	}
 
+	// The jump hop gets the same (never zero) timeout as the target;
+	// pool.connect_timeout alone may be 0, which meant no timeout at all.
+	timeout := targetConfig.Timeout
+	if timeout <= 0 {
+		timeout = defaultConnectTimeout
+	}
 	jumpConfig := &ssh.ClientConfig{
 		User:            jumpUser,
 		Auth:            jumpAuthMethods,
 		HostKeyCallback: hostKeyCallback,
-		Timeout:         poolConfig.ConnectTimeout,
+		Timeout:         timeout,
 	}
 
 	// Connect to jump host
 	jumpAddr := fmt.Sprintf("%s:%d", jumpHost, jumpPort)
-	jumpConn, err := ssh.Dial("tcp", jumpAddr, jumpConfig)
+	jumpConn, err := dialSSH(jumpAddr, jumpConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to jump host %s: %w", jumpAddr, err)
+		return nil, nil, fmt.Errorf("failed to connect to jump host %s: %w", jumpAddr, err)
 	}
 
 	// Connect to target through jump host
@@ -173,27 +230,29 @@ func connectViaJumpHost(host config.SSHHostConfig, defaults config.SSHHostDefaul
 	netConn, err := jumpConn.Dial("tcp", targetAddr)
 	if err != nil {
 		jumpConn.Close()
-		return nil, fmt.Errorf("failed to dial target through jump host: %w", err)
+		return nil, nil, fmt.Errorf("failed to dial target through jump host: %w", err)
 	}
 
 	// Create SSH connection over the proxied connection
-	ncc, chans, reqs, err := ssh.NewClientConn(netConn, targetAddr, targetConfig)
+	target, err := clientOver(netConn, targetAddr, targetConfig)
 	if err != nil {
-		netConn.Close()
 		jumpConn.Close()
-		return nil, fmt.Errorf("failed to create SSH connection through jump host: %w", err)
+		return nil, nil, fmt.Errorf("failed to create SSH connection through jump host: %w", err)
 	}
 
-	return ssh.NewClient(ncc, chans, reqs), nil
+	return target, jumpConn, nil
 }
 
-// buildAuthMethods creates SSH authentication methods
-func buildAuthMethods(host config.SSHHostConfig, defaults config.SSHHostDefaults) ([]ssh.AuthMethod, error) {
-	var methods []ssh.AuthMethod
+// buildAuthMethods creates SSH authentication methods. closeAgent releases
+// the ssh-agent connection, if one was opened; call it once the handshake
+// that uses the methods is done. It is never nil.
+func buildAuthMethods(host config.SSHHostConfig, defaults config.SSHHostDefaults) (methods []ssh.AuthMethod, closeAgent func(), err error) {
+	closeAgent = func() {}
 
 	// Try SSH agent first
-	if agentAuth := getAgentAuth(); agentAuth != nil {
+	if agentAuth, conn := getAgentAuth(); agentAuth != nil {
 		methods = append(methods, agentAuth)
+		closeAgent = func() { _ = conn.Close() }
 	}
 
 	// Try identity file
@@ -221,23 +280,26 @@ func buildAuthMethods(host config.SSHHostConfig, defaults config.SSHHostDefaults
 		}
 	}
 
-	return methods, nil
+	return methods, closeAgent, nil
 }
 
-// getAgentAuth returns an SSH agent authentication method if available
-func getAgentAuth() ssh.AuthMethod {
+// getAgentAuth returns an SSH agent authentication method if available,
+// with the agent connection it signs through. The caller closes the
+// connection after the handshake; it used to leak one per connect
+// (conduit-uanm).
+func getAgentAuth() (ssh.AuthMethod, net.Conn) {
 	socket := os.Getenv("SSH_AUTH_SOCK")
 	if socket == "" {
-		return nil
+		return nil, nil
 	}
 
 	conn, err := net.Dial("unix", socket)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 
 	agentClient := agent.NewClient(conn)
-	return ssh.PublicKeysCallback(agentClient.Signers)
+	return ssh.PublicKeysCallback(agentClient.Signers), conn
 }
 
 // getKeyFileAuth returns an SSH key file authentication method
@@ -518,6 +580,17 @@ func (c *SSHClient) Exec(cmd string) (*ExecResult, error) {
 
 // ExecWithTimeout executes a command with a timeout
 func (c *SSHClient) ExecWithTimeout(cmd string, timeout time.Duration) (*ExecResult, error) {
+	return c.ExecContext(context.Background(), cmd, timeout)
+}
+
+// ExecContext executes a command until it exits, timeout (if > 0) passes
+// or ctx is done. On timeout or cancellation the remote command is sent
+// SIGKILL and the session closed; the connection stays usable. The error
+// wraps ctx.Err() when ctx ended it (conduit-uanm).
+func (c *SSHClient) ExecContext(ctx context.Context, cmd string, timeout time.Duration) (*ExecResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("command not started: %w", err)
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -547,14 +620,24 @@ func (c *SSHClient) ExecWithTimeout(cmd string, timeout time.Duration) (*ExecRes
 		done <- session.Wait()
 	}()
 
+	var expired <-chan time.Time
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		expired = timer.C
+	}
+
 	var waitErr error
 	select {
 	case waitErr = <-done:
 		// Command completed
-	case <-time.After(timeout):
-		// Timeout - try to close the session
-		session.Signal(ssh.SIGKILL)
+	case <-expired:
+		// Timeout - kill the command; the deferred Close ends the session
+		_ = session.Signal(ssh.SIGKILL)
 		return nil, fmt.Errorf("command timed out after %v", timeout)
+	case <-ctx.Done():
+		_ = session.Signal(ssh.SIGKILL)
+		return nil, fmt.Errorf("command cancelled: %w", ctx.Err())
 	}
 
 	result := &ExecResult{
@@ -615,10 +698,14 @@ func (c *SSHClient) Close() error {
 	}
 
 	c.closed = true
+	var err error
 	if c.conn != nil {
-		return c.conn.Close()
+		err = c.conn.Close()
 	}
-	return nil
+	if c.jump != nil {
+		_ = c.jump.Close()
+	}
+	return err
 }
 
 // IsHealthy checks if the connection is still usable

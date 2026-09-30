@@ -59,7 +59,7 @@ func newLiveHarness(t *testing.T, mutate func(*config.Config)) *liveHarness {
 		Defaults: def.Defaults,
 	}
 	cfg.RemoteSSH.Pool.KnownHostsFile = h.srv.knownHosts
-	cfg.RemoteSSH.Pool.ConnectTimeout = 5 * time.Second
+	cfg.RemoteSSH.Pool.ConnectTimeout = config.Duration(5 * time.Second)
 	cfg.Tools.Sandbox = config.SandboxConfig{WorkspaceDir: h.sandbox}
 	if mutate != nil {
 		mutate(cfg)
@@ -295,7 +295,7 @@ func (s *liveSSHServer) writeKnownHostsFor(t *testing.T, port int) string {
 
 func TestLiveSSH_ApprovalTimeoutHonoured(t *testing.T) {
 	h := newLiveHarness(t, func(cfg *config.Config) {
-		cfg.RemoteSSH.Security.ApprovalTimeout = 200 * time.Millisecond
+		cfg.RemoteSSH.Security.ApprovalTimeout = config.Duration(200 * time.Millisecond)
 	})
 
 	before := time.Now()

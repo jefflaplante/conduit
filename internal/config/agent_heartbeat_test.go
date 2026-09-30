@@ -35,7 +35,7 @@ func TestAgentHeartbeatConfigValidation(t *testing.T) {
 				},
 				AlertRetryPolicy: AlertRetryPolicy{
 					MaxRetries:    3,
-					RetryInterval: 5 * time.Minute,
+					RetryInterval: Duration(5 * time.Minute),
 					BackoffFactor: 2.0,
 				},
 				HeartbeatTaskPath: "HEARTBEAT.md",
@@ -100,7 +100,7 @@ func TestAgentHeartbeatConfigValidation(t *testing.T) {
 				AlertQueuePath:  "test.json",
 				AlertRetryPolicy: AlertRetryPolicy{
 					MaxRetries:    3,
-					RetryInterval: 5 * time.Minute,
+					RetryInterval: Duration(5 * time.Minute),
 					BackoffFactor: 2.0,
 				},
 				LogLevel: "invalid",
@@ -116,7 +116,7 @@ func TestAgentHeartbeatConfigValidation(t *testing.T) {
 				AlertQueuePath:  "test.json",
 				AlertRetryPolicy: AlertRetryPolicy{
 					MaxRetries:    3,
-					RetryInterval: 5 * time.Minute,
+					RetryInterval: Duration(5 * time.Minute),
 					BackoffFactor: 2.0,
 				},
 				EnabledTaskTypes: []string{"invalid_type"},
@@ -312,7 +312,7 @@ func TestAlertRetryPolicyValidation(t *testing.T) {
 			name: "valid policy",
 			policy: AlertRetryPolicy{
 				MaxRetries:    3,
-				RetryInterval: 5 * time.Minute,
+				RetryInterval: Duration(5 * time.Minute),
 				BackoffFactor: 2.0,
 			},
 			wantErr: false,
@@ -321,7 +321,7 @@ func TestAlertRetryPolicyValidation(t *testing.T) {
 			name: "negative max retries",
 			policy: AlertRetryPolicy{
 				MaxRetries:    -1,
-				RetryInterval: 5 * time.Minute,
+				RetryInterval: Duration(5 * time.Minute),
 				BackoffFactor: 2.0,
 			},
 			wantErr: true,
@@ -331,7 +331,7 @@ func TestAlertRetryPolicyValidation(t *testing.T) {
 			name: "too many max retries",
 			policy: AlertRetryPolicy{
 				MaxRetries:    11,
-				RetryInterval: 5 * time.Minute,
+				RetryInterval: Duration(5 * time.Minute),
 				BackoffFactor: 2.0,
 			},
 			wantErr: true,
@@ -341,7 +341,7 @@ func TestAlertRetryPolicyValidation(t *testing.T) {
 			name: "invalid backoff factor - too low",
 			policy: AlertRetryPolicy{
 				MaxRetries:    3,
-				RetryInterval: 5 * time.Minute,
+				RetryInterval: Duration(5 * time.Minute),
 				BackoffFactor: 0.5,
 			},
 			wantErr: true,
@@ -351,7 +351,7 @@ func TestAlertRetryPolicyValidation(t *testing.T) {
 			name: "invalid backoff factor - too high",
 			policy: AlertRetryPolicy{
 				MaxRetries:    3,
-				RetryInterval: 5 * time.Minute,
+				RetryInterval: Duration(5 * time.Minute),
 				BackoffFactor: 6.0,
 			},
 			wantErr: true,

@@ -57,7 +57,7 @@ unless all of the following are true:
    `YES <code>` on an interactive channel (Telegram, TUI, WebSocket); without
    one they are refused (see [Human Approval](#human-approval)).
 
-Minimal enablement (durations omitted so defaults apply; see the note below):
+Minimal enablement:
 
 ```json
 {
@@ -76,7 +76,7 @@ Minimal enablement (durations omitted so defaults apply; see the note below):
     "security": {
       "default_tier": "dangerous",
       "require_approval": ["dangerous", "blocked"],
-      "approval_timeout": 600000000000
+      "approval_timeout": "10m"
     },
     "pool": {
       "known_hosts_file": "~/.conduit/ssh_known_hosts",
@@ -93,19 +93,19 @@ Minimal enablement (durations omitted so defaults apply; see the note below):
 }
 ```
 
-The `remote_ssh` block is decoded onto zero values, not merged with the
-built-in defaults, so anything you omit is empty. Two safety defaults are
-re-applied when absent (`null`): `require_approval` (`["dangerous",
-"blocked"]`) and the hard blocks (`blocked_patterns` and
-`allowed_commands.blocked`); an explicit `[]` still means none. Omitting
-`allowed_commands.read`/`modify` makes every command fall to `default_tier`
-(so even `ls` needs approval) — copy the lists below to relax that.
+The `remote_ssh` block is merged key by key onto the built-in defaults
+(the tables below): anything you omit keeps its default, including the
+`allowed_commands` lists, `default_tier` (`"dangerous"`), audit logging
+(on, `logs/ssh_audit.jsonl`) and the pool and session settings. Anything
+you set wins, including an explicit `false`, `0` or `[]`; a list you set
+replaces the default list rather than extending it. `require_approval`
+and the hard blocks (`blocked_patterns`, `allowed_commands.blocked`) also
+fall back to their defaults when set to `null`.
 
-> **Durations are nanoseconds.** Duration fields (`approval_timeout`,
-> `idle_timeout`, `connect_timeout`, `session_idle_timeout`, ...) are Go
-> `time.Duration` values and must be JSON integers in nanoseconds
-> (`600000000000` = 10m). The config loader rejects strings like `"5m"`
-> today; the examples on this page that show strings are illustrative only.
+> **Durations are strings.** Duration fields (`approval_timeout`,
+> `idle_timeout`, `connect_timeout`, `session_idle_timeout`, ...) take Go
+> duration strings such as `"30s"`, `"5m"` or `"1h30m"`. Plain integers are
+> still accepted as nanoseconds (`600000000000` = 10m) for older configs.
 
 Connections are dialled lazily on first use (nothing connects at startup),
 pooled per host (`pool.*` limits) and closed when the gateway shuts down.
@@ -241,7 +241,7 @@ Hosts belong to a group if they list the group name in their `groups` array or m
 | `allow_subshells` | bool | `false` | Permit `$()` and backtick command substitution |
 | `allow_pipes` | bool | `true` | Permit pipe chains |
 | `max_command_length` | int | `10000` | Maximum command string length |
-| `approval_timeout` | duration (ns) | `0` = gateway default (5m) | How long an SSH approval prompt stays valid; capped at 1h |
+| `approval_timeout` | duration | `0` = gateway default (5m) | How long an SSH approval prompt stays valid; capped at 1h |
 
 ### Pool Configuration
 

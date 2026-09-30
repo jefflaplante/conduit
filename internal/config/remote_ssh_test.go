@@ -367,7 +367,7 @@ func TestSSHSecurityConfig_Validate(t *testing.T) {
 			name: "negative approval timeout",
 			config: SSHSecurityConfig{
 				DefaultTier:     "dangerous",
-				ApprovalTimeout: -1 * time.Second,
+				ApprovalTimeout: Duration(-1 * time.Second),
 			},
 			wantErr: true,
 			errMsg:  "approval_timeout cannot be negative",
@@ -487,7 +487,7 @@ func TestSSHPoolConfig_Validate(t *testing.T) {
 			config: SSHPoolConfig{
 				MaxConnectionsPerHost: 5,
 				MaxTotalConnections:   50,
-				IdleTimeout:           5 * time.Minute,
+				IdleTimeout:           Duration(5 * time.Minute),
 				StrictHostKeyChecking: "yes",
 			},
 			wantErr: false,
@@ -511,7 +511,7 @@ func TestSSHPoolConfig_Validate(t *testing.T) {
 		{
 			name: "negative idle timeout",
 			config: SSHPoolConfig{
-				IdleTimeout: -1 * time.Second,
+				IdleTimeout: Duration(-1 * time.Second),
 			},
 			wantErr: true,
 			errMsg:  "idle_timeout cannot be negative",
@@ -573,7 +573,7 @@ func TestSSHHostConfig_Helpers(t *testing.T) {
 		Port:           2222,
 		User:           "defaultuser",
 		IdentityFile:   "/default/key",
-		ConnectTimeout: 60 * time.Second,
+		ConnectTimeout: Duration(60 * time.Second),
 	}
 
 	t.Run("IsHostEnabled - nil", func(t *testing.T) {
@@ -642,7 +642,7 @@ func TestSSHHostConfig_Helpers(t *testing.T) {
 	})
 
 	t.Run("GetConnectTimeout - host override", func(t *testing.T) {
-		host := SSHHostConfig{ConnectTimeout: 90 * time.Second}
+		host := SSHHostConfig{ConnectTimeout: Duration(90 * time.Second)}
 		if got := host.GetConnectTimeout(defaults); got != 90*time.Second {
 			t.Errorf("GetConnectTimeout() = %v, want 90s", got)
 		}
@@ -725,7 +725,7 @@ func TestSSHSecurityConfig_Helpers(t *testing.T) {
 	})
 
 	t.Run("GetApprovalTimeout - override", func(t *testing.T) {
-		config := SSHSecurityConfig{ApprovalTimeout: 10 * time.Minute}
+		config := SSHSecurityConfig{ApprovalTimeout: Duration(10 * time.Minute)}
 		if got := config.GetApprovalTimeout(); got != 10*time.Minute {
 			t.Errorf("GetApprovalTimeout() = %v, want 10m", got)
 		}
@@ -937,7 +937,7 @@ func TestSSHSessionConfig_Validate(t *testing.T) {
 			name: "valid config",
 			config: SSHSessionConfig{
 				MaxConcurrentSessions: 5,
-				SessionIdleTimeout:    10 * time.Minute,
+				SessionIdleTimeout:    Duration(10 * time.Minute),
 				DefaultShell:          "/bin/bash",
 			},
 			wantErr: false,
@@ -953,7 +953,7 @@ func TestSSHSessionConfig_Validate(t *testing.T) {
 		{
 			name: "negative session idle timeout",
 			config: SSHSessionConfig{
-				SessionIdleTimeout: -1 * time.Second,
+				SessionIdleTimeout: Duration(-1 * time.Second),
 			},
 			wantErr: true,
 			errMsg:  "session_idle_timeout cannot be negative",

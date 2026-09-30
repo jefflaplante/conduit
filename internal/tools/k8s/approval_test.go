@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"conduit/internal/approval"
 	"conduit/internal/config"
@@ -249,4 +250,27 @@ func TestK8sApproval_ExecPromptRedactsSecrets(t *testing.T) {
 	assert.Contains(t, prompt, "Command: env DB_PASSWORD=[redacted] psql --token [redacted] -c 'select 1'")
 	assert.Contains(t, prompt, "Container: web")
 	assert.Contains(t, prompt, "Verb: exec")
+}
+
+// conduit-17yf: kubernetes.approval_timeout sets how long the approval
+// stays valid (it used to be ignored in favour of the 5m default).
+func TestK8sApproval_TimeoutFromConfig(t *testing.T) {
+	h := newApprovalHarness(t, []string{"dangerous"})
+	h.tool.config.ApprovalTimeout = config.Duration(200 * time.Millisecond)
+
+	before := time.Now()
+	res, err := h.tool.Execute(h.interactive(), deleteArgs("web-abc123"))
+	require.NoError(t, err)
+	require.Equal(t, "pending", res.Data["approval_status"])
+	expires, err := time.Parse(time.RFC3339, res.Data["expires_at"].(string))
+	require.NoError(t, err)
+	assert.WithinDuration(t, before, expires, 2*time.Second,
+		"approval must use kubernetes.approval_timeout, not the 5m default")
+
+	code, _ := h.promptCode(t)
+	require.Eventually(t, func() bool { return len(h.mgr.Pending(h.origin.SessionKey)) == 0 },
+		3*time.Second, 20*time.Millisecond, "the approval must expire")
+	h.reply("YES " + code)
+	h.mgr.Wait()
+	assert.True(t, podExists(t, h.tool, "web-abc123"), "an expired approval must not run the delete")
 }

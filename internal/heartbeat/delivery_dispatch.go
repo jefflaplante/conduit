@@ -201,7 +201,7 @@ func (g *GatewayIntegration) scheduleRetries(reg *DeliveryRegistry, alert Alert,
 			g.retries.wg.Done()
 		}()
 
-		delay := policy.RetryInterval
+		delay := policy.RetryInterval.Duration()
 		if delay < minRetryInterval {
 			delay = minRetryInterval
 		}

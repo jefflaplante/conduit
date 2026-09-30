@@ -4,6 +4,7 @@ package ssh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -177,14 +178,15 @@ func (f *FanoutExecutor) executeOnHost(ctx context.Context, hostName string, com
 		execCtx = ctx
 	}
 
-	// Execute command
-	execResult, err := client.ExecWithTimeout(command, timeout)
+	// Execute command; execCtx carries both the timeout and the caller's
+	// cancellation (conduit-uanm: ExecWithTimeout ignored ctx).
+	execResult, err := client.ExecContext(execCtx, command, 0)
 	duration := time.Since(execStart)
 
 	if err != nil {
 		// Check if it was a timeout
 		timedOut := false
-		if execCtx.Err() == context.DeadlineExceeded {
+		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
 			timedOut = true
 		}
 

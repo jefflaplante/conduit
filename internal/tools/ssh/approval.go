@@ -22,11 +22,12 @@ const approvedBy = "human-approval"
 // an absent list means the secure default (["dangerous", "blocked"]), not
 // "no approvals". An explicit [] still disables gating (conduit-w3l7).
 //
-// The same absent-means-default rule applies to the hard blocks: a
-// remote_ssh block is decoded onto zero values (config defaults are not
-// merged), so omitting blocked_patterns or allowed_commands.blocked used to
-// silently drop every block (mkfs, dd, /etc/shadow, curl|sh), leaving them
-// merely approval-gated. Explicit [] still means none (conduit-enf0).
+// The same absent-means-default rule applies to the hard blocks, so a nil
+// blocked_patterns or allowed_commands.blocked never silently drops every
+// block (mkfs, dd, /etc/shadow, curl|sh). Explicit [] still means none
+// (conduit-enf0). A loaded remote_ssh block is already merged onto
+// DefaultRemoteSSHConfig (conduit-6wjo); this still covers an explicit
+// null and configs built in code.
 func effectiveSecurityConfig(sec config.SSHSecurityConfig) config.SSHSecurityConfig {
 	def := config.DefaultRemoteSSHConfig().Security
 	if sec.RequireApproval == nil {
@@ -94,7 +95,7 @@ func classificationData(c *ClassificationResult) map[string]interface{} {
 // stays valid for security.approval_timeout (0 = the gateway default, capped
 // at approval.MaxTTL; conduit-enf0).
 func (t *SSHTool) gate(ctx context.Context, op approvalgate.Operation, run approvalgate.Run) (*types.ToolResult, error) {
-	op.TTL = t.config.Security.ApprovalTimeout
+	op.TTL = t.config.Security.ApprovalTimeout.Duration()
 	return approvalgate.Request(ctx, t.approver(), op, run), nil
 }
 

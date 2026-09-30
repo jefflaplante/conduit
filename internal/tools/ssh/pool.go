@@ -3,6 +3,7 @@
 package ssh
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -41,10 +42,10 @@ func NewPool(hosts []config.SSHHostConfig, defaults config.SSHHostDefaults, pool
 		poolConfig.MaxTotalConnections = 50
 	}
 	if poolConfig.IdleTimeout == 0 {
-		poolConfig.IdleTimeout = 5 * time.Minute
+		poolConfig.IdleTimeout = config.Duration(5 * time.Minute)
 	}
 	if poolConfig.HealthCheckInterval == 0 {
-		poolConfig.HealthCheckInterval = 1 * time.Minute
+		poolConfig.HealthCheckInterval = config.Duration(1 * time.Minute)
 	}
 
 	// Build host lookup map
@@ -217,7 +218,7 @@ func (p *Pool) Close() {
 
 // cleanupLoop periodically cleans up idle and unhealthy connections
 func (p *Pool) cleanupLoop() {
-	ticker := time.NewTicker(p.poolConfig.HealthCheckInterval)
+	ticker := time.NewTicker(p.poolConfig.HealthCheckInterval.Duration())
 	defer ticker.Stop()
 
 	for {
@@ -251,7 +252,7 @@ func (p *Pool) cleanup() {
 			}
 
 			// Check idle timeout
-			if now.Sub(pc.returnedAt) > p.poolConfig.IdleTimeout {
+			if now.Sub(pc.returnedAt) > p.poolConfig.IdleTimeout.Duration() {
 				toRemove = append(toRemove, pc)
 				continue
 			}
@@ -389,11 +390,21 @@ func (p *Pool) Exec(hostName string, cmd string) (*ExecResult, error) {
 
 // ExecWithTimeout is a convenience method that executes a command with a timeout
 func (p *Pool) ExecWithTimeout(hostName string, cmd string, timeout time.Duration) (*ExecResult, error) {
+	return p.ExecContext(context.Background(), hostName, cmd, timeout)
+}
+
+// ExecContext gets a connection, executes cmd until it exits, timeout
+// passes or ctx is done (see SSHClient.ExecContext), and returns the
+// connection. A ctx that is already done dials nothing.
+func (p *Pool) ExecContext(ctx context.Context, hostName string, cmd string, timeout time.Duration) (*ExecResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("command not started: %w", err)
+	}
 	client, err := p.Get(hostName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connection: %w", err)
 	}
 	defer p.Put(hostName, client)
 
-	return client.ExecWithTimeout(cmd, timeout)
+	return client.ExecContext(ctx, cmd, timeout)
 }

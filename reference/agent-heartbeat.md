@@ -72,7 +72,7 @@ This document covers the **Agent Heartbeat** system.
     ],
     "alert_retry_policy": {
       "max_retries": 3,
-      "retry_interval": 300000000000,
+      "retry_interval": "5m",
       "backoff_factor": 2.0
     },
     "log_level": "info",
@@ -105,7 +105,7 @@ This document covers the **Agent Heartbeat** system.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `max_retries` | int | `3` | Retries after a failed live delivery (0-10) |
-| `retry_interval` | duration | `5m` | Wait before the first retry (nanoseconds) |
+| `retry_interval` | duration | `"5m"` | Wait before the first retry (e.g. `"30s"`; integers are nanoseconds) |
 | `backoff_factor` | float | `2.0` | Multiplier applied to the wait after each retry |
 
 See [Delivery](#delivery) for how retries interact with the circuit breaker.

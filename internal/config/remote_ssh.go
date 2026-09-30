@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -33,6 +35,25 @@ type RemoteSSHConfig struct {
 
 	// Default settings applied to hosts without explicit configuration
 	Defaults SSHHostDefaults `json:"defaults,omitempty"`
+}
+
+// UnmarshalJSON decodes a remote_ssh block on top of DefaultRemoteSSHConfig,
+// so every key the block omits keeps its default (allowed command lists,
+// audit, pool, sessions) while explicit values, including false, 0 and [],
+// win. Previously the block replaced the defaults wholesale: omitting
+// allowed_commands made even `ls` need approval and audit was off unless
+// configured (conduit-6wjo). Lists are replaced, never appended to.
+func (c *RemoteSSHConfig) UnmarshalJSON(b []byte) error {
+	if bytes.Equal(bytes.TrimSpace(b), []byte("null")) {
+		return nil
+	}
+	type plain RemoteSSHConfig // no UnmarshalJSON: avoids recursion
+	merged := plain(DefaultRemoteSSHConfig())
+	if err := json.Unmarshal(b, &merged); err != nil {
+		return err
+	}
+	*c = RemoteSSHConfig(merged)
+	return nil
 }
 
 // SSHHostConfig defines a known SSH host
@@ -69,7 +90,7 @@ type SSHHostConfig struct {
 	JumpHost string `json:"jump_host,omitempty"`
 
 	// ConnectTimeout overrides the default connection timeout
-	ConnectTimeout time.Duration `json:"connect_timeout,omitempty"`
+	ConnectTimeout Duration `json:"connect_timeout,omitempty"`
 }
 
 // SSHHostGroup defines a logical group of hosts
@@ -116,7 +137,7 @@ type SSHSecurityConfig struct {
 	MaxCommandLength int `json:"max_command_length,omitempty"`
 
 	// ApprovalTimeout is how long approval requests are valid
-	ApprovalTimeout time.Duration `json:"approval_timeout,omitempty"`
+	ApprovalTimeout Duration `json:"approval_timeout,omitempty"`
 
 	// ApprovalChannel is the channel to send approval requests to
 	ApprovalChannel string `json:"approval_channel,omitempty"`
@@ -150,13 +171,13 @@ type SSHPoolConfig struct {
 	MaxTotalConnections int `json:"max_total_connections,omitempty"`
 
 	// IdleTimeout closes idle connections after this duration
-	IdleTimeout time.Duration `json:"idle_timeout,omitempty"`
+	IdleTimeout Duration `json:"idle_timeout,omitempty"`
 
 	// ConnectTimeout is the default timeout for new connections
-	ConnectTimeout time.Duration `json:"connect_timeout,omitempty"`
+	ConnectTimeout Duration `json:"connect_timeout,omitempty"`
 
 	// HealthCheckInterval is how often to verify connection health
-	HealthCheckInterval time.Duration `json:"health_check_interval,omitempty"`
+	HealthCheckInterval Duration `json:"health_check_interval,omitempty"`
 
 	// KnownHostsFile is the path to the SSH known_hosts file
 	KnownHostsFile string `json:"known_hosts_file,omitempty" cfg:"path"`
@@ -199,7 +220,7 @@ type SSHSessionConfig struct {
 	MaxConcurrentSessions int `json:"max_concurrent_sessions,omitempty"`
 
 	// SessionIdleTimeout closes idle sessions after this duration
-	SessionIdleTimeout time.Duration `json:"session_idle_timeout,omitempty"`
+	SessionIdleTimeout Duration `json:"session_idle_timeout,omitempty"`
 
 	// DefaultShell is the shell to use for sessions (default: /bin/sh)
 	DefaultShell string `json:"default_shell,omitempty"`
@@ -220,7 +241,7 @@ type SSHHostDefaults struct {
 	IdentityFile string `json:"identity_file,omitempty" cfg:"path"`
 
 	// ConnectTimeout is the default connection timeout
-	ConnectTimeout time.Duration `json:"connect_timeout,omitempty"`
+	ConnectTimeout Duration `json:"connect_timeout,omitempty"`
 }
 
 // Validate validates the entire RemoteSSH configuration
@@ -473,10 +494,10 @@ func (h *SSHHostConfig) GetIdentityFile(defaults SSHHostDefaults) string {
 // GetConnectTimeout returns the host connect timeout or default
 func (h *SSHHostConfig) GetConnectTimeout(defaults SSHHostDefaults) time.Duration {
 	if h.ConnectTimeout != 0 {
-		return h.ConnectTimeout
+		return h.ConnectTimeout.Duration()
 	}
 	if defaults.ConnectTimeout != 0 {
-		return defaults.ConnectTimeout
+		return defaults.ConnectTimeout.Duration()
 	}
 	return 30 * time.Second
 }
@@ -508,7 +529,7 @@ func (s *SSHSecurityConfig) GetMaxCommandLength() int {
 // GetApprovalTimeout returns the approval timeout or default
 func (s *SSHSecurityConfig) GetApprovalTimeout() time.Duration {
 	if s.ApprovalTimeout != 0 {
-		return s.ApprovalTimeout
+		return s.ApprovalTimeout.Duration()
 	}
 	return 5 * time.Minute // 5 minute default
 }
@@ -571,9 +592,9 @@ func DefaultRemoteSSHConfig() RemoteSSHConfig {
 		Pool: SSHPoolConfig{
 			MaxConnectionsPerHost: 5,
 			MaxTotalConnections:   50,
-			IdleTimeout:           5 * time.Minute,
-			ConnectTimeout:        30 * time.Second,
-			HealthCheckInterval:   1 * time.Minute,
+			IdleTimeout:           Duration(5 * time.Minute),
+			ConnectTimeout:        Duration(30 * time.Second),
+			HealthCheckInterval:   Duration(1 * time.Minute),
 			StrictHostKeyChecking: "yes",
 		},
 		Audit: SSHAuditConfig{
@@ -587,13 +608,13 @@ func DefaultRemoteSSHConfig() RemoteSSHConfig {
 		},
 		Sessions: SSHSessionConfig{
 			MaxConcurrentSessions: 5,
-			SessionIdleTimeout:    10 * time.Minute,
+			SessionIdleTimeout:    Duration(10 * time.Minute),
 			DefaultShell:          "/bin/sh",
 			OutputBoundaryMarker:  "___CONDUIT_OUTPUT_BOUNDARY___",
 		},
 		Defaults: SSHHostDefaults{
 			Port:           22,
-			ConnectTimeout: 30 * time.Second,
+			ConnectTimeout: Duration(30 * time.Second),
 		},
 	}
 }

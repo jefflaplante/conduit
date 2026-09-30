@@ -33,7 +33,6 @@ type OperationClassification struct {
 type SecurityConfig struct {
 	RequireApproval []string        `json:"require_approval,omitempty"`
 	BlockedActions  []BlockedAction `json:"blocked_actions,omitempty"`
-	ApprovalTimeout int             `json:"approval_timeout,omitempty"`
 	ApprovalChannel string          `json:"approval_channel,omitempty"`
 }
 

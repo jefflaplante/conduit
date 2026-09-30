@@ -690,7 +690,7 @@ Agent heartbeat for automated tasks. See [agent-heartbeat.md](agent-heartbeat.md
     ],
     "alert_retry_policy": {
       "max_retries": 3,
-      "retry_interval": 300000000000,
+      "retry_interval": "5m",
       "backoff_factor": 2.0
     },
     "job_failure_alert_threshold": 3
@@ -982,6 +982,7 @@ Multi-cluster Kubernetes configuration for the K8s tool. Kubeconfig paths suppor
 | `defaults.namespace` | string | `"default"` | Default namespace |
 | `defaults.safety_level` | string | `"read"` | Default safety level |
 | `require_approval` | array | `["dangerous"]` | Tiers whose operations need a human `YES <code>` reply in the originating chat before running; non-interactive turns fail closed. `[]` disables |
+| `approval_timeout` | duration | `"5m"` | How long an approval prompt stays valid, e.g. `"10m"`; capped at 1h |
 
 **Safety Levels:**
 - `read` — get, list, describe, logs, watch, events, top, clusters, namespaces

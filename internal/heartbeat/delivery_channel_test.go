@@ -63,7 +63,7 @@ func newAuditedIntegration(t *testing.T, sender ChannelSender, policy config.Ale
 }
 
 func fastPolicy(max int) config.AlertRetryPolicy {
-	return config.AlertRetryPolicy{MaxRetries: max, RetryInterval: time.Millisecond, BackoffFactor: 2}
+	return config.AlertRetryPolicy{MaxRetries: max, RetryInterval: config.Duration(time.Millisecond), BackoffFactor: 2}
 }
 
 func TestDelivery_SuccessWritesAlertHistory(t *testing.T) {
@@ -176,7 +176,7 @@ func TestDelivery_RetryPolicyBoundsAttempts(t *testing.T) {
 
 func TestDelivery_CloseStopsPendingRetries(t *testing.T) {
 	sender := &flakySender{failN: -1}
-	g, _, _ := newAuditedIntegration(t, sender, config.AlertRetryPolicy{MaxRetries: 3, RetryInterval: time.Hour, BackoffFactor: 2})
+	g, _, _ := newAuditedIntegration(t, sender, config.AlertRetryPolicy{MaxRetries: 3, RetryInterval: config.Duration(time.Hour), BackoffFactor: 2})
 	_ = g.sendToTarget(context.Background(), "telegram:42", "x")
 
 	done := make(chan struct{})
