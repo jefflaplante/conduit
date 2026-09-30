@@ -780,3 +780,71 @@ func TestResultProcessor_ProcessResponse_EmptyContentIsOK(t *testing.T) {
 		t.Errorf("Explicit HEARTBEAT_OK should be OK, got %s", okResult.Status)
 	}
 }
+
+// conduit-16yt: negated keywords ("no urgent items") must not raise an alert
+// or a critical priority; an un-negated keyword in the same reply still does.
+func TestResultProcessor_NegatedKeywordsAreNotAlerts(t *testing.T) {
+	processor := NewResultProcessor()
+
+	calm := []string{
+		"No calendar events, no urgent items otherwise.",
+		"Nothing urgent in the inbox today.",
+		"Checked the servers: not critical, just slow page loads.",
+		"There were no warnings in the logs.",
+		"The queue isn't urgent right now.",
+		"Zero critical findings from the scan.",
+	}
+	for _, content := range calm {
+		t.Run(content, func(t *testing.T) {
+			result, err := processor.ProcessResponse(&mockAIResponse{content: content}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Status == ResultStatusAlert {
+				t.Fatalf("negated keyword raised an alert: %+v", result.Actions)
+			}
+			for _, a := range result.Actions {
+				if a.Type == ActionTypeAlert || a.Priority >= TaskPriorityHigh {
+					t.Fatalf("negated keyword produced %s/%s", a.Type, a.Priority)
+				}
+			}
+		})
+	}
+
+	alarming := []string{
+		"No calendar events, urgent: the backup server is down.",
+		"Nothing else to report. CRITICAL: disk full on the NAS.",
+		"No new mail; warning - certificate expires tomorrow.",
+	}
+	for _, content := range alarming {
+		t.Run(content, func(t *testing.T) {
+			result, err := processor.ProcessResponse(&mockAIResponse{content: content}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Status != ResultStatusAlert {
+				t.Fatalf("un-negated keyword must still alert, got %s", result.Status)
+			}
+		})
+	}
+}
+
+func TestResultProcessor_inferPriorityFromContent_Negation(t *testing.T) {
+	processor := NewResultProcessor()
+	tests := []struct {
+		content  string
+		expected TaskPriority
+	}{
+		{"No urgent items", TaskPriorityNormal},
+		{"Nothing critical, no errors, no issues", TaskPriorityNormal},
+		{"Not urgent, but the disk is down", TaskPriorityCritical},
+		{"No warnings; one problem with the backup", TaskPriorityHigh},
+	}
+	for _, tt := range tests {
+		t.Run(tt.content, func(t *testing.T) {
+			if got := processor.inferPriorityFromContent(tt.content); got != tt.expected {
+				t.Errorf("got %s, want %s", got, tt.expected)
+			}
+		})
+	}
+}

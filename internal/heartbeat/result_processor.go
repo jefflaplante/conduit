@@ -170,9 +170,10 @@ func (p *ResultProcessor) analyzeSentenceForAction(sentence string, tasks []Pars
 		return nil
 	}
 
-	// Check for alert patterns
+	// Check for alert patterns (negated mentions such as "no urgent items"
+	// do not count, conduit-16yt)
 	for _, pattern := range p.alertPatterns {
-		if pattern.MatchString(sentence) {
+		if matchesUnnegated(pattern, sentence) {
 			return &HeartbeatAction{
 				Type:     ActionTypeAlert,
 				Target:   "telegram",
@@ -253,7 +254,7 @@ func (p *ResultProcessor) inferPriorityFromContent(content string) TaskPriority 
 	}
 
 	for _, keyword := range criticalKeywords {
-		if strings.Contains(lowerContent, keyword) {
+		if containsUnnegated(lowerContent, keyword) {
 			return TaskPriorityCritical
 		}
 	}
@@ -265,7 +266,7 @@ func (p *ResultProcessor) inferPriorityFromContent(content string) TaskPriority 
 	}
 
 	for _, keyword := range highKeywords {
-		if strings.Contains(lowerContent, keyword) {
+		if containsUnnegated(lowerContent, keyword) {
 			return TaskPriorityHigh
 		}
 	}
@@ -295,7 +296,7 @@ func (p *ResultProcessor) isImmediateAction(content string) bool {
 	}
 
 	for _, keyword := range immediateKeywords {
-		if strings.Contains(lowerContent, keyword) {
+		if containsUnnegated(lowerContent, keyword) {
 			return true
 		}
 	}
@@ -512,4 +513,65 @@ func (p *ResultProcessor) GetActionSummary(actions []HeartbeatAction) string {
 	}
 
 	return summary
+}
+
+// Negation handling (conduit-16yt). A keyword is negated when one of the
+// negationWindow words before it, within the same clause, is a negator:
+// "no urgent items", "nothing critical", "isn't urgent". Clause punctuation
+// ends the window, so in "No calendar events, urgent: server down" the
+// "urgent" still counts.
+const negationWindow = 3
+
+var (
+	negators = map[string]bool{
+		"no": true, "not": true, "nothing": true, "none": true,
+		"without": true, "zero": true, "never": true, "nor": true,
+	}
+	clauseBreakRE = regexp.MustCompile(`[,;:.!?()\[\]\n\-–—]`)
+)
+
+// isNegatedAt reports whether the text just before byte offset i negates
+// what starts there.
+func isNegatedAt(text string, i int) bool {
+	before := text[:i]
+	if locs := clauseBreakRE.FindAllStringIndex(before, -1); len(locs) > 0 {
+		before = before[locs[len(locs)-1][1]:]
+	}
+	words := strings.Fields(strings.ToLower(before))
+	if len(words) > negationWindow {
+		words = words[len(words)-negationWindow:]
+	}
+	for _, w := range words {
+		w = strings.ReplaceAll(w, "’", "'")
+		if negators[w] || strings.HasSuffix(w, "n't") {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesUnnegated reports whether re matches text at least once where the
+// match is not negated.
+func matchesUnnegated(re *regexp.Regexp, text string) bool {
+	for _, loc := range re.FindAllStringIndex(text, -1) {
+		if !isNegatedAt(text, loc[0]) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsUnnegated is strings.Contains that skips negated occurrences.
+// lower must already be lowercased, like keyword.
+func containsUnnegated(lower, keyword string) bool {
+	for off := 0; ; {
+		i := strings.Index(lower[off:], keyword)
+		if i < 0 {
+			return false
+		}
+		if !isNegatedAt(lower, off+i) {
+			return true
+		}
+		off += i + len(keyword)
+	}
 }
