@@ -30,6 +30,26 @@ type MaintenanceConfig struct {
 	// BackupDir is where the pre-cleanup VACUUM INTO backup is written.
 	// Empty means next to the database file.
 	BackupDir string `json:"backup_dir,omitempty" cfg:"path"`
+
+	// KeepBackups is how many "<db>.backup.<timestamp>" files maintenance
+	// keeps in the backup directory: after each successful backup, older
+	// ones beyond the newest KeepBackups are deleted (conduit-16f0). Only
+	// files with exactly that name are ever deleted. Unset means the default
+	// (3); 0 keeps all backups (no rotation).
+	KeepBackups *int `json:"keep_backups,omitempty"`
+}
+
+// DefaultKeepBackups is the number of maintenance backups kept when
+// maintenance.keep_backups is unset.
+const DefaultKeepBackups = 3
+
+// EffectiveKeepBackups returns keep_backups, or DefaultKeepBackups when it
+// is unset. 0 means keep all.
+func (m MaintenanceConfig) EffectiveKeepBackups() int {
+	if m.KeepBackups == nil {
+		return DefaultKeepBackups
+	}
+	return *m.KeepBackups
 }
 
 // DefaultPrunableSessionPrefixes are the session-key prefixes of automated
@@ -92,6 +112,9 @@ func validateMaintenance(me *multiError, m MaintenanceConfig) {
 	}
 	if m.BatchSize < 0 {
 		me.add("maintenance.batch_size must be >= 0 (got %d)", m.BatchSize)
+	}
+	if m.KeepBackups != nil && *m.KeepBackups < 0 {
+		me.add("maintenance.keep_backups must be >= 0 (got %d; 0 keeps all backups)", *m.KeepBackups)
 	}
 	if _, err := NormalizePrunablePrefixes(m.PrunablePrefixes); err != nil {
 		me.add("%v", err)

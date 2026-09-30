@@ -98,16 +98,19 @@ type PruneReport struct {
 	KeptUnparseable int `json:"kept_unparseable"`
 
 	// Execution results (zero for a dry run).
-	BackupPath          string        `json:"backup_path,omitempty"`
-	SessionsDeleted     int           `json:"sessions_deleted"`
-	MessagesDeleted     int           `json:"messages_deleted"`
-	SummariesDeleted    int           `json:"summaries_deleted,omitempty"`
-	MappingsDeleted     int           `json:"claude_code_mappings_deleted,omitempty"`
-	SearchIndexDeleted  int           `json:"search_index_deleted,omitempty"`
-	SkippedChanged      int           `json:"skipped_changed"`
-	Batches             int           `json:"batches"`
-	ExecuteDuration     time.Duration `json:"execute_duration,omitempty"`
-	SearchIndexWarnings []string      `json:"search_index_warnings,omitempty"`
+	BackupPath string `json:"backup_path,omitempty"`
+	// BackupRotation is the rotation after the backup (conduit-16f0); in a
+	// dry run, the rotation the run would do after writing its backup.
+	BackupRotation      *BackupRotation `json:"backup_rotation,omitempty"`
+	SessionsDeleted     int             `json:"sessions_deleted"`
+	MessagesDeleted     int             `json:"messages_deleted"`
+	SummariesDeleted    int             `json:"summaries_deleted,omitempty"`
+	MappingsDeleted     int             `json:"claude_code_mappings_deleted,omitempty"`
+	SearchIndexDeleted  int             `json:"search_index_deleted,omitempty"`
+	SkippedChanged      int             `json:"skipped_changed"`
+	Batches             int             `json:"batches"`
+	ExecuteDuration     time.Duration   `json:"execute_duration,omitempty"`
+	SearchIndexWarnings []string        `json:"search_index_warnings,omitempty"`
 
 	candidates []pruneCandidate
 }

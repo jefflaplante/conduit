@@ -84,7 +84,8 @@ type SessionConfig struct {
 	CleanupEnabled    bool     `json:"cleanup_enabled"`     // default true
 	BackupBeforePrune bool     `json:"backup_before_prune"` // default true
 	BackupDir         string   `json:"backup_dir,omitempty"`
-	DryRun            bool     `json:"-"` // plan only (--dry-run)
+	KeepBackups       int      `json:"keep_backups"` // newest backups kept after a backup; 0 = keep all
+	DryRun            bool     `json:"-"`            // plan only (--dry-run)
 }
 
 // DatabaseConfig configures database maintenance operations
@@ -94,7 +95,8 @@ type DatabaseConfig struct {
 	BackupBeforeVacuum bool   `json:"backup_before_vacuum"` // default true
 	OptimizeIndexes    bool   `json:"optimize_indexes"`     // default true
 	BackupDir          string `json:"backup_dir,omitempty"`
-	DryRun             bool   `json:"-"` // report only (--dry-run)
+	KeepBackups        int    `json:"keep_backups"` // newest backups kept after a backup; 0 = keep all
+	DryRun             bool   `json:"-"`            // report only (--dry-run)
 }
 
 // DefaultConfig returns the default maintenance configuration
@@ -106,12 +108,14 @@ func DefaultConfig() Config {
 			BatchSize:         DefaultPruneBatchSize,
 			CleanupEnabled:    true,
 			BackupBeforePrune: true,
+			KeepBackups:       DefaultKeepBackups,
 		},
 		Database: DatabaseConfig{
 			VacuumEnabled:      true,
 			VacuumThreshold:    100, // 100 MB
 			BackupBeforeVacuum: true,
 			OptimizeIndexes:    true,
+			KeepBackups:        DefaultKeepBackups,
 		},
 	}
 }

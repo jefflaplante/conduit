@@ -34,14 +34,34 @@ func TestValidateMaintenance(t *testing.T) {
 		t.Fatalf("empty section: %v", err)
 	}
 	me = multiError{}
-	validateMaintenance(&me, MaintenanceConfig{RetentionDays: -1, BatchSize: -5, PrunablePrefixes: []string{"telegram"}})
+	neg := -1
+	validateMaintenance(&me, MaintenanceConfig{RetentionDays: -1, BatchSize: -5, PrunablePrefixes: []string{"telegram"}, KeepBackups: &neg})
 	err := me.toError()
 	if err == nil {
 		t.Fatal("invalid section accepted")
 	}
-	for _, want := range []string{"retention_days", "batch_size", "protected"} {
+	for _, want := range []string{"retention_days", "batch_size", "protected", "keep_backups"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q lacks %q", err, want)
 		}
+	}
+}
+
+// conduit-16f0: keep_backups unset means the default; 0 is "keep all".
+func TestMaintenanceKeepBackups(t *testing.T) {
+	if got := (MaintenanceConfig{}).EffectiveKeepBackups(); got != DefaultKeepBackups {
+		t.Fatalf("unset = %d, want %d", got, DefaultKeepBackups)
+	}
+	zero, five := 0, 5
+	if got := (MaintenanceConfig{KeepBackups: &zero}).EffectiveKeepBackups(); got != 0 {
+		t.Fatalf("0 = %d", got)
+	}
+	if got := (MaintenanceConfig{KeepBackups: &five}).EffectiveKeepBackups(); got != 5 {
+		t.Fatalf("5 = %d", got)
+	}
+	var me multiError
+	validateMaintenance(&me, MaintenanceConfig{KeepBackups: &zero})
+	if err := me.toError(); err != nil {
+		t.Fatalf("keep_backups 0 rejected: %v", err)
 	}
 }

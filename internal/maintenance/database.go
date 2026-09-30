@@ -54,6 +54,7 @@ func (t *DatabaseMaintenanceTask) Execute(ctx context.Context) TaskResult {
 	start := time.Now()
 	result := TaskResult{Success: true}
 	var totalSpaceReclaimed int64
+	var backupNote string
 
 	// Check if database meets vacuum threshold
 	dbSize, err := t.getDatabaseSize()
@@ -82,7 +83,14 @@ func (t *DatabaseMaintenanceTask) Execute(ctx context.Context) TaskResult {
 		if len(would) > 0 {
 			msg += "; would run " + strings.Join(would, ", ")
 		}
-		return TaskResult{Success: true, Message: msg}
+		res := TaskResult{Success: true, Message: msg}
+		if len(would) > 0 && would[0] == "backup" {
+			if rot, err := PlanBackupRotation(t.dbPath, t.config.BackupDir, t.config.KeepBackups, 1); err == nil {
+				res.Message += "; " + rot.Summary(true)
+				res.Details = rot
+			}
+		}
+		return res
 	}
 
 	// Only vacuum if database is above threshold
@@ -93,6 +101,8 @@ func (t *DatabaseMaintenanceTask) Execute(ctx context.Context) TaskResult {
 			if !backupResult.Success {
 				return backupResult
 			}
+			backupNote = backupResult.Message
+			result.Details = backupResult.Details
 		}
 
 		// Perform VACUUM
@@ -121,6 +131,9 @@ func (t *DatabaseMaintenanceTask) Execute(ctx context.Context) TaskResult {
 	if totalSpaceReclaimed > 0 {
 		result.Message += fmt.Sprintf(", Space reclaimed: %.1f MB",
 			float64(totalSpaceReclaimed)/(1024*1024))
+	}
+	if backupNote != "" {
+		result.Message += ". " + backupNote
 	}
 
 	return result
@@ -159,16 +172,17 @@ func (t *DatabaseMaintenanceTask) getDatabaseSize() (int64, error) {
 	return stat.Size(), nil
 }
 
-// createBackup writes a VACUUM INTO backup (0600) before VACUUM. There is
-// no raw file-copy fallback: copying the main file of a WAL database while
-// the gateway runs does not produce a consistent copy. conduit-2cxu
+// createBackup writes a VACUUM INTO backup (0600) before VACUUM, then
+// rotates old backups (keep_backups, conduit-16f0). There is no raw
+// file-copy fallback: copying the main file of a WAL database while the
+// gateway runs does not produce a consistent copy. conduit-2cxu
 func (t *DatabaseMaintenanceTask) createBackup(ctx context.Context) TaskResult {
-	path, err := BackupDatabase(ctx, t.db, t.dbPath, t.config.BackupDir, time.Now())
+	path, rot, err := BackupAndRotate(ctx, t.db, t.dbPath, t.config.BackupDir, t.config.KeepBackups, time.Now())
 	if err != nil {
 		return TaskResult{Success: false, Message: "Backup before VACUUM failed", Error: err}
 	}
-	t.logger.Printf("[DatabaseMaintenance] Created backup: %s", path)
-	return TaskResult{Success: true, Message: fmt.Sprintf("Created backup: %s", path)}
+	t.logger.Printf("[DatabaseMaintenance] Created backup: %s; %s", path, rot.Summary(false))
+	return TaskResult{Success: true, Details: rot, Message: fmt.Sprintf("Created backup: %s; %s", path, rot.Summary(false))}
 }
 
 // performVacuum runs a WAL checkpoint first (lighter), then attempts VACUUM.
@@ -262,30 +276,5 @@ func (t *DatabaseMaintenanceTask) optimizeIndexes(ctx context.Context) TaskResul
 	return TaskResult{
 		Success: true,
 		Message: "Index optimization completed successfully",
-	}
-}
-
-// CleanupOldBackups removes database backup files older than the specified days
-func (t *DatabaseMaintenanceTask) CleanupOldBackups(ctx context.Context, retentionDays int) TaskResult {
-	if t.dbPath == "" {
-		return TaskResult{
-			Success: true,
-			Message: "No database path available for backup cleanup",
-		}
-	}
-
-	// Find backup files
-	pattern := t.dbPath + ".backup.*"
-
-	// This is a simplified implementation - in a real system you'd want to
-	// use filepath.Glob and check file modification times
-	// For now, we'll just log that we would clean up backups
-
-	t.logger.Printf("[DatabaseMaintenance] Would cleanup backup files older than %d days matching pattern: %s",
-		retentionDays, pattern)
-
-	return TaskResult{
-		Success: true,
-		Message: fmt.Sprintf("Backup cleanup would process files matching: %s", pattern),
 	}
 }

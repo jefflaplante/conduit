@@ -187,7 +187,7 @@ conduit maintenance run
 conduit maintenance run-task session_cleanup
 conduit maintenance run-task database_maintenance
 
-# Database size, sessions/messages per key prefix, and what a run would prune (read-only)
+# Database size, sessions/messages per key prefix, what a run would prune, and backups (read-only)
 conduit maintenance status
 
 # Effective settings (config file "maintenance" section over defaults)
@@ -214,7 +214,7 @@ Since conduit-385r, cron and heartbeat runs that give no reply delete their own 
 
 Telegram (`telegram_`) and TUI (`tui_`) sessions, and any key with another prefix, are never deleted. `--dry-run` and `status` print what is kept as well: the old sessions and messages that are protected. Timestamps are parsed in Go (stored values mix Go `time.String()` text with a zone and `m=+…` suffix, RFC 3339 and SQLite `CURRENT_TIMESTAMP`); a session with an unparseable timestamp is kept.
 
-Before deleting anything a `VACUUM INTO` backup is written next to the database (or to `maintenance.backup_dir`) as `<db>.backup.<UTC timestamp>` with mode 0600, and its path is printed; `--no-backup` skips it. Deletes run in transactions of `maintenance.batch_size` sessions (default 500). Each session is re-checked inside its transaction and skipped if it changed since the plan. Rows keyed by the session are removed too: messages (gateway.db `messages_fts` follows through its triggers), and `session_summaries` / `claude_code_sessions` rows where those tables exist. If search is enabled and search.db exists, the pruned sessions' rows are removed from its `messages_fts` mirror as well (otherwise the gateway rebuilds the mirror at its next start, when the counts differ).
+Before deleting anything a `VACUUM INTO` backup is written next to the database (or to `maintenance.backup_dir`) as `<db>.backup.<UTC timestamp>` with mode 0600, and its path is printed; `--no-backup` skips it. After a successful backup, older backups beyond the newest `maintenance.keep_backups` (default 3; `0` keeps all) are deleted from that directory. Only files named exactly `<db>.backup.<timestamp>` are rotated; other copies next to the database (`*.bak-*`, `*.pre-*`, …) are never touched. `--dry-run` shows which backups the run would remove, and `status` lists the existing backups with the same plan. Deletes run in transactions of `maintenance.batch_size` sessions (default 500). Each session is re-checked inside its transaction and skipped if it changed since the plan. Rows keyed by the session are removed too: messages (gateway.db `messages_fts` follows through its triggers), and `session_summaries` / `claude_code_sessions` rows where those tables exist. If search is enabled and search.db exists, the pruned sessions' rows are removed from its `messages_fts` mirror as well (otherwise the gateway rebuilds the mirror at its next start, when the counts differ).
 
 **database_maintenance** runs `ANALYZE`/`PRAGMA optimize`, and when the file exceeds the vacuum threshold (100 MB) a backup (same rules as above) followed by a WAL checkpoint and `VACUUM`. If the running gateway keeps the database busy, `VACUUM` is skipped. There is no fallback to copying the raw database file.
 

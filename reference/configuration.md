@@ -1069,7 +1069,8 @@ Optional settings for the `conduit maintenance` CLI (conduit-2cxu). The gateway 
     "retention_days": 30,
     "prunable_prefixes": ["cron", "heartbeat", "subagent", "test"],
     "batch_size": 500,
-    "backup_dir": ""
+    "backup_dir": "",
+    "keep_backups": 3
   }
 }
 ```
@@ -1080,6 +1081,7 @@ Optional settings for the `conduit maintenance` CLI (conduit-2cxu). The gateway 
 | `prunable_prefixes` | `cron`, `heartbeat`, `subagent`, `test` | Session-key prefixes that may be deleted. Default-deny: nothing else is ever deleted. A trailing `_` is implied (`cron` matches `cron_…`, not `cronjob_…`); values are literal, no wildcards. A prefix that could match `telegram_` or `tui_` keys is a config error |
 | `batch_size` | `500` | Sessions deleted per transaction (keeps each write lock short while the gateway runs) |
 | `backup_dir` | next to the database | Where the pre-delete / pre-VACUUM `VACUUM INTO` backup (mode 0600) is written |
+| `keep_backups` | `3` | After each successful backup, only the newest this many `<db>.backup.<UTC timestamp>` files in the backup directory are kept; older ones are deleted. Only files with exactly that name (as maintenance writes them) are ever deleted: hand-made copies such as `gateway.db.bak-…` or `gateway.db.pre-…` are never touched. `0` keeps all backups. `maintenance status` lists the backups and which the next rotation would remove |
 
 ### Debug
 
