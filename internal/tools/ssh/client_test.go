@@ -268,7 +268,8 @@ func TestBuildAuthMethods(t *testing.T) {
 
 	// This test verifies that buildAuthMethods doesn't panic
 	// and returns something (may be empty if no agent/keys available)
-	methods, err := buildAuthMethods(host, defaults)
+	methods, closeAgent, err := buildAuthMethods(host, defaults)
+	defer closeAgent()
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 		return

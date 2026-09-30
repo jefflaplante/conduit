@@ -86,7 +86,7 @@ func NewPoolClient(pool *Pool) *PoolClient {
 // Execute runs a command on the specified host
 func (p *PoolClient) Execute(ctx context.Context, host, command string, timeout time.Duration) (*ExecutionResult, error) {
 	start := time.Now()
-	result, err := p.pool.ExecWithTimeout(host, command, timeout)
+	result, err := p.pool.ExecContext(ctx, host, command, timeout)
 	if err != nil {
 		return nil, err
 	}
