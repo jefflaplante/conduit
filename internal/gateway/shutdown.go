@@ -157,6 +157,11 @@ func (sm *ShutdownManager) runShutdownSequence() {
 	// before the drain and listed only WebSocket clients).
 	sm.writeBreadcrumb(turns)
 
+	// Phase 3b: deliver what the drained work queued (heartbeat alerts,
+	// final replies) while the channel adapters still run — cancelling the
+	// lifecycle context below stops them (conduit-25o4).
+	sm.flushOutgoing()
+
 	// Phase 4: Transition to terminate
 	sm.state.Store(int32(StateTerminate))
 	sm.logger.Info("drain complete, terminating")
@@ -387,4 +392,41 @@ func (sm *ShutdownManager) turnReport() []TurnSnapshot {
 		return nil
 	}
 	return gw.turns().DrainReport()
+}
+
+// Outgoing-flush bounds (conduit-25o4). The flush uses what is left of the
+// drain budget, clamped: at most maxOutgoingFlush, and at least
+// minOutgoingFlush even when the drain used everything, which keeps a
+// SIGTERM stop within the watchdog (15s drain + 1s + 10s stop < 27s; see
+// cmd/gateway/signals.go). Vars so tests can shorten them.
+var (
+	minOutgoingFlush = 1 * time.Second
+	maxOutgoingFlush = 5 * time.Second
+)
+
+// flushOutgoing waits (bounded) for the channel manager's outgoing queue to
+// empty. channels.Manager.SendMessage only queues, so without this a
+// message queued by the last drained turn or job was dropped when the
+// adapters' context was cancelled, while its sender believed it delivered.
+func (sm *ShutdownManager) flushOutgoing() {
+	gw := sm.gateway
+	if gw == nil || gw.channelManager == nil {
+		return
+	}
+	sm.mu.Lock()
+	budget := time.Until(sm.drainDeadline)
+	sm.mu.Unlock()
+	budget = min(max(budget, minOutgoingFlush), maxOutgoingFlush)
+
+	start := time.Now()
+	pending := gw.channelManager.Pending()
+	if gw.channelManager.Flush(budget) {
+		if pending > 0 {
+			sm.logger.Info("outgoing messages delivered before shutdown",
+				"messages", pending, "duration", time.Since(start).Round(time.Millisecond))
+		}
+		return
+	}
+	sm.logger.Warn("outgoing message flush timed out; undelivered messages will be dropped",
+		"undelivered", gw.channelManager.Pending(), "budget", budget)
 }

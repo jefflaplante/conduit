@@ -23,6 +23,9 @@ import (
 // within the SAME budget (one shared deadline, not additive): a SIGTERM stop
 // is still <= 15s drain + 10s stop = 25s < 27s watchdog < 30s systemd. A
 // SIGTERM that joins a SIGHUP drain shortens it to 15s from that moment.
+// conduit-25o4: after the drain, queued outgoing messages are flushed within
+// what is left of the drain budget, but for at least 1s: worst case
+// 15s + 1s + 10s = 26s < 27s.
 // SIGHUP alone (install.sh deploy) is not a systemd stop: 30s drain + 10s
 // stop + RestartSec 5s = 45s, inside install.sh's 90s wait.
 const (

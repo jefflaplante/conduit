@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"conduit/internal/protocol"
@@ -14,6 +15,15 @@ import (
 
 // ReplyTagRe matches [[reply_to_current]] and [[reply_to:<id>]] with optional whitespace
 var ReplyTagRe = regexp.MustCompile(`\[\[\s*reply_to(?:_current|:\s*(\d+))\s*\]\]`)
+
+// flushTimeout bounds how long Stop waits for queued outgoing messages to
+// be delivered before stopping the adapters (conduit-25o4). It must fit
+// inside the gateway's stop budget (gatewayStopTimeout). A var so tests can
+// shorten it.
+var flushTimeout = 5 * time.Second
+
+// flushPoll is how often Flush re-checks the pending count.
+const flushPoll = 10 * time.Millisecond
 
 // Manager manages all channel adapters (native Go)
 type Manager struct {
@@ -34,6 +44,11 @@ type Manager struct {
 	wg         sync.WaitGroup
 	forwarders map[string]context.CancelFunc
 	stopped    bool
+
+	// pending counts outgoing messages accepted by SendMessage and not yet
+	// handed to (and returned from) their adapter, so Flush can wait for
+	// delivery before adapters are stopped (conduit-25o4).
+	pending atomic.Int64
 }
 
 // NewManager creates a new channel manager
@@ -64,6 +79,7 @@ func (m *Manager) Start(ctx context.Context, configs []ChannelConfig) error {
 	m.mutex.Lock()
 	m.ctx, m.cancel = context.WithCancel(ctx)
 	m.stopped = false
+	m.pending.Store(int64(len(m.outgoing))) // left over from a previous run; the new router sends them
 	m.wg.Add(1)
 	m.mutex.Unlock()
 
@@ -97,13 +113,30 @@ func (m *Manager) Start(ctx context.Context, configs []ChannelConfig) error {
 // channel is "ready" in select and panics even alongside ctx.Done), and the
 // gateway's processMessages would read nil messages. Now: cancel ctx, stop
 // adapters, wait for our goroutines, leave the channels open. Idempotent.
+//
+// conduit-25o4: SendMessage only queues, so before cancelling anything Stop
+// refuses new sends and waits (bounded by flushTimeout) for what is already
+// queued — including a send in flight — to go out through the still-running
+// adapters. Previously such messages were dropped while their senders
+// believed them delivered. If ctx was already cancelled (the gateway's
+// lifecycle context) the router is gone; the gateway flushes before
+// cancelling it (ShutdownManager).
 func (m *Manager) Stop() error {
 	m.mutex.Lock()
 	if m.stopped {
 		m.mutex.Unlock()
 		return nil
 	}
-	m.stopped = true
+	m.stopped = true // SendMessage checks this under the lock: nothing new is queued
+	m.mutex.Unlock()
+
+	if !m.Flush(flushTimeout) {
+		if n := m.Pending(); n > 0 {
+			log.Printf("[ChannelManager] Stopping with %d undelivered outgoing message(s)", n)
+		}
+	}
+
+	m.mutex.Lock()
 	if m.cancel != nil {
 		m.cancel()
 	}
@@ -188,25 +221,59 @@ func (m *Manager) RemoveAdapter(id string) error {
 
 // SendMessage sends a message through the specified channel
 func (m *Manager) SendMessage(msg *protocol.OutgoingMessage) error {
+	// The read lock is held across the (non-blocking) enqueue so a message
+	// is either queued before Stop sets stopped — and so flushed — or
+	// refused (conduit-25o4).
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	if m.ctx == nil {
+		return fmt.Errorf("channel manager is not running")
+	}
+	if m.stopped || m.ctx.Err() != nil {
+		return fmt.Errorf("channel manager is shutting down")
+	}
+	m.pending.Add(1) // before the enqueue: the router may finish it first
+	select {
+	case m.outgoing <- msg:
+		return nil
+	default:
+		m.pending.Add(-1)
+		return fmt.Errorf("outgoing message queue is full")
+	}
+}
+
+// Pending reports how many accepted outgoing messages have not finished
+// delivery (queued or being sent).
+func (m *Manager) Pending() int64 {
+	return m.pending.Load()
+}
+
+// Flush waits until every outgoing message accepted so far has been handed
+// to its adapter and the send has returned, or timeout passes. It reports
+// whether the queue fully drained. New messages may still be accepted while
+// it waits. It returns false at once if the manager is not running
+// (conduit-25o4).
+func (m *Manager) Flush(timeout time.Duration) bool {
 	m.mutex.RLock()
 	ctx := m.ctx
 	m.mutex.RUnlock()
 	if ctx == nil {
-		return fmt.Errorf("channel manager is not running")
+		return m.pending.Load() == 0
 	}
-	// Check shutdown first: select picks randomly among ready cases, so a
-	// message could otherwise be queued after Stop with nobody routing it.
-	if ctx.Err() != nil {
-		return fmt.Errorf("channel manager is shutting down")
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(flushPoll)
+	defer tick.Stop()
+	for m.pending.Load() > 0 {
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			return false
+		case <-ctx.Done():
+			return m.pending.Load() == 0
+		}
 	}
-	select {
-	case m.outgoing <- msg:
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("channel manager is shutting down")
-	default:
-		return fmt.Errorf("outgoing message queue is full")
-	}
+	return true
 }
 
 // ReceiveMessages returns the channel for incoming messages
@@ -391,56 +458,61 @@ func (m *Manager) routeMessages() {
 			if !ok {
 				return
 			}
-
-			// Strip reply tags from text; set metadata for adapters that support replies
-			processReplyTags(msg)
-
-			// Sanitize remaining internal markers (MEDIA: lines, excessive newlines)
-			msg.Text = SanitizeOutgoingText(msg.Text)
-
-			m.mutex.RLock()
-			adapter, exists := m.adapters[msg.ChannelID]
-			m.mutex.RUnlock()
-
-			if !exists {
-				// Check if this is a TUI channel that needs dynamic creation
-				if strings.HasPrefix(msg.ChannelID, "tui_") {
-					log.Printf("[ChannelManager] Creating dynamic TUI adapter for channel %s", msg.ChannelID)
-
-					// Create dynamic TUI adapter configuration
-					tuiConfig := ChannelConfig{
-						ID:      msg.ChannelID,
-						Type:    "tui",
-						Name:    "TUI Dynamic",
-						Enabled: true,
-						Config:  map[string]interface{}{},
-					}
-
-					// Try to create the adapter
-					if err := m.CreateAdapter(tuiConfig); err != nil {
-						log.Printf("[ChannelManager] Failed to create dynamic TUI adapter for %s: %v", msg.ChannelID, err)
-						continue
-					}
-
-					// Get the newly created adapter
-					m.mutex.RLock()
-					adapter, exists = m.adapters[msg.ChannelID]
-					m.mutex.RUnlock()
-				}
-
-				if !exists {
-					log.Printf("[ChannelManager] Warning: no adapter found for channel %s", msg.ChannelID)
-					continue
-				}
-			}
-
-			if err := adapter.SendMessage(msg); err != nil {
-				log.Printf("[ChannelManager] Error sending message via %s: %v", msg.ChannelID, err)
-			}
+			m.route(msg)
+			m.pending.Add(-1)
 
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+// route delivers one outgoing message to its adapter.
+func (m *Manager) route(msg *protocol.OutgoingMessage) {
+	// Strip reply tags from text; set metadata for adapters that support replies
+	processReplyTags(msg)
+
+	// Sanitize remaining internal markers (MEDIA: lines, excessive newlines)
+	msg.Text = SanitizeOutgoingText(msg.Text)
+
+	m.mutex.RLock()
+	adapter, exists := m.adapters[msg.ChannelID]
+	m.mutex.RUnlock()
+
+	if !exists {
+		// Check if this is a TUI channel that needs dynamic creation
+		if strings.HasPrefix(msg.ChannelID, "tui_") {
+			log.Printf("[ChannelManager] Creating dynamic TUI adapter for channel %s", msg.ChannelID)
+
+			// Create dynamic TUI adapter configuration
+			tuiConfig := ChannelConfig{
+				ID:      msg.ChannelID,
+				Type:    "tui",
+				Name:    "TUI Dynamic",
+				Enabled: true,
+				Config:  map[string]interface{}{},
+			}
+
+			// Try to create the adapter
+			if err := m.CreateAdapter(tuiConfig); err != nil {
+				log.Printf("[ChannelManager] Failed to create dynamic TUI adapter for %s: %v", msg.ChannelID, err)
+				return
+			}
+
+			// Get the newly created adapter
+			m.mutex.RLock()
+			adapter, exists = m.adapters[msg.ChannelID]
+			m.mutex.RUnlock()
+		}
+
+		if !exists {
+			log.Printf("[ChannelManager] Warning: no adapter found for channel %s", msg.ChannelID)
+			return
+		}
+	}
+
+	if err := adapter.SendMessage(msg); err != nil {
+		log.Printf("[ChannelManager] Error sending message via %s: %v", msg.ChannelID, err)
 	}
 }
 
