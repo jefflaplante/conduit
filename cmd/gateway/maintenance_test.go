@@ -266,3 +266,48 @@ func TestMaintenance_RefusesBadConfigAndMissingDB(t *testing.T) {
 		t.Fatal("--retention-days -1 accepted")
 	}
 }
+
+// conduit-3dad: `run-task fts_rebuild` reports messages_fts drift with
+// --dry-run, repairs it without, and `status` shows the drift.
+func TestMaintenanceRunTask_FTSRebuild(t *testing.T) {
+	f := newMaintenanceFixture(t, config.MaintenanceConfig{})
+	db, err := sql.Open("sqlite", database.BuildDSN(f.dbPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, q := range []string{
+		`INSERT INTO messages_fts(message_id, session_key, role, content) VALUES ('gone', 'cron_x', 'user', 'orphan')`,
+		`DELETE FROM messages_fts WHERE message_id = 'telegram_123_eeee-m'`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	useMaintenanceFlags(t, f.cfgPath, "")
+
+	out := captureMaintenanceStdout(t, func() error { return showMaintenanceStatus(nil, nil) })
+	if !strings.Contains(out, "Search index (messages_fts): 1 stale index rows (1 orphaned, 0 outdated, 0 duplicate) and 1 unindexed messages") {
+		t.Fatalf("status lacks the drift:\n%s", out)
+	}
+
+	maintenanceDryRun = true
+	out = captureMaintenanceStdout(t, func() error { return runSpecificMaintenanceTask(nil, []string{"fts_rebuild"}) })
+	if !strings.Contains(out, "DRY RUN") || !strings.Contains(out, "would delete 1 and insert 1 messages_fts rows") {
+		t.Fatalf("dry run output:\n%s", out)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM messages_fts WHERE message_id = 'gone'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("dry run changed messages_fts: %d, %v", n, err)
+	}
+
+	maintenanceDryRun = false
+	out = captureMaintenanceStdout(t, func() error { return runSpecificMaintenanceTask(nil, []string{"fts_rebuild"}) })
+	if !strings.Contains(out, "Repaired messages_fts: deleted 1 stale rows, indexed 1 messages") {
+		t.Fatalf("run output:\n%s", out)
+	}
+	out = captureMaintenanceStdout(t, func() error { return showMaintenanceStatus(nil, nil) })
+	if !strings.Contains(out, "Search index (messages_fts): in sync (4 rows)") {
+		t.Fatalf("status after repair:\n%s", out)
+	}
+}

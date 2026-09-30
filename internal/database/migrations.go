@@ -244,8 +244,64 @@ func GetMigrations() []Migration {
 				CREATE INDEX IF NOT EXISTS idx_alert_history_severity ON alert_history (severity);
 			`,
 		},
+		{
+			Version: 9,
+			Name:    "messages_fts_indexed_delete_triggers",
+			SQL:     messagesFTSIndexedTriggersSQL,
+		},
 	}
 }
+
+// messagesFTSIndexedTriggersSQL is migration 9 (conduit-3dad). The delete
+// and update triggers from migration 5 remove a message's FTS row with
+// "WHERE message_id = old.id", which FTS5 answers by scanning the whole
+// table: every deleted message cost a full scan (about 80 ms per delete
+// at 50k messages). FTS5 cannot index a column, but message_id is itself a
+// full-text column, so a phrase MATCH on it finds the row through the FTS
+// index; the "message_id = old.id" term then filters out rows that only
+// share the tokens. The same string tokenizes the same way in the
+// document and in the query, so the phrase always matches the row.
+//
+// An id with no ASCII letter or digit may tokenize to nothing (and a
+// phrase with no tokens matches nothing), so those ids, and NULL, keep
+// the old full-scan statement: each operation is split into two triggers
+// whose WHEN clauses are exact complements, so exactly one fires.
+//
+// Triggers only; no data changes. Idempotent (DROP ... IF EXISTS).
+const messagesFTSIndexedTriggersSQL = `
+	DROP TRIGGER IF EXISTS messages_fts_delete;
+	DROP TRIGGER IF EXISTS messages_fts_delete_scan;
+	DROP TRIGGER IF EXISTS messages_fts_update;
+	DROP TRIGGER IF EXISTS messages_fts_update_scan;
+
+	CREATE TRIGGER messages_fts_delete AFTER DELETE ON messages
+	WHEN coalesce(old.id GLOB '*[A-Za-z0-9]*', 0) BEGIN
+		DELETE FROM messages_fts
+		WHERE message_id MATCH '"' || replace(old.id, '"', '""') || '"'
+		  AND message_id = old.id;
+	END;
+
+	CREATE TRIGGER messages_fts_delete_scan AFTER DELETE ON messages
+	WHEN NOT coalesce(old.id GLOB '*[A-Za-z0-9]*', 0) BEGIN
+		DELETE FROM messages_fts WHERE message_id = old.id;
+	END;
+
+	CREATE TRIGGER messages_fts_update AFTER UPDATE ON messages
+	WHEN coalesce(old.id GLOB '*[A-Za-z0-9]*', 0) BEGIN
+		DELETE FROM messages_fts
+		WHERE message_id MATCH '"' || replace(old.id, '"', '""') || '"'
+		  AND message_id = old.id;
+		INSERT INTO messages_fts(message_id, session_key, role, content)
+		VALUES (new.id, new.session_key, new.role, new.content);
+	END;
+
+	CREATE TRIGGER messages_fts_update_scan AFTER UPDATE ON messages
+	WHEN NOT coalesce(old.id GLOB '*[A-Za-z0-9]*', 0) BEGIN
+		DELETE FROM messages_fts WHERE message_id = old.id;
+		INSERT INTO messages_fts(message_id, session_key, role, content)
+		VALUES (new.id, new.session_key, new.role, new.content);
+	END;
+`
 
 // RunMigrations executes all pending migrations
 func RunMigrations(db *sql.DB) error {
