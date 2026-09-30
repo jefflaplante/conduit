@@ -94,8 +94,8 @@ func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExec
 	log.Printf("[Heartbeat] Generated prompt for %d tasks (%d chars)", len(tasks), len(prompt))
 
 	// Create session for this heartbeat execution
-	sessionKey := fmt.Sprintf("%s_%d", e.config.SessionPrefix, time.Now().UnixNano())
-	session, err := e.sessionsStore.GetOrCreateSession("heartbeat", sessionKey)
+	channelID := fmt.Sprintf("%s_%d", e.config.SessionPrefix, time.Now().UnixNano())
+	session, err := e.sessionsStore.GetOrCreateSession("heartbeat", channelID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create heartbeat session: %w", err)
 	}
@@ -146,7 +146,7 @@ func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExec
 		return nil, fmt.Errorf("failed to process AI response: %w", err)
 	}
 
-	result.SessionKey = sessionKey
+	result.SessionKey = session.Key
 	result.ExecutionTime = time.Since(startTime)
 
 	log.Printf("[Heartbeat] Completed execution: status=%s, action_count=%d",
@@ -187,7 +187,7 @@ type HeartbeatResult struct {
 	// Actions contains any actions that need to be taken
 	Actions []HeartbeatAction `json:"actions,omitempty"`
 
-	// SessionKey is the session used for this execution
+	// SessionKey is the stored key of the session used for this execution
 	SessionKey string `json:"session_key"`
 
 	// ExecutionTime is how long the execution took

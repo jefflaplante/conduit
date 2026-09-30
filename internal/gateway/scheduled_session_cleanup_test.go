@@ -377,9 +377,7 @@ func TestHeartbeat_AlertRunKeepsSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys := sessionKeysLike(t, store, "heartbeat_%")
-	// HeartbeatResult.SessionKey is the channel ID the key was built from
-	// ("heartbeat_<nanos>"); the stored key extends it.
-	if len(keys) != 1 || !strings.HasPrefix(keys[0], res.SessionKey+"_") {
+	if len(keys) != 1 || keys[0] != res.SessionKey {
 		t.Fatalf("sessions = %v (result key %q), want the run's session kept", keys, res.SessionKey)
 	}
 	if got := transcript(t, store, keys[0]); len(got) != 2 {

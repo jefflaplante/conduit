@@ -141,3 +141,30 @@ func TestExecuteHeartbeatJob_FinalizesSessionOnce(t *testing.T) {
 		}
 	})
 }
+
+// The result reports the key the store gave the session, not the channel ID
+// the executor built it from (conduit-27cz).
+func TestExecuteHeartbeatJob_ReportsStoredSessionKey(t *testing.T) {
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "HEARTBEAT.md"), []byte("# HEARTBEAT.md\n\n## Check status\nCheck the system status.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultExecutorConfig()
+	config.TimeoutSeconds = 10
+	store := newMockSessionStore()
+
+	var used string
+	aiExec := &funcMockAIExecutor{
+		execFunc: func(ctx context.Context, session *sessions.Session, prompt, model string) (AIResponse, error) {
+			used = session.Key
+			return &mockAIResponse{content: "HEARTBEAT_OK"}, nil
+		},
+	}
+	result, err := NewJobExecutor(tempDir, store, config).ExecuteHeartbeatJob(context.Background(), aiExec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.sessions[result.SessionKey]; !ok || result.SessionKey != used {
+		t.Fatalf("SessionKey = %q, want the stored key %q", result.SessionKey, used)
+	}
+}
