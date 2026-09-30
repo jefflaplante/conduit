@@ -216,8 +216,15 @@ type SSHAuditConfig struct {
 
 // SSHSessionConfig defines persistent session settings
 type SSHSessionConfig struct {
-	// MaxConcurrentSessions limits active persistent sessions
+	// MaxConcurrentSessions limits active persistent sessions across all
+	// hosts (default: 5)
 	MaxConcurrentSessions int `json:"max_concurrent_sessions,omitempty"`
+
+	// MaxSessionsPerHost limits active persistent sessions on any one host
+	// (default: 2). Each session holds its own SSH connection outside the
+	// connection pool, so pool.max_connections_per_host does not bound it
+	// (conduit-1kxf).
+	MaxSessionsPerHost int `json:"max_sessions_per_host,omitempty"`
 
 	// SessionIdleTimeout closes idle sessions after this duration
 	SessionIdleTimeout Duration `json:"session_idle_timeout,omitempty"`
@@ -449,6 +456,10 @@ func (s *SSHSessionConfig) Validate() error {
 		return fmt.Errorf("max_concurrent_sessions cannot be negative")
 	}
 
+	if s.MaxSessionsPerHost < 0 {
+		return fmt.Errorf("max_sessions_per_host cannot be negative")
+	}
+
 	if s.SessionIdleTimeout < 0 {
 		return fmt.Errorf("session_idle_timeout cannot be negative")
 	}
@@ -608,6 +619,7 @@ func DefaultRemoteSSHConfig() RemoteSSHConfig {
 		},
 		Sessions: SSHSessionConfig{
 			MaxConcurrentSessions: 5,
+			MaxSessionsPerHost:    2,
 			SessionIdleTimeout:    Duration(10 * time.Minute),
 			DefaultShell:          "/bin/sh",
 			OutputBoundaryMarker:  "___CONDUIT_OUTPUT_BOUNDARY___",

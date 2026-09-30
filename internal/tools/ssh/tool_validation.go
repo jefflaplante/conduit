@@ -68,6 +68,20 @@ func (t *SSHTool) ValidateParameters(ctx context.Context, args map[string]interf
 		}
 	}
 
+	// session_start never runs a command (conduit-1kxf)
+	if action == "session_start" {
+		if command := toolargs.GetString(args, "command", ""); command != "" {
+			result.Valid = false
+			result.Errors = append(result.Errors, types.ValidationError{
+				Parameter:     "command",
+				Message:       "session_start does not run commands; send them with action=session_send",
+				ProvidedValue: command,
+				DiscoveryHint: "Start the session with only host, then use action=session_send",
+				ErrorType:     "invalid_value",
+			})
+		}
+	}
+
 	// Validate command for exec and session_send
 	if action == "exec" || action == "session_send" {
 		command := toolargs.GetString(args, "command", "")

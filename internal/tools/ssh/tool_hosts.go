@@ -138,10 +138,11 @@ func (t *SSHTool) getStatus(ctx context.Context, args map[string]interface{}) (*
 	// Session summary
 	if t.sessionManager != nil {
 		sessionCount := t.sessionManager.SessionCount()
-		content.WriteString(fmt.Sprintf("\nPersistent Sessions: %d/%d active\n", sessionCount, t.sessionManager.maxSessions))
+		content.WriteString(fmt.Sprintf("\nPersistent Sessions: %d/%d active (max %d per host)\n", sessionCount, t.sessionManager.MaxSessions(), t.sessionManager.MaxSessionsPerHost()))
 		data["sessions"] = map[string]interface{}{
-			"active":       sessionCount,
-			"max_sessions": t.sessionManager.maxSessions,
+			"active":                sessionCount,
+			"max_sessions":          t.sessionManager.MaxSessions(),
+			"max_sessions_per_host": t.sessionManager.MaxSessionsPerHost(),
 		}
 	}
 

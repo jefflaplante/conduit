@@ -105,3 +105,26 @@ func TestRemoteSSHConfig_UnmarshalNull(t *testing.T) {
 		t.Error("null remote_ssh must stay disabled")
 	}
 }
+
+// conduit-1kxf: sessions.max_sessions_per_host defaults to 2 when a
+// sessions block sets only some keys, and an explicit value wins.
+func TestRemoteSSHConfig_SessionsPerHostCapMerges(t *testing.T) {
+	var got RemoteSSHConfig
+	if err := json.Unmarshal([]byte(`{"sessions": {"max_concurrent_sessions": 3}}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Sessions.MaxConcurrentSessions != 3 {
+		t.Errorf("max_concurrent_sessions = %d, want 3", got.Sessions.MaxConcurrentSessions)
+	}
+	if got.Sessions.MaxSessionsPerHost != 2 {
+		t.Errorf("max_sessions_per_host = %d, want default 2", got.Sessions.MaxSessionsPerHost)
+	}
+
+	got = RemoteSSHConfig{}
+	if err := json.Unmarshal([]byte(`{"sessions": {"max_sessions_per_host": 4}}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Sessions.MaxSessionsPerHost != 4 || got.Sessions.MaxConcurrentSessions != 5 {
+		t.Errorf("sessions = %+v, want per-host 4 and global default 5", got.Sessions)
+	}
+}
