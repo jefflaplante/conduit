@@ -219,8 +219,8 @@ func TestGetMigrations(t *testing.T) {
 			t.Errorf("Migration %d has empty name", migration.Version)
 		}
 
-		if migration.SQL == "" {
-			t.Errorf("Migration %s has empty SQL", migration.Name)
+		if migration.SQL == "" && migration.Func == nil {
+			t.Errorf("Migration %s has neither SQL nor Func", migration.Name)
 		}
 	}
 }

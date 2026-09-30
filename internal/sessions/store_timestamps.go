@@ -2,7 +2,6 @@ package sessions
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"conduit/internal/database"
@@ -16,14 +15,25 @@ import (
 // driver's time.Time.String(), in the process's local zone, with a
 // monotonic "m=+..." suffix) and by SQL CURRENT_TIMESTAMP (UTC, second
 // precision), so ORDER BY updated_at could pick the wrong "latest" session.
-const updatedAtLayout = "2006-01-02 15:04:05.000000000"
+//
+// conduit-a636: messages.timestamp and sessions.created_at use the same
+// layout (database.StoredTimeLayout); gateway.db migration 10 converted
+// their existing rows.
+const updatedAtLayout = database.StoredTimeLayout
 
 // canonicalUpdatedAtGlob matches an updated_at already in updatedAtLayout.
-const canonicalUpdatedAtGlob = `updated_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'`
+var canonicalUpdatedAtGlob = database.CanonicalTimeGlobSQL("updated_at")
 
 // formatUpdatedAt renders t in the canonical updated_at format.
 func formatUpdatedAt(t time.Time) string {
-	return t.UTC().Format(updatedAtLayout)
+	return database.FormatStoredTime(t)
+}
+
+// formatStoredTime renders t for messages.timestamp / sessions.created_at.
+// Binding the time.Time itself would store the driver's t.String() text
+// (process zone + monotonic reading), which does not sort. conduit-a636.
+func formatStoredTime(t time.Time) string {
+	return database.FormatStoredTime(t)
 }
 
 // FormatUpdatedAt renders t in the canonical sessions.updated_at format, for
@@ -35,40 +45,18 @@ func FormatUpdatedAt(t time.Time) string { return formatUpdatedAt(t) }
 // nowUpdatedAt returns the current time in the canonical updated_at format.
 func nowUpdatedAt() string { return formatUpdatedAt(time.Now()) }
 
-// legacyTimeLayouts are the formats legacy rows may hold in updated_at.
-var legacyTimeLayouts = []string{
-	"2006-01-02 15:04:05.999999999 -0700 MST", // Go time.Time.String() (m=+ stripped)
-	time.RFC3339Nano,
-	"2006-01-02 15:04:05.999999999-07:00",
-	"2006-01-02T15:04:05.999999999",
-	"2006-01-02 15:04:05.999999999", // CURRENT_TIMESTAMP (UTC) and friends
-	"2006-01-02 15:04",
-	"2006-01-02",
-}
-
 // ParseStoredTime parses a timestamp as stored in gateway.db text columns:
-// the canonical updated_at layout, Go time.Time.String() output from the
-// driver's default time binding (including a trailing monotonic "m=+..."
-// reading, as in messages.timestamp and sessions.created_at), RFC 3339, and
-// SQLite CURRENT_TIMESTAMP. Zone-less forms are UTC. conduit-2cxu: the
-// maintenance CLI compares these in Go because the mixed text formats do
-// not sort chronologically.
-func ParseStoredTime(v string) (time.Time, bool) { return parseLegacyTime(v) }
+// the canonical layout, Go time.Time.String() output from the driver's
+// default time binding (including a trailing monotonic "m=+..." reading and
+// any zone name, as legacy messages.timestamp and sessions.created_at rows
+// hold), RFC 3339 variants, and SQLite CURRENT_TIMESTAMP. Zone-less forms
+// are UTC. conduit-2cxu: the maintenance CLI compares these in Go so that a
+// database whose rows migration 10 could not convert is still handled.
+func ParseStoredTime(v string) (time.Time, bool) { return database.ParseStoredTime(v) }
 
 // parseLegacyTime parses a legacy updated_at string. Zone-less forms are
 // UTC (that is what SQLite's CURRENT_TIMESTAMP produces).
-func parseLegacyTime(v string) (time.Time, bool) {
-	v = strings.TrimSpace(v)
-	if i := strings.Index(v, " m="); i > 0 {
-		v = v[:i]
-	}
-	for _, layout := range legacyTimeLayouts {
-		if t, err := time.Parse(layout, v); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
-}
+func parseLegacyTime(v string) (time.Time, bool) { return database.ParseStoredTime(v) }
 
 // normalizeUpdatedAt rewrites every sessions.updated_at value that is not
 // already canonical into updatedAtLayout (UTC). It is idempotent: once all

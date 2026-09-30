@@ -24,11 +24,14 @@ import (
 // any unknown prefix) is kept, whatever its age. A session whose timestamps
 // cannot be parsed is kept.
 //
-// Timestamps are compared in Go, not SQL: messages.timestamp (and
-// sessions.created_at) hold the driver's default time.Time.String() rendering
-// ("2026-02-13 01:03:25.453024355 +0000 UTC m=+2227.79"), which carries the
-// process's zone and does not sort chronologically as text, and binding a
-// time.Time cutoff compares against that same rendering of the cutoff.
+// Timestamps are compared in Go, not SQL. Older gateway.db rows held the
+// driver's default time.Time.String() rendering in messages.timestamp and
+// sessions.created_at ("2026-02-13 01:03:25.453024355 +0000 UTC m=+2227.79"),
+// which carries the process's zone and does not sort chronologically as
+// text. Since conduit-a636 new rows are canonical UTC text and migration 10
+// rewrote the old ones, so SQL comparisons against sessions.FormatUpdatedAt
+// work; parsing in Go still copes with any value the migration had to leave
+// as it was (and a bound time.Time cutoff would still compare wrongly).
 //
 // Plan and Execute share the selection: a dry run reports exactly the
 // sessions Execute would delete. Execute re-checks each session inside its
