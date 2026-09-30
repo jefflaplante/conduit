@@ -126,7 +126,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/brain/ — Tiered cognitive memory: LTM (SQLite-persisted brain.db), working memory (in-process per-user), scratchpad (LIFO stack). Salience-scored entries with configurable weights: brain_ltm stores base salience and recency is computed at query time (salience.go). Recall-events log with rotation (recall_events.go). Own migration system (migrations.go, brain_migrations table, 9 migrations; runs in brain.New after options are applied). rem/ implements the nightly REM cycle (triage, consolidate, integrate, prune, reflect). Sub-agent WM sharing via parent context.
 - internal/reflection/ — SPAR Reflect subsystem: per-tool outcome capture (ReflectionMiddleware), session metrics (SessionReflector), farewell detection (FarewellDetector), ReflectionStore (brain_reflections table). See reference/spar.md.
 - internal/config/ — JSON config loading with ${ENV_VAR} expansion. Config struct includes: port, database, AI, agent, workspace, skills, tools, channels, debug, rate limiting, heartbeat, agent heartbeat, SSH, MQTT, brain. `Config.Validate()` (validate.go) is called by `config.Load()` and checks port range, AI credentials, channels, workspace, rate-limit sanity, and tool constraints; credential checks are intentionally soft (warn, not fatal) to allow partial configs.
-- internal/database/ — Gateway DB (gateway.db) SQLite migration system (8 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search, messages_fts sync triggers, token hash versioning, ingest DLQ, alert history). The brain DB has its own separate migrations in internal/brain.
+- internal/database/ — Gateway DB (gateway.db) SQLite migration system (9 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search, messages_fts sync triggers, token hash versioning, ingest DLQ, alert history, indexed messages_fts delete/update triggers). The brain DB has its own separate migrations in internal/brain.
 - internal/fts/ — FTS5 full-text search: document chunking, indexing, and search queries (Porter stemming, unicode61 tokenizer)
 - internal/ftsquery/ — Turns free-text user queries into safe FTS5 MATCH expressions
 - internal/searchdb/ — Dedicated search.db with FTS5 indexes (document chunks, beads, messages, brain LTM). Includes BeadsIndexer, BrainIndexer, MessageSyncer
@@ -137,7 +137,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/monitoring/ — Gateway metrics, event tracking, metric aggregation, heartbeat metrics. TokenWindowTracker (token_usage.go) records API token usage in rolling hour/day windows.
 - internal/heartbeat/ — HEARTBEAT.md task execution, result processing, task types, quiet-hours deferral (deferred.go, SharedAlertQueue-backed deferred.json). All delivery goes through DeliveryRegistry (delivery.go: CircuitBreaker + AlertAuditor → alert_history) with a ChannelSenderDeliverer (delivery_channel.go) and bounded background retries per alert_retry_policy (delivery_dispatch.go).
 - internal/skills/ — Skill discovery from SKILL.md files, loading, validation, tool adaptation, manager
-- internal/maintenance/ — On-demand database cleanup/optimization tasks behind `conduit maintenance` (no background schedule or maintenance window). Session cleanup prunes only automated sessions (key prefixes cron_/heartbeat_/subagent_/test_, config `maintenance` section; telegram_/tui_ are never prunable), plan/execute share one selection (retention.go), VACUUM INTO backups are 0600 (backup.go)
+- internal/maintenance/ — On-demand database cleanup/optimization tasks behind `conduit maintenance` (no background schedule or maintenance window). Session cleanup prunes only automated sessions (key prefixes cron_/heartbeat_/subagent_/test_, config `maintenance` section; telegram_/tui_ are never prunable), plan/execute share one selection (retention.go), VACUUM INTO backups are 0600 (backup.go). fts_rebuild (fts.go) repairs gateway.db messages_fts drift; `run` order is session_cleanup, fts_rebuild, database_maintenance
 - internal/scheduler/ — Cron job scheduling with interfaces
 - internal/ssh/ — SSH server via Wish with key management (server.go, keys.go)
 - internal/tui/ — BubbleTea terminal UI: chat view, sidebar, tab bar, status bar, tool activity display, Lipgloss styling, client interface
@@ -177,7 +177,7 @@ Config struct covers: port, database path, AI providers (Anthropic with OAuth or
 
 SQLite with WAL mode, 5s busy timeout, NORMAL synchronous, foreign keys enabled, 10000 page cache. Connection pool: max 4 open, 2 idle, no lifetime expiry. There are two independent migration systems.
 
-Gateway DB (internal/database, `schema_migrations`), eight migrations:
+Gateway DB (internal/database, `schema_migrations`), nine migrations:
 
 1. Sessions and messages tables
 2. Auth tokens table (+ schema_migrations table)
@@ -187,6 +187,9 @@ Gateway DB (internal/database, `schema_migrations`), eight migrations:
 6. Token hash version column (SHA256 v1 → HMAC-SHA256 v2)
 7. Ingest dead-letter queue (ingest_dlq) for dropped messages
 8. Alert history table (alert_history) for SRE audit trail
+9. messages_fts delete/update triggers find the row with a phrase MATCH on message_id (FTS index) instead of a full-table scan; ids with no ASCII letter/digit fall back to the scan via complementary `_scan` triggers (conduit-3dad). Triggers only, no data change.
+
+messages_fts is a standalone FTS5 table (own content, `message_id` column), so FTS5 'rebuild' cannot resync it with messages; `conduit maintenance run-task fts_rebuild [--dry-run]` (internal/maintenance/fts.go) deletes stale/outdated/duplicate index rows and indexes missing messages in one transaction, and `maintenance status` reports the drift.
 
 Brain DB (internal/brain/migrations.go, `brain_migrations`), nine migrations: 1 brain_ltm; 2 REM support (source_hash, brain_archive, brain_relationships); 3 staleness + source indexes; 4 SPAR brain_reflections; 5 expires_at TTL; 6 warmth; 7 edge last_traversed_at; 8 edge access_count; 9 data migration converting stored salience to base salience by subtracting the configured `recency_weight` (conduit-31jg.53). Because migration 9 depends on configuration, brain migrations run in `brain.New()` after options are applied, and every opener of brain.db (gateway, `briefing`, `brain export`) must pass the configured recency weight.
 

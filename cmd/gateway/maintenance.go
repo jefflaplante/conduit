@@ -26,7 +26,8 @@ import (
 var maintenanceCmd = &cobra.Command{
 	Use:   "maintenance",
 	Short: "Database maintenance operations",
-	Long: `Run database maintenance tasks (session cleanup, database optimization) on demand.
+	Long: `Run database maintenance tasks (session cleanup, search index repair,
+database optimization) on demand.
 
 Session cleanup deletes only automated sessions (key prefixes cron_,
 heartbeat_, subagent_, test_ by default; see maintenance.prunable_prefixes)
@@ -43,8 +44,8 @@ timer (cron, systemd) to run maintenance periodically.`,
 var maintenanceRunCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run maintenance tasks immediately",
-	Long: `Execute all maintenance tasks immediately: session_cleanup, then
-database_maintenance. Before deleting anything a VACUUM INTO backup (0600) is
+	Long: `Execute all maintenance tasks immediately: session_cleanup, fts_rebuild,
+then database_maintenance. Before deleting anything a VACUUM INTO backup (0600) is
 written next to the database unless --no-backup is given. Use --dry-run to see
 exactly what would be deleted.`,
 	Example: `  conduit maintenance run --dry-run
@@ -56,17 +57,24 @@ exactly what would be deleted.`,
 var maintenanceRunTaskCmd = &cobra.Command{
 	Use:   "run-task [task-name]",
 	Short: "Run a specific maintenance task",
-	Long:  `Execute a specific maintenance task by name: session_cleanup or database_maintenance.`,
-	Args:  cobra.ExactArgs(1),
-	RunE:  runSpecificMaintenanceTask,
+	Long: `Execute a specific maintenance task by name: session_cleanup, fts_rebuild or
+database_maintenance.
+
+fts_rebuild repairs gateway.db's messages_fts search index: it deletes index
+rows whose message is gone, has changed or is indexed twice, and indexes
+messages that have no row. With --dry-run it only reports the counts.`,
+	Example: `  conduit maintenance run-task fts_rebuild --dry-run
+  conduit maintenance run-task fts_rebuild`,
+	Args: cobra.ExactArgs(1),
+	RunE: runSpecificMaintenanceTask,
 }
 
 var maintenanceStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show database size, sessions per prefix and what a run would prune",
 	Long: `Show the database path and size, session and message counts per session-key
-prefix, and what 'maintenance run' would delete now. Read-only. No run history
-is kept.`,
+prefix, what 'maintenance run' would delete now, and whether the messages_fts
+search index matches the messages table. Read-only. No run history is kept.`,
 	RunE: showMaintenanceStatus,
 }
 
@@ -287,6 +295,12 @@ func newMaintenanceScheduler(env *maintenanceEnv) (*maintenance.Scheduler, func(
 		cleanup()
 		return nil, nil, fmt.Errorf("failed to register session cleanup task: %w", err)
 	}
+	// fts_rebuild runs after session cleanup and before VACUUM, so pages
+	// the repair frees are reclaimed in the same run (conduit-3dad).
+	if err := scheduler.RegisterTask(maintenance.NewFTSRebuildTask(db, env.mcfg.Database, logger)); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("failed to register fts rebuild task: %w", err)
+	}
 	dbTask := maintenance.NewDatabaseMaintenanceTask(db, env.dbPath, env.mcfg.Database, logger)
 	if err := scheduler.RegisterTask(dbTask); err != nil {
 		cleanup()
@@ -371,6 +385,10 @@ func showMaintenanceStatus(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	fts, err := maintenance.PlanFTSRepair(context.Background(), db) // nil without messages_fts
+	if err != nil {
+		return err
+	}
 	size, wal := fileSize(env.dbPath), fileSize(env.dbPath+"-wal")
 
 	if maintenanceJSONOutput {
@@ -384,6 +402,7 @@ func showMaintenanceStatus(cmd *cobra.Command, args []string) error {
 				"cleanup_enabled": env.mcfg.Sessions.CleanupEnabled,
 				"plan":            rep,
 			},
+			"fts_index": fts,
 		})
 	}
 
@@ -405,6 +424,14 @@ func showMaintenanceStatus(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(out, "Session cleanup is disabled.")
 	}
 	printPruneReport(out, rep)
+	switch {
+	case fts == nil:
+		fmt.Fprintln(out, "\nSearch index (messages_fts): not present")
+	case fts.InSync():
+		fmt.Fprintf(out, "\nSearch index (messages_fts): in sync (%d rows)\n", fts.IndexRows)
+	default:
+		fmt.Fprintf(out, "\nSearch index (messages_fts): %s\nRepair with 'conduit maintenance run-task fts_rebuild'.\n", fts.Summary())
+	}
 	fmt.Fprintf(out, "\nNote: %s\n", maintenanceNoScheduleNote)
 	return nil
 }
