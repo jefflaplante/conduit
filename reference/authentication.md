@@ -78,6 +78,8 @@ Token ID: 3f2a9c1e-... (use 3f2a9c1e with revoke/export/set-role)
 | `owner` | any session, may act as any user ID | may approve owner actions (e.g. sending email as the owner) | interactive |
 | `automation` | only sessions whose user is the token's client name; cannot name another user ID | never | non-interactive: owner-account actions fail closed instead of prompting |
 
+HTTP endpoints that expose the owner's data (`/debug/prompt`, `/api/brain/graph`, `/api/vector/*`, `/diagnostics`) also require an owner-role token; `/health`, `/metrics`, `/prometheus`, `/api/channels/status` and `/api/test/message` accept either role.
+
 Give `owner` only to clients you use yourself. Tokens created before roles
 existed have none and are treated as `owner`; the gateway logs a warning for
 each until it is tagged:

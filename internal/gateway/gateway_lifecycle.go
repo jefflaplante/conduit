@@ -59,6 +59,10 @@ func (g *Gateway) buildHTTPServer() *http.Server {
 	protect := func(h http.Handler) http.Handler {
 		return g.rateLimitMiddleware.WrapPreAuth(g.auth.AuthMiddleware.Wrap(g.rateLimitMiddleware.Wrap(h)))
 	}
+	// ownerOnly additionally requires an owner-role token (conduit-25lt.1).
+	ownerOnly := func(h http.Handler) http.Handler {
+		return protect(g.requireOwnerRole(h))
+	}
 
 	// Diagnostic endpoints - auth requirement controlled by diagnostics config.
 	// Auth middleware skip paths are configured at gateway initialization based
@@ -66,7 +70,7 @@ func (g *Gateway) buildHTTPServer() *http.Server {
 	// require auth.
 	mux.Handle("/health", protect(http.HandlerFunc(g.handleHealthEnhanced)))
 	mux.Handle("/metrics", protect(http.HandlerFunc(g.handleMetrics)))
-	mux.Handle("/diagnostics", protect(http.HandlerFunc(g.handleDiagnostics)))
+	mux.Handle("/diagnostics", ownerOnly(http.HandlerFunc(g.handleDiagnostics)))
 	mux.Handle("/prometheus", protect(http.HandlerFunc(g.handlePrometheusMetrics)))
 
 	// WebSocket endpoint with custom authentication and rate limiting.
@@ -77,10 +81,13 @@ func (g *Gateway) buildHTTPServer() *http.Server {
 	mux.Handle("/ws", g.rateLimitMiddleware.WrapWebSocket(g.auth.WSAuthenticator, http.HandlerFunc(g.handleWebSocket)))
 
 	// Protected API endpoints - wrapped with auth middleware and rate limiting.
+	// ownerOnly endpoints expose the owner's data and refuse automation-role
+	// tokens; /api/test/message stays open to automation (scripts use it; its
+	// turns are non-interactive, so they cannot approve anything).
 	// Order (see protect): pre-auth IP limiter, auth (sets context),
 	// per-client rate limiting (uses context), handler. POST endpoints also get request body size
 	// limiting to prevent OOM attacks.
-	mux.Handle("/debug/prompt", protect(http.HandlerFunc(g.handleDebugPrompt)))
+	mux.Handle("/debug/prompt", ownerOnly(http.HandlerFunc(g.handleDebugPrompt)))
 	mux.Handle("/api/channels/status", protect(http.HandlerFunc(g.handleChannelStatus)))
 	mux.Handle("/api/test/message", protect(
 		limitRequestBody(http.HandlerFunc(g.handleTestMessage), MaxRequestBodySize)))
@@ -88,19 +95,19 @@ func (g *Gateway) buildHTTPServer() *http.Server {
 	// Vector API endpoints (registered unconditionally; handlers return 503
 	// when disabled).
 	vectorAPI := &VectorAPI{vectorService: g.search.VectorService}
-	mux.Handle("/api/vector/search", protect(
+	mux.Handle("/api/vector/search", ownerOnly(
 		limitRequestBody(http.HandlerFunc(vectorAPI.handleSearch), MaxRequestBodySize)))
-	mux.Handle("/api/vector/index", protect(
+	mux.Handle("/api/vector/index", ownerOnly(
 		limitRequestBody(http.HandlerFunc(vectorAPI.handleIndex), MaxRequestBodySize)))
-	mux.Handle("/api/vector/delete", protect(
+	mux.Handle("/api/vector/delete", ownerOnly(
 		limitRequestBody(http.HandlerFunc(vectorAPI.handleDelete), MaxRequestBodySize)))
-	mux.Handle("/api/vector/status", protect(http.HandlerFunc(vectorAPI.handleStatus)))
+	mux.Handle("/api/vector/status", ownerOnly(http.HandlerFunc(vectorAPI.handleStatus)))
 
 	// Brain memory-graph dashboard (gated by config.Brain.DashboardEnabled,
 	// enforced inside the handler). The HTML chrome at /dashboard/brain and
 	// the static asset bundle at /dashboard/assets/ are public; the JSON
 	// data feed at /api/brain/graph is auth-gated.
-	mux.Handle("/api/brain/graph", protect(http.HandlerFunc(g.handleBrainGraph)))
+	mux.Handle("/api/brain/graph", ownerOnly(http.HandlerFunc(g.handleBrainGraph)))
 	mux.Handle("/dashboard/brain", dashboard.BrainHandler())
 	mux.Handle("/dashboard/assets/", http.StripPrefix("/dashboard/assets/", dashboard.AssetsHandler()))
 
