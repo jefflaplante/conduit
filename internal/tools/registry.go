@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"conduit/internal/config"
+	"conduit/internal/policy"
 	"conduit/internal/sandbox"
 	"conduit/internal/tools/communication"
 	"conduit/internal/tools/core"
@@ -50,7 +51,8 @@ type Registry struct {
 	sandboxCfg   config.SandboxConfig
 	enabledTools map[string]bool
 	services     *types.ToolServices
-	resultChars  int // tools.max_tool_result_chars (conduit-31jg.39)
+	resultChars  int            // tools.max_tool_result_chars (conduit-31jg.39)
+	policy       *policy.Engine // tool action policy, shadow mode (conduit-25lt.2); guarded by mu
 }
 
 // Type aliases for backward compatibility

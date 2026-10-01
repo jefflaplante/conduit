@@ -369,3 +369,29 @@ func TestSenderGate_ReadsNotAudited(t *testing.T) {
 		t.Fatalf("reads must not produce sender-gate records: %s", buf.String())
 	}
 }
+
+// conduit-25lt.2: email sends classify by the same account decision the
+// approval gate uses.
+func TestClassifySkillActions(t *testing.T) {
+	e := NewExecutor(ExecutionConfig{})
+	email := Skill{Name: "email"}
+	got := e.classifySkillActions(email, "send", map[string]interface{}{"to": "Bob@Example.com, carol@example.com"})
+	if len(got) != 2 || got[0].Class != "email.send.agent" || got[0].Target != "bob@example.com" {
+		t.Fatalf("agent send = %+v", got)
+	}
+	got = e.classifySkillActions(email, "send", ownerSendArgs("bob@example.com"))
+	if len(got) != 1 || got[0].Class != "email.send.owner" {
+		t.Fatalf("owner send = %+v", got)
+	}
+	if e.classifySkillActions(email, "search", map[string]interface{}{"account": "jeff"}) != nil {
+		t.Fatal("reads have no outward actions")
+	}
+	st := &SkillTool{skill: email, executor: e}
+	if got := st.ClassifyActions(context.Background(), map[string]interface{}{"action": "send", "args": map[string]interface{}{"to": "x@example.com"}}); len(got) != 1 {
+		t.Fatalf("SkillTool = %+v", got)
+	}
+	ad := NewSkillToolAdapter(st)
+	if got := ad.ClassifyActions(context.Background(), map[string]interface{}{"action": "send", "args": map[string]interface{}{"to": "x@example.com"}}); len(got) != 1 {
+		t.Fatalf("adapter = %+v", got)
+	}
+}

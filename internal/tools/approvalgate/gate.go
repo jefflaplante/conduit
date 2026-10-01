@@ -48,6 +48,9 @@ type Operation struct {
 	// tool's configured approval timeout). Zero uses the manager default;
 	// the manager caps it at approval.MaxTTL (conduit-enf0).
 	TTL time.Duration
+	// Purpose is the agent's stated reason, shown in the prompt labelled as
+	// the agent's words (conduit-25lt.2). Optional.
+	Purpose string
 }
 
 // Run performs the approved operation with the values frozen at request
@@ -82,6 +85,7 @@ func Request(ctx context.Context, r approval.Requester, op Operation, run Run) *
 		Audit:       op.Audit,
 		Fingerprint: fp,
 		TTL:         op.TTL,
+		Purpose:     op.Purpose,
 	}
 
 	exec := func(execCtx context.Context, t approval.Ticket) (string, error) {

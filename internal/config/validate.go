@@ -212,6 +212,7 @@ func (c *Config) ValidateSemantic() error {
 	validateRestartResume(&me, c.RestartResume)
 	validateCallLog(&me, c.AI.CallLog)
 	validateMaintenance(&me, c.Maintenance) // conduit-2cxu
+	validateToolPolicy(&me, c.ToolPolicy)   // conduit-25lt.2
 
 	return me.toError()
 }

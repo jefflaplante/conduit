@@ -404,6 +404,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	gw.cognition.initReflection(cfg, executionEngine, logger)
 
 	toolsRegistry.SetServices(gw.buildToolServices(cfg, sessionStore, aiRouter, debugBuffer, skillsManager))
+	initToolPolicy(cfg, toolsRegistry, logger) // conduit-25lt.2: shadow mode
 
 	// Register MCP tools now that the registry is fully populated.
 	if mcpServer != nil {

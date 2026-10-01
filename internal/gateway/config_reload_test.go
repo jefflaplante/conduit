@@ -435,3 +435,24 @@ func TestApplyConfigUpdate_CallLogToggleAppliesLive(t *testing.T) {
 		t.Error("call log still attached after disabling it")
 	}
 }
+
+// conduit-25lt.2: the agent cannot change its own tool policy through
+// update_config, in either patch form, even as part of a larger patch.
+func TestConfigUpdate_RefusesToolPolicy(t *testing.T) {
+	f := newReloadFixture(t)
+	for _, patch := range []map[string]interface{}{
+		{"tool_policy.classes.message.group": "allow"},
+		{"tool_policy": map[string]interface{}{"mode": "off"}},
+		{"ai.providers.z-ai.timeout_seconds": 900.0, "Tool_Policy.default": "allow"},
+	} {
+		if _, err := f.gw.PlanConfigUpdate(context.Background(), patch); err == nil || !strings.Contains(err.Error(), "tool_policy") {
+			t.Errorf("plan %v: err = %v, want tool_policy refusal", patch, err)
+		}
+		if _, err := f.gw.ApplyConfigUpdate(context.Background(), patch); err == nil {
+			t.Errorf("apply %v succeeded", patch)
+		}
+	}
+	if f.file(t) != f.orig {
+		t.Fatal("config file changed")
+	}
+}

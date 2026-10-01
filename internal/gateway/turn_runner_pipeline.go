@@ -102,6 +102,14 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 	if req.Origin != nil {
 		o := *req.Origin
 		o.SessionKey = key
+		if o.RequestText == "" {
+			// conduit-25lt.2: approval prompts show what the human asked.
+			// StoreText is what they typed when Text is an internal prompt.
+			o.RequestText = req.StoreText
+			if o.RequestText == "" {
+				o.RequestText = req.Text
+			}
+		}
 		ctx = approval.WithInteractiveOrigin(ctx, o) // conduit-31jg.43
 	} else {
 		ctx = approval.WithNonInteractive(ctx, req.NonInteractiveSource) // conduit-31jg.43

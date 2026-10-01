@@ -84,6 +84,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - `briefing` — Generate and manage session briefings (generate, show, list)
 - `chain` — Manage and execute saved tool chains (list, show, create, run, delete, validate)
 - `cron` — Scheduler job maintenance for cron_jobs.json (migrate-tz)
+- `policy` — Tool action policy decisions (report)
 - `loadtest` — Load test against the AI provider using a mock backend
 - `metrics` — Start the metrics dashboard HTTP server
 - `restart` / `stop` / `status` — Signal or check a running Conduit process (signals, not HTTP)
@@ -145,6 +146,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/protocol/ — Message type definitions (messages.go) shared across packages
 - internal/tokens/ — Token generation (generator.go) and formatting (format.go) utilities
 - internal/approval/ — Generic human-in-the-loop approval primitive (manager, request origin)
+- internal/policy/ — Tool action policy (conduit-25lt.2): tools implement policy.Classifier (Message, email skill, google_workspace) to map a call to dotted action classes; one allow/ask/deny table (config `tool_policy`, refused by update_config) plus the origin rule (non-interactive: ask→deny). Shadow mode only: Registry.ExecuteTool records every decision to <data_dir>/logs/policy-decisions.jsonl and never blocks; `conduit policy report` reviews it
 - internal/briefing/ — Session briefing generation (used by the `briefing` CLI; stored in brain LTM)
 - internal/chain/ — Saved multi-tool chain definitions (variables, steps) behind the `chain` CLI and Chain tool
 - internal/constants/ — Shared constant values

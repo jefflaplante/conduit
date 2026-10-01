@@ -1083,6 +1083,47 @@ Optional settings for the `conduit maintenance` CLI (conduit-2cxu). The gateway 
 | `backup_dir` | next to the database | Where the pre-delete / pre-VACUUM `VACUUM INTO` backup (mode 0600) is written |
 | `keep_backups` | `3` | After each successful backup, only the newest this many `<db>.backup.<UTC timestamp>` files in the backup directory are kept; older ones are deleted. Only files with exactly that name (as maintenance writes them) are ever deleted: hand-made copies such as `gateway.db.bak-…` or `gateway.db.pre-…` are never touched. `0` keeps all backups. `maintenance status` lists the backups and which the next rotation would remove |
 
+### Tool Policy
+
+`tool_policy` classifies outward tool calls into action classes and records
+what the policy says about each (conduit-25lt.2). Phase 1 is **shadow mode**:
+decisions go to `<data_dir>/logs/policy-decisions.jsonl` and nothing is
+blocked; review them with `conduit policy report`. Read at startup only, and
+the agent cannot change it (`update_config` refuses `tool_policy` keys).
+
+```json
+"tool_policy": {
+  "mode": "shadow",
+  "default": "allow",
+  "classes": { "message.group": "ask" },
+  "recipients": { "email.send.agent": ["owner@example.com"] },
+  "owner_targets": ["telegram:123456789"]
+}
+```
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `mode` | `shadow` | `shadow` records decisions; `off` disables the policy |
+| `default` | `allow` | Decision for classes no entry matches |
+| `classes` | see below | Class or class prefix to `allow`, `ask` or `deny`; the most specific entry wins; merged over the defaults |
+| `recipients` | none | Targets an ask-class action may reach without asking, per class or prefix |
+| `owner_targets` | Telegram `chat_id`s of `agent_heartbeat.alert_targets` | The owner's own chats; a message to one is `message.self` |
+
+Classes and defaults:
+
+| Class | Raised by | Default |
+|-------|-----------|---------|
+| `message.self` | Message to the owner's own chat (or a TUI) | allow |
+| `message.dm` | Message to any other person | ask |
+| `message.group` | Message to a group chat (negative Telegram ID) | ask |
+| `email.send.agent` | Email from the agent's account (email skill, `google_workspace`) | ask; listed recipients allow |
+| `email.send.owner` | Email from the owner's account (email skill) | ask |
+
+A turn nobody can answer (cron, heartbeat, sub-agent, MCP, an automation
+token) turns `ask` into `deny`. Message and `google_workspace` accept an
+optional `purpose` argument, recorded with the decision and shown in approval
+prompts next to the message that started the turn.
+
 ### Debug
 
 ```json
@@ -1209,6 +1250,8 @@ mechanism as gated Kubernetes and SSH operations):
    against the file as it is at that moment. The model never sees the code.
 4. Non-interactive turns (cron, heartbeat, sub-agents, wakes, MCP) and a
    gateway without an approval channel fail closed: nothing is applied.
+5. `tool_policy` keys are refused outright, even with approval: the agent
+   must not be able to widen its own permissions.
 
 ### Audit
 

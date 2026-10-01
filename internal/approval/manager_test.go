@@ -541,9 +541,35 @@ func TestPromptNotice_MultiLineFields(t *testing.T) {
 			{Name: "Host", Value: "web-1"},
 			{Name: "Command", Value: "systemctl stop app\nrm -rf /srv/app/cache\n"},
 		},
-	}, time.Minute)
+	}, time.Minute, "")
 	want := "\nHost: web-1\nCommand:\n    systemctl stop app\n    rm -rf /srv/app/cache\n\nReply"
 	if !strings.Contains(n.Text, want) {
 		t.Fatalf("prompt layout mismatch:\n%s", n.Text)
+	}
+}
+
+// conduit-25lt.2: the human's request (from the turn) and the agent's stated
+// purpose (model words) lead the prompt, each on one line, clipped.
+func TestPromptNotice_RequestAndPurpose(t *testing.T) {
+	n := promptNotice(Ticket{Code: "ABC234", ExpiresAt: time.Now()}, Action{
+		Title:   "Send email AS THE OWNER to bob",
+		Purpose: "you asked me to\nreply to Bob",
+		Fields:  []Field{{Name: "To", Value: "bob@example.com"}},
+	}, time.Minute, "what's the weather "+strings.Repeat("x", 300))
+	lines := strings.Split(n.Text, "\n")
+	// lines[2] is the blank line after the title.
+	if !strings.HasPrefix(lines[3], "You asked: what's the weather") || !strings.HasSuffix(lines[3], "…") {
+		t.Fatalf("request line = %q", lines[3])
+	}
+	if lines[4] != "Agent's stated purpose: you asked me to reply to Bob" {
+		t.Fatalf("purpose line = %q", lines[4])
+	}
+	if lines[5] != "To: bob@example.com" {
+		t.Fatalf("fields must follow: %q", lines[5])
+	}
+
+	plain := promptNotice(Ticket{Code: "ABC234", ExpiresAt: time.Now()}, Action{Title: "x"}, time.Minute, "")
+	if strings.Contains(plain.Text, "You asked") || strings.Contains(plain.Text, "purpose") {
+		t.Fatalf("empty context must add no lines:\n%s", plain.Text)
 	}
 }

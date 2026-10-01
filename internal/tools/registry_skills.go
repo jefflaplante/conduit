@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"conduit/internal/policy"
 	"conduit/internal/skills"
 	"conduit/internal/tools/types"
 )
@@ -20,6 +21,12 @@ type skillToolBridge struct {
 func (b *skillToolBridge) Name() string                       { return b.adapter.Name() }
 func (b *skillToolBridge) Description() string                { return b.adapter.Description() }
 func (b *skillToolBridge) Parameters() map[string]interface{} { return b.adapter.Parameters() }
+
+// ClassifyActions implements policy.Classifier (conduit-25lt.2).
+func (b *skillToolBridge) ClassifyActions(ctx context.Context, args map[string]interface{}) []policy.Action {
+	return b.adapter.ClassifyActions(ctx, args)
+}
+
 func (b *skillToolBridge) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
 	result, err := b.adapter.Execute(ctx, args)
 	if err != nil {

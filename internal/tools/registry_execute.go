@@ -64,6 +64,10 @@ func (r *Registry) ExecuteTool(ctx context.Context, name string, args map[string
 		}
 	}
 
+	// conduit-25lt.2: classify and record the call against the tool policy.
+	// Shadow mode: this never blocks.
+	r.observePolicy(ctx, name, tool, args)
+
 	// Execute tool
 	toolResult, execErr := tool.Execute(ctx, args)
 	if execErr != nil {

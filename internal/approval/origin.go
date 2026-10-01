@@ -59,6 +59,11 @@ type Origin struct {
 	// Notify reaches the human on the originating channel. Nil means the
 	// channel cannot prompt.
 	Notify Notifier
+	// RequestText is the human message that started this turn. Approval
+	// prompts show it beside the agent's stated purpose, so a mismatch
+	// ("you asked about the weather; the agent wants to email a stranger")
+	// is visible (conduit-25lt.2). Set by the gateway, never by the model.
+	RequestText string
 }
 
 type ctxKeyOrigin struct{}

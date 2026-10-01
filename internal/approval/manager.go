@@ -85,6 +85,9 @@ type Action struct {
 	// SSH tool's security.approval_timeout). Zero or negative uses
 	// Config.TTL; values above MaxTTL are capped (conduit-enf0).
 	TTL time.Duration
+	// Purpose is the agent's stated reason for the action, shown labelled as
+	// the agent's words (conduit-25lt.2). Model-supplied: untrusted.
+	Purpose string
 }
 
 // ttlFor returns the lifetime of a pending approval for action.
@@ -271,7 +274,7 @@ func (m *Manager) Request(ctx context.Context, action Action, exec ExecuteFunc) 
 
 	m.audit("approval.requested", &t, action, "source", origin.Source)
 
-	if err := origin.Notify(ctx, promptNotice(t, action, ttl)); err != nil {
+	if err := origin.Notify(ctx, promptNotice(t, action, ttl, origin.RequestText)); err != nil {
 		m.remove(code, id)
 		m.audit("approval.prompt_failed", &t, action, "error", err.Error())
 		return nil, fmt.Errorf("%w: %v", ErrCannotPrompt, err)
@@ -522,9 +525,23 @@ func (m *Manager) audit(event string, t *Ticket, a Action, extra ...any) {
 	m.log.Info("approval audit", attrs...)
 }
 
-func promptNotice(t Ticket, a Action, ttl time.Duration) Notice {
+// promptRequestRunes and promptPurposeRunes bound the two context lines.
+const (
+	promptRequestRunes = 200
+	promptPurposeRunes = 300
+)
+
+func promptNotice(t Ticket, a Action, ttl time.Duration, requestText string) Notice {
 	var b strings.Builder
 	fmt.Fprintf(&b, "APPROVAL NEEDED [%s]\n%s\n", t.Code, a.Title)
+	// conduit-25lt.2: what the human asked (trusted, from the turn) next to
+	// what the agent says it is doing (untrusted), before the details.
+	if r := strings.TrimSpace(requestText); r != "" {
+		writeField(&b, Field{Name: "You asked", Value: clipRunes(oneLine(r), promptRequestRunes)})
+	}
+	if p := strings.TrimSpace(a.Purpose); p != "" {
+		writeField(&b, Field{Name: "Agent's stated purpose", Value: clipRunes(oneLine(p), promptPurposeRunes)})
+	}
 	for _, f := range a.Fields {
 		writeField(&b, f)
 	}
@@ -614,4 +631,16 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return string(r[:max]) + "..."
+}
+
+// oneLine collapses whitespace runs (newlines included) to single spaces.
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// clipRunes shortens s to n runes, marking the cut.
+func clipRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }

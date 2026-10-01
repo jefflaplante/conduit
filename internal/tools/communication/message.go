@@ -82,6 +82,12 @@ func (t *MessageTool) Parameters() map[string]interface{} {
 				"type":        "string",
 				"description": "Path to an image file to send as a photo (e.g., /tmp/chart.png)",
 			},
+			// conduit-25lt.2: recorded with the policy decision and, once
+			// enforcement ships, shown to the owner in approval prompts.
+			"purpose": map[string]interface{}{
+				"type":        "string",
+				"description": "One line: why you are sending this and at whose request. Required in spirit for messages to anyone other than the owner.",
+			},
 		},
 		"required": []string{"action"},
 	}

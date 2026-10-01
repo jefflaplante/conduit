@@ -345,6 +345,12 @@ func (g *Gateway) planConfigUpdate(patch map[string]interface{}) (*configPlan, e
 	var changes []change
 	res := &toolstypes.ConfigUpdateResult{Changes: []toolstypes.ConfigChange{}}
 	for _, op := range ops {
+		// conduit-25lt.2: the agent must not be able to widen its own
+		// permissions, even with an approval it talked the owner into. The
+		// owner edits tool_policy in the config file directly.
+		if len(op.Path) > 0 && strings.EqualFold(op.Path[0], "tool_policy") {
+			return nil, rejectInvalid(errors.New("tool_policy cannot be changed through update_config; the owner edits it in the config file"))
+		}
 		canonical, changed, err := doc.Set(op.Path, op.Value, op.Delete)
 		if err != nil {
 			return nil, rejectInvalid(err)

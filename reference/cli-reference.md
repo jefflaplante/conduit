@@ -269,6 +269,19 @@ conduit cron migrate-tz --from UTC --to America/New_York --file workspace/cron_j
 conduit cron migrate-tz --from UTC --to America/New_York --file workspace/cron_jobs.json --include-system --dry-run
 ```
 
+### policy
+
+Review tool action policy decisions (see `tool_policy` in the configuration
+reference). Shadow mode records only; this is how to review it.
+
+```bash
+# Counts per class and decision, then every would-ask / would-deny call (last 24h)
+conduit policy report
+
+# The whole shadow week, as JSON
+conduit policy report --since 168h --json
+```
+
 ### brain
 
 ```bash

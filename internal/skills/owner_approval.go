@@ -146,6 +146,7 @@ func (e *Executor) gateOwnerSend(ctx context.Context, skill Skill, action string
 		},
 		Fingerprint: fp,
 	}
+	act.Purpose, _ = args["purpose"].(string) // conduit-25lt.2
 
 	exec := func(execCtx context.Context, t approval.Ticket) (string, error) {
 		// Re-verify binding: only the frozen params that were approved run.

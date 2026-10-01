@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"conduit/internal/config"
+	"conduit/internal/policy"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
@@ -72,6 +73,10 @@ func (t *GoogleWorkspaceTool) Parameters() map[string]interface{} {
 			"from_alias": map[string]interface{}{
 				"type":        "string",
 				"description": "Send from alias instead of primary address (for email_send)",
+			},
+			"purpose": map[string]interface{}{ // conduit-25lt.2
+				"type":        "string",
+				"description": "One line: why you are sending this email and at whose request (for email_send)",
 			},
 			// Calendar args
 			"title": map[string]interface{}{
@@ -677,4 +682,22 @@ func (t *GoogleWorkspaceTool) SelfTest(ctx context.Context, opts *types.SelfTest
 	}
 
 	return result
+}
+
+// ClassifyActions implements policy.Classifier (conduit-25lt.2). Only
+// email_send reaches anyone, and the sender gate (conduit-1nfq) guarantees
+// it sends as the agent; every to/cc/bcc address is a recipient.
+func (t *GoogleWorkspaceTool) ClassifyActions(_ context.Context, args map[string]interface{}) []policy.Action {
+	if toolargs.GetString(args, "action", "") != "email_send" {
+		return nil
+	}
+	var out []policy.Action
+	for _, key := range []string{"to", "cc", "bcc"} {
+		for _, addr := range strings.Split(toolargs.GetString(args, key, ""), ",") {
+			if addr = strings.TrimSpace(addr); addr != "" {
+				out = append(out, policy.Action{Class: policy.EmailSendAgent, Target: strings.ToLower(addr)})
+			}
+		}
+	}
+	return out
 }
