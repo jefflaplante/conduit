@@ -121,8 +121,8 @@ func TestMigration9_UpgradesV8DatabaseAndKeepsFTSInSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, err := getCurrentVersion(db)
-	if err != nil || v != 9 {
-		t.Fatalf("version = %d, %v; want 9", v, err)
+	if latest := GetMigrations()[len(GetMigrations())-1].Version; err != nil || v != latest {
+		t.Fatalf("version = %d, %v; want %d", v, err, latest)
 	}
 	want := []string{"messages_fts_delete", "messages_fts_delete_scan", "messages_fts_insert", "messages_fts_update", "messages_fts_update_scan"}
 	if got := triggerNames(t, db); !reflect.DeepEqual(got, want) {

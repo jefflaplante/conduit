@@ -126,7 +126,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/brain/ — Tiered cognitive memory: LTM (SQLite-persisted brain.db), working memory (in-process per-user), scratchpad (LIFO stack). Salience-scored entries with configurable weights: brain_ltm stores base salience and recency is computed at query time (salience.go). Recall-events log with rotation (recall_events.go). Own migration system (migrations.go, brain_migrations table, 9 migrations; runs in brain.New after options are applied). rem/ implements the nightly REM cycle (triage, consolidate, integrate, prune, reflect). Sub-agent WM sharing via parent context.
 - internal/reflection/ — SPAR Reflect subsystem: per-tool outcome capture (ReflectionMiddleware), session metrics (SessionReflector), farewell detection (FarewellDetector), ReflectionStore (brain_reflections table). See reference/spar.md.
 - internal/config/ — JSON config loading with ${ENV_VAR} expansion. Config struct includes: port, database, AI, agent, workspace, skills, tools, channels, debug, rate limiting, heartbeat, agent heartbeat, SSH, MQTT, brain. `Config.Validate()` (validate.go) is called by `config.Load()` and checks port range, AI credentials, channels, workspace, rate-limit sanity, and tool constraints; credential checks are intentionally soft (warn, not fatal) to allow partial configs.
-- internal/database/ — Gateway DB (gateway.db) SQLite migration system (9 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search, messages_fts sync triggers, token hash versioning, ingest DLQ, alert history, indexed messages_fts delete/update triggers). The brain DB has its own separate migrations in internal/brain.
+- internal/database/ — Gateway DB (gateway.db) SQLite migration system (10 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search, messages_fts sync triggers, token hash versioning, ingest DLQ, alert history, indexed messages_fts delete/update triggers, canonical timestamps). Canonical timestamp text layout, formatter and tolerant parser in timestamps.go (StoredTimeLayout, FormatStoredTime, ParseStoredTime). The brain DB has its own separate migrations in internal/brain.
 - internal/fts/ — FTS5 full-text search: document chunking, indexing, and search queries (Porter stemming, unicode61 tokenizer)
 - internal/ftsquery/ — Turns free-text user queries into safe FTS5 MATCH expressions
 - internal/searchdb/ — Dedicated search.db with FTS5 indexes (document chunks, beads, messages, brain LTM). Includes BeadsIndexer, BrainIndexer, MessageSyncer
@@ -137,7 +137,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/monitoring/ — Gateway metrics, event tracking, metric aggregation, heartbeat metrics. TokenWindowTracker (token_usage.go) records API token usage in rolling hour/day windows.
 - internal/heartbeat/ — HEARTBEAT.md task execution, result processing, task types, quiet-hours deferral (deferred.go, SharedAlertQueue-backed deferred.json). All delivery goes through DeliveryRegistry (delivery.go: CircuitBreaker + AlertAuditor → alert_history) with a ChannelSenderDeliverer (delivery_channel.go) and bounded background retries per alert_retry_policy (delivery_dispatch.go).
 - internal/skills/ — Skill discovery from SKILL.md files, loading, validation, tool adaptation, manager
-- internal/maintenance/ — On-demand database cleanup/optimization tasks behind `conduit maintenance` (no background schedule or maintenance window). Session cleanup prunes only automated sessions (key prefixes cron_/heartbeat_/subagent_/test_, config `maintenance` section; telegram_/tui_ are never prunable), plan/execute share one selection (retention.go), VACUUM INTO backups are 0600 (backup.go). fts_rebuild (fts.go) repairs gateway.db messages_fts drift; `run` order is session_cleanup, fts_rebuild, database_maintenance
+- internal/maintenance/ — On-demand database cleanup/optimization tasks behind `conduit maintenance` (no background schedule or maintenance window). Session cleanup prunes only automated sessions (key prefixes cron_/heartbeat_/subagent_/test_, config `maintenance` section; telegram_/tui_ are never prunable), plan/execute share one selection (retention.go), VACUUM INTO backups are 0600 (backup.go) and rotated to the newest `maintenance.keep_backups` (default 3, 0 = all; exact `<db>.backup.<ts>` names only, backup_rotation.go). fts_rebuild (fts.go) repairs gateway.db messages_fts drift; `run` order is session_cleanup, fts_rebuild, database_maintenance
 - internal/scheduler/ — Cron job scheduling with interfaces
 - internal/ssh/ — SSH server via Wish with key management (server.go, keys.go)
 - internal/tui/ — BubbleTea terminal UI: chat view, sidebar, tab bar, status bar, tool activity display, Lipgloss styling, client interface
@@ -177,7 +177,7 @@ Config struct covers: port, database path, AI providers (Anthropic with OAuth or
 
 SQLite with WAL mode, 5s busy timeout, NORMAL synchronous, foreign keys enabled, 10000 page cache. Connection pool: max 4 open, 2 idle, no lifetime expiry. There are two independent migration systems.
 
-Gateway DB (internal/database, `schema_migrations`), nine migrations:
+Gateway DB (internal/database, `schema_migrations`), ten migrations (a `Migration` has `SQL` and/or a Go `Func(tx)`, both run in the migration transaction):
 
 1. Sessions and messages tables
 2. Auth tokens table (+ schema_migrations table)
@@ -188,6 +188,7 @@ Gateway DB (internal/database, `schema_migrations`), nine migrations:
 7. Ingest dead-letter queue (ingest_dlq) for dropped messages
 8. Alert history table (alert_history) for SRE audit trail
 9. messages_fts delete/update triggers find the row with a phrase MATCH on message_id (FTS index) instead of a full-table scan; ids with no ASCII letter/digit fall back to the scan via complementary `_scan` triggers (conduit-3dad). Triggers only, no data change.
+10. Data migration (Go func, migration_timestamps.go): rewrites messages.timestamp and sessions.created_at from legacy text (Go `time.String()` with zone + `m=+…`, RFC 3339, CURRENT_TIMESTAMP) into the canonical UTC `2006-01-02 15:04:05.000000000` layout that sessions.updated_at uses (conduit-a636). Idempotent; unparseable/non-text values are left untouched and logged; the messages UPDATE triggers are dropped and restored verbatim around the rewrite so messages_fts is not touched. The sessions store binds `FormatStoredTime` strings for these columns (never a raw time.Time, which the driver stores as `t.String()`).
 
 messages_fts is a standalone FTS5 table (own content, `message_id` column), so FTS5 'rebuild' cannot resync it with messages; `conduit maintenance run-task fts_rebuild [--dry-run]` (internal/maintenance/fts.go) deletes stale/outdated/duplicate index rows and indexes missing messages in one transaction, and `maintenance status` reports the drift.
 

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -177,7 +178,7 @@ func loadMaintenanceConfig(cfg *config.Config) (maintenance.Config, string, erro
 	source := "built-in defaults"
 	if cfg != nil {
 		mc := cfg.Maintenance
-		if mc.RetentionDays != 0 || len(mc.PrunablePrefixes) != 0 || mc.BatchSize != 0 || mc.BackupDir != "" {
+		if mc.RetentionDays != 0 || len(mc.PrunablePrefixes) != 0 || mc.BatchSize != 0 || mc.BackupDir != "" || mc.KeepBackups != nil {
 			source = "config file " + cfgFile + " (maintenance section) over built-in defaults"
 		}
 		if mc.RetentionDays > 0 {
@@ -193,6 +194,11 @@ func loadMaintenanceConfig(cfg *config.Config) (maintenance.Config, string, erro
 		m.Sessions.PrunablePrefixes = prefixes
 		m.Sessions.BackupDir = mc.BackupDir
 		m.Database.BackupDir = mc.BackupDir
+		if mc.KeepBackups != nil && *mc.KeepBackups < 0 {
+			return m, "", fmt.Errorf("maintenance.keep_backups must be >= 0 (got %d)", *mc.KeepBackups)
+		}
+		m.Sessions.KeepBackups = mc.EffectiveKeepBackups()
+		m.Database.KeepBackups = mc.EffectiveKeepBackups()
 	}
 
 	if maintenanceRetentionDays != 0 {
@@ -392,7 +398,14 @@ func showMaintenanceStatus(cmd *cobra.Command, args []string) error {
 	size, wal := fileSize(env.dbPath), fileSize(env.dbPath+"-wal")
 
 	if maintenanceJSONOutput {
+		// backups: existing backups (kept + removed) and what the rotation
+		// after the next backup would remove (conduit-16f0).
+		backups, berr := maintenance.PlanBackupRotation(env.dbPath, env.mcfg.Sessions.BackupDir, env.mcfg.Sessions.KeepBackups, 1)
+		if berr != nil {
+			return berr
+		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]interface{}{
+			"backups":    backups,
 			"database":   env.dbPath,
 			"size_bytes": size,
 			"wal_bytes":  wal,
@@ -432,6 +445,7 @@ func showMaintenanceStatus(cmd *cobra.Command, args []string) error {
 	default:
 		fmt.Fprintf(out, "\nSearch index (messages_fts): %s\nRepair with 'conduit maintenance run-task fts_rebuild'.\n", fts.Summary())
 	}
+	printBackupStatus(out, env.dbPath, env.mcfg.Sessions)
 	fmt.Fprintf(out, "\nNote: %s\n", maintenanceNoScheduleNote)
 	return nil
 }
@@ -459,6 +473,7 @@ func showMaintenanceConfig(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Batch Size: %d sessions per transaction\n", mc.Sessions.BatchSize)
 	fmt.Printf("  Backup Before Prune: %t\n", mc.Sessions.BackupBeforePrune)
 	fmt.Printf("  Backup Dir: %s\n", orDefault(mc.Sessions.BackupDir, "(next to the database)"))
+	fmt.Printf("  Keep Backups: %s\n", keepBackupsLabel(mc.Sessions.KeepBackups))
 
 	fmt.Println("\nDatabase Configuration:")
 	fmt.Printf("  Vacuum Enabled: %t\n", mc.Database.VacuumEnabled)
@@ -471,6 +486,62 @@ func showMaintenanceConfig(cmd *cobra.Command, args []string) error {
 
 func protectedPrefixes() []string {
 	return append([]string(nil), config.ProtectedSessionPrefixes...)
+}
+
+func keepBackupsLabel(n int) string {
+	if n <= 0 {
+		return "all (rotation off)"
+	}
+	return fmt.Sprintf("newest %d <db>.backup.<timestamp> files", n)
+}
+
+// printBackupStatus lists the maintenance backups of the database and what
+// the rotation after the next backup would remove (conduit-16f0).
+func printBackupStatus(out io.Writer, dbPath string, cfg maintenance.SessionConfig) {
+	rot, err := maintenance.PlanBackupRotation(dbPath, cfg.BackupDir, cfg.KeepBackups, 1)
+	if err != nil {
+		fmt.Fprintf(out, "\nBackups: %v\n", err)
+		return
+	}
+	all := append(append([]maintenance.BackupFile(nil), rot.Kept...), rot.Removed...)
+	var total int64
+	for _, b := range all {
+		total += b.Size
+	}
+	fmt.Fprintf(out, "\nBackups in %s: %d (%.1f MB); keep %s\n",
+		rot.Dir, len(all), float64(total)/(1<<20), keepBackupsLabel(cfg.KeepBackups))
+	if len(all) == 0 {
+		return
+	}
+	removed := make(map[string]bool, len(rot.Removed))
+	for _, b := range rot.Removed {
+		removed[b.Path] = true
+	}
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "  BACKUP\tTIME (UTC)\tSIZE\tNEXT BACKUP")
+	for _, b := range all {
+		next := "keep"
+		if removed[b.Path] {
+			next = "remove"
+		}
+		fmt.Fprintf(w, "  %s\t%s\t%.1f MB\t%s\n", filepath.Base(b.Path), fmtTime(b.Time), float64(b.Size)/(1<<20), next)
+	}
+	w.Flush()
+}
+
+// printBackupRotation renders the rotation done (or planned) after a backup.
+func printBackupRotation(out io.Writer, rot *maintenance.BackupRotation, dryRun bool) {
+	if rot == nil {
+		return
+	}
+	fmt.Fprintf(out, "Backups: %s\n", rot.Summary(dryRun))
+	for _, b := range rot.Removed {
+		verb := "removed"
+		if dryRun {
+			verb = "would remove"
+		}
+		fmt.Fprintf(out, "  %s %s\n", verb, filepath.Base(b.Path))
+	}
 }
 
 func orDefault(s, def string) string {
@@ -519,11 +590,13 @@ func printPruneReport(out io.Writer, rep *maintenance.PruneReport) {
 		rep.KeptRecent, rep.KeptUnparseable)
 
 	if rep.DryRun {
+		printBackupRotation(out, rep.BackupRotation, true)
 		return
 	}
 	if rep.BackupPath != "" {
 		fmt.Fprintf(out, "Backup: %s\n", rep.BackupPath)
 	}
+	printBackupRotation(out, rep.BackupRotation, false)
 	fmt.Fprintf(out, "Result: deleted %d sessions and %d messages in %d batches (%v)",
 		rep.SessionsDeleted, rep.MessagesDeleted, rep.Batches, rep.ExecuteDuration.Round(time.Millisecond))
 	if rep.SkippedChanged > 0 {

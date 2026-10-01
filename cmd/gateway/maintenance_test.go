@@ -311,3 +311,75 @@ func TestMaintenanceRunTask_FTSRebuild(t *testing.T) {
 		t.Fatalf("status after repair:\n%s", out)
 	}
 }
+
+// conduit-16f0: maintenance.keep_backups rotates <db>.backup.<ts> files after
+// a run's backup (never other files), dry run and status show the rotation,
+// and keep_backups 0 keeps everything.
+func TestMaintenanceRun_BackupRotation(t *testing.T) {
+	keep := 2
+	f := newMaintenanceFixture(t, config.MaintenanceConfig{RetentionDays: 30, KeepBackups: &keep})
+	var old []string
+	for i := 0; i < 3; i++ {
+		p := f.dbPath + ".backup." + time.Date(2026, 1, 1, i, 0, 0, 0, time.UTC).Format("20060102T150405.000Z")
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old = append(old, p)
+	}
+	manual := f.dbPath + ".bak-manual"
+	if err := os.WriteFile(manual, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	useMaintenanceFlags(t, f.cfgPath, "")
+
+	out := captureMaintenanceStdout(t, func() error { return showMaintenanceStatus(nil, nil) })
+	if !strings.Contains(out, "Backups in ") || !strings.Contains(out, "keep newest 2") || strings.Count(out, "remove\n") != 2 {
+		t.Fatalf("status lacks the backups:\n%s", out)
+	}
+	cfgOut := captureMaintenanceStdout(t, func() error { return showMaintenanceConfig(nil, nil) })
+	if !strings.Contains(cfgOut, "Keep Backups: newest 2") {
+		t.Fatalf("config output:\n%s", cfgOut)
+	}
+
+	maintenanceDryRun = true
+	out = captureMaintenanceStdout(t, func() error { return runSpecificMaintenanceTask(nil, []string{"session_cleanup"}) })
+	if !strings.Contains(out, "would remove 2 old backup(s)") {
+		t.Fatalf("dry run output:\n%s", out)
+	}
+	maintenanceDryRun = false
+	out = captureMaintenanceStdout(t, func() error { return runSpecificMaintenanceTask(nil, []string{"session_cleanup"}) })
+	if !strings.Contains(out, "removed 2 old backup(s)") {
+		t.Fatalf("run output:\n%s", out)
+	}
+	left, _ := filepath.Glob(f.dbPath + ".backup.*")
+	if len(left) != 2 {
+		t.Fatalf("backups left = %v", left)
+	}
+	for _, p := range []string{old[2], manual} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s removed", p)
+		}
+	}
+
+	// keep_backups 0: the config loads and rotation is off.
+	zero := 0
+	f2 := newMaintenanceFixture(t, config.MaintenanceConfig{KeepBackups: &zero})
+	cfgFile = f2.cfgPath
+	m, _, err := loadMaintenanceConfig(mustLoadConfig(t, f2.cfgPath))
+	if err != nil || m.Sessions.KeepBackups != 0 || m.Database.KeepBackups != 0 {
+		t.Fatalf("keep_backups 0 = %+v, %v", m, err)
+	}
+	m, _, err = loadMaintenanceConfig(nil)
+	if err != nil || m.Sessions.KeepBackups != 3 {
+		t.Fatalf("default keep = %d, %v", m.Sessions.KeepBackups, err)
+	}
+}
+
+func mustLoadConfig(t *testing.T, path string) *config.Config {
+	t.Helper()
+	cfg, err := loadExistingConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}

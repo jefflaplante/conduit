@@ -20,13 +20,12 @@ func BackupDatabase(ctx context.Context, db *sql.DB, dbPath, dir string, now tim
 	if dbPath == "" {
 		return "", errors.New("backup: database path not available")
 	}
-	if dir == "" {
-		dir = filepath.Dir(dbPath)
-	}
+	dir = backupDir(dbPath, dir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("backup: %w", err)
 	}
-	path := filepath.Join(dir, fmt.Sprintf("%s.backup.%s", filepath.Base(dbPath), now.UTC().Format("20060102T150405.000Z")))
+	// ListBackups/RotateBackups match exactly this name (conduit-16f0).
+	path := filepath.Join(dir, fmt.Sprintf("%s.backup.%s", filepath.Base(dbPath), now.UTC().Format(backupTimestampLayout)))
 
 	// VACUUM INTO accepts an existing empty file and keeps its mode.
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)

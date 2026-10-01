@@ -173,8 +173,8 @@ func (s *Store) SaveSession(session *Session) error {
 			session.Key,
 			session.UserID,
 			session.ChannelID,
-			session.CreatedAt,
-			nowUpdatedAt(), // conduit-31jg.24: canonical format
+			formatStoredTime(session.CreatedAt), // conduit-a636: canonical format
+			nowUpdatedAt(),                      // conduit-31jg.24: canonical format
 			session.MessageCount,
 			string(contextJSON),
 		)

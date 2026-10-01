@@ -5,15 +5,19 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
 
-// Migration represents a database migration
+// Migration represents a database migration. SQL runs first, then Func
+// (for data migrations that need Go, e.g. parsing timestamps); both run in
+// the migration's transaction, which also records the version.
 type Migration struct {
 	Version int
 	Name    string
 	SQL     string
+	Func    func(tx *sql.Tx) error
 }
 
 // GetMigrations returns all available migrations in order
@@ -249,6 +253,12 @@ func GetMigrations() []Migration {
 			Name:    "messages_fts_indexed_delete_triggers",
 			SQL:     messagesFTSIndexedTriggersSQL,
 		},
+		{
+			// conduit-a636: data only; see migration_timestamps.go.
+			Version: 10,
+			Name:    "normalize_message_session_timestamps",
+			Func:    normalizeTimestampsMigration,
+		},
 	}
 }
 
@@ -367,9 +377,16 @@ func runMigration(db *sql.DB, migration Migration) error {
 	}
 	defer tx.Rollback()
 
-	// Execute migration SQL
-	if _, err := tx.Exec(migration.SQL); err != nil {
-		return err
+	// Execute migration SQL, then the migration's Go function
+	if strings.TrimSpace(migration.SQL) != "" {
+		if _, err := tx.Exec(migration.SQL); err != nil {
+			return err
+		}
+	}
+	if migration.Func != nil {
+		if err := migration.Func(tx); err != nil {
+			return err
+		}
 	}
 
 	// Record migration as applied

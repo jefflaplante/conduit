@@ -48,7 +48,7 @@ func (s *Store) AddMessage(sessionKey, role, content string, metadata map[string
 			message.SessionKey,
 			message.Role,
 			message.Content,
-			message.Timestamp,
+			formatStoredTime(message.Timestamp), // conduit-a636: canonical UTC text
 			string(metadataJSON),
 		); err != nil {
 			return fmt.Errorf("failed to save message: %w", err)

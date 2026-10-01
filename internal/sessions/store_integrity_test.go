@@ -131,6 +131,55 @@ func TestUpdatedAt_NewWritesCanonical(t *testing.T) {
 	assert.Equal(t, 0, bad)
 }
 
+// conduit-a636: messages.timestamp and sessions.created_at are written in
+// the canonical UTC layout on every write path (not the driver's
+// time.String() text), read back to the same instant, and messages still
+// order correctly (a compaction summary sorts before the retained ones).
+func TestTimestamps_NewWritesCanonical(t *testing.T) {
+	s, _ := newIntegrityStore(t)
+	sess, err := s.GetOrCreateSession("u", "c")
+	require.NoError(t, err)
+	sess.CreatedAt = time.Date(2026, 1, 1, 8, 0, 0, 123, time.FixedZone("EST", -5*3600))
+	require.NoError(t, s.SaveSession(sess))
+	var msgs []*Message
+	for _, c := range []string{"one", "two", "three"} {
+		m, err := s.AddMessage(sess.Key, "user", c, nil)
+		require.NoError(t, err)
+		msgs = append(msgs, m)
+	}
+	_, err = s.ApplyCompaction(sess.Key, []string{msgs[0].ID}, CompactionSummary{Content: "summary", Before: msgs[1].Timestamp})
+	require.NoError(t, err)
+
+	canonical := func(q string) {
+		t.Helper()
+		rows, err := s.DB().Query(q)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var v string
+			require.NoError(t, rows.Scan(&v))
+			_, perr := time.Parse(updatedAtLayout, v)
+			assert.NoError(t, perr, "value %q", v)
+			assert.Len(t, v, len(updatedAtLayout), "value %q", v)
+		}
+	}
+	canonical(`SELECT CAST(timestamp AS TEXT) FROM messages`)
+	canonical(`SELECT CAST(created_at AS TEXT) FROM sessions`)
+
+	got, err := s.GetSession(sess.Key)
+	require.NoError(t, err)
+	assert.True(t, got.CreatedAt.Equal(sess.CreatedAt), "created_at %v, want %v", got.CreatedAt, sess.CreatedAt)
+
+	history, err := s.GetMessages(sess.Key, 0)
+	require.NoError(t, err)
+	var contents []string
+	for _, m := range history {
+		contents = append(contents, m.Content)
+	}
+	assert.Equal(t, []string{"summary", "two", "three"}, contents)
+	assert.True(t, history[1].Timestamp.Equal(msgs[1].Timestamp))
+}
+
 // conduit-31jg.24: AddMessage's insert and message_count update are one
 // transaction — if the count update fails, the message must not persist.
 func TestAddMessage_Atomic(t *testing.T) {

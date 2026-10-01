@@ -74,6 +74,11 @@ func (t *SessionCleanupTask) Execute(ctx context.Context) TaskResult {
 		return TaskResult{Success: false, Message: "Failed to plan session cleanup", Error: err}
 	}
 	if t.config.DryRun {
+		if rep.PruneSessions > 0 && t.config.BackupBeforePrune {
+			if rot, err := PlanBackupRotation(t.dbPath, t.config.BackupDir, t.config.KeepBackups, 1); err == nil {
+				rep.BackupRotation = rot
+			}
+		}
 		return TaskResult{
 			Success: true,
 			Details: rep,
@@ -86,12 +91,12 @@ func (t *SessionCleanupTask) Execute(ctx context.Context) TaskResult {
 	}
 
 	if t.config.BackupBeforePrune {
-		path, err := BackupDatabase(ctx, t.db, t.dbPath, t.config.BackupDir, t.now())
+		path, rot, err := BackupAndRotate(ctx, t.db, t.dbPath, t.config.BackupDir, t.config.KeepBackups, t.now())
 		if err != nil {
 			return TaskResult{Success: false, Details: rep, Message: "Backup failed; nothing deleted", Error: err}
 		}
-		rep.BackupPath = path
-		t.logger.Printf("[SessionCleanup] Backup written to %s", path)
+		rep.BackupPath, rep.BackupRotation = path, rot
+		t.logger.Printf("[SessionCleanup] Backup written to %s; %s", path, rot.Summary(false))
 	}
 
 	if err := ExecutePrune(ctx, t.db, rep, t.config.BatchSize); err != nil {

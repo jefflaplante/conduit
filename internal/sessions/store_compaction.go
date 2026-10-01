@@ -97,7 +97,7 @@ func (s *Store) ApplyCompaction(sessionKey string, compactedIDs []string, summar
 		if _, err := tx.Exec(`
 			INSERT INTO messages (id, session_key, role, content, timestamp, metadata)
 			VALUES (?, ?, ?, ?, ?, ?)
-		`, msg.ID, msg.SessionKey, msg.Role, msg.Content, msg.Timestamp, string(metadataJSON)); err != nil {
+		`, msg.ID, msg.SessionKey, msg.Role, msg.Content, formatStoredTime(msg.Timestamp), string(metadataJSON)); err != nil {
 			return fmt.Errorf("insert summary: %w", err)
 		}
 

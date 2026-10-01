@@ -24,11 +24,14 @@ import (
 // any unknown prefix) is kept, whatever its age. A session whose timestamps
 // cannot be parsed is kept.
 //
-// Timestamps are compared in Go, not SQL: messages.timestamp (and
-// sessions.created_at) hold the driver's default time.Time.String() rendering
-// ("2026-02-13 01:03:25.453024355 +0000 UTC m=+2227.79"), which carries the
-// process's zone and does not sort chronologically as text, and binding a
-// time.Time cutoff compares against that same rendering of the cutoff.
+// Timestamps are compared in Go, not SQL. Older gateway.db rows held the
+// driver's default time.Time.String() rendering in messages.timestamp and
+// sessions.created_at ("2026-02-13 01:03:25.453024355 +0000 UTC m=+2227.79"),
+// which carries the process's zone and does not sort chronologically as
+// text. Since conduit-a636 new rows are canonical UTC text and migration 10
+// rewrote the old ones, so SQL comparisons against sessions.FormatUpdatedAt
+// work; parsing in Go still copes with any value the migration had to leave
+// as it was (and a bound time.Time cutoff would still compare wrongly).
 //
 // Plan and Execute share the selection: a dry run reports exactly the
 // sessions Execute would delete. Execute re-checks each session inside its
@@ -98,16 +101,19 @@ type PruneReport struct {
 	KeptUnparseable int `json:"kept_unparseable"`
 
 	// Execution results (zero for a dry run).
-	BackupPath          string        `json:"backup_path,omitempty"`
-	SessionsDeleted     int           `json:"sessions_deleted"`
-	MessagesDeleted     int           `json:"messages_deleted"`
-	SummariesDeleted    int           `json:"summaries_deleted,omitempty"`
-	MappingsDeleted     int           `json:"claude_code_mappings_deleted,omitempty"`
-	SearchIndexDeleted  int           `json:"search_index_deleted,omitempty"`
-	SkippedChanged      int           `json:"skipped_changed"`
-	Batches             int           `json:"batches"`
-	ExecuteDuration     time.Duration `json:"execute_duration,omitempty"`
-	SearchIndexWarnings []string      `json:"search_index_warnings,omitempty"`
+	BackupPath string `json:"backup_path,omitempty"`
+	// BackupRotation is the rotation after the backup (conduit-16f0); in a
+	// dry run, the rotation the run would do after writing its backup.
+	BackupRotation      *BackupRotation `json:"backup_rotation,omitempty"`
+	SessionsDeleted     int             `json:"sessions_deleted"`
+	MessagesDeleted     int             `json:"messages_deleted"`
+	SummariesDeleted    int             `json:"summaries_deleted,omitempty"`
+	MappingsDeleted     int             `json:"claude_code_mappings_deleted,omitempty"`
+	SearchIndexDeleted  int             `json:"search_index_deleted,omitempty"`
+	SkippedChanged      int             `json:"skipped_changed"`
+	Batches             int             `json:"batches"`
+	ExecuteDuration     time.Duration   `json:"execute_duration,omitempty"`
+	SearchIndexWarnings []string        `json:"search_index_warnings,omitempty"`
 
 	candidates []pruneCandidate
 }
