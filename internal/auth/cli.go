@@ -39,22 +39,29 @@ func CreateTokenCmd(config *CLIConfig) *cobra.Command {
 	var (
 		clientName string
 		expiresIn  string
+		role       string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new authentication token",
-		Long:  `Create a new authentication token for a client. The token will be displayed once and cannot be retrieved again.`,
-		Example: `  conduit token create --client-name "jules-main" --expires-in "1y"
-  conduit token create --client-name "production-server"`,
+		Long: `Create a new authentication token for a client. The token will be displayed once and cannot be retrieved again.
+
+--role is required:
+  owner       the human operator: any session, may approve owner actions
+  automation  scripts/services: only sessions it creates, never approves`,
+		Example: `  conduit token create --client-name "laptop" --role owner --expires-in "1y"
+  conduit token create --client-name "backup-bot" --role automation`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return createToken(config, clientName, expiresIn)
+			return createToken(config, clientName, expiresIn, role)
 		},
 	}
 
 	cmd.Flags().StringVar(&clientName, "client-name", "", "Name of the client (required)")
 	cmd.Flags().StringVar(&expiresIn, "expires-in", "", "Expiration duration (e.g., '1y', '30d', '24h') - optional")
+	cmd.Flags().StringVar(&role, "role", "", "Token role: owner or automation (required)")
 	cmd.MarkFlagRequired("client-name")
+	cmd.MarkFlagRequired("role")
 
 	return cmd
 }
@@ -82,12 +89,11 @@ func ListTokensCmd(config *CLIConfig) *cobra.Command {
 // RevokeTokenCmd creates the token revoke command
 func RevokeTokenCmd(config *CLIConfig) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "revoke <token-prefix>",
-		Short: "Revoke an authentication token",
-		Long:  `Revoke an authentication token by its prefix. The token will be marked as inactive and can no longer be used.`,
-		Example: `  conduit token revoke claw_v1_8KzABC
-  conduit token revoke claw_v1_ABC123DEF456`,
-		Args: cobra.ExactArgs(1),
+		Use:     "revoke <token-id-prefix>",
+		Short:   "Revoke an authentication token",
+		Long:    `Revoke an authentication token by a prefix of its token ID (the ID column of 'conduit token list'). The token will be marked as inactive and can no longer be used.`,
+		Example: `  conduit token revoke 3f2a9c1e`,
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return revokeToken(config, args[0])
 		},
@@ -96,17 +102,32 @@ func RevokeTokenCmd(config *CLIConfig) *cobra.Command {
 	return cmd
 }
 
+// SetRoleCmd creates the token set-role command (conduit-31jg.67).
+func SetRoleCmd(config *CLIConfig) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-role <token-id-prefix> <owner|automation>",
+		Short: "Set a token's role",
+		Long: `Set the role of an existing token. Tokens created before roles existed have
+none and are treated as owner until tagged. The role applies to new
+connections; reconnect clients for it to take effect.`,
+		Example: `  conduit token set-role 3f2a9c1e automation`,
+		Args:    cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return setTokenRole(config, args[0], args[1])
+		},
+	}
+}
+
 // ExportTokenCmd creates the token export command
 func ExportTokenCmd(config *CLIConfig) *cobra.Command {
 	var format string
 
 	cmd := &cobra.Command{
-		Use:   "export <token-prefix>",
-		Short: "Export an authentication token for easy setup",
-		Long:  `Export an authentication token in various formats for easy environment setup.`,
-		Example: `  conduit token export claw_v1_8KzABC --format env
-  conduit token export claw_v1_ABC123DEF456`,
-		Args: cobra.ExactArgs(1),
+		Use:     "export <token-id-prefix>",
+		Short:   "Export an authentication token for easy setup",
+		Long:    `Export an authentication token in various formats for easy environment setup.`,
+		Example: `  conduit token export 3f2a9c1e --format env`,
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return exportToken(config, args[0], format)
 		},
@@ -129,6 +150,7 @@ func TokenRootCmd(config *CLIConfig) *cobra.Command {
 	cmd.AddCommand(CreateTokenCmd(config))
 	cmd.AddCommand(ListTokensCmd(config))
 	cmd.AddCommand(RevokeTokenCmd(config))
+	cmd.AddCommand(SetRoleCmd(config))
 	cmd.AddCommand(ExportTokenCmd(config))
 	cmd.AddCommand(InfoTokenCmd(config)) // conduit-31jg.48
 
@@ -136,10 +158,14 @@ func TokenRootCmd(config *CLIConfig) *cobra.Command {
 }
 
 // createToken handles token creation
-func createToken(config *CLIConfig, clientName, expiresIn string) error {
+func createToken(config *CLIConfig, clientName, expiresIn, role string) error {
 	// Validate input
 	if strings.TrimSpace(clientName) == "" {
 		return fmt.Errorf("client-name is required")
+	}
+	role, err := ParseRole(role)
+	if err != nil {
+		return err
 	}
 
 	// Parse expiration if provided
@@ -160,21 +186,11 @@ func createToken(config *CLIConfig, clientName, expiresIn string) error {
 	}
 	defer db.Close()
 
-	// Generate new token
-	token, err := tokenspkg.GenerateToken()
-	if err != nil {
-		return fmt.Errorf("failed to generate token: %w", err)
-	}
-
-	// Create token request (we need to modify the existing CreateToken method)
-	req := CreateTokenRequest{
+	resp, err := storage.CreateToken(CreateTokenRequest{
 		ClientName: clientName,
 		ExpiresAt:  expiresAt,
-		Metadata:   make(map[string]string),
-	}
-
-	// Store the token with our custom format
-	resp, err := storage.CreateTokenWithCustomFormat(req, token)
+		Metadata:   map[string]string{MetadataKeyRole: role},
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create token: %w", err)
 	}
@@ -183,13 +199,14 @@ func createToken(config *CLIConfig, clientName, expiresIn string) error {
 	fmt.Printf("✅ Token created successfully!\n\n")
 	fmt.Printf("Token: %s\n", resp.Token)
 	fmt.Printf("Client: %s\n", resp.TokenInfo.ClientName)
+	fmt.Printf("Role: %s\n", role)
 	fmt.Printf("Created: %s\n", resp.TokenInfo.CreatedAt.Format(time.RFC3339))
 	if resp.TokenInfo.ExpiresAt != nil {
 		fmt.Printf("Expires: %s\n", resp.TokenInfo.ExpiresAt.Format(time.RFC3339))
 	} else {
 		fmt.Printf("Expires: Never\n")
 	}
-	fmt.Printf("Token ID: %s\n", resp.TokenInfo.TokenID)
+	fmt.Printf("Token ID: %s (use %s with revoke/export/set-role)\n", resp.TokenInfo.TokenID, displayID(resp.TokenInfo.TokenID))
 
 	fmt.Printf("\n⚠️  Save this token now! It cannot be retrieved again.\n")
 	fmt.Printf("\nTo use this token, set the environment variable:\n")
@@ -224,11 +241,11 @@ func listTokens(config *CLIConfig, includeRevoked bool) error {
 
 	// Display tokens in table format
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PREFIX\tCLIENT\tCREATED\tEXPIRES\tLAST USED\tSTATUS")
-	fmt.Fprintln(w, "------\t------\t-------\t-------\t---------\t------")
+	fmt.Fprintln(w, "ID\tCLIENT\tROLE\tCREATED\tEXPIRES\tLAST USED\tSTATUS")
+	fmt.Fprintln(w, "--\t------\t----\t-------\t-------\t---------\t------")
 
 	for _, token := range tokenList {
-		prefix := tokenspkg.GetTokenPrefix("claw_v1_"+token.TokenID[:8], 12) // Show first 12 chars as prefix
+		prefix := displayID(token.TokenID)
 
 		status := "Active"
 		if !token.IsActive {
@@ -250,9 +267,15 @@ func listTokens(config *CLIConfig, includeRevoked bool) error {
 			lastUsed = token.LastUsedAt.Format("2006-01-02")
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		role, explicit := TokenRole(token.Metadata)
+		if !explicit {
+			role += " (default)"
+		}
+
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			prefix,
 			token.ClientName,
+			role,
 			token.CreatedAt.Format("2006-01-02"),
 			expires,
 			lastUsed,
@@ -297,6 +320,34 @@ func revokeToken(config *CLIConfig, tokenPrefix string) error {
 	fmt.Printf("Created: %s\n", tokenInfo.CreatedAt.Format(time.RFC3339))
 	fmt.Printf("Revoked: %s\n", time.Now().Format(time.RFC3339))
 
+	return nil
+}
+
+// setTokenRole handles token set-role (conduit-31jg.67).
+func setTokenRole(config *CLIConfig, tokenPrefix, role string) error {
+	role, err := ParseRole(role)
+	if err != nil {
+		return err
+	}
+	storage, db, err := openTokenStorage(config)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	tokenID, err := findTokenByPrefix(storage, tokenPrefix)
+	if err != nil {
+		return err
+	}
+	if err := storage.SetTokenRole(tokenID, role); err != nil {
+		return fmt.Errorf("failed to set role: %w", err)
+	}
+	info, err := storage.GetTokenInfo(tokenID)
+	if err != nil {
+		return fmt.Errorf("failed to get token info: %w", err)
+	}
+	fmt.Printf("✅ Role set to %s for %s (%s).\n", role, tokenPrefix, info.ClientName)
+	fmt.Printf("Clients already connected keep their old role until they reconnect.\n")
 	return nil
 }
 
@@ -455,8 +506,20 @@ func parseDuration(s string) (time.Duration, error) {
 	return time.ParseDuration(s)
 }
 
-// findTokenByPrefix finds a token ID by matching a prefix
+// displayID is the short token-ID prefix shown by `token list` and
+// accepted by revoke/export/set-role. Token IDs are UUIDs; the raw token is
+// never stored, so it cannot be shown (conduit-3ryz: this used to print a
+// made-up "claw_v1_" token prefix).
+func displayID(tokenID string) string {
+	return tokenspkg.GetTokenPrefix(tokenID, 8)
+}
+
+// findTokenByPrefix finds a token by a prefix of its token ID.
 func findTokenByPrefix(storage *TokenStorage, prefix string) (string, error) {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return "", fmt.Errorf("token ID prefix is required")
+	}
 	// List all tokens (including revoked ones for potential match)
 	tokens, err := storage.ListTokens("", true)
 	if err != nil {
@@ -465,26 +528,23 @@ func findTokenByPrefix(storage *TokenStorage, prefix string) (string, error) {
 
 	var matches []TokenInfo
 	for _, token := range tokens {
-		// Create a display prefix from token ID (since we don't store the actual token)
-		displayPrefix := tokenspkg.GetTokenPrefix("claw_v1_"+token.TokenID[:8], 12)
-		if strings.HasPrefix(displayPrefix, prefix) {
+		if strings.HasPrefix(token.TokenID, prefix) {
 			matches = append(matches, token)
 		}
 	}
 
 	if len(matches) == 0 {
-		return "", fmt.Errorf("no token found matching prefix: %s", prefix)
+		return "", fmt.Errorf("no token found with ID prefix %q (see `conduit token list`)", prefix)
 	}
 
 	if len(matches) > 1 {
 		fmt.Printf("Multiple tokens match prefix '%s':\n", prefix)
 		for _, match := range matches {
-			displayPrefix := tokenspkg.GetTokenPrefix("claw_v1_"+match.TokenID[:8], 12)
 			status := "Active"
 			if !match.IsActive {
 				status = "Revoked"
 			}
-			fmt.Printf("  %s (%s) - %s\n", displayPrefix, match.ClientName, status)
+			fmt.Printf("  %s (%s) - %s\n", displayID(match.TokenID), match.ClientName, status)
 		}
 		return "", fmt.Errorf("ambiguous prefix, please provide more characters")
 	}

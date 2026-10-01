@@ -51,13 +51,12 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		g.monitoring.MetricsCollector.MarkActivity()
 	}
 
-	// Determine user ID: prefer message field, fall back to client field
-	userID := msg.UserID
-	if userID == "" {
-		userID = client.UserID
-	}
-	if userID == "" {
-		userID = client.Role // fall back to client name
+	// Determine user ID: prefer message field, fall back to client field.
+	// Only owner tokens may name another user (conduit-31jg.67).
+	userID, ok := wsUserID(client, msg.UserID)
+	if !ok {
+		g.sendErrorToClient(client, msg.SessionKey, "forbidden", "This token may only act as its own user")
+		return
 	}
 
 	// Determine session key
@@ -71,6 +70,11 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	var err error
 	if sessionKey != "" {
 		session, err = g.sessions.GetSession(sessionKey)
+	}
+	if session != nil && !wsCanAccessSession(client, session) {
+		g.logger.Warn("websocket session access denied", "client", client.Role, "session_key", sessionKey)
+		g.sendErrorToClient(client, sessionKey, "forbidden", "This token cannot access that session")
+		return
 	}
 	if session == nil {
 		channelID := fmt.Sprintf("tui_%s", userID)
@@ -86,11 +90,11 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	client.SetSessionKey(session.Key) // conduit-31jg.25
 
 	// conduit-31jg.43: consume approval replies before the transcript and the
-	// per-session turn lock (see approval_wiring.go).
-	notify := g.wsApprovalNotifier(client, session.Key)
-	if g.approvals.HandleReply(ctx, approval.Inbound{
+	// per-session turn lock (see approval_wiring.go). Only owner tokens may
+	// approve (conduit-31jg.55).
+	if client.Owner && g.approvals.HandleReply(ctx, approval.Inbound{
 		ChannelID: session.ChannelID, UserID: userID, SessionKey: session.Key,
-		Text: msg.Text, Notify: notify,
+		Text: msg.Text, Notify: g.wsApprovalNotifier(client, session.Key),
 	}) {
 		return
 	}
@@ -115,15 +119,14 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	// conduit-31jg.35: the shared TurnRunner owns the turn lock, transcript
 	// persistence (inside the lock, conduit-31jg.22), /stop registration
 	// (conduit-31jg.23), SPAR reflection, cost and compaction.
+	origin, nonInteractive := g.wsTurnOrigin(client, session, userID) // conduit-31jg.43/.55
 	g.turns().Run(ctx, TurnRequest{
-		Session:   session,
-		ChannelID: session.ChannelID,
-		UserID:    userID,
-		Text:      msg.Text,
-		Origin: &approval.Origin{ // conduit-31jg.43
-			Source: "websocket", ChannelID: session.ChannelID, UserID: userID,
-			SessionKey: session.Key, Notify: notify,
-		},
-		SanitizeStored: true,
+		Session:              session,
+		ChannelID:            session.ChannelID,
+		UserID:               userID,
+		Text:                 msg.Text,
+		Origin:               origin,
+		NonInteractiveSource: nonInteractive,
+		SanitizeStored:       true,
 	}, &wsTurnSink{g: g, client: client, sessionKey: session.Key, requestID: requestID})
 }

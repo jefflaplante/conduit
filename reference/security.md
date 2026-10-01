@@ -244,7 +244,7 @@ We protect against:
 #### Creation Phase
 
 ```bash
-conduit token create --client-name "my-app" --expires-in "90d"
+conduit token create --client-name "my-app" --role automation --expires-in "90d"
 ```
 
 **What happens:**
@@ -282,7 +282,7 @@ curl -H "Authorization: Bearer conduit_abc123..." http://localhost:18789/api/...
 
 ```bash
 # Create new token
-conduit token create --client-name "my-app"
+conduit token create --client-name "my-app" --role automation
 
 # Update application with new token
 
@@ -800,7 +800,7 @@ sqlite3 gateway.db "UPDATE auth_tokens SET is_active = 0 WHERE token_id != '';"
 
 # 2. Create new tokens for all clients
 for client in $(openclw-go token list | awk '{print $2}'); do
-    conduit token create --client-name "$client"
+    conduit token create --client-name "$client" --role automation
 done
 
 # 3. Distribute new tokens securely
@@ -889,7 +889,7 @@ done
 # After 100 requests, should get 429
 
 # 5. Expired token
-conduit token create --client-name test --expires-in "-1h"
+conduit token create --client-name test --role owner --expires-in "-1h"
 # Should be rejected immediately
 ```
 

@@ -46,6 +46,16 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 		})
 	}
 
+	// Commands read and change session state (/stop, /reset, /model ...):
+	// a non-owner token may only target its own sessions (conduit-31jg.67).
+	if !client.Owner && sessionKey != "" {
+		if s, err := g.sessions.GetSession(sessionKey); err == nil && !wsCanAccessSession(client, s) {
+			g.logger.Warn("websocket command denied: session not owned by token", "client", client.Role, "session_key", sessionKey, "command", command)
+			g.sendErrorToClient(client, sessionKey, "forbidden", "This token cannot access that session")
+			return
+		}
+	}
+
 	switch {
 	case text == "/goodbye" || text == "/end":
 		// SPAR reflection: fire high-confidence reflection, then end session

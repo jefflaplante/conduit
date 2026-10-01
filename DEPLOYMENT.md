@@ -228,7 +228,7 @@ podman run -d --name conduit \
 
 curl -fsS http://localhost:18789/health
 podman exec conduit conduit status
-podman exec conduit conduit --config /etc/conduit/config.json token create --client-name my-client
+podman exec conduit conduit --config /etc/conduit/config.json token create --client-name my-client --role owner
 ```
 
 Pass `--config /etc/conduit/config.json` to CLI commands run with `exec` that read the config (`token`, `pairing`, `backup`); the working directory is `/data`, and the default `--config config.json` would otherwise create a fresh default config there.

@@ -68,7 +68,7 @@ func (e *tokenTestEnv) cliCreateToken(t *testing.T) (token, diag string) {
 	t.Helper()
 	var stderr bytes.Buffer
 	cmd := auth.TokenRootCmd(&auth.CLIConfig{ConfigPath: e.cfgPath, Stderr: &stderr})
-	cmd.SetArgs([]string{"create", "--client-name", "regression"})
+	cmd.SetArgs([]string{"create", "--client-name", "regression", "--role", "automation"})
 	cmd.SetErr(io.Discard)
 	cmd.SetOut(io.Discard)
 

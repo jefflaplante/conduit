@@ -55,26 +55,44 @@ tokens still validate and are re-hashed to v2 on first use.
 Create a token for a client:
 
 ```bash
-conduit token create --client-name "my-app"
+conduit token create --client-name "my-app" --role automation
 ```
 
 This returns a token that looks like:
 
 ```
-Token: conduit_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0...
-TokenID: uuid-string-here
-ClientName: my-app
-CreatedAt: 2026-02-07T21:00:00Z
+Token: conduit_v1_3mJr7AsRZ5Wy9kQ2pXe8hT...
+Client: my-app
+Role: automation
+Token ID: 3f2a9c1e-... (use 3f2a9c1e with revoke/export/set-role)
 ```
 
 **Important:** The raw token is only displayed once. Store it securely immediately.
+
+#### Token Roles
+
+`--role` is required and controls what a WebSocket client using the token may do:
+
+| Role | Sessions | Approvals | Turns |
+|------|----------|-----------|-------|
+| `owner` | any session, may act as any user ID | may approve owner actions (e.g. sending email as the owner) | interactive |
+| `automation` | only sessions whose user is the token's client name; cannot name another user ID | never | non-interactive: owner-account actions fail closed instead of prompting |
+
+Give `owner` only to clients you use yourself. Tokens created before roles
+existed have none and are treated as `owner`; the gateway logs a warning for
+each until it is tagged:
+
+```bash
+conduit token list                          # ROLE column shows "owner (default)" for untagged tokens
+conduit token set-role 3f2a9c1e automation  # takes effect when the client reconnects
+```
 
 #### Token with Expiration
 
 Create a token that expires in 1 year:
 
 ```bash
-conduit token create --client-name "julian-ai" --expires-in "1y"
+conduit token create --client-name "julian-ai" --role automation --expires-in "1y"
 ```
 
 Supported expiration formats:
@@ -91,6 +109,7 @@ Create a token with custom metadata:
 ```bash
 conduit token create \
   --client-name "prod-server" \
+  --role automation \
   --metadata "environment=production" \
   --metadata "version=2.0"
 ```
@@ -122,7 +141,7 @@ Output shows:
 Revoke a token by its ID:
 
 ```bash
-conduit token revoke conduit_v1_abc123...
+conduit token revoke 3f2a9c1e   # ID prefix from `conduit token list`
 ```
 
 Or by ID:
@@ -138,7 +157,7 @@ Once revoked, the token cannot be used. This action is immediate and irreversibl
 Export a token as an environment variable:
 
 ```bash
-conduit token export conduit_abc123... --format env
+conduit token export 3f2a9c1e --format env
 ```
 
 Output:
@@ -289,6 +308,7 @@ Create a long-lived token for Jules:
 # Create a token valid for 1 year
 conduit token create \
   --client-name "jules-main" \
+  --role owner \
   --expires-in "1y"
 ```
 
@@ -337,7 +357,7 @@ Jules automatically uses the `CONDUIT_TOKEN` environment variable when making re
 3. **Rotate tokens periodically**
    ```bash
    # Create replacement token
-   conduit token create --client-name "my-app"
+   conduit token create --client-name "my-app" --role automation
    
    # Update your application with new token
    
@@ -356,6 +376,7 @@ Add context to tokens using metadata:
 ```bash
 conduit token create \
   --client-name "production-worker" \
+  --role automation \
   --expires-in "90d" \
   --metadata "environment=prod" \
   --metadata "owner=devops@example.com" \
@@ -544,6 +565,7 @@ The `?token=` query parameter is accepted **only on the `/ws` WebSocket upgrade*
    conduit token create \
      --config /path/to/config.json \
      --client-name "my-app"
+     --role automation \
    ```
 
 4. Check server isn't running (would lock database):

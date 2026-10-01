@@ -130,7 +130,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/fts/ — FTS5 full-text search: document chunking, indexing, and search queries (Porter stemming, unicode61 tokenizer)
 - internal/ftsquery/ — Turns free-text user queries into safe FTS5 MATCH expressions
 - internal/searchdb/ — Dedicated search.db with FTS5 indexes (document chunks, beads, messages, brain LTM). Includes BeadsIndexer, BrainIndexer, MessageSyncer
-- internal/auth/ — Token auth (128-bit entropy, Base58, SHA256 hash storage), OAuth support, CLI token management
+- internal/auth/ — Token auth (conduit_v1_ tokens: 128-bit entropy, Base58, HMAC-SHA256 hash storage), OAuth support, CLI token management. Token roles (roles.go) live in auth_tokens.metadata["role"]: owner (any session, may approve) or automation (own sessions only, never approves, non-interactive turns); untagged tokens are owner. WebSocket enforcement is in gateway/ws_access.go
 - internal/backup/ — Backup/restore system: create tar.gz archives of database, config, workspace, SSH keys, skills; restore with dry-run support; list/inspect archives
 - internal/middleware/ — HTTP auth, WebSocket auth, rate limiting. RequestID middleware (request_id.go) injects a `request_id` into every request context; slog-based structured logging uses it for correlation throughout auth and rate-limit handlers.
 - internal/ratelimit/ — Sliding window rate limiter implementation

@@ -48,7 +48,7 @@ For a complete new installation:
 make init
 
 # Create your first authentication token
-./bin/conduit token create --client-name "my-client" --expires-in "1y"
+./bin/conduit token create --client-name "my-client" --role owner --expires-in "1y"
 
 # Start the gateway
 ./bin/conduit server --verbose

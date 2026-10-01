@@ -47,7 +47,7 @@ A rewrite of the Conduit gateway core in Go (single static binary, pure-Go SQLit
 make build
 
 # Create auth token
-./bin/conduit token create --client-name "my-client"
+./bin/conduit token create --client-name "my-client" --role owner
 
 # Start server
 ./bin/conduit server

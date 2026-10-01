@@ -10,12 +10,12 @@ import (
 
 // handleWebSocketSessionSwitch handles session management requests
 func (g *Gateway) handleWebSocketSessionSwitch(client *Client, msg *protocol.SessionSwitch) {
-	userID := msg.UserID
-	if userID == "" {
-		userID = client.UserID
-	}
-	if userID == "" {
-		userID = client.Role
+	// Only owner tokens may create, switch to or list another user's
+	// sessions (conduit-31jg.67).
+	userID, ok := wsUserID(client, msg.UserID)
+	if !ok {
+		g.sendErrorToClient(client, "", "forbidden", "This token may only act as its own user")
+		return
 	}
 
 	switch msg.Action {
@@ -51,6 +51,11 @@ func (g *Gateway) handleWebSocketSessionSwitch(client *Client, msg *protocol.Ses
 		session, err := g.sessions.GetSession(msg.SessionKey)
 		if err != nil {
 			g.sendErrorToClient(client, "", "session_error", fmt.Sprintf("Session not found: %v", err))
+			return
+		}
+		if !wsCanAccessSession(client, session) {
+			g.logger.Warn("websocket session switch denied", "client", client.Role, "session_key", msg.SessionKey)
+			g.sendErrorToClient(client, "", "forbidden", "This token cannot access that session")
 			return
 		}
 

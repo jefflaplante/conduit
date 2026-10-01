@@ -6,7 +6,6 @@ import (
 	"log"
 	"time"
 
-	"conduit/internal/approval"
 	"conduit/internal/channels"
 )
 
@@ -34,10 +33,8 @@ func (g *Gateway) handleReflectiveSessionEnd(ctx context.Context, client *Client
 			reflCtx, reflCancel := context.WithTimeout(ctx, 30*time.Second)
 			defer reflCancel()
 
-			userID := client.UserID
-			if userID == "" {
-				userID = client.Role
-			}
+			userID := wsIdentity(client)
+			origin, nonInteractive := g.wsTurnOrigin(client, session, userID) // conduit-31jg.43/.55
 			sink := &goodbyeTurnSink{wsTurnSink: wsTurnSink{
 				g: g, client: client, sessionKey: sessionKey,
 				requestID: fmt.Sprintf("refl_%d", time.Now().UnixNano()),
@@ -50,13 +47,11 @@ func (g *Gateway) handleReflectiveSessionEnd(ctx context.Context, client *Client
 				// Transcript shows what the user typed, not the internal
 				// prompt (matters if the reflection is stopped and the
 				// session continues).
-				StoreText: "/goodbye",
-				Origin: &approval.Origin{ // conduit-31jg.43: the user typed /goodbye
-					Source: "websocket", ChannelID: session.ChannelID, UserID: userID,
-					SessionKey: sessionKey, Notify: g.wsApprovalNotifier(client, sessionKey),
-				},
-				SanitizeStored: true,
-				SkipReflection: true, // this turn IS the reflection
+				StoreText:            "/goodbye",
+				Origin:               origin, // conduit-31jg.43: the user typed /goodbye
+				NonInteractiveSource: nonInteractive,
+				SanitizeStored:       true,
+				SkipReflection:       true, // this turn IS the reflection
 			}, sink)
 			switch {
 			case !sink.ran:

@@ -3,10 +3,12 @@ package auth
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"conduit/internal/database"
+	tokenspkg "conduit/internal/tokens"
 	_ "modernc.org/sqlite"
 )
 
@@ -111,8 +113,9 @@ func TestCreateToken(t *testing.T) {
 				t.Error("Expected non-empty token")
 			}
 
-			if resp.Token[:8] != "conduit_" {
-				t.Errorf("Expected token to have 'conduit_' prefix, got '%s'", resp.Token[:8])
+			// conduit-3ryz: one format, the CLI's conduit_v1_ base58 token.
+			if !strings.HasPrefix(resp.Token, tokenspkg.TokenPrefix) {
+				t.Errorf("Expected token to have %q prefix, got %q", tokenspkg.TokenPrefix, resp.Token)
 			}
 
 			if resp.TokenInfo.TokenID == "" {

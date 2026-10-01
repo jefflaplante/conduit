@@ -84,7 +84,7 @@ fmt.Printf("Token ID: %s\n", resp.TokenInfo.TokenID)
 
 ```go
 // Validate a token (updates last_used_at)
-tokenInfo, err := storage.ValidateToken("claw_v1_abc123...")
+tokenInfo, err := storage.ValidateToken("conduit_v1_abc123...")
 if err != nil {
     // Token is invalid, expired, or revoked
     return fmt.Errorf("invalid token: %w", err)
@@ -143,9 +143,9 @@ fmt.Printf("Cleaned up %d expired tokens\n", deletedCount)
 
 ## Token Format
 
-Generated tokens have the format: `conduit_v1_<base58-random>` (new) or `claw_v1_<base58-random>` (legacy)
+Generated tokens have the format `conduit_v1_<base58-random>` (`TokenStorage.CreateToken`, used by the CLI). Older tokens in other formats (`conduit_<hex>`, `claw_v1_...`) still validate: lookup is by hash, not format
 
-- **Prefix**: `conduit_v1_` (new) or `claw_v1_` (legacy) for easy identification
+- **Prefix**: `conduit_v1_` for easy identification
 - **Random Data**: 32 bytes (256 bits) of cryptographically secure random data
 - **Encoding**: Hexadecimal encoding
 - **Total Length**: 72 characters

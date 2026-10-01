@@ -36,20 +36,23 @@ Manage authentication tokens for API access.
 
 ```bash
 # Create a new token
-conduit token create --client-name "my-app" --expires-in "1y"
-conduit token create --client-name "temp" --expires-in "7d"
+conduit token create --client-name "my-app" --role automation --expires-in "1y"
+conduit token create --client-name "temp" --role automation --expires-in "7d"
 
-# List all active tokens
+# List all active tokens (ID prefix, client, role, ...)
 conduit token list
 
+# Set a token's role: owner (you) or automation (scripts; own sessions only, never approves)
+conduit token set-role 3f2a9c1e automation
+
 # Revoke a token
-conduit token revoke conduit_v1_abc123
+conduit token revoke 3f2a9c1e   # ID prefix from `conduit token list`
 
 # Show which database and token-secret source (never the secret) are used
 conduit token info
 
 # Export token for environment variable
-conduit token export conduit_v1_abc123 --format env
+conduit token export 3f2a9c1e --format env
 ```
 
 ### tui

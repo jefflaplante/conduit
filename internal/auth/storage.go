@@ -2,7 +2,6 @@ package auth
 
 import (
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	tokenspkg "conduit/internal/tokens"
 
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
@@ -129,75 +130,19 @@ func (ts *TokenStorage) OnRevoke(cb RevocationCallback) {
 	ts.onRevoke = cb
 }
 
-// CreateToken generates and stores a new authentication token
+// CreateToken generates and stores a new authentication token in the
+// conduit_v1_ format (internal/tokens: 128-bit base58 with checksum). It is
+// the only way tokens are created; the CLI uses it too (conduit-3ryz).
 func (ts *TokenStorage) CreateToken(req CreateTokenRequest) (*CreateTokenResponse, error) {
-	if len(ts.secret) == 0 {
-		return nil, ErrNoTokenSecret // conduit-31jg.48: fail closed
-	}
-	// Validate input
-	if strings.TrimSpace(req.ClientName) == "" {
-		return nil, fmt.Errorf("client_name is required")
-	}
-
-	// Generate token
-	tokenBytes := make([]byte, 32) // 256 bits
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return nil, fmt.Errorf("failed to generate random token: %w", err)
-	}
-
-	// Create token string with prefix for easy identification
-	rawToken := "conduit_" + hex.EncodeToString(tokenBytes)
-
-	// Hash token for storage using HMAC-SHA256
-	hashedToken := ts.hashTokenHMAC(rawToken)
-
-	// Generate token ID
-	tokenID := uuid.New().String()
-
-	// Prepare metadata
-	metadata := req.Metadata
-	if metadata == nil {
-		metadata = make(map[string]string)
-	}
-	metadataJSON, err := json.Marshal(metadata)
+	rawToken, err := tokenspkg.GenerateToken()
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal metadata: %w", err)
+		return nil, fmt.Errorf("failed to generate token: %w", err)
 	}
-
-	// Insert into database with hash_version = 2 (HMAC-SHA256)
-	_, err = ts.db.Exec(`
-		INSERT INTO auth_tokens
-		(token_id, client_name, hashed_token, hash_version, created_at, expires_at, is_active, metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`,
-		tokenID,
-		strings.TrimSpace(req.ClientName),
-		hashedToken,
-		HashVersionHMACSHA256,
-		time.Now(),
-		req.ExpiresAt,
-		true,
-		string(metadataJSON),
-	)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to store token: %w", err)
-	}
-
-	// Retrieve the created token for response
-	tokenInfo, err := ts.GetTokenInfo(tokenID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve created token: %w", err)
-	}
-
-	return &CreateTokenResponse{
-		Token:     rawToken,
-		TokenInfo: *tokenInfo,
-	}, nil
+	return ts.storeToken(req, rawToken)
 }
 
-// CreateTokenWithCustomFormat creates a token with a custom provided token string
-func (ts *TokenStorage) CreateTokenWithCustomFormat(req CreateTokenRequest, rawToken string) (*CreateTokenResponse, error) {
+// storeToken stores rawToken (hashed) for req.
+func (ts *TokenStorage) storeToken(req CreateTokenRequest, rawToken string) (*CreateTokenResponse, error) {
 	// Validate input
 	if strings.TrimSpace(req.ClientName) == "" {
 		return nil, fmt.Errorf("client_name is required")

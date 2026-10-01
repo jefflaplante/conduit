@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"conduit/internal/auth"
 	"conduit/internal/protocol"
 	"conduit/internal/version"
 
@@ -19,8 +20,11 @@ type Client struct {
 	Role    string // "client" or "node"
 	UserID  string // user identity for session scoping
 	TokenID string // auth token ID used for this connection (for revocation)
-	Conn    *websocket.Conn
-	Send    chan []byte
+	// Owner is true for owner-role tokens (conduit-31jg.67/.55). Non-owner
+	// clients are confined to their own sessions and cannot approve.
+	Owner bool
+	Conn  *websocket.Conn
+	Send  chan []byte
 
 	// CloseFrame carries an out-of-band signal from off-goroutine callers
 	// (e.g. RevokeClientByToken running on the auth-revoke hook) asking the
@@ -133,11 +137,18 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	role, explicitRole := auth.TokenRole(authResult.AuthInfo.Metadata)
+	if !explicitRole {
+		g.logger.Warn("token has no role; treating it as owner — tag it with `conduit token set-role`",
+			"client", authResult.AuthInfo.ClientName, "token_id", authResult.AuthInfo.TokenID, "default_role", role)
+	}
+
 	client := &Client{
 		ID:         fmt.Sprintf("client_%d", time.Now().UnixNano()),
 		Role:       authResult.AuthInfo.ClientName, // Store authenticated client name
 		UserID:     authResult.AuthInfo.ClientName, // Default user identity from auth
 		TokenID:    authResult.AuthInfo.TokenID,    // Track token for revocation
+		Owner:      role == auth.RoleOwner,
 		Conn:       conn,
 		Send:       make(chan []byte, 256),
 		CloseFrame: make(chan []byte, 1),
@@ -153,7 +164,7 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		g.monitoring.MetricsCollector.UpdateWebSocketConnections(clientCount)
 	}
 
-	g.logger.Info("client connected", "client_id", client.ID, "auth", authResult.AuthInfo.ClientName)
+	g.logger.Info("client connected", "client_id", client.ID, "auth", authResult.AuthInfo.ClientName, "role", role)
 
 	// Send enriched gateway info to client
 	toolCount := len(g.tools.GetAvailableTools())

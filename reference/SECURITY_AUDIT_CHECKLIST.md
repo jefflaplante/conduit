@@ -154,7 +154,7 @@ Complete this checklist to verify the authentication system is production-ready 
 ### Token Management
 
 - [x] **Tokens can be created with CLI**
-  - Verification method: `conduit token create --client-name "test"`
+  - Verification method: `conduit token create --client-name "test" --role owner`
   - Expected: Token displayed once
   - Result: ✓ PASS
 

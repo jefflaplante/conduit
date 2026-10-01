@@ -103,7 +103,7 @@ func LoadOrCreateConfig(url, token, dbPath string) (*TUIConfig, error) {
 
 	// Validate
 	if cfg.Token == "" {
-		return nil, fmt.Errorf("no authentication token available; use --token or run 'conduit token create --client-name tui'")
+		return nil, fmt.Errorf("no authentication token available; use --token or run 'conduit token create --client-name tui --role owner'")
 	}
 
 	return cfg, nil

@@ -13,7 +13,7 @@ The TUI is a full-featured terminal chat client powered by [BubbleTea](https://g
 ./bin/conduit server
 
 # 2. Create an auth token
-./bin/conduit token create --client-name "tui"
+./bin/conduit token create --client-name "tui" --role owner
 # Save the token output
 
 # 3. Launch the TUI (in another terminal). Read the token into a variable
@@ -90,7 +90,7 @@ The gateway can serve the TUI over SSH using [Wish](https://github.com/charmbrac
 ./bin/conduit ssh-keys add ~/.ssh/id_ed25519.pub
 
 # 3. Create a gateway token for the SSH server
-./bin/conduit token create --client-name "ssh-server"
+./bin/conduit token create --client-name "ssh-server" --role owner
 ```
 
 ### Running the SSH Server

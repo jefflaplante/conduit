@@ -124,19 +124,19 @@ Raw tokens are never compared directly: `TokenStorage.ValidateToken` computes an
 ### HTTP Headers
 
 ```http
-Authorization: Bearer claw_v1_abc123
+Authorization: Bearer conduit_v1_abc123
 ```
 
 or
 
 ```http
-X-API-Key: claw_v1_abc123
+X-API-Key: conduit_v1_abc123
 ```
 
 ### Query Parameter
 
 ```
-/api/data?token=claw_v1_abc123
+/api/data?token=conduit_v1_abc123
 ```
 
 **Note**: Query parameter auth is less secure (token may appear in logs/history). Prefer headers when possible.
@@ -144,7 +144,7 @@ X-API-Key: claw_v1_abc123
 ### WebSocket Subprotocol
 
 ```http
-Sec-WebSocket-Protocol: conduit-auth, claw_v1_abc123
+Sec-WebSocket-Protocol: conduit-auth, conduit_v1_abc123
 ```
 
 The server echoes back `conduit-auth` to confirm protocol acceptance.

@@ -9,13 +9,16 @@ import (
 	"conduit/internal/protocol"
 )
 
-// newTestWSClient returns a Client with a buffered Send channel so sendToClient
-// and sendErrorToClient can be inspected by the test.
+// newTestWSClient returns an owner-role Client with a buffered Send channel
+// so sendToClient and sendErrorToClient can be inspected by the test. Owner:
+// these tests act on sessions of other users as the operator's own client
+// does; non-owner access is covered in ws_access_test.go.
 func newTestWSClient(id string) *Client {
 	return &Client{
-		ID:   id,
-		Role: "client",
-		Send: make(chan []byte, 32),
+		ID:    id,
+		Role:  "client",
+		Send:  make(chan []byte, 32),
+		Owner: true,
 	}
 }
 
