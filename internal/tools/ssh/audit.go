@@ -17,20 +17,23 @@ import (
 
 // AuditEntry represents a single audit log entry
 type AuditEntry struct {
-	Timestamp    time.Time `json:"timestamp"`
-	SessionID    string    `json:"session_id,omitempty"`
-	UserID       string    `json:"user_id,omitempty"`
-	Host         string    `json:"host"`
-	Command      string    `json:"command"`
-	SecurityTier string    `json:"security_tier,omitempty"`
-	Approved     bool      `json:"approved"`
-	ApprovedBy   string    `json:"approved_by,omitempty"`
-	ExitCode     int       `json:"exit_code"`
-	Duration     string    `json:"duration"`
-	Stdout       string    `json:"stdout,omitempty"`
-	Stderr       string    `json:"stderr,omitempty"`
-	Error        string    `json:"error,omitempty"`
-	TimedOut     bool      `json:"timed_out,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+	// Action names a non-command event such as "session_start" or
+	// "session_close" (conduit-1kxf); empty for executed commands.
+	Action       string `json:"action,omitempty"`
+	SessionID    string `json:"session_id,omitempty"`
+	UserID       string `json:"user_id,omitempty"`
+	Host         string `json:"host"`
+	Command      string `json:"command"`
+	SecurityTier string `json:"security_tier,omitempty"`
+	Approved     bool   `json:"approved"`
+	ApprovedBy   string `json:"approved_by,omitempty"`
+	ExitCode     int    `json:"exit_code"`
+	Duration     string `json:"duration"`
+	Stdout       string `json:"stdout,omitempty"`
+	Stderr       string `json:"stderr,omitempty"`
+	Error        string `json:"error,omitempty"`
+	TimedOut     bool   `json:"timed_out,omitempty"`
 }
 
 // AuditLogger handles audit logging for SSH operations

@@ -951,6 +951,14 @@ func TestSSHSessionConfig_Validate(t *testing.T) {
 			errMsg:  "max_concurrent_sessions cannot be negative",
 		},
 		{
+			name: "negative max sessions per host",
+			config: SSHSessionConfig{
+				MaxSessionsPerHost: -1,
+			},
+			wantErr: true,
+			errMsg:  "max_sessions_per_host cannot be negative",
+		},
+		{
 			name: "negative session idle timeout",
 			config: SSHSessionConfig{
 				SessionIdleTimeout: Duration(-1 * time.Second),

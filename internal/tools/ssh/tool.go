@@ -138,7 +138,7 @@ Actions:
 - exec_group: Execute a command on a host group (fan-out)
 - hosts: List configured SSH hosts
 - status: Show connection pool, session, and tunnel status
-- session_start: Start a persistent session on a host
+- session_start: Start a persistent session on a host (runs no command; send commands with session_send)
 - session_send: Send a command to an existing session
 - session_close: Close a persistent session
 - session_list: List active persistent sessions
@@ -158,7 +158,8 @@ Tunnels only bind to 127.0.0.1 (localhost) for security.
 
 Persistent Sessions:
 Sessions maintain shell state between commands (environment variables, working directory).
-Max 5 concurrent sessions. Sessions auto-close after 10 minutes of idle time.
+Opening a session needs no approval; every command sent into it is classified (and approval-gated) like exec.
+Max 5 concurrent sessions and 2 per host by default. Sessions auto-close after 10 minutes of idle time.
 
 Examples:
 - One-shot exec: action=exec, host="web-prod-1", command="ls -la /var/log"
@@ -198,7 +199,7 @@ func (t *SSHTool) Parameters() map[string]interface{} {
 			},
 			"command": map[string]interface{}{
 				"type":        "string",
-				"description": "Command to execute (required for exec and session_send actions)",
+				"description": "Command to execute (required for exec and session_send actions; not accepted by session_start)",
 			},
 			"session_id": map[string]interface{}{
 				"type":        "string",

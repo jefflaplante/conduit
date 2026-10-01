@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,6 +46,8 @@ type liveSSHServer struct {
 	signals  []string
 	files    map[string][]byte // scp uploads by target path; scp -f source
 	conns    int               // authenticated SSH connections still open
+	accepted int               // TCP connections ever accepted
+	shells   int               // "shell" requests served (persistent sessions)
 }
 
 func newLiveSSHServer(t *testing.T) *liveSSHServer {
@@ -101,6 +104,9 @@ func newLiveSSHServer(t *testing.T) *liveSSHServer {
 			if err != nil {
 				return
 			}
+			s.mu.Lock()
+			s.accepted++
+			s.mu.Unlock()
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -157,6 +163,12 @@ func (s *liveSSHServer) serveConn(nc net.Conn, cfg *ssh.ServerConfig) {
 func (s *liveSSHServer) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 	defer ch.Close()
 	for req := range reqs {
+		if req.Type == "shell" {
+			_ = req.Reply(true, nil)
+			go ssh.DiscardRequests(reqs)
+			s.serveShell(ch)
+			return
+		}
 		if req.Type != "exec" {
 			_ = req.Reply(false, nil)
 			continue
@@ -194,6 +206,44 @@ func (s *liveSSHServer) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 		_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(status)}))
 		return
 	}
+}
+
+// shellLineRe matches the line PersistentSession.execute writes for each
+// command: echo '<start>'; <cmd>; __exit_code=$?; echo '<end>'"$__exit_code".
+var shellLineRe = regexp.MustCompile(`^echo '([^']*)'; (.*); __exit_code=\$\?; echo '([^']*)'"\$__exit_code"$`)
+
+// serveShell is a minimal fake shell for persistent sessions
+// (conduit-1kxf): each marker-wrapped command line is recorded and answered
+// with its start marker, "ran: <command>" and the end marker with exit 0.
+func (s *liveSSHServer) serveShell(ch ssh.Channel) {
+	s.mu.Lock()
+	s.shells++
+	s.mu.Unlock()
+	r := bufio.NewReader(ch)
+	for {
+		line, err := r.ReadString('\n')
+		if m := shellLineRe.FindStringSubmatch(strings.TrimRight(line, "\r\n")); m != nil {
+			s.record(m[2])
+			_, _ = fmt.Fprintf(ch, "%s\nran: %s\n%s0\n", m[1], m[2], m[3])
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// acceptedConns reports how many TCP connections the server ever accepted.
+func (s *liveSSHServer) acceptedConns() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.accepted
+}
+
+// shellsOpened reports how many persistent-session shells were started.
+func (s *liveSSHServer) shellsOpened() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shells
 }
 
 // unquote reverses scpShellQuote for the paths the tests use.

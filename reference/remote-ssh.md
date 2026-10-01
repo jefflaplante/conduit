@@ -192,6 +192,7 @@ Add a `remote_ssh` section to your config JSON:
     },
     "sessions": {
       "max_concurrent_sessions": 5,
+      "max_sessions_per_host": 2,
       "session_idle_timeout": "10m",
       "default_shell": "/bin/sh"
     }
@@ -271,7 +272,8 @@ Hosts belong to a group if they list the group name in their `groups` array or m
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_concurrent_sessions` | int | `5` | Max active persistent sessions |
+| `max_concurrent_sessions` | int | `5` | Max active persistent sessions across all hosts |
+| `max_sessions_per_host` | int | `2` | Max active persistent sessions on any one host (sessions hold their own connection, outside the pool) |
 | `session_idle_timeout` | duration | `10m` | Auto-close idle sessions |
 | `default_shell` | string | `"/bin/sh"` | Shell for persistent sessions |
 
@@ -350,6 +352,15 @@ Start a persistent shell session on a host. Sessions maintain state (environment
 ```
 
 Returns a `session_id` for use with `session_send` and `session_close`.
+
+`session_start` is a read-tier operation that never asks for approval: it runs
+no command (a `command` argument is refused), and each command sent with
+`session_send` is classified and gated like `exec`. The host must be a
+configured, enabled host (refused before connecting otherwise), and the start
+must fit under `max_sessions_per_host` and `max_concurrent_sessions`; a capped
+start is refused before connecting, with the open session IDs in the error.
+Opening and closing are audit-logged (`"action":"session_start"` /
+`"session_close"`).
 
 ### session_send
 
@@ -577,7 +588,8 @@ Sessions maintain a shell process on a remote host across multiple commands. Thi
 
 ### Limits
 
-- Max 5 concurrent sessions (configurable via `max_concurrent_sessions`)
+- Max 5 concurrent sessions (configurable via `max_concurrent_sessions`) and 2 per host (`max_sessions_per_host`)
+- Opening a session needs no approval and runs no command; host checks match `exec`
 - Sessions auto-close after 10 minutes of idle time (configurable via `session_idle_timeout`)
 - Each command in a session still goes through security classification
 

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -62,14 +63,22 @@ type SessionManager struct {
 	mu          sync.RWMutex
 	sessions    map[string]*PersistentSession
 	maxSessions int
-	idleTimeout time.Duration
-	marker      string
-	shell       string
-	defaults    config.SSHHostDefaults
-	poolConfig  config.SSHPoolConfig
-	hosts       map[string]config.SSHHostConfig
-	cleanupDone chan struct{}
-	cleanupOnce sync.Once
+	// maxPerHost caps open sessions on any one host (conduit-1kxf).
+	maxPerHost int
+	// pending counts slots reserved by StartSession calls that are still
+	// connecting, so concurrent starts cannot overshoot either cap while
+	// the (slow) connect runs without the lock held.
+	pending      map[string]int
+	pendingTotal int
+	closed       bool
+	idleTimeout  time.Duration
+	marker       string
+	shell        string
+	defaults     config.SSHHostDefaults
+	poolConfig   config.SSHPoolConfig
+	hosts        map[string]config.SSHHostConfig
+	cleanupDone  chan struct{}
+	cleanupOnce  sync.Once
 }
 
 // NewSessionManager creates a new session manager
@@ -78,6 +87,11 @@ func NewSessionManager(cfg config.SSHSessionConfig, hosts []config.SSHHostConfig
 	maxSessions := cfg.MaxConcurrentSessions
 	if maxSessions <= 0 {
 		maxSessions = 5
+	}
+
+	maxPerHost := cfg.MaxSessionsPerHost
+	if maxPerHost <= 0 {
+		maxPerHost = defaultMaxSessionsPerHost
 	}
 
 	idleTimeout := cfg.SessionIdleTimeout.Duration()
@@ -104,6 +118,8 @@ func NewSessionManager(cfg config.SSHSessionConfig, hosts []config.SSHHostConfig
 	sm := &SessionManager{
 		sessions:    make(map[string]*PersistentSession),
 		maxSessions: maxSessions,
+		maxPerHost:  maxPerHost,
+		pending:     make(map[string]int),
 		idleTimeout: idleTimeout,
 		marker:      marker,
 		shell:       shell,
@@ -119,43 +135,127 @@ func NewSessionManager(cfg config.SSHSessionConfig, hosts []config.SSHHostConfig
 	return sm
 }
 
-// StartSession starts a new persistent session on the specified host
+// defaultMaxSessionsPerHost applies when sessions.max_sessions_per_host is
+// unset (conduit-1kxf).
+const defaultMaxSessionsPerHost = 2
+
+// SessionLimitError reports that a session cap is reached. Scope is
+// "global" (sessions.max_concurrent_sessions) or "host"
+// (sessions.max_sessions_per_host); Open lists the IDs of the sessions
+// counting against that cap so the caller can reuse or close one.
+type SessionLimitError struct {
+	Scope string
+	Host  string
+	Limit int
+	Open  []string
+}
+
+func (e *SessionLimitError) Error() string {
+	if e.Scope == "host" {
+		return fmt.Sprintf("maximum persistent sessions on host %s reached (%d, sessions.max_sessions_per_host)", e.Host, e.Limit)
+	}
+	return fmt.Sprintf("maximum concurrent sessions reached (%d, sessions.max_concurrent_sessions)", e.Limit)
+}
+
+// StartSession starts a new persistent session on the specified host. Both
+// caps are checked and a slot reserved before connecting; the connection
+// itself is made without holding the manager lock.
 func (sm *SessionManager) StartSession(hostName string) (string, error) {
+	hostConfig, err := sm.reserve(hostName)
+	if err != nil {
+		return "", err
+	}
+
+	ps, err := sm.open(hostName, hostConfig)
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.release(hostName)
+	if err != nil {
+		return "", err
+	}
+	if sm.closed {
+		_ = ps.close()
+		return "", fmt.Errorf("session manager closed while connecting to %s", hostName)
+	}
+	sm.sessions[ps.id] = ps
+	return ps.id, nil
+}
+
+// reserve validates hostName and claims a slot under both caps.
+func (sm *SessionManager) reserve(hostName string) (config.SSHHostConfig, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Check session limit
-	if len(sm.sessions) >= sm.maxSessions {
-		return "", fmt.Errorf("maximum concurrent sessions reached (%d)", sm.maxSessions)
+	if sm.closed {
+		return config.SSHHostConfig{}, fmt.Errorf("session manager is closed")
 	}
 
 	// Look up host configuration
 	hostConfig, ok := sm.hosts[hostName]
 	if !ok {
-		return "", fmt.Errorf("unknown host: %s", hostName)
+		return config.SSHHostConfig{}, fmt.Errorf("unknown host: %s", hostName)
 	}
 
 	// Check if host is enabled
 	if !hostConfig.IsHostEnabled() {
-		return "", fmt.Errorf("host %s is disabled", hostName)
+		return config.SSHHostConfig{}, fmt.Errorf("host %s is disabled", hostName)
 	}
 
-	// Connect to the host
+	if len(sm.sessions)+sm.pendingTotal >= sm.maxSessions {
+		return config.SSHHostConfig{}, &SessionLimitError{Scope: "global", Limit: sm.maxSessions, Open: sm.sessionIDsLocked("")}
+	}
+	onHost := sm.sessionIDsLocked(hostName)
+	if len(onHost)+sm.pending[hostName] >= sm.maxPerHost {
+		return config.SSHHostConfig{}, &SessionLimitError{Scope: "host", Host: hostName, Limit: sm.maxPerHost, Open: onHost}
+	}
+
+	sm.pending[hostName]++
+	sm.pendingTotal++
+	return hostConfig, nil
+}
+
+// release returns a slot claimed by reserve. Callers hold sm.mu.
+func (sm *SessionManager) release(hostName string) {
+	sm.pending[hostName]--
+	if sm.pending[hostName] <= 0 {
+		delete(sm.pending, hostName)
+	}
+	sm.pendingTotal--
+}
+
+// open connects to the host and starts the persistent shell.
+func (sm *SessionManager) open(hostName string, hostConfig config.SSHHostConfig) (*PersistentSession, error) {
 	client, err := Connect(hostConfig, sm.defaults, sm.poolConfig)
 	if err != nil {
-		return "", fmt.Errorf("failed to connect to %s: %w", hostName, err)
+		return nil, fmt.Errorf("failed to connect to %s: %w", hostName, err)
 	}
-
-	// Create persistent session
 	ps, err := sm.createPersistentSession(hostName, client)
 	if err != nil {
 		client.Close()
-		return "", fmt.Errorf("failed to create persistent session: %w", err)
+		return nil, fmt.Errorf("failed to create persistent session: %w", err)
 	}
-
-	sm.sessions[ps.id] = ps
-	return ps.id, nil
+	return ps, nil
 }
+
+// sessionIDsLocked returns the sorted IDs of open sessions, on hostName
+// only when it is non-empty. Callers hold sm.mu.
+func (sm *SessionManager) sessionIDsLocked(hostName string) []string {
+	ids := make([]string, 0, len(sm.sessions))
+	for id, ps := range sm.sessions {
+		if hostName == "" || ps.host == hostName {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// MaxSessions returns the global cap on open sessions.
+func (sm *SessionManager) MaxSessions() int { return sm.maxSessions }
+
+// MaxSessionsPerHost returns the per-host cap on open sessions.
+func (sm *SessionManager) MaxSessionsPerHost() int { return sm.maxPerHost }
 
 // createPersistentSession creates a new persistent session with the given client
 func (sm *SessionManager) createPersistentSession(hostName string, client *SSHClient) (*PersistentSession, error) {
@@ -527,9 +627,11 @@ func (sm *SessionManager) Close() {
 		close(sm.cleanupDone)
 	})
 
-	// Close all sessions
+	// Close all sessions; a StartSession still connecting closes its
+	// session instead of registering it.
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	sm.closed = true
 
 	for id, ps := range sm.sessions {
 		ps.close()

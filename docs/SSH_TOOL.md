@@ -296,6 +296,7 @@ Controls behavior of persistent shell sessions:
 {
   "sessions": {
     "max_concurrent_sessions": 5,
+    "max_sessions_per_host": 2,
     "session_idle_timeout": "10m",
     "default_shell": "/bin/sh",
     "output_boundary_marker": "___CONDUIT_OUTPUT_BOUNDARY___"
@@ -305,7 +306,8 @@ Controls behavior of persistent shell sessions:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_concurrent_sessions` | int | 5 | Max active persistent sessions |
+| `max_concurrent_sessions` | int | 5 | Max active persistent sessions across all hosts |
+| `max_sessions_per_host` | int | 2 | Max active persistent sessions on any one host. Each session holds its own SSH connection outside the pool, so `pool.max_connections_per_host` does not bound it |
 | `session_idle_timeout` | duration | 10m | Close idle sessions after this period |
 | `default_shell` | string | `/bin/sh` | Shell used for persistent sessions |
 | `output_boundary_marker` | string | `___CONDUIT_OUTPUT_BOUNDARY___` | Internal delimiter for command output |
@@ -369,6 +371,25 @@ Start a persistent shell session on a host. The session maintains state (environ
 | `host` | string | yes | Target host name |
 
 Returns a `session_id` to use with subsequent `session_send` calls.
+
+`session_start` is classified as a read-tier operation and never asks for
+approval itself: it runs no command, and every command sent into the session
+is classified, capped by the host's `security_tier` and approval-gated by
+`session_send` exactly like `exec`. What bounds it instead:
+
+- **Host check** (same as `exec`): the host must be configured in
+  `remote_ssh.hosts` and enabled; unknown or disabled hosts are refused
+  before any connection is made. Jump hosts and connection settings are
+  resolved exactly as for `exec`.
+- **Session caps**: `sessions.max_sessions_per_host` (default 2) and
+  `sessions.max_concurrent_sessions` (default 5). A start that would exceed
+  either is refused before connecting; the error lists the open session IDs
+  so the model can reuse one (`session_send`), close one (`session_close`),
+  or fall back to `exec`.
+- **No initial command**: a `command` passed to `session_start` is refused
+  (not silently dropped); send it with `session_send`.
+- **Audit**: when audit logging is enabled, opening and closing a session
+  are logged with `"action":"session_start"` / `"action":"session_close"`.
 
 ### session_send
 
@@ -642,7 +663,11 @@ Audit logs are stored in JSONL (JSON Lines) format -- one JSON object per line:
 {"timestamp":"2026-03-17T15:30:45Z","session_id":"sess-abc123","user_id":"user-456","host":"web-prod-1","command":"ls -la","security_tier":"read","approved":true,"exit_code":0,"duration":"150ms","stdout":"total 24\ndrwxr-xr-x...","stderr":""}
 ```
 
-Fields: `timestamp`, `session_id`, `user_id`, `host`, `command`, `security_tier`, `approved`, `approved_by`, `exit_code`, `duration`, `stdout`, `stderr`, `error`, `timed_out`.
+Fields: `timestamp`, `action`, `session_id`, `user_id`, `host`, `command`, `security_tier`, `approved`, `approved_by`, `exit_code`, `duration`, `stdout`, `stderr`, `error`, `timed_out`.
+
+`action` is set only for session lifecycle events (`session_start`,
+`session_close`), which have an empty `command`; a failed start has
+`approved: false`, `exit_code: -1` and the connection `error`.
 
 Output exceeding `max_output_capture` is truncated with a `...[truncated]` marker.
 
@@ -795,6 +820,7 @@ Multiple hosts with groups, bastion access, strict security, and full audit:
     },
     "sessions": {
       "max_concurrent_sessions": 5,
+      "max_sessions_per_host": 2,
       "session_idle_timeout": "10m",
       "default_shell": "/bin/bash"
     }
