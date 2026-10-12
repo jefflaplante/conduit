@@ -3,6 +3,8 @@ package ai
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -383,6 +385,75 @@ func TestToolLoopTimeout_NoSecondMoveAfterFirstCallHandoff(t *testing.T) {
 	if n := third.GetCallCount(); n != 0 {
 		t.Errorf("third-route calls = %d, want 0", n)
 	}
+}
+
+// cancelAtProvider cancels the turn's ctx during its cancelAt'th call and
+// returns a transient-timeout error from it, so the guard's recovery gate
+// (route_call.go: ctx.Err() != nil → no retry, no handoff) is the only thing
+// standing between the error and a pointless second attempt.
+type cancelAtProvider struct {
+	name     string
+	cancel   context.CancelFunc
+	cancelAt int
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *cancelAtProvider) Name() string { return p.name }
+
+func (p *cancelAtProvider) GenerateResponse(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+	p.mu.Lock()
+	i := p.calls
+	p.calls++
+	p.mu.Unlock()
+	switch {
+	case i == 0:
+		return &GenerateResponse{ToolCalls: tlToolCall, Usage: Usage{PromptTokens: 10}}, nil
+	case i == p.cancelAt:
+		p.cancel()
+		return nil, errFallbackTimeout
+	default:
+		return nil, fmt.Errorf("WRONG: call %d ran — ctx died at call %d", i, p.cancelAt)
+	}
+}
+
+func (p *cancelAtProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+// A transient timeout on a ctx that is already dead must NOT be retried nor
+// handed off (the gate mirrors callWithRecovery's bd-13p ctx gate): the
+// chain deadline fired, so both recovery calls would fail instantly too.
+func TestToolLoopTimeout_DeadCtxNoRetryNoHandoff(t *testing.T) {
+	primary := &cancelAtProvider{name: "primary", cancelAt: 1}
+	fallback := NewMockProvider("fallbackprov")
+	r, obs := newToolLoopTimeoutRouter(t, 1, primary, fallback)
+	fallback.SetResponses([]MockResponse{{Content: "WRONG: handoff on dead ctx"}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	primary.cancel = cancel
+	defer cancel()
+
+	_, err := runToolTurn(t, r, ctx, false)
+	if err == nil {
+		t.Fatal("expected the timeout to surface on a dead ctx")
+	}
+	if !strings.Contains(err.Error(), "AI response after tool execution failed") {
+		t.Errorf("error = %q, want the tool-loop wrap", err)
+	}
+	if !strings.Contains(err.Error(), errFallbackTimeout.Error()) {
+		t.Errorf("error = %q, want the underlying transient timeout", err)
+	}
+	if n := primary.callCount(); n != 2 {
+		t.Errorf("primary calls = %d, want 2 (initial + depth1, NO retry)", n)
+	}
+	if n := fallback.GetCallCount(); n != 0 {
+		t.Errorf("fallback calls = %d, want 0 (no handoff on dead ctx)", n)
+	}
+	assertMetered(t, obs, 1, map[string]int{"primary|" + tlModel: 1})
 }
 
 // The EmptyGuard failover guard never recovers on a timeout either.
