@@ -167,6 +167,15 @@ func (r *Router) ResolvePricing(model string) ModelPricing {
 	return r.PricingResolver().PricingForModel(model)
 }
 
+// EffectiveRoute is the exported form of effectiveRoute: the (provider,
+// model) a request with the given provider/model overrides is served by —
+// the same resolution Generate* uses. Consumers outside internal/ai (e.g.
+// the gateway deciding whether a turn's provider can take image blocks)
+// need the answer before the request is built.
+func (r *Router) EffectiveRoute(provider, model string) (string, string) {
+	return r.effectiveRoute(provider, model)
+}
+
 // effectiveRoute returns the (provider, model) a request with the given
 // provider/model overrides is served by: the provider inferred from the
 // model when none is named (or the default provider), and the provider's

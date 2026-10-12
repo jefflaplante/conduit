@@ -91,6 +91,33 @@ func (a *visionAdapter) VisionRoute() (provider, model string) {
 	return a.route()
 }
 
+// hasDedicatedRoute reports whether image analysis has a route other than
+// "the turn's provider happens to be multimodal": an explicit ai.vision
+// config, or (unset) the heuristic's routable anthropic fallback. When true,
+// ingress can pre-transcribe photos for text-only turn providers through
+// this adapter (conduit-2xmt).
+func (a *visionAdapter) hasDedicatedRoute() bool {
+	if a == nil || a.router == nil {
+		return false
+	}
+	if a.cfg != nil {
+		// Explicit ai.vision: dedicated whenever the provider exists and is
+		// routable (config validation already refused the rest).
+		return a.cfg.Provider != ""
+	}
+	// Heuristic: dedicated only if it picked a routable anthropic provider
+	// (not the default itself — that would be the turn provider again).
+	provider, _ := a.route()
+	if provider == "" {
+		return false
+	}
+	meta, ok := a.router.GetProviderMeta(provider)
+	if !ok || !meta.Routable() {
+		return false
+	}
+	return meta.Type == "anthropic" || meta.Type == "claude-code"
+}
+
 // AnalyzeImage implements types.VisionAnalyzer. It builds a single-turn user
 // message with an image attachment + prompt and sends it to the selected
 // vision provider as a metered side call (bypassing session history, system
@@ -149,6 +176,47 @@ func (a *visionAdapter) AnalyzeImage(ctx context.Context, image []byte, mediaTyp
 		return "", fmt.Errorf("vision: provider returned empty response")
 	}
 	return content, nil
+}
+
+// meteredVisionResult is one transcription side-call's outcome: the trimmed
+// model-facing text and the usage meterCall priced and recorded for it.
+type meteredVisionResult struct {
+	content string
+	usage   ai.Usage
+}
+
+// analyzeImageMetered runs AnalyzeImage's request but returns the response
+// usage alongside the text, so ingress photo transcription (conduit-2xmt)
+// can fold the cost into the turn it precedes (IngestSideCalls). The call
+// is metered identically to the Image tool's (GenerateSideCall → meterCall
+// + usage tracker); a nil ledger on ctx just means it has no turn yet.
+func (a *visionAdapter) analyzeImageMetered(ctx context.Context, image []byte, mediaType string, prompt string) (meteredVisionResult, error) {
+	providerName, model := a.route()
+	if p, ok := a.router.GetProvider(providerName); !ok || p == nil {
+		return meteredVisionResult{}, fmt.Errorf("vision: provider %q not available", providerName)
+	}
+	req := &ai.GenerateRequest{
+		Messages: []ai.ChatMessage{
+			{
+				Role:    "user",
+				Content: prompt,
+				Attachments: []ai.Attachment{
+					{Type: "image", MediaType: mediaType, Data: image},
+				},
+			},
+		},
+		Model:     model,
+		MaxTokens: 1024,
+	}
+	resp, err := a.router.GenerateSideCall(ai.WithSideCallLabel(ctx, "vision-ingress"), providerName, req)
+	if err != nil {
+		return meteredVisionResult{}, fmt.Errorf("vision: provider call failed: %w", err)
+	}
+	content := strings.TrimSpace(resp.Content)
+	if content == "" {
+		return meteredVisionResult{}, fmt.Errorf("vision: provider returned empty response")
+	}
+	return meteredVisionResult{content: content, usage: resp.Usage}, nil
 }
 
 // Ensure visionAdapter implements the VisionAnalyzer interface at compile time.

@@ -124,6 +124,9 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 	// conduit-31jg.75: tool side calls (Image tool vision analysis) made
 	// under this ctx are metered into this ledger and added to the turn cost.
 	ctx, sideCalls := ai.WithSideCallLedger(ctx)
+	// conduit-2xmt: side calls made at ingress (photo transcription) share
+	// the same accounting — they are part of this turn's cost too.
+	sideCalls.Add(req.IngestSideCalls)
 
 	modelOverride := session.Context["model"]
 	providerOverride := session.Context["provider"]

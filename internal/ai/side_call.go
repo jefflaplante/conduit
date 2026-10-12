@@ -30,6 +30,18 @@ type SideCallLedger struct {
 	usage Usage
 }
 
+// Add accumulates pre-metered usage into the ledger — for side calls made
+// just before the turn started (ingress photo transcription, conduit-2xmt);
+// their cost was already priced by meterCall and only needs folding in.
+func (l *SideCallLedger) Add(u Usage) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.usage.Add(u)
+	l.mu.Unlock()
+}
+
 func (l *SideCallLedger) add(u Usage) {
 	if l == nil {
 		return

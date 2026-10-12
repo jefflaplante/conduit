@@ -324,6 +324,9 @@ func TestTurnRunner_TelegramTurnTriggersCompaction(t *testing.T) {
 
 // conduit-31jg.22: the stored text of a photo message ("[Photo] …") differs
 // from the text sent to the model; the user message must still be sent once.
+// conduit-2xmt: on this text-only test provider the photo is transcribed at
+// ingress — no vision route exists here, so the text carries the marker —
+// and no raw attachment reaches the provider.
 func TestTurnRunner_PhotoMessageNotSentTwice(t *testing.T) {
 	gw, store, p := newTurnTestGateway(t)
 	sess, _ := store.GetOrCreateSession("42", "telegram")
@@ -337,8 +340,11 @@ func TestTurnRunner_PhotoMessageNotSentTwice(t *testing.T) {
 		t.Fatalf("user message sent %d times: %+v", n, req)
 	}
 	last := req[len(req)-1]
-	if last.Role != "user" || len(last.Attachments) != 1 {
-		t.Fatalf("last message should be the user turn with the photo: %+v", last)
+	if last.Role != "user" || len(last.Attachments) != 0 {
+		t.Fatalf("last message should be the user turn without raw attachments (text-only provider): %+v", last)
+	}
+	if !strings.Contains(last.Content, photoTranscriptionUnavailable) {
+		t.Fatalf("transcription marker missing from model text: %q", last.Content)
 	}
 	if got := transcript(t, store, sess.Key); got[0] != "user:[Photo] what is this bird" {
 		t.Fatalf("stored user row = %q", got[0])

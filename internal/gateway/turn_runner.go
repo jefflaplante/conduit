@@ -137,6 +137,12 @@ type TurnRequest struct {
 	PersistedUserMessageID string
 	Attachments            []ai.Attachment
 
+	// IngestSideCalls carries the metered usage of provider side calls made
+	// before the turn started (conduit-2xmt: ingress photo transcription) so
+	// the pipeline folds them into the turn's cost and session_total_cost.
+	// Nil (most turns) adds nothing.
+	IngestSideCalls ai.Usage
+
 	// Origin marks a live human turn (conduit-31jg.43). nil means the turn is
 	// non-interactive, labelled NonInteractiveSource. SPAR reflection runs
 	// only for interactive turns.

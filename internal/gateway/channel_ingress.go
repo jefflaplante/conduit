@@ -136,7 +136,9 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 
 	// Transcript form of the message: a text marker for photos, not binary data.
 	textToStore := msg.Text
+	textForAI := msg.Text
 	var aiAttachments []ai.Attachment
+	var ingestUsage ai.Usage
 	if len(msg.Attachments) > 0 {
 		if textToStore == "" {
 			textToStore = "[Sent a photo]"
@@ -148,6 +150,10 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		for i, att := range msg.Attachments {
 			aiAttachments[i] = ai.Attachment{Type: att.Type, MediaType: att.MediaType, Data: att.Data}
 		}
+		// conduit-2xmt: the turn's provider may be text-only (no-anthropic
+		// routing) — transcribe photos via the vision side-call and inject
+		// the description as text instead of failing the turn on a 400.
+		textForAI, aiAttachments, ingestUsage = g.preparePhotoAttachments(ctx, session, msg.Text, aiAttachments)
 	}
 
 	// conduit-31jg.35: the shared TurnRunner owns the busy-ack decision, the
@@ -158,10 +164,12 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		Session:       session,
 		ChannelID:     msg.ChannelID,
 		UserID:        msg.UserID,
-		Text:          msg.Text,
+		Text:          textForAI,
 		StoreText:     textToStore,
 		StoreMetadata: msg.Metadata,
 		Attachments:   aiAttachments,
+		// conduit-2xmt: transcription side-call cost folds into this turn.
+		IngestSideCalls: ingestUsage,
 		Origin: &approval.Origin{ // conduit-31jg.43: live human turn on a promptable channel
 			Source: msg.ChannelID, ChannelID: msg.ChannelID, UserID: msg.UserID,
 			SessionKey: session.Key, Notify: notify,
