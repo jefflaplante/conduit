@@ -64,6 +64,7 @@ func TestResolveMCPAuth_EnforceUnusableTokenFailsClosed(t *testing.T) {
 	yes := true
 	path := filepath.Join(t.TempDir(), "tok")
 	require.NoError(t, os.WriteFile(path, []byte("secret\n"), 0644)) // world-readable
+	require.NoError(t, os.Chmod(path, 0644))                         // umask-proof: 0077 would land 0600 and void the precondition
 
 	_, _, ok := resolveMCPAuth(&config.Config{MCP: config.MCPConfig{RequireAuth: &yes, TokenFile: path}}, quietLogger())
 	assert.False(t, ok)
