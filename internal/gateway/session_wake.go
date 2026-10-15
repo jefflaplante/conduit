@@ -14,6 +14,18 @@ import (
 	"conduit/internal/tools/types"
 )
 
+// bd-unz3: wall-clock budget for a single wake turn. Wake turns host the
+// whole LLM chain (initial call + tool rounds + EmptyGuard retries) and can
+// spawn sub-agent chains at core.DefaultSubAgentTimeoutSeconds, so this must
+// always exceed the sub-agent chain budget (pinned by test).
+const wakeTurnTimeout = 30 * time.Minute
+
+// wakeTurnBudget derives the wake turn's context from parent with the wake
+// chain deadline. Split out for testability.
+func wakeTurnBudget(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, wakeTurnTimeout)
+}
+
 // wakeSession re-activates a session to process its most recent inter-session message.
 // It is called from the session wakeup listener goroutine started in Start().
 //
@@ -85,7 +97,16 @@ func (g *Gateway) wakeSession(sessionKey string) {
 		"session_key", sessionKey, "wake_depth", depth+1, "wake_source", wakeSource)
 
 	// Derive a context from the gateway lifecycle context (not a request context).
-	wakeCtx, cancel := context.WithTimeout(g.lifecycleCtx(), 5*time.Minute)
+	//
+	// bd-unz3: this budget wraps the ENTIRE wake turn — initial LLM call,
+	// every tool round, and every EmptyGuard retry — and the turn may
+	// legitimately spawn a sub-agent chain running at
+	// core.DefaultSubAgentTimeoutSeconds (600s). The previous 5-minute wall
+	// was shorter than the chain it hosted, so deep heartbeat/wake turns
+	// died at exactly 5m0.000s (bd-3ose census; three silent deaths the
+	// night of Oct 14-15 alone). wake_depth (max 3) remains the runaway
+	// guard; this deadline only needs to exceed any chain the turn hosts.
+	wakeCtx, cancel := wakeTurnBudget(g.lifecycleCtx())
 	defer cancel()
 
 	// conduit-31jg.35: run through the shared TurnRunner. The wake message is
