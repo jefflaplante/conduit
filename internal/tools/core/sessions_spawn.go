@@ -18,6 +18,22 @@ func NewSessionsSpawnTool(services *types.ToolServices) *SessionsSpawnTool {
 	return &SessionsSpawnTool{services: services}
 }
 
+// DefaultSubAgentTimeoutSeconds is the default wall-clock budget for a
+// sub-agent chain (initial call + every tool/post-tool round). bd-109l
+// (sd-bd-3ose fix 4): deep chains legitimately consume 4-6 minutes, so 300s
+// left zero slack for provider stalls; the tool's own docs example uses 600.
+const DefaultSubAgentTimeoutSeconds = 600
+
+// normalizeSubAgentTimeoutSeconds guards the chain deadline: WithTimeout(ctx, 0)
+// would kill a sub-agent instantly (the silent-death class bd-109l targets), so
+// explicit 0/negative values fall back to the default instead of passing through.
+func normalizeSubAgentTimeoutSeconds(n int) int {
+	if n <= 0 {
+		return DefaultSubAgentTimeoutSeconds
+	}
+	return n
+}
+
 func (t *SessionsSpawnTool) Name() string {
 	return "SessionsSpawn"
 }
@@ -49,7 +65,7 @@ func (t *SessionsSpawnTool) Parameters() map[string]interface{} {
 			"timeoutSeconds": map[string]interface{}{
 				"type":        "integer",
 				"description": "Session timeout in seconds",
-				"default":     300,
+				"default":     DefaultSubAgentTimeoutSeconds,
 			},
 			"announce": map[string]interface{}{
 				"type":        "boolean",
@@ -73,7 +89,7 @@ func (t *SessionsSpawnTool) Execute(ctx context.Context, args map[string]interfa
 	agentId := toolargs.GetString(args, "agentId", "")
 	model := toolargs.GetString(args, "model", "")
 	label := toolargs.GetString(args, "label", "")
-	timeoutSeconds := toolargs.GetInt(args, "timeoutSeconds", 300)
+	timeoutSeconds := normalizeSubAgentTimeoutSeconds(toolargs.GetInt(args, "timeoutSeconds", DefaultSubAgentTimeoutSeconds))
 	announce := toolargs.GetBool(args, "announce", true) // Default: announce results
 
 	if t.services.Gateway == nil {
