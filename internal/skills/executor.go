@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,59 @@ import (
 // script cannot OOM the gateway (conduit-31jg.20). Truncated output is no
 // longer valid JSON, so Data falls back to nil and Output carries the text.
 const maxSkillOutputBytes = 1 << 20
+
+// buildScriptArgv maps an action name and its args onto script argv.
+// Two script conventions exist in the wild:
+//   - CLI-style scripts (trmnl.py: `python3 trmnl.py status`) use argparse
+//     subcommands and exit 2 with "arguments are required: cmd" when invoked
+//     with empty argv — bd-3439.
+//   - Envelope readers (state.py: `python3 state.py`) dispatch on the JSON
+//     {"action": ...} piped on stdin; documented ones ignore extra argv or
+//     use argv[1] as a fallback action source, so forwarding is safe.
+//
+// Mapping contract (deterministic; keys sorted for stable argv):
+//   - the action always becomes argv[1] (the subcommand);
+//   - a key starting with "--" is an explicit flag passed verbatim, so
+//     models that read the SKILL.md can drive named options;
+//   - bool true becomes a bare --key flag, bool false is omitted
+//     (argparse store_true semantics);
+//   - other scalars become positional words in sorted key order;
+//   - slice values repeat as --key word (or verbatim-flag word).
+//
+// Values are passed as single argv elements via exec: the executor never
+// interpolates model-supplied strings into a shell line, and no shell
+// metacharacters are interpreted.
+func buildScriptArgv(action string, args map[string]interface{}) []string {
+	argv := []string{action}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		flag := "--" + strings.TrimPrefix(k, "-")
+		if strings.HasPrefix(k, "--") {
+			flag = k // explicit flag from the model: pass verbatim
+		}
+		switch v := args[k].(type) {
+		case bool:
+			if v {
+				argv = append(argv, flag)
+			}
+		case []string:
+			for _, item := range v {
+				argv = append(argv, flag, item)
+			}
+		case []interface{}:
+			for _, item := range v {
+				argv = append(argv, flag, fmt.Sprintf("%v", item))
+			}
+		default:
+			argv = append(argv, flag, fmt.Sprintf("%v", v))
+		}
+	}
+	return argv
+}
 
 // Executor handles skill execution through various methods
 type Executor struct {
@@ -129,10 +183,18 @@ func (e *Executor) executeScript(ctx context.Context, skill Skill, action string
 		cmd = exec.CommandContext(ctx, scriptPath)
 	}
 
+	// Forward action + args as argv before the stdin envelope. Two script
+	// conventions exist in the wild:
+	//   - envelope readers: `python3 monitor.py` dispatches on the JSON
+	//     {"action": ...} piped on stdin (state.py, water-tank monitor.py);
+	//   - CLI-style scripts: `python3 trmnl.py status` use argparse and exit 2
+	//     with "arguments are required: cmd" when invoked with empty argv.
+	// Passing argv keeps both working. Scalar args map to positional words in
+	// envelope key order; map args expand to --key value / --flag for booleans.
+	cmd.Args = append(cmd.Args, buildScriptArgv(action, args)...)
+
 	// Script skills always receive a JSON envelope on stdin containing the
-	// action name plus any args. Scripts select on the action key to dispatch
-	// subcommands (e.g. water-tank monitor.py). The executor runs
-	// `python3 monitor.py` with no argv, so stdin is the only channel.
+	// action name plus any args (see buildScriptArgv for the argv side).
 	envelope := make(map[string]interface{}, len(args)+1)
 	for k, v := range args {
 		envelope[k] = v
