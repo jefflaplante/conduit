@@ -179,8 +179,10 @@ func (e *Executor) execute(ctx context.Context, skill Skill, action string, args
 	// burn a guaranteed error round-trip (conduit-7ny5). Short-circuit the
 	// generic help/status verbs to success with a pointer to SKILL.md so the
 	// model self-corrects to Read. Any other action still fails honestly
-	// below via the empty-command path.
-	if len(skill.Scripts) == 0 && len(skill.Actions) == 0 && isDocOnlyIntrospectAction(action) {
+	// below via the empty-command path. Skills with curated subprocess
+	// builders (email/gog) are excluded — their status is a real command.
+	if len(skill.Scripts) == 0 && len(skill.Actions) == 0 &&
+		!hasCuratedSubprocessBuilder(skill.Name) && isDocOnlyIntrospectAction(action) {
 		return e.docOnlyIntrospectResult(skill, action), nil
 	}
 
@@ -212,6 +214,18 @@ func (e *Executor) execute(ctx context.Context, skill Skill, action string, args
 func isDocOnlyIntrospectAction(action string) bool {
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case "help", "status":
+		return true
+	}
+	return false
+}
+
+// hasCuratedSubprocessBuilder reports whether the skill name has a dedicated
+// subprocess command builder in buildSkillSpecificCommand. Such skills have
+// real executable actions even with no scripts and no frontmatter list, so
+// the doc-only short-circuit must not intercept them (conduit-7ny5).
+func hasCuratedSubprocessBuilder(skillName string) bool {
+	switch skillName {
+	case "email", "gog":
 		return true
 	}
 	return false

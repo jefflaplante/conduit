@@ -3,6 +3,7 @@ package skills
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -155,5 +156,43 @@ func TestDocOnlySkillSteering(t *testing.T) {
 	ctxLine := integrator.BuildSkillsContext([]Skill{docOnly})
 	if !strings.Contains(ctxLine, "doc-only — Read skills/doconly/SKILL.md") {
 		t.Errorf("skills context should carry a doc-only Read pointer; got %q", ctxLine)
+	}
+}
+
+// TestExecutor_CuratedSubprocessSkillsKeepRealStatus verifies the doc-only
+// short-circuit never masks skills with curated subprocess builders
+// (email/gog): even with no scripts and no frontmatter actions, their status
+// action must still build and run the real gog command rather than a
+// doc-only pointer.
+func TestExecutor_CuratedSubprocessSkillsKeepRealStatus(t *testing.T) {
+	dir := t.TempDir()
+	loader := NewSkillLoader()
+	skill, err := loader.LoadSkillFromContent("---\nname: email\ndescription: mail skill\n---\nbody")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	skill.Location = dir
+	if len(skill.Scripts) != 0 || len(skill.Actions) != 0 {
+		t.Fatalf("fixture must have no scripts/actions; got scripts=%d actions=%d", len(skill.Scripts), len(skill.Actions))
+	}
+
+	// A fake gog on PATH that records the invocation and succeeds.
+	fakeBin := t.TempDir()
+	script := "#!/bin/sh\necho \"GOG_INVOKED $*\"\n"
+	if err := writeExecutable(filepath.Join(fakeBin, "gog"), script); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin+":"+getSystemPath())
+
+	e := NewExecutor(ExecutionConfig{TimeoutSeconds: 10})
+	result, err := e.ExecuteSkill(context.Background(), *skill, "status", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("ExecuteSkill error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("email skill status failed: %s (output: %s)", result.Error, result.Output)
+	}
+	if !strings.Contains(result.Output, "GOG_INVOKED") {
+		t.Errorf("curated subprocess skill status must run the real builder; got: %q", result.Output)
 	}
 }
