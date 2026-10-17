@@ -369,7 +369,9 @@ func (e *Executor) buildSkillSpecificCommand(skillName, action string, args map[
 // Account selection: only the configured env-var expansions
 // (e.gog.ownerAccount / e.gog.agentAccount, double-quoted so the shell
 // expands them without word-splitting or globbing) are ever emitted after
-// --account (conduit-31jg.2, conduit-31jg.40).
+// --account (conduit-31jg.2, conduit-31jg.40). The cleanup action forwards
+// the same expansions as JULES_SWEEP_ACCOUNT / JULES_SWEEP_DRY_RUN env
+// assignments (bd-3f3l.2).
 
 // Bounds for gog --max (conduit-31jg.2).
 const (
@@ -377,6 +379,23 @@ const (
 	gogMinMax     = 1
 	gogMaxMax     = 100
 )
+
+// truthyArg reports whether a model-supplied boolean-ish arg is present and
+// true. Accepts JSON booleans and the strings "true"/"1"/"yes" (case-
+// insensitive); anything else is false. Used for capability flags like
+// dry_run — absence and garbage both mean "off" (bd-3f3l.2).
+func truthyArg(raw interface{}) bool {
+	switch v := raw.(type) {
+	case bool:
+		return v
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "true", "1", "yes":
+			return true
+		}
+	}
+	return false
+}
 
 // parseMaxResults reads the first present key from args as a whole number,
 // accepting JSON numbers and numeric strings, and clamps it to
@@ -538,7 +557,18 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 		if g.cleanupScript == "" {
 			return false, fmt.Errorf("cleanup needs skills.gog.cleanup_script or a configured workspace")
 		}
-		command.WriteString(shellWord(g.cleanupScript) + "\n")
+		// bd-3f3l.2: plumb the resolved account and dry_run into the script
+		// via env (argv stays a fixed single token). The script previously
+		// hardcoded $GOG_ACCOUNT, so an agent-inbox cleanup trashed owner
+		// mail. Env names are prefixed JULES_SWEEP_ and the values are the
+		// same fixed account expansions used by every other gog action —
+		// nothing model-supplied reaches the shell beyond what the other
+		// cases already emit.
+		command.WriteString(fmt.Sprintf("JULES_SWEEP_ACCOUNT=%s", account))
+		if dryRun := truthyArg(args["dry_run"]); dryRun {
+			command.WriteString(" JULES_SWEEP_DRY_RUN=1")
+		}
+		command.WriteString(" " + shellWord(g.cleanupScript) + "\n")
 
 	case "list":
 		listAccount := account

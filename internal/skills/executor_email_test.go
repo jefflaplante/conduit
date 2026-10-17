@@ -124,6 +124,39 @@ func TestEmailSkill_CleanupRunsJunkSweep(t *testing.T) {
 	}
 }
 
+// bd-3f3l.2: cleanup must plumb the resolved account into the sweep script.
+// The script previously hardcoded $GOG_ACCOUNT, so a cleanup meant for the
+// agent inbox silently swept the owner inbox (destructive: TRASHes mail).
+// Default (no account arg) stays the owner account for backward compat.
+func TestEmailSkill_CleanupPlumbsAccount(t *testing.T) {
+	defaultCmd := emailCommand(t, "cleanup", map[string]interface{}{})
+	if !strings.Contains(defaultCmd, `JULES_SWEEP_ACCOUNT="$GOG_ACCOUNT"`) {
+		t.Errorf("cleanup default must target the owner account via $GOG_ACCOUNT, got:\n%s", defaultCmd)
+	}
+
+	agentCmd := emailCommand(t, "cleanup", map[string]interface{}{"account": "jules"})
+	if !strings.Contains(agentCmd, `JULES_SWEEP_ACCOUNT="$JULES_ACCOUNT"`) {
+		t.Errorf("cleanup with agent alias must target $JULES_ACCOUNT, got:\n%s", agentCmd)
+	}
+	if strings.Contains(agentCmd, `JULES_SWEEP_ACCOUNT="$GOG_ACCOUNT"`) {
+		t.Errorf("cleanup with agent alias must not target $GOG_ACCOUNT, got:\n%s", agentCmd)
+	}
+}
+
+// bd-3f3l.2: cleanup must forward dry_run to the sweep script so a caller
+// can preview matches without trashing anything.
+func TestEmailSkill_CleanupForwardsDryRun(t *testing.T) {
+	cmd := emailCommand(t, "cleanup", map[string]interface{}{"dry_run": true})
+	if !strings.Contains(cmd, `JULES_SWEEP_DRY_RUN=1`) {
+		t.Errorf("cleanup with dry_run=true must set JULES_SWEEP_DRY_RUN=1, got:\n%s", cmd)
+	}
+
+	defaultCmd := emailCommand(t, "cleanup", map[string]interface{}{})
+	if strings.Contains(defaultCmd, "JULES_SWEEP_DRY_RUN") {
+		t.Errorf("cleanup without dry_run must not set the env var, got:\n%s", defaultCmd)
+	}
+}
+
 // No real command exists for an unknown action on a scriptless skill.
 // The executor must fail honestly (empty command → executeSubprocess error)
 // instead of echoing "Executed action: X" and exiting 0 — the old fallback
