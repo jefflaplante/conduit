@@ -172,6 +172,18 @@ func (e *Executor) ExecuteSkill(ctx context.Context, skill Skill, action string,
 // execute runs a skill with no approval gating. Only ExecuteSkill (after the
 // gate) and an approved owner-send ExecuteFunc may call it.
 func (e *Executor) execute(ctx context.Context, skill Skill, action string, args map[string]interface{}) (*ExecutionResult, error) {
+	// Doc-only skills (no scripts, no frontmatter actions) are documentation
+	// the agent reads, not programs the executor runs — yet the integrator
+	// advertises fallback verbs for them ([status help],
+	// integration.go getCommonActionsForSkill), and every such call used to
+	// burn a guaranteed error round-trip (conduit-7ny5). Short-circuit the
+	// generic help/status verbs to success with a pointer to SKILL.md so the
+	// model self-corrects to Read. Any other action still fails honestly
+	// below via the empty-command path.
+	if len(skill.Scripts) == 0 && len(skill.Actions) == 0 && isDocOnlyIntrospectAction(action) {
+		return e.docOnlyIntrospectResult(skill, action), nil
+	}
+
 	// Create a context with timeout
 	timeoutCtx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
@@ -189,6 +201,31 @@ func (e *Executor) execute(ctx context.Context, skill Skill, action string, args
 			Success: false,
 			Error:   fmt.Sprintf("unsupported execution method: %s", method),
 		}, nil
+	}
+}
+
+// isDocOnlyIntrospectAction reports whether action is a generic
+// introspection verb that carries no skill-specific meaning. Curated
+// subprocess skills (email/gog) build real commands for "status" and so are
+// excluded from this path by the caller's script/actions guard; the guard
+// itself is what prevents masking real builders.
+func isDocOnlyIntrospectAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "help", "status":
+		return true
+	}
+	return false
+}
+
+// docOnlyIntrospectResult builds the self-correcting success payload for a
+// help/status call against a doc-only skill.
+func (e *Executor) docOnlyIntrospectResult(skill Skill, action string) *ExecutionResult {
+	return &ExecutionResult{
+		Success: true,
+		Output: fmt.Sprintf("Skill %q is documentation-only: no scripts and no declared actions. "+
+			"Read the skill file for how to use it: %s (workspace-relative: skills/%s/SKILL.md). "+
+			"Do not call this tool again; use the Read tool on that path instead.",
+			skill.Name, filepath.Join(skill.Location, "SKILL.md"), skill.Name),
 	}
 }
 
