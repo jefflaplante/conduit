@@ -339,12 +339,54 @@ func (a *ConduitAgentWithIntegration) GetToolDefinitions(session *sessions.Sessi
 	// a.tools already contains each skill_* tool. Appending freshly
 	// generated skill tools here shipped every skill tool TWICE to the
 	// provider catalog. Filter to genuinely-new names instead.
+	//
+	// Skill-scoping fix (conduit-3oym): registry bridges are unconditional,
+	// so with a session skill_filter active the dedup below silently
+	// discarded the GenerateToolsFiltered output and scoped sessions
+	// received every skill tool. When a filter is active, compute the full
+	// skill-tool name set, drop the tools belonging to skills OUTSIDE the
+	// filter from the catalog, then merge any genuinely-new filtered tools
+	// on top. Core (non-skill) tools are untouched; an empty filter keeps
+	// the exact dedup-only behavior.
 	if sm != nil && caps.SkillsIntegration && sm.IsEnabled() {
 		ctx := context.Background()
 		var skillTools []skills.SkillToolInterface
 		var err error
 		if len(skillFilter) > 0 {
-			skillTools, err = sm.GenerateToolsFiltered(ctx, skillFilter)
+			// Full skill-tool set (all skills) vs the filtered subset; the
+			// difference is exactly the skill tools that must not ship to
+			// this session. Discovery is cached, so the extra call re-walks
+			// an in-memory skill list rather than rescanning disk.
+			allSkillTools, genErr := sm.GenerateTools(ctx)
+			if genErr != nil {
+				log.Printf("Failed to generate all skill tools for filter: %v", genErr)
+				err = genErr
+			} else {
+				filteredTools, filtErr := sm.GenerateToolsFiltered(ctx, skillFilter)
+				if filtErr != nil {
+					log.Printf("Failed to generate filtered skill tools: %v", filtErr)
+					err = filtErr
+				} else {
+					allNames := make(map[string]bool, len(allSkillTools))
+					for _, st := range allSkillTools {
+						allNames[st.Name()] = true
+					}
+					filteredNames := make(map[string]bool, len(filteredTools))
+					for _, st := range filteredTools {
+						filteredNames[st.Name()] = true
+					}
+					scoped := make([]ai.Tool, 0, len(allTools))
+					for _, t := range allTools {
+						// Keep core tools and allowed skill tools; drop skill
+						// bridges whose skill is not in the filter.
+						if !allNames[t.Name] || filteredNames[t.Name] {
+							scoped = append(scoped, t)
+						}
+					}
+					allTools = scoped
+					skillTools = filteredTools
+				}
+			}
 		} else {
 			skillTools, err = sm.GenerateTools(ctx)
 		}

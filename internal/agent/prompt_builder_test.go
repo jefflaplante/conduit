@@ -832,3 +832,129 @@ func TestGetToolDefinitions_NoSkillDupes(t *testing.T) {
 		t.Errorf("base tools must be untouched; Read count = %d", counts["Read"])
 	}
 }
+
+// TestGetToolDefinitions_SkillFilterExcludesOtherSkills is the conduit-3oym
+// regression test: when a session sets "skill_filter", GetToolDefinitions
+// must scope the catalog to the named skills. The registry registers every
+// skill tool unconditionally (registry_skills.go), so the agent's dedup
+// path kept all bridge tools even after GenerateToolsFiltered returned a
+// scoped list — scoping was a silent no-op. The fix: when a filter is
+// active, drop non-matching skill tools from the base catalog instead of
+// merging the filtered output on top of the full set.
+func TestGetToolDefinitions_SkillFilterExcludesOtherSkills(t *testing.T) {
+	tempDir := t.TempDir()
+	writeSkill := func(name string) {
+		t.Helper()
+		skillDir := filepath.Join(tempDir, name)
+		if err := os.MkdirAll(skillDir, 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		skillMD := "---\nname: " + name + "\ndescription: Skill filter fixture " + name + "\n---\nbody"
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	writeSkill("alpha-one")
+	writeSkill("beta-two")
+
+	sm := skills.NewManager(skills.SkillsConfig{
+		Enabled:     true,
+		SearchPaths: []string{tempDir},
+	})
+	if err := sm.Initialize(context.Background()); err != nil {
+		t.Fatalf("manager init: %v", err)
+	}
+
+	// Base catalog mimics the registry: both skill bridges present, plus a
+	// core tool that must survive filtering untouched.
+	tools := []ai.Tool{
+		{Name: "Read", Description: "Read a file"},
+		{Name: "skill_alpha-one", Description: "registry bridge copy"},
+		{Name: "skill_beta-two", Description: "registry bridge copy"},
+	}
+	cfg := AgentConfig{
+		Name:        "test-agent",
+		Personality: "helpful",
+		Identity:    IdentityConfig{APIKeyIdentity: "You are a test agent."},
+		Capabilities: AgentCapabilities{
+			SkillsIntegration: true,
+		},
+	}
+	agent := NewConduitAgentWithIntegration(cfg, tools, nil, nil, sm, nil, nil)
+
+	session := &sessions.Session{
+		Context: map[string]string{"skill_filter": "alpha-one"},
+	}
+	defs := agent.GetToolDefinitions(session)
+
+	counts := map[string]int{}
+	for _, td := range defs {
+		counts[td.Name]++
+	}
+	if counts["skill_alpha-one"] != 1 {
+		t.Errorf("allowed skill tool count = %d, want exactly 1", counts["skill_alpha-one"])
+	}
+	if counts["skill_beta-two"] != 0 {
+		t.Errorf("filtered-out skill tool still in scoped catalog (conduit-3oym no-op); count = %d", counts["skill_beta-two"])
+	}
+	if counts["Read"] != 1 {
+		t.Errorf("core tools must be unaffected by skill_filter; Read count = %d", counts["Read"])
+	}
+}
+
+// TestGetToolDefinitions_SkillFilterEmptyIsUnscoped pins the contract that an
+// empty skill_filter leaves the catalog untouched (all skills, deduped) —
+// the pre-fix behavior for unscoped sessions must not change.
+func TestGetToolDefinitions_SkillFilterEmptyIsUnscoped(t *testing.T) {
+	tempDir := t.TempDir()
+	writeSkill := func(name string) {
+		t.Helper()
+		skillDir := filepath.Join(tempDir, name)
+		if err := os.MkdirAll(skillDir, 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		skillMD := "---\nname: " + name + "\ndescription: Unscoped fixture " + name + "\n---\nbody"
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	writeSkill("alpha-one")
+	writeSkill("beta-two")
+
+	sm := skills.NewManager(skills.SkillsConfig{
+		Enabled:     true,
+		SearchPaths: []string{tempDir},
+	})
+	if err := sm.Initialize(context.Background()); err != nil {
+		t.Fatalf("manager init: %v", err)
+	}
+
+	tools := []ai.Tool{
+		{Name: "Read", Description: "Read a file"},
+		{Name: "skill_alpha-one", Description: "registry bridge copy"},
+		{Name: "skill_beta-two", Description: "registry bridge copy"},
+	}
+	cfg := AgentConfig{
+		Name:        "test-agent",
+		Personality: "helpful",
+		Identity:    IdentityConfig{APIKeyIdentity: "You are a test agent."},
+		Capabilities: AgentCapabilities{
+			SkillsIntegration: true,
+		},
+	}
+	agent := NewConduitAgentWithIntegration(cfg, tools, nil, nil, sm, nil, nil)
+
+	defs := agent.GetToolDefinitions(nil)
+
+	counts := map[string]int{}
+	for _, td := range defs {
+		counts[td.Name]++
+	}
+	if counts["skill_alpha-one"] != 1 || counts["skill_beta-two"] != 1 {
+		t.Errorf("unscoped session must keep every skill tool exactly once; got alpha=%d beta=%d",
+			counts["skill_alpha-one"], counts["skill_beta-two"])
+	}
+	if counts["Read"] != 1 {
+		t.Errorf("base tools must be untouched; Read count = %d", counts["Read"])
+	}
+}
