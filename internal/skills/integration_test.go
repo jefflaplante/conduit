@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -242,5 +243,85 @@ func TestParameters_EnumOnlyWithHonestActions(t *testing.T) {
 	}
 	if actionProp2["description"] == "" {
 		t.Error("action param must still carry a description")
+	}
+}
+
+// --- bd-312l: SkillActionTool.Execute hoist must be args-wins ---
+
+// captureSkillForActionTool runs a SkillActionTool against a real executor +
+// temp-dir bash script that echoes its stdin envelope back as JSON, then
+// returns the decoded map the skill invocation actually received.
+func captureSkillForActionTool(t *testing.T, args map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	dir := t.TempDir()
+	skill := writeScript(t, dir, "search.sh", `#!/bin/bash
+line=$(cat)
+echo "$line"
+`)
+	skill.Name = "hoist-probe"
+	e := NewExecutor(ExecutionConfig{TimeoutSeconds: 10})
+	tool := &SkillActionTool{skill: skill, action: "search", executor: e}
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("SkillActionTool.Execute error: %v", err)
+	}
+	if result == nil || !result.Success {
+		t.Fatalf("skill probe failed: %v (output: %s)", result, resultContentFor(result))
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal([]byte(result.Content), &got); err != nil {
+		t.Fatalf("probe output not JSON: %v (raw: %q)", err, result.Content)
+	}
+	return got
+}
+
+func resultContentFor(r *SkillToolResult) string {
+	if r == nil {
+		return "<nil result>"
+	}
+	return r.Content
+}
+
+// TestSkillActionTool_ExecuteArgsWinOverHoisted: SkillActionTool.Execute
+// hoists action-specific top-level params (e.g. query for a search tool) into
+// skill args, but the hoist is unconditional — a same-named key inside nested
+// args is silently clobbered by the top-level copy. The nested args object is
+// the documented channel, so explicit args keys must win on conflict
+// (mirrors TestSkillTool_ExecuteArgsWinOverHoisted from bd-3f3l.1).
+func TestSkillActionTool_ExecuteArgsWinOverHoisted(t *testing.T) {
+	got := captureSkillForActionTool(t, map[string]interface{}{
+		"query": "top-level-query",
+		"args": map[string]interface{}{
+			"query": "nested-query",
+		},
+	})
+
+	if q, ok := got["query"].(string); !ok || q != "nested-query" {
+		t.Errorf("nested args.query must win over hoisted top-level query; got: %v", got)
+	}
+}
+
+// TestSkillActionTool_ExecuteHoistsTopLevelParams: action-specific top-level
+// params (query, location, ...) declared in the tool schema must still reach
+// the skill when the provider sends them at the top level — args-wins must
+// not become args-only (regression guard for the bd-312l fix).
+func TestSkillActionTool_ExecuteHoistsTopLevelParams(t *testing.T) {
+	got := captureSkillForActionTool(t, map[string]interface{}{
+		"query":    "invoice",
+		"location": "Seattle",
+		"args":     map[string]interface{}{"limit": 10},
+	})
+
+	if q, ok := got["query"].(string); !ok || q != "invoice" {
+		t.Errorf("top-level query not hoisted into skill args; got: %v", got)
+	}
+	if loc, ok := got["location"].(string); !ok || loc != "Seattle" {
+		t.Errorf("top-level location not hoisted into skill args; got: %v", got)
+	}
+	if lim, ok := got["limit"].(float64); !ok || lim != 10 {
+		t.Errorf("nested args.limit lost during hoist; got: %v", got)
+	}
+	if _, leaked := got["args"]; leaked {
+		t.Errorf("raw args container must not be forwarded as a key; got: %v", got)
 	}
 }

@@ -198,6 +198,29 @@ func (st *SkillTool) BrainProduces() []string {
 	return st.skill.Metadata.Conduit.Produces
 }
 
+// hoistTopLevelParams merges top-level tool-call params into skillArgs,
+// skipping the reserved dispatch keys and never overwriting an explicit
+// nested-args value. Providers legitimately send extra keys at the top level
+// of the tool-call JSON (schemas declare only a few properties with no
+// additionalProperties:false); the nested args object is the documented
+// channel, so explicit args keys win on conflict (bd-312l, mirroring the
+// bd-3f3l.1 SkillTool fix).
+func hoistTopLevelParams(args, skillArgs map[string]interface{}, reserved ...string) {
+	skip := make(map[string]bool, len(reserved)+1)
+	skip["args"] = true // never forward the raw args container itself
+	for _, key := range reserved {
+		skip[key] = true
+	}
+	for key, value := range args {
+		if skip[key] {
+			continue
+		}
+		if _, exists := skillArgs[key]; !exists {
+			skillArgs[key] = value
+		}
+	}
+}
+
 // Execute runs the skill with the given parameters
 func (st *SkillTool) Execute(ctx context.Context, args map[string]interface{}) (*SkillToolResult, error) {
 	action, ok := args["action"].(string)
@@ -212,6 +235,15 @@ func (st *SkillTool) Execute(ctx context.Context, args map[string]interface{}) (
 	if skillArgs == nil {
 		skillArgs = make(map[string]interface{})
 	}
+
+	// Hoist every top-level key except "action"/"args" into skillArgs
+	// (bd-3f3l.1). The schema declares only action+args with no
+	// additionalProperties:false, so providers legitimately pass extra keys
+	// (e.g. account, query) at the top level of the tool-call JSON —
+	// previously they were silently discarded (top-level account quietly
+	// resolved to the owner inbox with zero signal). Explicit args keys win
+	// on conflict: the nested args object is the documented channel.
+	hoistTopLevelParams(args, skillArgs, "action")
 
 	result, err := st.executor.ExecuteSkill(ctx, st.skill, action, skillArgs)
 	if err != nil {
@@ -289,12 +321,12 @@ func (sat *SkillActionTool) Execute(ctx context.Context, args map[string]interfa
 		skillArgs = make(map[string]interface{})
 	}
 
-	// Add action-specific arguments to skill args
-	for key, value := range args {
-		if key != "args" {
-			skillArgs[key] = value
-		}
-	}
+	// Add action-specific arguments to skill args. Args-wins on conflict
+	// (bd-312l): the hoist used to be unconditional, silently clobbering a
+	// same-named nested-args key with the top-level copy. The nested args
+	// object is the documented channel; top-level keys are the convenience
+	// passthrough for schema-declared params like query/location.
+	hoistTopLevelParams(args, skillArgs)
 
 	result, err := sat.executor.ExecuteSkill(ctx, sat.skill, sat.action, skillArgs)
 	if err != nil {
