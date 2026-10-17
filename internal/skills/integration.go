@@ -88,7 +88,13 @@ func (i *SkillIntegrator) extractAvailableActions(skill Skill) []string {
 	return removeDuplicates(actions)
 }
 
-// getCommonActionsForSkill returns commonly used actions for known skill types
+// getCommonActionsForSkill returns commonly used actions for known skill types.
+// Doc-only skills (no scripts, no frontmatter actions) get NO fallback verbs:
+// the generic [status help] had no execution path, so advertising them
+// guaranteed an error round-trip on every call. With no honest actions the
+// tool schema omits the enum entirely (conduit-1jd9) and the model is steered
+// to Read SKILL.md; the executor separately short-circuits stray help/status
+// calls (conduit-7ny5).
 func (i *SkillIntegrator) getCommonActionsForSkill(skillName string) []string {
 	skillActions := map[string][]string{
 		"email":    {"search", "read", "send", "cleanup", "list"},
@@ -105,7 +111,7 @@ func (i *SkillIntegrator) getCommonActionsForSkill(skillName string) []string {
 		return actions
 	}
 
-	return []string{"status", "help"}
+	return nil
 }
 
 // shouldCreateActionTool determines if an action warrants its own tool
@@ -158,6 +164,12 @@ func (st *SkillTool) Description() string {
 	emoji := st.skill.Metadata.Conduit.Emoji
 	if emoji == "" {
 		emoji = "🔧"
+	}
+	if len(st.actions) == 0 {
+		// Doc-only skill: no scripts, no frontmatter actions. Steering text
+		// instead of a dead verb list (conduit-7ny5).
+		return fmt.Sprintf("%s %s (doc-only skill — Read skills/%s/SKILL.md instead of calling this tool)",
+			emoji, st.skill.Description, st.skill.Name)
 	}
 	return fmt.Sprintf("%s %s (Available actions: %s)", emoji, st.skill.Description,
 		formatActionsList(st.actions))
@@ -405,10 +417,15 @@ func (i *SkillIntegrator) BuildSkillsContext(skills []Skill) string {
 		// One compact line per skill. The full description already ships in
 		// the tool catalog (skill_* tools), so repeating it here doubled the
 		// token cost of every request. Keep name + emoji + trimmed gist +
-		// actions only.
+		// actions only. Doc-only skills (no honest actions) say so and point
+		// at the file to Read instead of listing dead verbs (conduit-7ny5).
+		actionInfo := formatActionsList(actions)
+		if len(actions) == 0 {
+			actionInfo = fmt.Sprintf("doc-only — Read skills/%s/SKILL.md", skill.Name)
+		}
 		skillInfo := fmt.Sprintf("- `skill_%s` %s — %s (actions: %s)\n",
 			skill.Name, emoji, truncateDescription(skill.Description, 160),
-			formatActionsList(actions))
+			actionInfo)
 
 		context = append(context, skillInfo)
 	}
