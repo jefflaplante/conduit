@@ -213,6 +213,22 @@ func (st *SkillTool) Execute(ctx context.Context, args map[string]interface{}) (
 		skillArgs = make(map[string]interface{})
 	}
 
+	// Hoist every top-level key except "action"/"args" into skillArgs
+	// (bd-3f3l.1). The schema declares only action+args with no
+	// additionalProperties:false, so providers legitimately pass extra keys
+	// (e.g. account, query) at the top level of the tool-call JSON —
+	// previously they were silently discarded (top-level account quietly
+	// resolved to the owner inbox with zero signal). Explicit args keys win
+	// on conflict: the nested args object is the documented channel.
+	for key, value := range args {
+		if key == "action" || key == "args" {
+			continue
+		}
+		if _, exists := skillArgs[key]; !exists {
+			skillArgs[key] = value
+		}
+	}
+
 	result, err := st.executor.ExecuteSkill(ctx, st.skill, action, skillArgs)
 	if err != nil {
 		return &SkillToolResult{
