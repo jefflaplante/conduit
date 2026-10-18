@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
+	"conduit/internal/ai"
+	"conduit/internal/config"
 	"conduit/internal/eval"
 
 	"github.com/spf13/cobra"
@@ -12,13 +15,17 @@ import (
 //
 //	conduit eval run --corpus internal/eval/testdata/corpus [--baseline results.jsonl] [--out results.jsonl]
 //
-// Replay mode only in v0.1: scores scripted transcripts. No provider calls,
-// no side effects.
+// Replay mode with the stub judge makes no provider calls and has no side
+// effects. --judge llm is the one explicit opt-in to live judge calls: it
+// requires --judge-model and sends one scoring request per case (bd-18u
+// v0.2, design doc §3b).
 var (
-	evalCorpus   string
-	evalBaseline string
-	evalOut      string
-	evalJudge    string
+	evalCorpus        string
+	evalBaseline      string
+	evalOut           string
+	evalJudge         string
+	evalJudgeModel    string
+	evalJudgeProvider string
 )
 
 var evalCmd = &cobra.Command{
@@ -29,7 +36,11 @@ var evalCmd = &cobra.Command{
 Replay mode scores pre-scripted transcripts through deterministic checks
 (turn budget, tool allowlist, deny classes, content fragments, cost budget)
 and the configured judge for the goal dimension. Emits per-case JSONL and
-an aggregate markdown report to stdout.`,
+an aggregate markdown report to stdout.
+
+Judge selection: --judge stub (default, deterministic, no network) or
+--judge llm (one LLM scoring call per case; requires --judge-model and
+makes real provider calls).`,
 }
 
 var evalRunCmd = &cobra.Command{
@@ -46,14 +57,74 @@ func init() {
 	evalRunCmd.Flags().StringVar(&evalOut, "out", "",
 		"write per-case results as JSONL to this path")
 	evalRunCmd.Flags().StringVar(&evalJudge, "judge", "stub",
-		"judge implementation (v0.1: stub only)")
+		"judge implementation: stub (default, deterministic) or llm")
+	evalRunCmd.Flags().StringVar(&evalJudgeModel, "judge-model", "",
+		"model for --judge llm (e.g. provider/model); required with --judge llm")
+	evalRunCmd.Flags().StringVar(&evalJudgeProvider, "judge-provider", "",
+		"provider name from gateway config for --judge llm; default resolves from the model's provider/ prefix")
 
 	evalCmd.AddCommand(evalRunCmd)
 	rootCmd.AddCommand(evalCmd)
 }
 
+// evalJudgeFromConfig wires the judge selected by flags. The stub path is
+// pure; the llm path resolves the provider from the gateway config (same
+// file the server loads) and constructs it with the production constructor.
+// No provider call happens here — construction only; live calls occur later
+// in runEval, one per case, only because the user passed --judge llm.
+func evalJudgeFromConfig(cmd *cobra.Command) (eval.Judge, error) {
+	switch strings.TrimSpace(evalJudge) {
+	case "", "stub":
+		return eval.JudgeByName("stub")
+	case "llm":
+		if strings.TrimSpace(evalJudgeModel) == "" {
+			return nil, fmt.Errorf("--judge llm requires --judge-model (e.g. --judge-model provider/model)")
+		}
+		cfg, err := loadExistingConfig(cfgFile)
+		if err != nil {
+			return nil, err
+		}
+		provider, err := evalProviderFromConfig(cfg, evalJudgeProvider, evalJudgeModel)
+		if err != nil {
+			return nil, err
+		}
+		return eval.LLMJudgeByName("llm", evalJudgeModel, provider)
+	default:
+		// Surface the unknown-judge error with flag context.
+		return nil, fmt.Errorf("unknown --judge %q (supported: stub, llm)", evalJudge)
+	}
+}
+
+// evalProviderFromConfig picks the named provider config out of the gateway
+// config and builds it with the same constructors the router uses, keeping
+// judge traffic on the identical code path as production traffic. No new
+// config keys: the judge reuses the providers already declared there.
+func evalProviderFromConfig(cfg *config.Config, providerName, model string) (ai.Provider, error) {
+	if providerName == "" {
+		// Default: resolve from the model's "provider/model" prefix, same
+		// convention the router uses for routing decisions.
+		idx := strings.Index(model, "/")
+		if idx <= 0 {
+			return nil, fmt.Errorf("cannot resolve a judge provider: --judge-model %q has no provider/ prefix and --judge-provider is unset", model)
+		}
+		providerName = model[:idx]
+	}
+	for i := range cfg.AI.Providers {
+		pc := cfg.AI.Providers[i]
+		if !strings.EqualFold(pc.Name, providerName) {
+			continue
+		}
+		provider, err := ai.NewOpenAIProvider(pc)
+		if err != nil {
+			return nil, fmt.Errorf("build judge provider %s: %w", pc.Name, err)
+		}
+		return provider, nil
+	}
+	return nil, fmt.Errorf("provider %q not found in config; --judge-provider must name a configured provider", providerName)
+}
+
 func runEval(cmd *cobra.Command, args []string) error {
-	judge, err := eval.JudgeByName(evalJudge)
+	judge, err := evalJudgeFromConfig(cmd)
 	if err != nil {
 		return err
 	}

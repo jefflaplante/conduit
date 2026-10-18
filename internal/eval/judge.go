@@ -62,14 +62,17 @@ func assistantText(c *Case) string {
 	return b.String()
 }
 
-// JudgeByName returns the judge for a --judge value. v0.1 accepts only the
-// stub (and "" for the default); wiring a real LLM judge here is the v0.1
-// follow-up. Unknown names error rather than silently falling back.
+// JudgeByName returns the judge for a --judge value. "" and "stub" give the
+// deterministic stub; "llm" builds an LLMJudge via LLMJudgeByName (provider
+// + model must come from the caller's config wiring — never a live call from
+// here). Unknown names error rather than silently falling back.
 func JudgeByName(name string) (Judge, error) {
 	switch strings.TrimSpace(name) {
 	case "", "stub":
 		return StubJudge{}, nil
+	case "llm":
+		return LLMJudgeByName(name, "", nil)
 	default:
-		return nil, fmt.Errorf("unknown judge %q (v0.1 supports only \"stub\")", name)
+		return nil, fmt.Errorf("unknown judge %q (supported: stub, llm)", name)
 	}
 }
