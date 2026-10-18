@@ -67,8 +67,12 @@ func (j *LLMJudge) JudgeGoal(c *Case) (float64, error) {
 
 	resp, err := j.Provider.GenerateResponse(ctx, &ai.GenerateRequest{
 		Model: j.Model,
+		// Cache-stable prompt placement (bd-18u v0.3): the rubric lives
+		// solely in the leading system message, declared as a static
+		// SystemBlock, byte-identical across every case and every sampled
+		// run — see judgeSystemMessage.
 		Messages: []ai.ChatMessage{
-			{Role: "system", Content: judgeSystemPrompt()},
+			judgeSystemMessage(),
 			{Role: "user", Content: judgeUserPrompt(c)},
 		},
 		MaxTokens: judgeMaxTokens,
@@ -143,6 +147,38 @@ Be strict: when in doubt between two anchors, choose the lower score. Do not rew
 
 Respond with ONLY a JSON object, no other text, in exactly this form:
 {"score": 0.75, "rationale": "one short sentence explaining the score"}`
+}
+
+// judgeSystemMessage renders the rubric as the judge request's leading
+// system message (bd-18u v0.3, cache-friendly rubric placement).
+//
+// The cache contract, and why the shape matters:
+//   - The rubric is byte-identical for every case and every sampled run,
+//     so provider-side prefix caches (Anthropic prompt caching, OpenAI
+//     implicit caching) can reuse it across judge calls; only the user
+//     message varies. Any per-call bytes here (timestamp, run index)
+//     would invalidate the shared prefix — there are none.
+//   - The rubric is declared as a static (non-Dynamic) SystemBlock with
+//     Content set to the same joined text. Anthropic wire conversion
+//     keeps block arrays when Content matches the joined blocks and
+//     places the system cache breakpoint on the last non-dynamic block
+//     (conduit-31jg.14), so the breakpoint lands on the rubric by
+//     construction rather than via the plain-string fallback. Providers
+//     without block support use Content unchanged.
+//   - Placement (system/prefix) is also the position providers require
+//     for a cacheable prefix: nothing variable precedes the transcript.
+//
+// Bumping the rubric text is a rubricVersion bump: it changes every
+// judge score AND drops every warm prompt cache.
+func judgeSystemMessage() ai.ChatMessage {
+	rubric := judgeSystemPrompt()
+	return ai.ChatMessage{
+		Role:    "system",
+		Content: rubric,
+		SystemBlocks: []ai.SystemBlock{
+			{Type: "text", Text: rubric},
+		},
+	}
 }
 
 // judgeUserPrompt renders the case for the judge: the goal plus the full
