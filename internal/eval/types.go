@@ -4,7 +4,8 @@
 // a corpus of scripted cases, with deterministic checks gating and a pluggable
 // judge scoring the subjective dimension. v0.1 is replay-only: assistant turns
 // are pre-scripted in the corpus, so runs are free, deterministic, and
-// side-effect-free. Live mode (model-under-test generates the turns) is v0.2.
+// side-effect-free. Live mode (v0.4) executes each case's user turns against
+// a real provider and scores the captured transcript with the same pipeline.
 //
 // Design doc: workspace/memory/sd-bd-18u-eval-harness-research-2026-10-18.md.
 // Key invariants:
@@ -125,8 +126,8 @@ type DimensionScores struct {
 	// GoalRuns/GoalScores carry the sampling metadata and are populated
 	// only when Runs>1 — single-run results keep them zero/nil so their
 	// JSONL lines stay byte-compatible with pre-sampling baselines.
-	Goal       float64 `json:"goal"`
-	GoalRuns   int     `json:"goal_runs,omitempty"`
+	Goal       float64   `json:"goal"`
+	GoalRuns   int       `json:"goal_runs,omitempty"`
 	GoalScores []float64 `json:"goal_scores,omitempty"`
 	// Compliance covers allowlist + deny-class adherence (1.0 clean, 0 on
 	// violations — though deny violations also hard-fail the case).
@@ -187,6 +188,12 @@ type CaseResult struct {
 	// calls made) and for results whose judge did not report usage.
 	JudgeUsage JudgeUsage `json:"judge_usage,omitempty"`
 
+	// LiveUsage accounts the model-under-test's provider calls that
+	// generated this case's transcript (v0.4, live mode only: tokens +
+	// priced cost). Nil for replay results so replay JSONL lines stay
+	// byte-compatible with earlier baselines.
+	LiveUsage *JudgeUsage `json:"live_usage,omitempty"`
+
 	// ScoredAt records when the case was scored.
 	ScoredAt time.Time `json:"scored_at"`
 }
@@ -229,6 +236,16 @@ type Summary struct {
 	// (bd-18u v0.3): calls, tokens, and priced cost. Distinct from
 	// TotalCostUSD, which prices the *cases'* synthetic token counts.
 	JudgeUsage JudgeUsage `json:"judge_usage,omitempty"`
+
+	// LiveModel is the model-under-test ID for live runs (v0.4); empty for
+	// replay runs. Recorded so live summaries stay auditable against the
+	// model that actually generated the transcripts.
+	LiveModel string `json:"live_model,omitempty"`
+
+	// LiveUsage aggregates the model-under-test's provider spend across a
+	// live run (v0.4): calls, tokens, and priced cost. Zero-valued for
+	// replay runs (no generation calls happen).
+	LiveUsage JudgeUsage `json:"live_usage,omitempty"`
 
 	// PerCase holds the individual results.
 	PerCase []CaseResult `json:"per_case"`
