@@ -174,6 +174,11 @@ type CaseResult struct {
 	// JudgeID records which judge implementation scored the case.
 	JudgeID string `json:"judge_id"`
 
+	// JudgeUsage accounts the judge's own provider calls for this case
+	// (tokens + priced cost). Zero-valued for deterministic judges (no
+	// calls made) and for results whose judge did not report usage.
+	JudgeUsage JudgeUsage `json:"judge_usage,omitempty"`
+
 	// ScoredAt records when the case was scored.
 	ScoredAt time.Time `json:"scored_at"`
 }
@@ -207,6 +212,11 @@ type Summary struct {
 
 	// JudgeID is the judge that scored every case in this run.
 	JudgeID string `json:"judge_id"`
+
+	// JudgeUsage aggregates the judge's own provider spend across the run
+	// (bd-18u v0.3): calls, tokens, and priced cost. Distinct from
+	// TotalCostUSD, which prices the *cases'* synthetic token counts.
+	JudgeUsage JudgeUsage `json:"judge_usage,omitempty"`
 
 	// PerCase holds the individual results.
 	PerCase []CaseResult `json:"per_case"`

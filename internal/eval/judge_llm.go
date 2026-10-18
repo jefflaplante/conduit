@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"conduit/internal/ai"
@@ -28,12 +29,23 @@ const judgeMaxTokens = 512
 // §3b). It wraps any ai.Provider — production wiring hands it a provider
 // built from the gateway config; tests inject a mock. One provider call per
 // case, no shared mutable state: safe for concurrent JudgeGoal calls.
+//
+// With Runs > 1 (median-of-N), JudgeGoal is invoked once per run and each
+// invocation makes one provider call.
 type LLMJudge struct {
 	// Provider is the backing provider (used only for Name() and calls).
 	Provider ai.Provider
 	// Model is the model ID sent with each judge request (e.g. "z-ai/glm-5.3").
 	// May carry a "provider/" prefix; providers strip their own prefix.
 	Model string
+
+	// lastUsage is the provider-reported usage of the most recent
+	// JudgeGoal call, consumed by the runner through JudgeUsageReporter.
+	// Single-flight by the runner's serial loop. guard serializes the
+	// lastUsage write against probes (Runner.Runs may add concurrency
+	// later; today the runner is serial).
+	lastUsage ai.Usage
+	guard     sync.Mutex
 }
 
 // compile-time check: LLMJudge must satisfy Judge.
@@ -65,11 +77,28 @@ func (j *LLMJudge) JudgeGoal(c *Case) (float64, error) {
 		return 0, fmt.Errorf("llm judge (%s): %w", j.ID(), err)
 	}
 
+	// Record usage before parse: tokens burned on an unparseable verdict
+	// are real spend and must land in the accounting even though the call
+	// ultimately fails.
+	j.guard.Lock()
+	j.lastUsage = resp.Usage
+	j.guard.Unlock()
+
 	verdict, err := parseJudgeVerdict(resp.Content)
 	if err != nil {
 		return 0, fmt.Errorf("llm judge (%s): %w", j.ID(), err)
 	}
 	return clamp01(verdict.Score), nil
+}
+
+// LastUsage implements JudgeUsageReporter: the provider-reported usage of
+// the most recent JudgeGoal call (per call, not cumulative). A provider
+// that omits usage reports zeros — visible in the accounting as calls
+// without tokens.
+func (j *LLMJudge) LastUsage() ai.Usage {
+	j.guard.Lock()
+	defer j.guard.Unlock()
+	return j.lastUsage
 }
 
 // ID implements Judge: "llm/<provider-name>/<model>@rubric-v1". Recorded

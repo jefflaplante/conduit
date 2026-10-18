@@ -48,6 +48,14 @@ func FormatSummaryMarkdown(s *Summary, flags []string) string {
 		s.TotalCases, s.PassedCases, s.TotalCases-s.PassedCases))
 	b.WriteString(fmt.Sprintf("- **Weighted score:** %.3f\n", s.WeightedScore))
 	b.WriteString(fmt.Sprintf("- **Total cost:** $%.6f (synthetic token counts)\n", s.TotalCostUSD))
+	if s.JudgeUsage.Calls > 0 {
+		b.WriteString(fmt.Sprintf("- **Judge calls:** %d, $%.6f (priced=%t; prompt %d tok, completion %d tok, cache-read %d tok, cache-write %d tok)\n",
+			s.JudgeUsage.Calls, s.JudgeUsage.CostUSD, s.JudgeUsage.CostPriced,
+			s.JudgeUsage.PromptTokens, s.JudgeUsage.CompletionTokens,
+			s.JudgeUsage.CacheReadTokens, s.JudgeUsage.CacheCreationTokens))
+	} else {
+		b.WriteString("- **Judge calls:** 0 (no provider spend)\n")
+	}
 	b.WriteString(fmt.Sprintf("- **Judge:** %s\n", s.JudgeID))
 	b.WriteString(fmt.Sprintf("- **Generated:** %s\n\n", s.GeneratedAt.Format(time.RFC3339)))
 
@@ -129,6 +137,7 @@ func LoadSummaryJSONL(path string) (*Summary, error) {
 	}
 	s.MeanScores = meanScores(s.PerCase)
 	s.WeightedScore = weighted(s.MeanScores)
+	s.JudgeUsage = SumJudgeUsage(s.PerCase)
 	if s.TotalCases > 0 {
 		s.JudgeID = s.PerCase[0].JudgeID
 	}

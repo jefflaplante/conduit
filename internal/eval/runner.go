@@ -42,6 +42,7 @@ func (r *Runner) Run(cases []*Case) (*Summary, error) {
 	summary.TotalCases = len(summary.PerCase)
 	summary.MeanScores = meanScores(summary.PerCase)
 	summary.WeightedScore = weighted(summary.MeanScores)
+	summary.JudgeUsage = SumJudgeUsage(summary.PerCase)
 	return summary, nil
 }
 
@@ -60,7 +61,15 @@ func (r *Runner) scoreCase(c *Case) (*CaseResult, error) {
 
 	goal, err := r.Judge.JudgeGoal(c)
 	if err != nil {
-		return nil, fmt.Errorf("goal judge: %w", err)
+		// Attribute the failed call's usage to the case anyway: provider
+		// spend happened even though no score came back (bd-18u v0.3).
+		if rep, ok := r.Judge.(JudgeUsageReporter); ok {
+			res.JudgeUsage = judgeUsageFor(judgeModel(r.Judge), rep.LastUsage(), r.Pricing)
+		}
+		return nil, fmt.Errorf("case %s: goal judge: %w", c.ID, err)
+	}
+	if rep, ok := r.Judge.(JudgeUsageReporter); ok {
+		res.JudgeUsage = judgeUsageFor(judgeModel(r.Judge), rep.LastUsage(), r.Pricing)
 	}
 	res.Dimensions.Goal = clamp01(goal)
 
