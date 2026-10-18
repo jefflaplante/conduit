@@ -60,6 +60,14 @@ func FormatSummaryMarkdown(s *Summary, flags []string) string {
 	if s.Runs > 1 {
 		b.WriteString(fmt.Sprintf("- **Sampling:** median-of-%d judge calls per case\n", s.Runs))
 	}
+	if s.LiveModel != "" {
+		// Live run (v0.4): the model-under-test's generation spend is real
+		// money and is reported separately from the judge's.
+		b.WriteString(fmt.Sprintf("- **Live model:** %s\n", s.LiveModel))
+		b.WriteString(fmt.Sprintf("- **Live generation:** %d calls, $%.6f (priced=%t; prompt %d tok, completion %d tok)\n",
+			s.LiveUsage.Calls, s.LiveUsage.CostUSD, s.LiveUsage.CostPriced,
+			s.LiveUsage.PromptTokens, s.LiveUsage.CompletionTokens))
+	}
 	b.WriteString(fmt.Sprintf("- **Generated:** %s\n\n", s.GeneratedAt.Format(time.RFC3339)))
 
 	b.WriteString("## Dimensions (mean across cases)\n\n")

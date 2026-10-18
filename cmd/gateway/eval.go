@@ -27,6 +27,9 @@ var (
 	evalJudgeModel    string
 	evalJudgeProvider string
 	evalRuns          int
+	evalMode          string
+	evalLiveModel     string
+	evalLiveProvider  string
 )
 
 var evalCmd = &cobra.Command{
@@ -41,7 +44,14 @@ an aggregate markdown report to stdout.
 
 Judge selection: --judge stub (default, deterministic, no network) or
 --judge llm (one LLM scoring call per case; requires --judge-model and
-makes real provider calls).`,
+makes real provider calls).
+
+Mode selection: --mode replay (default) scores the corpus transcripts
+as scripted — free and deterministic. --mode live sends each case's user
+turns to a real model under test (--live-model, --live-provider) and
+scores the captured transcript; live runs make real provider calls for
+generation (and for the judge when --judge llm) and report their spend
+separately in the results.`,
 }
 
 var evalRunCmd = &cobra.Command{
@@ -65,6 +75,12 @@ func init() {
 		"provider name from gateway config for --judge llm; default resolves from the model's provider/ prefix")
 	evalRunCmd.Flags().IntVar(&evalRuns, "runs", 1,
 		"sample each case N times and score the goal by the median (dampens judge variance; N judge calls per case)")
+	evalRunCmd.Flags().StringVar(&evalMode, "mode", "replay",
+		"run mode: replay (score scripted transcripts, default) or live (generate transcripts from a real model)")
+	evalRunCmd.Flags().StringVar(&evalLiveModel, "live-model", "",
+		"model for --mode live (e.g. provider/model); required with --mode live")
+	evalRunCmd.Flags().StringVar(&evalLiveProvider, "live-provider", "",
+		"provider name from gateway config for --mode live; default resolves from the model's provider/ prefix")
 
 	evalCmd.AddCommand(evalRunCmd)
 	rootCmd.AddCommand(evalCmd)
@@ -150,8 +166,34 @@ func runEval(cmd *cobra.Command, args []string) error {
 	if evalRuns < 0 {
 		return fmt.Errorf("--runs must be >= 0 (got %d)", evalRuns)
 	}
-	runner := &eval.Runner{Judge: judge, Runs: evalRuns}
-	summary, err := runner.Run(cases)
+
+	var summary *eval.Summary
+	switch strings.TrimSpace(evalMode) {
+	case "", "replay":
+		runner := &eval.Runner{Judge: judge, Runs: evalRuns}
+		summary, err = runner.Run(cases)
+	case "live":
+		// Error clearly before any provider call: a live run without a model
+		// under test has nothing to execute.
+		if strings.TrimSpace(evalLiveModel) == "" {
+			return fmt.Errorf("--mode live requires --live-model (e.g. --live-model provider/model)")
+		}
+		cfg, err := loadExistingConfig(cfgFile)
+		if err != nil {
+			return err
+		}
+		// Same provider wiring as the judge (evalProviderFromConfig) and the
+		// same constructors the router uses: live eval traffic rides the
+		// identical client code path as production traffic.
+		provider, err := evalProviderFromConfig(cfg, evalLiveProvider, evalLiveModel)
+		if err != nil {
+			return err
+		}
+		runner := &eval.LiveRunner{Provider: provider, Model: evalLiveModel, Judge: judge, Runs: evalRuns}
+		summary, err = runner.Run(cases)
+	default:
+		return fmt.Errorf("unknown --mode %q (supported: replay, live)", evalMode)
+	}
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
