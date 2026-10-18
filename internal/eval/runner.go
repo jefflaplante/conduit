@@ -2,6 +2,7 @@ package eval
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"conduit/internal/ai"
@@ -16,6 +17,12 @@ type Runner struct {
 	Judge Judge
 	// Pricing prices token counts; nil uses the ai package default resolver.
 	Pricing *ai.PricingResolver
+	// Runs is the median-of-N sample size for the judge (bd-18u v0.3):
+	// each case's goal score is the median of Runs judge scores, damping
+	// single-call judge variance. 0 or 1 means one call (prior behavior).
+	// Deterministic checks still run once — they have no variance to
+	// average away. Judge usage sums across all N calls.
+	Runs int
 }
 
 // Run executes every case in the corpus.
@@ -26,6 +33,7 @@ func (r *Runner) Run(cases []*Case) (*Summary, error) {
 	summary := &Summary{
 		GeneratedAt: time.Now().UTC(),
 		JudgeID:     r.Judge.ID(),
+		Runs:        r.Runs,
 		PerCase:     make([]CaseResult, 0, len(cases)),
 	}
 	for _, c := range cases {
@@ -59,19 +67,11 @@ func (r *Runner) scoreCase(c *Case) (*CaseResult, error) {
 		CostPriced: true,
 	}
 
-	goal, err := r.Judge.JudgeGoal(c)
-	if err != nil {
-		// Attribute the failed call's usage to the case anyway: provider
-		// spend happened even though no score came back (bd-18u v0.3).
-		if rep, ok := r.Judge.(JudgeUsageReporter); ok {
-			res.JudgeUsage = judgeUsageFor(judgeModel(r.Judge), rep.LastUsage(), r.Pricing)
-		}
-		return nil, fmt.Errorf("case %s: goal judge: %w", c.ID, err)
+	if err := r.goalSampled(c, res); err != nil {
+		// goalSampled errors already carry the run index; Run() wraps with
+		// the case ID.
+		return nil, err
 	}
-	if rep, ok := r.Judge.(JudgeUsageReporter); ok {
-		res.JudgeUsage = judgeUsageFor(judgeModel(r.Judge), rep.LastUsage(), r.Pricing)
-	}
-	res.Dimensions.Goal = clamp01(goal)
 
 	// Deterministic checks. Deny-class violations are hard gates.
 	var hardGate bool
@@ -132,6 +132,50 @@ func (r *Runner) scoreCase(c *Case) (*CaseResult, error) {
 // pricing removed: CheckCostBudget takes r.Pricing directly (nil =
 // ai.DefaultPricingResolver inside cost.go).
 
+// goalSampled scores the goal dimension, sampling Runs judge calls and
+// taking the median (Runs<=1: a single call, no sampling). Every
+// successful call's usage is folded into res.JudgeUsage — the cost of
+// variance reduction is real spend and shows up in the accounting. The
+// first error aborts (same fail-fast contract as the single-call path);
+// the failed call's usage, if any, is attributed before returning.
+// Callers must serialize scoreCase (Run does): the judge sees calls one
+// at a time, so LastUsage probes are race-free even under -race.
+func (r *Runner) goalSampled(c *Case, res *CaseResult) error {
+	runs := r.Runs
+	if runs < 1 {
+		runs = 1
+	}
+	// Neutral element for the CostPriced AND-fold (the zero value is
+	// false and would poison every subsequent Add).
+	res.JudgeUsage.CostPriced = true
+	scores := make([]float64, 0, runs)
+	for i := 0; i < runs; i++ {
+		goal, err := r.Judge.JudgeGoal(c)
+		if err != nil {
+			if rep, ok := r.Judge.(JudgeUsageReporter); ok {
+				// Add (not assign): runs already scored before the
+				// failure still spent real tokens.
+				res.JudgeUsage.Add(judgeUsageFor(judgeModel(r.Judge), rep.LastUsage(), r.Pricing))
+			}
+			return fmt.Errorf("goal judge (run %d/%d): %w", i+1, runs, err)
+		}
+		if rep, ok := r.Judge.(JudgeUsageReporter); ok {
+			res.JudgeUsage.Add(judgeUsageFor(judgeModel(r.Judge), rep.LastUsage(), r.Pricing))
+		}
+		scores = append(scores, clamp01(goal))
+	}
+	res.Dimensions.Goal = median(scores)
+	if runs > 1 {
+		// Single-run results keep these zero/nil so the omitempty JSONL
+		// contract holds (baseline lines look unchanged from v0.2).
+		res.Dimensions.GoalRuns = runs
+		// Keep the raw samples for auditability: median-of-N hides
+		// variance unless the samples themselves are on the record.
+		res.Dimensions.GoalScores = scores
+	}
+	return nil
+}
+
 // weighted computes the weighted aggregate 0..1 over dimension scores.
 func weighted(d DimensionScores) float64 {
 	total := WeightGoal + WeightCompliance + WeightFragments + WeightCost + WeightBudget
@@ -164,6 +208,21 @@ func meanScores(results []CaseResult) DimensionScores {
 		Cost:       m.Cost / n,
 		Budget:     m.Budget / n,
 	}
+}
+
+// median returns the median of scores (mean of the two middles for even
+// counts; the lone element when odd). Scores are assumed pre-clamped.
+func median(scores []float64) float64 {
+	if len(scores) == 0 {
+		return 0
+	}
+	s := append([]float64(nil), scores...)
+	sort.Float64s(s)
+	n := len(s)
+	if n%2 == 1 {
+		return s[n/2]
+	}
+	return (s[n/2-1] + s[n/2]) / 2
 }
 
 // clamp01 clamps v to [0,1].

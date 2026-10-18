@@ -173,7 +173,7 @@ func TestRunnerCorpusEndToEnd(t *testing.T) {
 
 func TestWeightedAggregates(t *testing.T) {
 	// All-perfect dimensions -> 1.0.
-	if got := weighted(DimensionScores{1, 1, 1, 1, 1}); got != 1.0 {
+	if got := weighted(DimensionScores{Goal: 1, Compliance: 1, Fragments: 1, Cost: 1, Budget: 1}); got != 1.0 {
 		t.Errorf("weighted(all 1) = %v", got)
 	}
 	// All-zero -> 0.

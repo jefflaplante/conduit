@@ -26,6 +26,7 @@ var (
 	evalJudge         string
 	evalJudgeModel    string
 	evalJudgeProvider string
+	evalRuns          int
 )
 
 var evalCmd = &cobra.Command{
@@ -62,6 +63,8 @@ func init() {
 		"model for --judge llm (e.g. provider/model); required with --judge llm")
 	evalRunCmd.Flags().StringVar(&evalJudgeProvider, "judge-provider", "",
 		"provider name from gateway config for --judge llm; default resolves from the model's provider/ prefix")
+	evalRunCmd.Flags().IntVar(&evalRuns, "runs", 1,
+		"sample each case N times and score the goal by the median (dampens judge variance; N judge calls per case)")
 
 	evalCmd.AddCommand(evalRunCmd)
 	rootCmd.AddCommand(evalCmd)
@@ -144,7 +147,10 @@ func runEval(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load corpus: %w", err)
 	}
 
-	runner := &eval.Runner{Judge: judge}
+	if evalRuns < 0 {
+		return fmt.Errorf("--runs must be >= 0 (got %d)", evalRuns)
+	}
+	runner := &eval.Runner{Judge: judge, Runs: evalRuns}
 	summary, err := runner.Run(cases)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)

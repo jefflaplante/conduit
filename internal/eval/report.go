@@ -57,6 +57,9 @@ func FormatSummaryMarkdown(s *Summary, flags []string) string {
 		b.WriteString("- **Judge calls:** 0 (no provider spend)\n")
 	}
 	b.WriteString(fmt.Sprintf("- **Judge:** %s\n", s.JudgeID))
+	if s.Runs > 1 {
+		b.WriteString(fmt.Sprintf("- **Sampling:** median-of-%d judge calls per case\n", s.Runs))
+	}
 	b.WriteString(fmt.Sprintf("- **Generated:** %s\n\n", s.GeneratedAt.Format(time.RFC3339)))
 
 	b.WriteString("## Dimensions (mean across cases)\n\n")
@@ -69,8 +72,8 @@ func FormatSummaryMarkdown(s *Summary, flags []string) string {
 	b.WriteString(fmt.Sprintf("| budget | %.3f |\n\n", m.Budget))
 
 	b.WriteString("## Per-case results\n\n")
-	b.WriteString("| Case | Passed | Score | Goal | Compl | Frag | Cost | Budget | Violations |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| Case | Passed | Score | Goal | Runs | Compl | Frag | Cost | Budget | Violations |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|\n")
 	for i := range s.PerCase {
 		r := &s.PerCase[i]
 		status := "yes"
@@ -85,9 +88,14 @@ func FormatSummaryMarkdown(s *Summary, flags []string) string {
 			}
 			viol = strings.Join(parts, "; ")
 		}
-		b.WriteString(fmt.Sprintf("| %s | %s | %.3f | %.2f | %.2f | %.2f | %.2f | %.2f | %s |\n",
+		runsCol := "1"
+		if r.Dimensions.GoalRuns > 1 {
+			runsCol = fmt.Sprintf("%d (min %.2f / max %.2f)", r.Dimensions.GoalRuns,
+				minScore(r.Dimensions.GoalScores), maxScore(r.Dimensions.GoalScores))
+		}
+		b.WriteString(fmt.Sprintf("| %s | %s | %.3f | %.2f | %s | %.2f | %.2f | %.2f | %.2f | %s |\n",
 			r.CaseID, status, r.Score,
-			r.Dimensions.Goal, r.Dimensions.Compliance, r.Dimensions.Fragments,
+			r.Dimensions.Goal, runsCol, r.Dimensions.Compliance, r.Dimensions.Fragments,
 			r.Dimensions.Cost, r.Dimensions.Budget, viol))
 	}
 
@@ -100,6 +108,34 @@ func FormatSummaryMarkdown(s *Summary, flags []string) string {
 		b.WriteString("\nNo regressions flagged.\n")
 	}
 	return b.String()
+}
+
+// minScore / maxScore return the extremes of a score sample (0 when the
+// sample is empty — the single-run report path never renders them).
+func minScore(scores []float64) float64 {
+	if len(scores) == 0 {
+		return 0
+	}
+	m := scores[0]
+	for _, v := range scores[1:] {
+		if v < m {
+			m = v
+		}
+	}
+	return m
+}
+
+func maxScore(scores []float64) float64 {
+	if len(scores) == 0 {
+		return 0
+	}
+	m := scores[0]
+	for _, v := range scores[1:] {
+		if v > m {
+			m = v
+		}
+	}
+	return m
 }
 
 // LoadSummaryJSONL reads a baseline results file written by WriteResultsFile

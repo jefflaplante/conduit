@@ -118,8 +118,16 @@ type Case struct {
 
 // DimensionScores holds the per-dimension 0..1 scores for one case.
 type DimensionScores struct {
-	// Goal is the judged goal-completion score (0..1).
-	Goal float64 `json:"goal"`
+	// Goal is the median of the sampled judge scores (Runs>1): the median
+	// dampens judge variance without the sensitivity of a mean to a single
+	// outlier call.
+	//
+	// GoalRuns/GoalScores carry the sampling metadata and are populated
+	// only when Runs>1 — single-run results keep them zero/nil so their
+	// JSONL lines stay byte-compatible with pre-sampling baselines.
+	Goal       float64 `json:"goal"`
+	GoalRuns   int     `json:"goal_runs,omitempty"`
+	GoalScores []float64 `json:"goal_scores,omitempty"`
 	// Compliance covers allowlist + deny-class adherence (1.0 clean, 0 on
 	// violations — though deny violations also hard-fail the case).
 	Compliance float64 `json:"compliance"`
@@ -212,6 +220,10 @@ type Summary struct {
 
 	// JudgeID is the judge that scored every case in this run.
 	JudgeID string `json:"judge_id"`
+
+	// Runs is the median-of-N sample size (bd-18u v0.3); 1 or 0 means a
+	// single judge call per case.
+	Runs int `json:"runs,omitempty"`
 
 	// JudgeUsage aggregates the judge's own provider spend across the run
 	// (bd-18u v0.3): calls, tokens, and priced cost. Distinct from
