@@ -114,7 +114,18 @@ func evalProviderFromConfig(cfg *config.Config, providerName, model string) (ai.
 		if !strings.EqualFold(pc.Name, providerName) {
 			continue
 		}
-		provider, err := ai.NewOpenAIProvider(pc)
+		// Same type dispatch as the router's newProviderInstance — an
+		// anthropic-type config through the OpenAI constructor would build
+		// a silently wrong client.
+		var provider ai.Provider
+		var err error
+		switch pc.Type {
+		case "anthropic":
+			provider, err = ai.NewAnthropicProvider(pc)
+		default:
+			// "openai", "ollama" — all OpenAI-compatible constructors.
+			provider, err = ai.NewOpenAIProvider(pc)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("build judge provider %s: %w", pc.Name, err)
 		}
