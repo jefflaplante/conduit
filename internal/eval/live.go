@@ -55,20 +55,31 @@ type LiveRunner struct {
 	Runs int
 
 	// liveUsage accumulates the model-under-test's provider usage across the
-	// most recent Run (tokens + priced cost fields). Consumed by Usage().
+	// most recent Run (tokens + priced cost fields). liveCalls counts the
+	// provider calls (ai.Usage has no call counter). Consumed by Usage().
 	// mu serializes accumulation and probes; Run itself is serial today, the
 	// mutex keeps Usage() safe if sampling gains concurrency later.
 	liveUsage ai.Usage
+	liveCalls int
 	mu        sync.Mutex
 }
 
 // Usage returns the model-under-test's provider usage accumulated across the
 // most recent Run — distinct from the judge's spend (Summary.JudgeUsage) and
-// from case costs priced off scripted counts.
+// from case costs priced off scripted counts. Calls is the provider-call
+// count.
 func (r *LiveRunner) Usage() ai.Usage {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.liveUsage
+}
+
+// liveCallsCount returns the number of provider calls made in the most
+// recent Run.
+func (r *LiveRunner) liveCallsCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.liveCalls
 }
 
 // Run executes every case live and produces the same Summary shape as replay,
@@ -107,17 +118,22 @@ func (r *LiveRunner) Run(cases []*Case) (*Summary, error) {
 	summary.JudgeUsage = SumJudgeUsage(summary.PerCase)
 	summary.LiveModel = r.Model
 	summary.LiveUsage = judgeUsageFor(r.Model, r.Usage(), r.Pricing)
+	// judgeUsageFor assumes the judge's 1-call-per-case contract; the
+	// model-under-test makes one call per corpus user turn, so Calls comes
+	// from the counted usage, not the default.
+	summary.LiveUsage.Calls = r.liveCallsCount()
 	return summary, nil
 }
 
 // runCase executes one case live and scores the captured transcript.
 func (r *LiveRunner) runCase(c *Case) (*CaseResult, error) {
-	transcript, usage, err := r.execute(c)
+	transcript, usage, calls, err := r.execute(c)
 	if err != nil {
 		return nil, err
 	}
 	r.mu.Lock()
 	r.liveUsage.Add(usage)
+	r.liveCalls += calls
 	r.mu.Unlock()
 
 	// Score a copy with the transcript swapped for the captured one: the
@@ -132,8 +148,10 @@ func (r *LiveRunner) runCase(c *Case) (*CaseResult, error) {
 		return nil, err
 	}
 	// The model-under-test's spend is real too. JudgeUsage carries the case's
-	// judge accounting; LiveUsage carries the generation accounting.
+	// judge accounting; LiveUsage carries the generation accounting — one
+	// call per corpus user turn, so Calls is counted, not assumed 1.
 	lu := judgeUsageFor(r.Model, usage, r.Pricing)
+	lu.Calls = calls
 	res.LiveUsage = &lu
 	return res, nil
 }
@@ -143,11 +161,12 @@ func (r *LiveRunner) runCase(c *Case) (*CaseResult, error) {
 // captures the assistant reply. Scripted assistant turns are skipped — live
 // mode generates its own. A corpus with no user turns is a corpus defect and
 // errors rather than silently scoring an empty transcript.
-func (r *LiveRunner) execute(c *Case) ([]Turn, ai.Usage, error) {
+func (r *LiveRunner) execute(c *Case) ([]Turn, ai.Usage, int, error) {
 	var (
 		out     []Turn
 		usage   ai.Usage
 		hasUser bool
+		calls   int
 	)
 	for _, t := range c.Turns {
 		if t.Role != "user" {
@@ -156,18 +175,19 @@ func (r *LiveRunner) execute(c *Case) ([]Turn, ai.Usage, error) {
 		hasUser = true
 		resp, callUsage, err := r.call(r.messages(c, out, t))
 		if err != nil {
-			return nil, usage, fmt.Errorf("turn %d: %w", t.Turn, err)
+			return nil, usage, calls, fmt.Errorf("turn %d: %w", t.Turn, err)
 		}
 		usage.Add(callUsage)
+		calls++
 		out = append(out,
 			Turn{Turn: t.Turn, Role: "user", Content: t.Content},
 			Turn{Turn: t.Turn, Role: "assistant", Content: resp.Content, Tools: liveToolCalls(resp.ToolCalls)},
 		)
 	}
 	if !hasUser {
-		return nil, usage, fmt.Errorf("case has no user turns to execute live")
+		return nil, usage, calls, fmt.Errorf("case has no user turns to execute live")
 	}
-	return out, usage, nil
+	return out, usage, calls, nil
 }
 
 // messages builds the request history: a fixed system message, then the
