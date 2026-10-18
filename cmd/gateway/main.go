@@ -308,7 +308,20 @@ func main() {
 	}
 
 	if err := rootCmd.Execute(); err != nil {
+		// exitError carries an explicit status (eval regression check: 2 for
+		// usage/setup failure, 1 for detected regression); everything else is
+		// a plain error and exits 1.
+		code := 1
+		if xe, ok := err.(exitError); ok {
+			code = xe.code
+			if xe.err == nil {
+				// A regression detection result, not a failure: report
+				// without the "Error:" framing.
+				fmt.Fprintf(os.Stderr, "eval regression check: %d regression(s) detected\n", code)
+				os.Exit(code)
+			}
+		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(code)
 	}
 }
