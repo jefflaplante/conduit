@@ -99,3 +99,31 @@ func TestRequireOwnerRole(t *testing.T) {
 		}
 	}
 }
+
+// /api/test/message pins automation tokens to their client name, as the
+// WebSocket path does; owners may still name any user.
+func TestHTTPTestUserID(t *testing.T) {
+	owner := &middleware.AuthInfo{ClientName: "me", Metadata: map[string]string{"role": "owner"}}
+	untagged := &middleware.AuthInfo{ClientName: "old"}
+	bot := &middleware.AuthInfo{ClientName: "bot", Metadata: map[string]string{"role": "automation"}}
+	for _, tt := range []struct {
+		name      string
+		info      *middleware.AuthInfo
+		requested string
+		want      string
+		ok        bool
+	}{
+		{"owner default", owner, "", "test_user", true},
+		{"owner names user", owner, "12345", "12345", true},
+		{"untagged names user", untagged, "12345", "12345", true},
+		{"public path", nil, "12345", "12345", true},
+		{"automation default", bot, "", "bot", true},
+		{"automation self", bot, "bot", "bot", true},
+		{"automation names owner", bot, "12345", "", false},
+	} {
+		got, ok := httpTestUserID(tt.info, tt.requested)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("%s: got (%q, %v), want (%q, %v)", tt.name, got, ok, tt.want, tt.ok)
+		}
+	}
+}

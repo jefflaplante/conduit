@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -122,7 +123,7 @@ func isReferenceBullet(line string) bool {
 	normalized := strings.ToLower(stripLeadingEmphasis(body))
 
 	// Reject entries explicitly marked as non-file references.
-	skipLabels := []string{"env:", "skills:", "skill:", "tools:", "tool:", "fallback:", "binary:", "binaries:", "workspace:", "shared:"}
+	skipLabels := []string{"env:", "skills:", "skill:", "tools:", "tool:", "fallback:", "binary:", "binaries:", "workspace:", "shared:", "script:", "state:", "templates:", "data:", "data dir:"}
 	for _, lbl := range skipLabels {
 		if strings.HasPrefix(normalized, lbl) {
 			return false
@@ -199,10 +200,76 @@ func looksLikeFilePath(s string) bool {
 	return true
 }
 
+// workspaceRootFor returns the workspace root for a skill directory laid out
+// as <root>/skills/<name> (the parent of the skills/ dir). ok is false for
+// skill dirs not under a "skills" parent, so bundled/system skills keep the
+// old skill-dir-only behavior.
+func workspaceRootFor(absSkillDir string) (string, bool) {
+	skillsDir := filepath.Dir(absSkillDir)
+	if filepath.Base(skillsDir) != "skills" {
+		return "", false
+	}
+	root := filepath.Dir(skillsDir)
+	if root == string(os.PathSeparator) || root == "." {
+		return "", false
+	}
+	return root, true
+}
+
+// containedJoin joins base and rel, enforcing that the result stays under
+// base. ok is false for absolute paths, traversal, or escape attempts.
+func containedJoin(base, rel string) (string, bool) {
+	if filepath.IsAbs(rel) || strings.Contains(rel, "..") {
+		return "", false
+	}
+	joined := filepath.Join(base, rel)
+	if !strings.HasPrefix(joined, base+string(os.PathSeparator)) && joined != base {
+		return "", false
+	}
+	return joined, true
+}
+
+// workspaceFallbackDirs are the workspace-root subtrees a dependency may be
+// found in by the bd-3vr2 fallback. The root itself also holds config.json,
+// .mcp.json, databases and secrets, so any SKILL.md naming one of those
+// must not get it into the system prompt.
+var workspaceFallbackDirs = []string{"skills", "memory", "reference"}
+
+// workspaceFallbackAllowed reports whether rel names a file inside one of
+// workspaceFallbackDirs with no hidden path component.
+func workspaceFallbackAllowed(rel string) bool {
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/")
+	if len(parts) < 2 || !slices.Contains(workspaceFallbackDirs, parts[0]) {
+		return false
+	}
+	for _, p := range parts {
+		if strings.HasPrefix(p, ".") {
+			return false
+		}
+	}
+	return true
+}
+
+// realPathWithin reports whether path, with symlinks resolved, stays under
+// base (also resolved, so a symlinked workspace or skill dir still works).
+func realPathWithin(base, path string) bool {
+	realBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return false
+	}
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	return realPath == realBase || strings.HasPrefix(realPath, realBase+string(os.PathSeparator))
+}
+
 // resolveDependencies loads the content of each declared dependency for a
-// skill. Paths are resolved relative to skillDir. Files that are missing,
-// unsafe (outside skillDir), or oversized are recorded with a flag but do not
-// fail the skill load.
+// skill. Paths are resolved relative to skillDir first, then — for skills
+// under <root>/skills/<name> — relative to <root>, because SKILL.md files
+// commonly declare workspace-root-relative paths (skills/<name>/scripts/x.py,
+// memory/state.json). Files that are missing, unsafe, or oversized are
+// recorded with a flag but do not fail the skill load.
 func resolveDependencies(skillDir string, paths []string) []SkillDependency {
 	if len(paths) == 0 {
 		return nil
@@ -220,7 +287,8 @@ func resolveDependencies(skillDir string, paths []string) []SkillDependency {
 		dep := SkillDependency{Path: rel}
 
 		// Reject absolute paths and upward traversal — deps must live under
-		// the skill dir to avoid smuggling arbitrary files into the prompt.
+		// the skill dir (or workspace root via the fallback) to avoid
+		// smuggling arbitrary files into the prompt.
 		if filepath.IsAbs(rel) || strings.Contains(rel, "..") {
 			dep.Skipped = true
 			dep.SkipReason = "path must be relative and contained within skill directory"
@@ -238,7 +306,31 @@ func resolveDependencies(skillDir string, paths []string) []SkillDependency {
 			deps = append(deps, dep)
 			continue
 		}
+
+		// bd-3vr2: fall back to the workspace root for paths that only exist
+		// relative to it (skills/<name>/... , memory/...). Containment is
+		// re-enforced against the root before use.
+		base := absSkillDir
+		if _, err := os.Stat(resolved); err != nil {
+			if root, ok := workspaceRootFor(absSkillDir); ok && workspaceFallbackAllowed(rel) {
+				if fallback, ok := containedJoin(root, rel); ok {
+					if _, err := os.Stat(fallback); err == nil {
+						resolved, base = fallback, root
+					}
+				}
+			}
+		}
 		dep.ResolvedPath = resolved
+
+		// The checks above are lexical; Stat and ReadFile follow symlinks, so
+		// a link inside the skill dir could still point anywhere.
+		if _, err := os.Lstat(resolved); err == nil && !realPathWithin(base, resolved) {
+			dep.Skipped = true
+			dep.SkipReason = "symlink resolves outside skill directory"
+			log.Printf("[skills] skipping dependency %q: %s", rel, dep.SkipReason)
+			deps = append(deps, dep)
+			continue
+		}
 
 		info, err := os.Stat(resolved)
 		if err != nil {

@@ -81,9 +81,12 @@ func (i *SkillIntegrator) extractAvailableActions(skill Skill) []string {
 	// advertised garbage like "NOT" (from "do NOT trigger") in the tool enum.
 	actions := ExtractActions(skill)
 
-	// Add common actions based on skill name/type
-	commonActions := i.getCommonActionsForSkill(skill.Name)
-	actions = append(actions, commonActions...)
+	// bd-3vr2: an explicit frontmatter list is authoritative — do not pad it
+	// with the curated common-actions fallback, or placeholder verbs like
+	// "status"/"help" pollute a real enum ([trmnl status help]).
+	if len(actions) == 0 {
+		actions = i.getCommonActionsForSkill(skill.Name)
+	}
 
 	return removeDuplicates(actions)
 }
