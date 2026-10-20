@@ -40,7 +40,8 @@ const maxSkillOutputBytes = 1 << 20
 //     models that read the SKILL.md can drive named options;
 //   - bool true becomes a bare --key flag, bool false is omitted
 //     (argparse store_true semantics);
-//   - other scalars become positional words in sorted key order;
+//   - nil is omitted;
+//   - other values become --key word, in sorted key order;
 //   - slice values repeat as --key word (or verbatim-flag word).
 //
 // Values are passed as single argv elements via exec: the executor never
@@ -69,13 +70,33 @@ func buildScriptArgv(action string, args map[string]interface{}) []string {
 			}
 		case []interface{}:
 			for _, item := range v {
-				argv = append(argv, flag, fmt.Sprintf("%v", item))
+				argv = append(argv, flag, argvWord(item))
 			}
+		case nil:
 		default:
-			argv = append(argv, flag, fmt.Sprintf("%v", v))
+			argv = append(argv, flag, argvWord(v))
 		}
 	}
 	return argv
+}
+
+// argvWord renders one value as a script argument. JSON numbers arrive as
+// float64, which %v prints as 1.7e+09 for large integers and argparse
+// type=int rejects; objects become JSON rather than Go's map[...] syntax.
+func argvWord(v interface{}) string {
+	switch v := v.(type) {
+	case string:
+		return v
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(v), 'f', -1, 32)
+	case map[string]interface{}, []interface{}:
+		if b, err := json.Marshal(v); err == nil {
+			return string(b)
+		}
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // Executor handles skill execution through various methods

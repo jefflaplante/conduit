@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,5 +116,19 @@ print("ok:", " ".join(sys.argv[1:]))
 	}
 	if !res.Success || !strings.Contains(res.Output, "--minutes 15") || !strings.Contains(res.Output, "--text hello world") {
 		t.Fatalf("note args not forwarded: %+v", res)
+	}
+}
+
+// JSON numbers decode as float64; large integers must not reach the script
+// as 1.7e+09, and objects go as JSON, not Go map syntax.
+func TestBuildScriptArgvValueFormatting(t *testing.T) {
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(`{"since":1700000000,"id":1234567,"ratio":0.25,"opts":{"a":1},"ids":[10000000,2],"none":null}`), &args); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(buildScriptArgv("run", args), " ")
+	want := `run --id 1234567 --ids 10000000 --ids 2 --opts {"a":1} --ratio 0.25 --since 1700000000`
+	if got != want {
+		t.Fatalf("argv = %q\nwant   %q", got, want)
 	}
 }

@@ -27,3 +27,23 @@ func (g *Gateway) requireOwnerRole(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// httpTestUserID resolves the user /api/test/message acts as, by the same
+// rule as wsUserID: owners (and requests on a path the auth middleware
+// skips) may name any user, defaulting to "test_user"; any other token is
+// pinned to its client name, so it cannot run full-tool turns as the owner.
+// ok is false when a non-owner names someone else.
+func httpTestUserID(info *middleware.AuthInfo, requested string) (userID string, ok bool) {
+	if info != nil {
+		if role, _ := auth.TokenRole(info.Metadata); role != auth.RoleOwner {
+			if requested == "" || requested == info.ClientName {
+				return info.ClientName, true
+			}
+			return "", false
+		}
+	}
+	if requested == "" {
+		return "test_user", true
+	}
+	return requested, true
+}

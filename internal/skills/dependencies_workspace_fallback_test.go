@@ -104,3 +104,49 @@ func TestParseDependencyPathsSkipsScriptStateLabels(t *testing.T) {
 		t.Fatalf("parseDependencyPaths = %v, want %v", got, want)
 	}
 }
+
+// The fallback reaches only skills/, memory/ and reference/: workspace-root
+// files such as config.json, .mcp.json or a secrets file never load.
+func TestDependencyResolutionFallbackSkipsRootFiles(t *testing.T) {
+	ws, skillDir := writeTree(t)
+	for _, name := range []string{"config.json", ".mcp.json", ".secrets.env"} {
+		if err := os.WriteFile(filepath.Join(ws, name), []byte("token=x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(ws, "memory", ".private"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "memory", ".private", "x.md"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"config.json", ".mcp.json", ".secrets.env", "memory/.private/x.md"} {
+		deps := resolveDependencies(skillDir, []string{rel})
+		if len(deps) != 1 || deps[0].Content != "" || !deps[0].Missing {
+			t.Errorf("%s: want missing with no content, got %+v", rel, deps)
+		}
+	}
+}
+
+// A symlink in the skill dir pointing outside it is skipped, not followed.
+func TestDependencyResolutionSkipsEscapingSymlink(t *testing.T) {
+	ws, skillDir := writeTree(t)
+	secret := filepath.Join(ws, "config.json")
+	if err := os.WriteFile(secret, []byte("token=x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(skillDir, "ref.md")); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(skillDir, "scripts", "helper.py")
+	if err := os.Symlink(inside, filepath.Join(skillDir, "alias.py")); err != nil {
+		t.Fatal(err)
+	}
+	deps := resolveDependencies(skillDir, []string{"ref.md", "alias.py"})
+	if !deps[0].Skipped || deps[0].Content != "" {
+		t.Errorf("escaping symlink: want skipped, got %+v", deps[0])
+	}
+	if deps[1].Skipped || deps[1].Content == "" {
+		t.Errorf("symlink within skill dir: want loaded, got %+v", deps[1])
+	}
+}

@@ -10,6 +10,7 @@ import (
 
 	"conduit/internal/ai"
 	"conduit/internal/logging"
+	"conduit/internal/middleware"
 	"conduit/internal/tools"
 )
 
@@ -126,9 +127,12 @@ func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.UserID == "" {
-		req.UserID = "test_user"
+	userID, ok := httpTestUserID(middleware.GetAuthInfo(r.Context()), req.UserID)
+	if !ok {
+		writeJSONError(w, http.StatusForbidden, "automation tokens may only act as their own client name")
+		return
 	}
+	req.UserID = userID
 
 	// Get or create session.
 	session, err := g.sessions.GetOrCreateSession(req.UserID, "test")
