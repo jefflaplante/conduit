@@ -150,3 +150,22 @@ func TestDependencyResolutionSkipsEscapingSymlink(t *testing.T) {
 		t.Errorf("symlink within skill dir: want loaded, got %+v", deps[1])
 	}
 }
+
+// A symlink inside an allowed subtree that points back at a root file is
+// skipped: the fallback is contained to memory/, not the whole workspace.
+func TestDependencyResolutionFallbackSymlinkToRootFile(t *testing.T) {
+	ws, skillDir := writeTree(t)
+	if err := os.WriteFile(filepath.Join(ws, "config.json"), []byte("token=x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../config.json", filepath.Join(ws, "memory", "cfg")); err != nil {
+		t.Fatal(err)
+	}
+	deps := resolveDependencies(skillDir, []string{"memory/cfg", "memory/testskill-state.json"})
+	if !deps[0].Skipped || deps[0].Content != "" {
+		t.Errorf("memory/cfg -> ../config.json: want skipped, got %+v", deps[0])
+	}
+	if deps[1].Skipped || deps[1].Content == "" {
+		t.Errorf("plain memory/ file: want loaded, got %+v", deps[1])
+	}
+}

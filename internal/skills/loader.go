@@ -115,6 +115,10 @@ func (l *SkillLoader) populateSkillFromFrontmatter(skill *Skill, data map[string
 		}
 	}
 
+	if argv, ok := data["argv"].(bool); ok {
+		skill.Argv = argv
+	}
+
 	// Optional Conduit metadata
 	if conduitData, ok := data["conduit"].(map[string]interface{}); ok {
 		if err := l.parseConduitMetadata(&skill.Metadata.Conduit, conduitData); err != nil {

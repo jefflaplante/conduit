@@ -14,7 +14,11 @@ type Skill struct {
 	// ("actions: [a, b]"). When present it is the sole source of truth for
 	// the tool schema enum — no heuristic content scraping. Empty means
 	// actions fall back to script names + the curated common-actions map.
-	Actions      []string          `json:"actions,omitempty"`
+	Actions []string `json:"actions,omitempty"`
+	// Argv opts a script skill into receiving its action and args on the
+	// command line (frontmatter "argv: true"); it requires Actions. Other
+	// script skills get the JSON envelope on stdin only.
+	Argv         bool              `json:"argv,omitempty"`
 	Scripts      []SkillScript     `json:"scripts"`
 	References   []SkillReference  `json:"references"`
 	Dependencies []SkillDependency `json:"dependencies,omitempty"`

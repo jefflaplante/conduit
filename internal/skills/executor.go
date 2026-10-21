@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,29 +27,28 @@ import (
 // longer valid JSON, so Data falls back to nil and Output carries the text.
 const maxSkillOutputBytes = 1 << 20
 
-// buildScriptArgv maps an action name and its args onto script argv.
-// Two script conventions exist in the wild:
-//   - CLI-style scripts (trmnl.py: `python3 trmnl.py status`) use argparse
-//     subcommands and exit 2 with "arguments are required: cmd" when invoked
-//     with empty argv — bd-3439.
-//   - Envelope readers (state.py: `python3 state.py`) dispatch on the JSON
-//     {"action": ...} piped on stdin; documented ones ignore extra argv or
-//     use argv[1] as a fallback action source, so forwarding is safe.
+// buildScriptArgv builds the command line for a script skill that opted in
+// with "argv: true" (bd-3439: argparse scripts like trmnl.py exit 2 on an
+// empty argv). Envelope-reading scripts don't opt in: they treat argv[1] as
+// data (water-tank collect.py) or reject unknown arguments.
 //
-// Mapping contract (deterministic; keys sorted for stable argv):
-//   - the action always becomes argv[1] (the subcommand);
-//   - a key starting with "--" is an explicit flag passed verbatim, so
-//     models that read the SKILL.md can drive named options;
-//   - bool true becomes a bare --key flag, bool false is omitted
-//     (argparse store_true semantics);
-//   - nil is omitted;
-//   - other values become --key word, in sorted key order;
-//   - slice values repeat as --key word (or verbatim-flag word).
+// The model controls action and args, so nothing it sends may become an
+// option the skill didn't mean to expose (e.g. ics-email's --attach):
+//   - the action must be one of the skill's declared actions, and becomes
+//     argv[1] (the subcommand);
+//   - keys must be plain option names; leading dashes are dropped, and
+//     anything else (such as "attach=/path") is refused;
+//   - values are joined as --key=value, so a value starting with "-" is
+//     never parsed as an option;
+//   - bool true becomes a bare --key flag, false and nil are omitted;
+//   - slice values repeat as --key=value; keys are sorted for stable argv.
 //
 // Values are passed as single argv elements via exec: the executor never
-// interpolates model-supplied strings into a shell line, and no shell
-// metacharacters are interpreted.
-func buildScriptArgv(action string, args map[string]interface{}) []string {
+// interpolates model-supplied strings into a shell line.
+func buildScriptArgv(actions []string, action string, args map[string]interface{}) ([]string, error) {
+	if !slices.Contains(actions, action) {
+		return nil, fmt.Errorf("unknown action %q (declared: %s)", action, strings.Join(actions, ", "))
+	}
 	argv := []string{action}
 	keys := make([]string, 0, len(args))
 	for k := range args {
@@ -55,10 +56,11 @@ func buildScriptArgv(action string, args map[string]interface{}) []string {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		flag := "--" + strings.TrimPrefix(k, "-")
-		if strings.HasPrefix(k, "--") {
-			flag = k // explicit flag from the model: pass verbatim
+		name := strings.TrimLeft(k, "-")
+		if !argvOptionName.MatchString(name) {
+			return nil, fmt.Errorf("invalid argument name %q", k)
 		}
+		flag := "--" + name
 		switch v := args[k].(type) {
 		case bool:
 			if v {
@@ -66,19 +68,23 @@ func buildScriptArgv(action string, args map[string]interface{}) []string {
 			}
 		case []string:
 			for _, item := range v {
-				argv = append(argv, flag, item)
+				argv = append(argv, flag+"="+item)
 			}
 		case []interface{}:
 			for _, item := range v {
-				argv = append(argv, flag, argvWord(item))
+				argv = append(argv, flag+"="+argvWord(item))
 			}
 		case nil:
 		default:
-			argv = append(argv, flag, argvWord(v))
+			argv = append(argv, flag+"="+argvWord(v))
 		}
 	}
-	return argv
+	return argv, nil
 }
+
+// argvOptionName is what a model-supplied key may look like once its leading
+// dashes are dropped.
+var argvOptionName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
 
 // argvWord renders one value as a script argument. JSON numbers arrive as
 // float64, which %v prints as 1.7e+09 for large integers and argparse
@@ -204,18 +210,16 @@ func (e *Executor) executeScript(ctx context.Context, skill Skill, action string
 		cmd = exec.CommandContext(ctx, scriptPath)
 	}
 
-	// Forward action + args as argv before the stdin envelope. Two script
-	// conventions exist in the wild:
-	//   - envelope readers: `python3 monitor.py` dispatches on the JSON
-	//     {"action": ...} piped on stdin (state.py, water-tank monitor.py);
-	//   - CLI-style scripts: `python3 trmnl.py status` use argparse and exit 2
-	//     with "arguments are required: cmd" when invoked with empty argv.
-	// Passing argv keeps both working. Scalar args map to positional words in
-	// envelope key order; map args expand to --key value / --flag for booleans.
-	cmd.Args = append(cmd.Args, buildScriptArgv(action, args)...)
+	if skill.Argv {
+		argv, err := buildScriptArgv(skill.Actions, action, args)
+		if err != nil {
+			return &ExecutionResult{Success: false, Error: err.Error()}, nil
+		}
+		cmd.Args = append(cmd.Args, argv...)
+	}
 
 	// Script skills always receive a JSON envelope on stdin containing the
-	// action name plus any args (see buildScriptArgv for the argv side).
+	// action name plus any args; see buildScriptArgv for the argv opt-in.
 	envelope := make(map[string]interface{}, len(args)+1)
 	for k, v := range args {
 		envelope[k] = v

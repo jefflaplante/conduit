@@ -315,7 +315,9 @@ func resolveDependencies(skillDir string, paths []string) []SkillDependency {
 			if root, ok := workspaceRootFor(absSkillDir); ok && workspaceFallbackAllowed(rel) {
 				if fallback, ok := containedJoin(root, rel); ok {
 					if _, err := os.Stat(fallback); err == nil {
-						resolved, base = fallback, root
+						// Contain to the allowed subtree, not the root: a link
+						// in memory/ to ../config.json must not pass.
+						resolved, base = fallback, filepath.Join(root, strings.SplitN(filepath.ToSlash(filepath.Clean(rel)), "/", 2)[0])
 					}
 				}
 			}
@@ -326,7 +328,7 @@ func resolveDependencies(skillDir string, paths []string) []SkillDependency {
 		// a link inside the skill dir could still point anywhere.
 		if _, err := os.Lstat(resolved); err == nil && !realPathWithin(base, resolved) {
 			dep.Skipped = true
-			dep.SkipReason = "symlink resolves outside skill directory"
+			dep.SkipReason = "symlink resolves outside its allowed directory"
 			log.Printf("[skills] skipping dependency %q: %s", rel, dep.SkipReason)
 			deps = append(deps, dep)
 			continue
