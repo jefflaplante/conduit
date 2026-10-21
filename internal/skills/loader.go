@@ -118,6 +118,17 @@ func (l *SkillLoader) populateSkillFromFrontmatter(skill *Skill, data map[string
 	if argv, ok := data["argv"].(bool); ok {
 		skill.Argv = argv
 	}
+	if pos, ok := data["positional"].(map[string]interface{}); ok {
+		skill.Positional = make(map[string][]string, len(pos))
+		for action, names := range pos {
+			list, _ := names.([]interface{})
+			for _, n := range list {
+				if s, ok := n.(string); ok && strings.TrimSpace(s) != "" {
+					skill.Positional[action] = append(skill.Positional[action], strings.TrimSpace(s))
+				}
+			}
+		}
+	}
 
 	// Optional Conduit metadata
 	if conduitData, ok := data["conduit"].(map[string]interface{}); ok {

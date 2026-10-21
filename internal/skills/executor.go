@@ -41,18 +41,35 @@ const maxSkillOutputBytes = 1 << 20
 //   - values are joined as --key=value, so a value starting with "-" is
 //     never parsed as an option;
 //   - bool true becomes a bare --key flag, false and nil are omitted;
-//   - slice values repeat as --key=value; keys are sorted for stable argv.
+//   - slice values repeat as --key=value; keys are sorted for stable argv;
+//   - args named in the skill's Positional list for this action are
+//     required and go last, in that order, after a "--" so argparse never
+//     reads them as options (trmnl.py: `alert TITLE`, `note TEXT`).
 //
 // Values are passed as single argv elements via exec: the executor never
 // interpolates model-supplied strings into a shell line.
-func buildScriptArgv(actions []string, action string, args map[string]interface{}) ([]string, error) {
-	if !slices.Contains(actions, action) {
-		return nil, fmt.Errorf("unknown action %q (declared: %s)", action, strings.Join(actions, ", "))
+func buildScriptArgv(skill Skill, action string, args map[string]interface{}) ([]string, error) {
+	if !slices.Contains(skill.Actions, action) {
+		return nil, fmt.Errorf("unknown action %q (declared: %s)", action, strings.Join(skill.Actions, ", "))
+	}
+	positional := skill.Positional[action]
+	var words []string
+	for _, name := range positional {
+		switch v := args[name].(type) {
+		case string, float64, float32, int, int64:
+			words = append(words, argvWord(v))
+		case nil:
+			return nil, fmt.Errorf("action %s requires argument %q", action, name)
+		default:
+			return nil, fmt.Errorf("argument %q must be a single value", name)
+		}
 	}
 	argv := []string{action}
 	keys := make([]string, 0, len(args))
 	for k := range args {
-		keys = append(keys, k)
+		if !slices.Contains(positional, k) {
+			keys = append(keys, k)
+		}
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
@@ -78,6 +95,9 @@ func buildScriptArgv(actions []string, action string, args map[string]interface{
 		default:
 			argv = append(argv, flag+"="+argvWord(v))
 		}
+	}
+	if len(words) > 0 {
+		argv = append(append(argv, "--"), words...)
 	}
 	return argv, nil
 }
@@ -211,7 +231,7 @@ func (e *Executor) executeScript(ctx context.Context, skill Skill, action string
 	}
 
 	if skill.Argv {
-		argv, err := buildScriptArgv(skill.Actions, action, args)
+		argv, err := buildScriptArgv(skill, action, args)
 		if err != nil {
 			return &ExecutionResult{Success: false, Error: err.Error()}, nil
 		}

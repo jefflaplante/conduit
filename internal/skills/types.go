@@ -18,11 +18,15 @@ type Skill struct {
 	// Argv opts a script skill into receiving its action and args on the
 	// command line (frontmatter "argv: true"); it requires Actions. Other
 	// script skills get the JSON envelope on stdin only.
-	Argv         bool              `json:"argv,omitempty"`
-	Scripts      []SkillScript     `json:"scripts"`
-	References   []SkillReference  `json:"references"`
-	Dependencies []SkillDependency `json:"dependencies,omitempty"`
-	Metadata     SkillMetadata     `json:"metadata"`
+	Argv bool `json:"argv,omitempty"`
+	// Positional names, per action, the args that an argv skill receives as
+	// positional words rather than --key=value (frontmatter
+	// "positional: {alert: [title]}"), in order.
+	Positional   map[string][]string `json:"positional,omitempty"`
+	Scripts      []SkillScript       `json:"scripts"`
+	References   []SkillReference    `json:"references"`
+	Dependencies []SkillDependency   `json:"dependencies,omitempty"`
+	Metadata     SkillMetadata       `json:"metadata"`
 }
 
 // SkillDependency represents a reference file auto-loaded with the skill.

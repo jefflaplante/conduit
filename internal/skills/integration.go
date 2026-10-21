@@ -189,11 +189,31 @@ func (st *SkillTool) Parameters() map[string]interface{} {
 			"action": actionProp,
 			"args": map[string]interface{}{
 				"type":        "object",
-				"description": "Arguments for the skill action",
+				"description": argsDescription(st.skill),
 			},
 		},
 		"required": []string{"action"},
 	}
+}
+
+// argsDescription tells the model how args reach an argv skill: the
+// SKILL.md shows CLI lines (`alert "Cat outside" --minutes 20`), and the
+// positional words there have no visible name to use as a key.
+func argsDescription(skill Skill) string {
+	if !skill.Argv {
+		return "Arguments for the skill action"
+	}
+	desc := "Arguments for the skill action, keyed by option name without dashes (--minutes 20 -> {\"minutes\": 20}; a bare flag -> true)"
+	var req []string
+	for _, a := range skill.Actions {
+		if names := skill.Positional[a]; len(names) > 0 {
+			req = append(req, a+": "+strings.Join(names, ", "))
+		}
+	}
+	if len(req) > 0 {
+		desc += ". Positional arguments are keyed by name and required: " + strings.Join(req, "; ")
+	}
+	return desc
 }
 
 // BrainProduces returns the brain keys this skill declares it produces.
