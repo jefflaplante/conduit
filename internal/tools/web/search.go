@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -22,6 +23,7 @@ type WebSearchTool struct {
 	services    *types.ToolServices
 	httpClient  *http.Client
 	braveAPIKey string
+	retry       webRetryPolicy // zero value → webDefaultRetryPolicy (see retry.go)
 }
 
 // BraveSearchResult represents a single search result
@@ -153,6 +155,8 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]interface{}
 	// Perform search
 	results, err := t.searchBrave(ctx, query, count, country, freshness, searchLang)
 	if err != nil {
+		// Single 429/5xx responses are retried inside searchBrave; if we
+		// still failed, surface the final error (conduit-3czd).
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("search failed: %v", err),
@@ -174,8 +178,47 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]interface{}
 	}, nil
 }
 
-// searchBrave performs the actual search using Brave Search API
+// searchBrave performs the actual search using Brave Search API.
+// Retryable failures (429, transient 5xx) are retried with bounded,
+// jittered exponential backoff; see retry.go.
 func (t *WebSearchTool) searchBrave(ctx context.Context, query string, count int, country, freshness, searchLang string) ([]BraveSearchResult, error) {
+	policy := t.retry
+	if policy == (webRetryPolicy{}) {
+		policy = webDefaultRetryPolicy
+	}
+
+	var lastErr error
+	var lastDelay time.Duration
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			// Respect ctx cancellation/deadline before sleeping for a retry.
+			if err := policy.sleep(ctx, lastDelay); err != nil {
+				return nil, lastErr // deadline/cancel: surface the original error
+			}
+			log.Printf("[WebSearch] retry %d/%d for query %q after backoff (last error: %v)",
+				attempt, policy.maxRetries, query, lastErr)
+		}
+		results, err := t.searchBraveOnce(ctx, query, count, country, freshness, searchLang)
+		if err == nil {
+			return results, nil
+		}
+		var re *webRetryableError
+		if !errors.As(err, &re) || attempt >= policy.maxRetries {
+			return nil, err
+		}
+		lastErr = err
+		backoff, ok := policy.delay(attempt+1, re.retryAfter, re.hasRetryAfter)
+		if !ok {
+			return nil, err
+		}
+		lastDelay = backoff
+	}
+}
+
+// searchBraveOnce performs ONE request to the Brave Search API. On a
+// retryable HTTP failure it returns a *webRetryableError so the caller
+// (searchBrave) can decide whether to retry; all other errors are final.
+func (t *WebSearchTool) searchBraveOnce(ctx context.Context, query string, count int, country, freshness, searchLang string) ([]BraveSearchResult, error) {
 	// Construct the API URL
 	baseURL := "https://api.search.brave.com/res/v1/web/search"
 	params := url.Values{}
@@ -206,6 +249,8 @@ func (t *WebSearchTool) searchBrave(ctx context.Context, query string, count int
 	// Perform request
 	resp, err := t.httpClient.Do(req)
 	if err != nil {
+		// Transport errors are NOT retried here (matches the Anthropic
+		// provider: client timeouts/cancels are the caller's business).
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -214,6 +259,15 @@ func (t *WebSearchTool) searchBrave(ctx context.Context, query string, count int
 	if resp.StatusCode != http.StatusOK {
 		body, _ := httpsafe.ReadLimited(resp.Body, httpsafe.ErrorBodyLimit) // conduit-31jg.7
 		log.Printf("[WebSearch] API error: status %d, body: %s", resp.StatusCode, string(body))
+		if shouldRetryStatus(resp.StatusCode) {
+			ra, hasRA := parseRetryAfter(resp.Header, time.Now())
+			return nil, &webRetryableError{
+				status:        resp.StatusCode,
+				retryAfter:    ra,
+				hasRetryAfter: hasRA,
+				err:           fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body)),
+			}
+		}
 		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
