@@ -34,7 +34,6 @@ func TestRealSkills_NoHollowActions(t *testing.T) {
 	}
 
 	e := NewExecutor(ExecutionConfig{TimeoutSeconds: 10})
-	loader := NewSkillLoader()
 
 	var hollow []string
 	scriptBound := 0
@@ -46,7 +45,7 @@ func TestRealSkills_NoHollowActions(t *testing.T) {
 		if s.Content == "" {
 			continue // nothing extractable; not actionable via subprocess anyway
 		}
-		for _, action := range loader.ExtractActionsFromContent(s.Content) {
+		for _, action := range ExtractActions(s) {
 			if cmd, _ := e.buildShellCommand(s, action, map[string]interface{}{}); cmd == "" {
 				hollow = append(hollow, s.Name+"/"+action)
 			}

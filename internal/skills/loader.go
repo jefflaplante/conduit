@@ -198,30 +198,11 @@ func (l *SkillLoader) interfaceSliceToStringSlice(slice []interface{}) []string 
 	return result
 }
 
-// ExtractActionsFromContent returns the actions a skill genuinely supports.
-//
-// Historical note (Sep 2026, conduit-1jd9): this function used to regex-scrape
-// prose for action-like words, which produced garbage entries in the tool
-// schema enum — e.g. "NOT" from "do NOT trigger", "a" from "execute a",
-// lowercase header fragments from prose headings. Those fake entries were
-// advertised to the model via the tool enum while enforcing nothing (executor
-// dispatch is by script name / curated builders). Replaced with honest
-// sources only:
-//
-//  1. skill.Actions — explicit frontmatter "actions:" list (authoritative)
-//  2. skill.Scripts — declared script names are real executable actions
-//
-// Callers that need a broader set layer the curated common-actions map on
-// top (see extractAvailableActions in integration.go).
-func (l *SkillLoader) ExtractActionsFromContent(content string) []string {
-	// content is retained in the signature for backward compatibility with
-	// the old heuristic API, but is deliberately unused: prose scraping was
-	// the bug. See ExtractActions(skill) for the replacement.
-	return nil
-}
-
 // ExtractActions returns the honest action set for a skill: the explicit
 // frontmatter list when declared, otherwise the names of declared scripts.
+// (The old ExtractActionsFromContent prose scraper — source of garbage enum
+// entries like "NOT" and "a" pre-conduit-1jd9 — was removed entirely once no
+// callers remained; see TestRealSkills_NoHollowActions for the live audit.)
 func ExtractActions(skill Skill) []string {
 	if len(skill.Actions) > 0 {
 		return append([]string(nil), skill.Actions...)

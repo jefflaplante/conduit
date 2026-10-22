@@ -257,18 +257,24 @@ func TestSkillCache(t *testing.T) {
 }
 
 // TestSkillActionExtraction_NoProseScraping pins the conduit-1jd9 fix:
-// ExtractActionsFromContent no longer regex-scrapes prose. Prose that used to
-// yield garbage enum entries ("NOT" from "do NOT trigger", "a" from
-// "execute a") must yield nothing. Honest actions come from frontmatter
-// ("actions:") or declared scripts, via ExtractActions.
+// advertised actions come only from frontmatter ("actions:") or declared
+// scripts, via ExtractActions — never from regex-scraping prose. Prose that
+// used to yield garbage enum entries ("NOT" from "do NOT trigger", "a" from
+// "execute a") contributes nothing.
 func TestSkillActionExtraction_NoProseScraping(t *testing.T) {
 	prose := "# Email Skill\n\nThis skill manages email. Do NOT trigger for general questions. " +
 		"Use when the user wants to execute a search or read a thread.\n\n" +
 		"## Search\nSearch for emails using queries.\n\n## Read\nRead specific email threads.\n"
-
 	loader := NewSkillLoader()
-	if actions := loader.ExtractActionsFromContent(prose); len(actions) != 0 {
-		t.Errorf("prose scraping must stay dead; got %v", actions)
+
+	// Prose that looks action-rich but declares nothing honest must yield no
+	// actions — the enum comes from frontmatter or declared scripts only.
+	proseOnly, err := loader.LoadSkillFromContent("---\nname: t\ndescription: d\n---\n" + prose)
+	if err != nil {
+		t.Fatalf("load prose-only skill: %v", err)
+	}
+	if got := ExtractActions(*proseOnly); len(got) != 0 {
+		t.Errorf("prose scraping must stay dead; got %v", got)
 	}
 
 	// Frontmatter actions are the authoritative source.
