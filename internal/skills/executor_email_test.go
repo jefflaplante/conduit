@@ -443,7 +443,7 @@ func TestGogAuthSkill_EmailIsQuotedObjectNotAlias(t *testing.T) {
 	if !strings.Contains(cmd, `'o'\''brien@example.com'`) {
 		t.Errorf("email with embedded quote not shell-escaped:\n%s", cmd)
 	}
-	if strings.Contains(cmd, `'\'`, ) && !strings.Contains(cmd, `'o'\''brien`) {
+	if strings.Contains(cmd, `'\'`) && !strings.Contains(cmd, `'o'\''brien`) {
 		t.Errorf("double-quoting detected:\n%s", cmd)
 	}
 }
