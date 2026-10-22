@@ -542,3 +542,105 @@ func TestOpenAITimeoutConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestParseUsageMap_CachedTokens(t *testing.T) {
+	tests := []struct {
+		name          string
+		usageJSON     string // empty means a nil map
+		wantPrompt    int
+		wantTotal     int
+		wantCacheRead int
+		wantCacheCrt  int
+		wantContext   int // checked only when non-zero
+	}{
+		{
+			name:          "nested prompt_tokens_details.cached_tokens",
+			usageJSON:     `{"prompt_tokens":1200,"completion_tokens":50,"total_tokens":1250,"prompt_tokens_details":{"cached_tokens":1024}}`,
+			wantPrompt:    176, // OpenAI prompt_tokens includes cached; Usage.PromptTokens is uncached only
+			wantContext:   1200,
+			wantTotal:     1250,
+			wantCacheRead: 1024,
+		},
+		{
+			name:       "nested details absent",
+			usageJSON:  `{"prompt_tokens":100,"completion_tokens":10,"total_tokens":110}`,
+			wantPrompt: 100,
+			wantTotal:  110,
+		},
+		{
+			name:       "nested details empty",
+			usageJSON:  `{"prompt_tokens":100,"total_tokens":100,"prompt_tokens_details":{}}`,
+			wantPrompt: 100,
+			wantTotal:  100,
+		},
+		{
+			name:       "nested details null",
+			usageJSON:  `{"prompt_tokens":100,"total_tokens":100,"prompt_tokens_details":null}`,
+			wantPrompt: 100,
+			wantTotal:  100,
+		},
+		{
+			name:       "nested details wrong type",
+			usageJSON:  `{"prompt_tokens":100,"total_tokens":100,"prompt_tokens_details":"bogus"}`,
+			wantPrompt: 100,
+			wantTotal:  100,
+		},
+		{
+			name:          "top-level flattened cache keys",
+			usageJSON:     `{"prompt_tokens":300,"total_tokens":300,"cache_read_input_tokens":256,"cache_creation_input_tokens":40}`,
+			wantPrompt:    300,
+			wantTotal:     300,
+			wantCacheRead: 256,
+			wantCacheCrt:  40,
+		},
+		{
+			name:          "nested wins over top-level when both present",
+			usageJSON:     `{"prompt_tokens":300,"total_tokens":300,"cache_read_input_tokens":100,"prompt_tokens_details":{"cached_tokens":200}}`,
+			wantPrompt:    100,
+			wantTotal:     300,
+			wantCacheRead: 200,
+		},
+		{
+			name:          "nested zero falls back to top-level",
+			usageJSON:     `{"prompt_tokens":300,"total_tokens":300,"cache_read_input_tokens":100,"prompt_tokens_details":{"cached_tokens":0}}`,
+			wantPrompt:    300,
+			wantTotal:     300,
+			wantCacheRead: 100,
+		},
+		{
+			name:          "nested cached exceeding prompt clamps uncached to zero",
+			usageJSON:     `{"prompt_tokens":50,"total_tokens":50,"prompt_tokens_details":{"cached_tokens":64}}`,
+			wantPrompt:    0,
+			wantTotal:     50,
+			wantCacheRead: 64,
+		},
+		{
+			name:      "empty map",
+			usageJSON: `{}`,
+		},
+		{
+			name: "nil map",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var m map[string]interface{}
+			if tt.usageJSON != "" {
+				if err := json.Unmarshal([]byte(tt.usageJSON), &m); err != nil {
+					t.Fatalf("bad test JSON: %v", err)
+				}
+			}
+
+			var u Usage
+			assert.NotPanics(t, func() { u = parseUsageMap(m) })
+			assert.Equal(t, tt.wantPrompt, u.PromptTokens, "PromptTokens")
+			assert.Equal(t, tt.wantTotal, u.TotalTokens, "TotalTokens")
+			assert.Equal(t, tt.wantCacheRead, u.CacheReadInputTokens, "CacheReadInputTokens")
+			assert.Equal(t, tt.wantCacheCrt, u.CacheCreationInputTokens, "CacheCreationInputTokens")
+			if tt.wantContext > 0 {
+				assert.Equal(t, tt.wantContext, u.Context(), "Context")
+			}
+		})
+	}
+}
