@@ -34,9 +34,34 @@ func TestRealSkills_NoHollowActions(t *testing.T) {
 	}
 
 	e := NewExecutor(ExecutionConfig{TimeoutSeconds: 10})
+	// Wire the production gog settings (default cleanup script anchored at
+	// the real workspace) so the audit judges command resolvability, not
+	// executor construction. A bare NewExecutor left email/cleanup hollow in
+	// name only — the default cleanup_script resolves fine in production
+	// (bd-f92w).
+	if err := e.ConfigureGog(nil, os.Getenv("HOME")+"/ocgo/workspace"); err != nil {
+		t.Fatalf("ConfigureGog failed: %v", err)
+	}
 
 	var hollow []string
 	scriptBound := 0
+	// Probe args for actions that are arg-gated (return empty without their
+	// required argument, which is honest behavior, not hollow-ness). Keep in
+	// sync with buildGogCommand/buildGogAuthCommand required args (bd-f92w).
+	probeArgs := map[string]map[string]map[string]interface{}{
+		"gog-auth": {
+			"add_account":    {"email": "probe@example.com"},
+			"verify_account": {"email": "probe@example.com"},
+		},
+		"email": {
+			"send": {"to": "probe@example.com", "subject": "probe", "body": "probe"},
+			"read": {"message_id": "probe"},
+		},
+		"gog": {
+			"send": {"to": "probe@example.com", "subject": "probe", "body": "probe"},
+			"read": {"message_id": "probe"},
+		},
+	}
 	for _, s := range skills {
 		if len(s.Scripts) > 0 {
 			scriptBound++ // script-bound skills use executeScript; fallback not reachable
@@ -46,7 +71,13 @@ func TestRealSkills_NoHollowActions(t *testing.T) {
 			continue // nothing extractable; not actionable via subprocess anyway
 		}
 		for _, action := range ExtractActions(s) {
-			if cmd, _ := e.buildShellCommand(s, action, map[string]interface{}{}); cmd == "" {
+			args := map[string]interface{}{}
+			if forSkill, ok := probeArgs[s.Name]; ok {
+				if a, ok := forSkill[action]; ok {
+					args = a
+				}
+			}
+			if cmd, _ := e.buildShellCommand(s, action, args); cmd == "" {
 				hollow = append(hollow, s.Name+"/"+action)
 			}
 		}
