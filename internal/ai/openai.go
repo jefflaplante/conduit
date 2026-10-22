@@ -450,12 +450,29 @@ func (o *OpenAIProvider) parseOpenAISSEStream(body io.Reader, onDelta StreamCall
 }
 
 // parseUsageMap extracts Usage from an OpenAI usage JSON object.
+//
+// Cache reads come from prompt_tokens_details.cached_tokens (OpenAI, z.ai),
+// falling back to a flattened top-level cache_read_input_tokens that some
+// gateways emit. OpenAI's prompt_tokens INCLUDES the cached tokens, while
+// Usage.PromptTokens is uncached input only (Anthropic convention, relied on
+// by ModelPricing.Cost and Usage.Context), so a nested cached count is
+// subtracted from it. The flattened Anthropic-style keys are taken as
+// already excluded. bd-2fnh
 func parseUsageMap(m map[string]interface{}) Usage {
-	return Usage{
-		PromptTokens:     int(getFloat64(m, "prompt_tokens")),
-		CompletionTokens: int(getFloat64(m, "completion_tokens")),
-		TotalTokens:      int(getFloat64(m, "total_tokens")),
+	u := Usage{
+		PromptTokens:             int(getFloat64(m, "prompt_tokens")),
+		CompletionTokens:         int(getFloat64(m, "completion_tokens")),
+		TotalTokens:              int(getFloat64(m, "total_tokens")),
+		CacheReadInputTokens:     int(getFloat64(m, "cache_read_input_tokens")),
+		CacheCreationInputTokens: int(getFloat64(m, "cache_creation_input_tokens")),
 	}
+	if d, ok := m["prompt_tokens_details"].(map[string]interface{}); ok {
+		if cached := int(getFloat64(d, "cached_tokens")); cached > 0 {
+			u.CacheReadInputTokens = cached
+			u.PromptTokens = max(u.PromptTokens-cached, 0)
+		}
+	}
+	return u
 }
 
 // convertToolsToOpenAI converts tool definitions to OpenAI format

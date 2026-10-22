@@ -468,9 +468,68 @@ func (e *Executor) buildSkillSpecificCommand(skillName, action string, args map[
 	switch skillName {
 	case "email", "gog":
 		return e.buildGogCommand(action, args, command)
+	case "gog-auth":
+		return e.buildGogAuthCommand(action, args, command)
 	default:
 		return false, nil
 	}
+}
+
+// buildGogAuthCommand builds commands for the gog-auth skill (bd-f92w).
+// Every emitted line is fixed or shell-quoted: only the email and services
+// arguments are model-supplied, both free-text values quoted exactly once via
+// shellQuote (the gog-account alias security rule does not apply here — the
+// email is the OBJECT of auth management, not an inbox selector, and gog auth
+// add intentionally works on accounts that are not yet configured).
+func (e *Executor) buildGogAuthCommand(action string, args map[string]interface{}, command *strings.Builder) (bool, error) {
+	gogBin := shellWord(e.gog.binary)
+
+	getArg := func(key string) string {
+		if v, ok := args[key].(string); ok {
+			return v
+		}
+		return ""
+	}
+
+	switch normalizeAction(action) {
+	case "add_account":
+		email := getArg("email")
+		if email == "" {
+			// Interactive two-step OAuth flow needs a target account; failing
+			// honestly beats emitting a malformed gog invocation.
+			return false, nil
+		}
+		// Only whitelisted charset values survive into --services; anything
+		// else is dropped to the gog default ("user").
+		services := getArg("services")
+		if services == "" || !gogAuthServicesRE.MatchString(services) {
+			services = "user"
+		}
+		cmd := fmt.Sprintf("%s auth add %s --services %s --remote --step 1 --force-consent --json\n",
+			gogBin, shellQuote(email), services)
+		command.WriteString(cmd)
+
+	case "verify_account":
+		email := getArg("email")
+		if email == "" {
+			return false, nil
+		}
+		// A real API call with the target account proves the refresh token
+		// works (gog auth has no dedicated verify subcommand).
+		command.WriteString(fmt.Sprintf("%s gmail search 'is:unread' --account %s --max 1 --json\n",
+			gogBin, shellQuote(email)))
+
+	case "status":
+		command.WriteString(gogBin + " auth list --json\n")
+
+	case "help":
+		command.WriteString(gogBin + " auth --help\n")
+
+	default:
+		return false, nil
+	}
+
+	return true, nil
 }
 
 // Account selection: only the configured env-var expansions
@@ -484,6 +543,11 @@ const (
 	gogMinMax     = 1
 	gogMaxMax     = 100
 )
+
+// gogAuthServicesRE bounds the --services value for gog auth add: gog accepts
+// "user", "all", or comma-separated service names (letters only). Anything
+// outside this charset is model noise and falls back to the gog default.
+var gogAuthServicesRE = regexp.MustCompile(`^[a-z,]+$`)
 
 // parseMaxResults reads the first present key from args as a whole number,
 // accepting JSON numbers and numeric strings, and clamps it to
@@ -665,6 +729,10 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 
 	case "status":
 		command.WriteString(fmt.Sprintf("%s gmail search 'is:unread' --account %s --max 5\n", gogBin, account))
+
+	case "help":
+		// gog skill declares a help action (bd-f92w); passthrough to the CLI.
+		command.WriteString(gogBin + " --help\n")
 
 	default:
 		return false, nil

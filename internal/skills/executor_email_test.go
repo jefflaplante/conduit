@@ -387,3 +387,99 @@ func TestExecuteSkill_InvalidArgsReturnsError(t *testing.T) {
 		t.Fatal("injected command executed")
 	}
 }
+
+// gogAuthCommand builds the command for the gog-auth skill (bd-f92w).
+func gogAuthCommand(t *testing.T, action string, args map[string]interface{}) string {
+	t.Helper()
+	cmd, err := gogAuthCommandErr(action, args)
+	if err != nil {
+		t.Fatalf("buildShellCommand(%q, %v) unexpected error: %v", action, args, err)
+	}
+	return cmd
+}
+
+func gogAuthCommandErr(action string, args map[string]interface{}) (string, error) {
+	e := NewExecutor(ExecutionConfig{TimeoutSeconds: 10})
+	if err := e.ConfigureGog(&GogConfig{Binary: testGogBinary}, testWorkspace); err != nil {
+		return "", err
+	}
+	return e.buildShellCommand(Skill{Name: "gog-auth"}, action, args)
+}
+
+// All four advertised gog-auth actions must resolve to real commands
+// (bd-f92w: previously hollow — advertised in the tool enum but no executor
+// mapping, so every invocation failed honestly with "no command found").
+func TestGogAuthSkill_AllActionsResolveRealCommands(t *testing.T) {
+	cases := []struct {
+		action string
+		args   map[string]interface{}
+		want   string
+	}{
+		{"add_account", map[string]interface{}{"email": "owner@example.com"},
+			"auth add 'owner@example.com' --services user --remote --step 1 --force-consent --json"},
+		{"add_account", map[string]interface{}{"email": "owner@example.com", "services": "gmail,calendar"},
+			"--services gmail,calendar"},
+		{"verify_account", map[string]interface{}{"email": "owner@example.com"},
+			"gmail search 'is:unread' --account 'owner@example.com' --max 1 --json"},
+		{"status", nil, "auth list --json"},
+		{"help", nil, "auth --help"},
+	}
+	for _, tc := range cases {
+		cmd := gogAuthCommand(t, tc.action, tc.args)
+		if !strings.Contains(cmd, tc.want) {
+			t.Errorf("%s: missing %q in:\n%s", tc.action, tc.want, cmd)
+		}
+		if strings.Contains(cmd, "echo 'Executed action") {
+			t.Errorf("%s fell through to echo fallback:\n%s", tc.action, cmd)
+		}
+	}
+}
+
+// Email is the OBJECT of auth management, not an inbox selector: it must be
+// shell-quoted exactly once (never validated against the account alias
+// lists — gog auth add intentionally targets accounts not yet configured).
+func TestGogAuthSkill_EmailIsQuotedObjectNotAlias(t *testing.T) {
+	cmd := gogAuthCommand(t, "add_account", map[string]interface{}{"email": "o'brien@example.com"})
+	if !strings.Contains(cmd, `'o'\''brien@example.com'`) {
+		t.Errorf("email with embedded quote not shell-escaped:\n%s", cmd)
+	}
+	if strings.Contains(cmd, `'\'`, ) && !strings.Contains(cmd, `'o'\''brien`) {
+		t.Errorf("double-quoting detected:\n%s", cmd)
+	}
+}
+
+// Missing required email fails honestly (empty command → executor error),
+// never a malformed gog invocation.
+func TestGogAuthSkill_MissingEmailReturnsEmpty(t *testing.T) {
+	for _, action := range []string{"add_account", "verify_account"} {
+		cmd, err := gogAuthCommandErr(action, nil)
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", action, err)
+		}
+		if cmd != "" {
+			t.Errorf("%s without email must return empty command, got:\n%s", action, cmd)
+		}
+	}
+}
+
+// Model-supplied --services can never carry shell metacharacters: anything
+// outside the [a-z,] whitelist falls back to the gog default ("user").
+func TestGogAuthSkill_ServicesInjectionFallsBackToUser(t *testing.T) {
+	cmd := gogAuthCommand(t, "add_account", map[string]interface{}{
+		"email": "owner@example.com", "services": "user; touch PWNED",
+	})
+	if strings.Contains(cmd, "PWNED") {
+		t.Errorf("injected services value reached the command line:\n%s", cmd)
+	}
+	if !strings.Contains(cmd, "--services user ") {
+		t.Errorf("non-whitelist services must fall back to 'user':\n%s", cmd)
+	}
+}
+
+// The gog skill's help action is a real CLI passthrough (bd-f92w).
+func TestGogSkill_HelpPassthrough(t *testing.T) {
+	cmd := emailCommand(t, "help", nil)
+	if !strings.Contains(cmd, "gog --help") {
+		t.Errorf("gog help should be a CLI passthrough, got:\n%s", cmd)
+	}
+}
