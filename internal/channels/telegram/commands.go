@@ -98,6 +98,8 @@ func (a *Adapter) registerCommands(ctx context.Context) {
 		{Command: "context", Description: "Show context window usage"},
 		{Command: "stop", Description: "Stop the current operation"},
 		{Command: "ring", Description: "Show debug ring buffer activity"},
+		{Command: "topic", Description: "List topics; /topic <slug> switches (creates if new)"},
+		{Command: "home", Description: "Back to the main session (alias: /topic home)"},
 	}
 
 	_, err := a.bot.SetMyCommands(ctx, &bot.SetMyCommandsParams{
