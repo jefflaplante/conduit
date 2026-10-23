@@ -56,6 +56,9 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 	if r.topicPrompt != nil {
 		topicPrompt = r.topicPrompt(session)
 	}
+	if r.topicProfile != nil {
+		session = r.topicProfile(session)
+	}
 
 	// 4a. Persist the user message inside the lock (conduit-31jg.22).
 	userMsgID := req.PersistedUserMessageID

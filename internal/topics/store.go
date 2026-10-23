@@ -55,8 +55,11 @@ type Topic struct {
 	Persona    string
 	Summary    string
 	SessionKey string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	// PromptProfile is the raw stored prompt profile JSON, "" for none
+	// (conduit-331g). Use Profile() to read it.
+	PromptProfile string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // NormalizeSlug lowercases s, turns every run of characters outside
@@ -103,7 +106,7 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-const topicColumns = `id, slug, name, status, COALESCE(persona, ''), COALESCE(summary, ''), session_key, created_at, updated_at`
+const topicColumns = `id, slug, name, status, COALESCE(persona, ''), COALESCE(summary, ''), session_key, COALESCE(prompt_profile, ''), created_at, updated_at`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -111,7 +114,7 @@ func scanTopic(row rowScanner) (*Topic, error) {
 	var t Topic
 	var status string
 	var created, updated sql.NullString
-	if err := row.Scan(&t.ID, &t.Slug, &t.Name, &status, &t.Persona, &t.Summary, &t.SessionKey, &created, &updated); err != nil {
+	if err := row.Scan(&t.ID, &t.Slug, &t.Name, &status, &t.Persona, &t.Summary, &t.SessionKey, &t.PromptProfile, &created, &updated); err != nil {
 		return nil, err
 	}
 	t.Status = Status(status)
@@ -178,7 +181,7 @@ func (s *Store) List() ([]*Topic, error) {
 }
 
 // update sets one column on slug's row and bumps updated_at.
-func (s *Store) update(slug, column, value string) error {
+func (s *Store) update(slug, column string, value any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var n int64
@@ -209,6 +212,15 @@ func (s *Store) SetSummary(slug, summary string) error { return s.update(slug, "
 
 // SetPersona sets (or, with "", clears) a topic's persona fragment.
 func (s *Store) SetPersona(slug, persona string) error { return s.update(slug, "persona", persona) }
+
+// SetProfile stores a topic's prompt profile; nil clears it (NULL: the
+// full prompt). Validate input with ParseProfile first.
+func (s *Store) SetProfile(slug string, p *Profile) error {
+	if p == nil {
+		return s.update(slug, "prompt_profile", nil)
+	}
+	return s.update(slug, "prompt_profile", p.JSON())
+}
 
 // Rename changes oldSlug's slug and display name and moves every chat
 // pointer to the new slug, in one transaction. The old slug stops resolving.
@@ -254,13 +266,13 @@ func (s *Store) Pointer(chatID string) (string, error) {
 // exists. The caller decides what a non-active status means.
 func (s *Store) Active(chatID string) (*Topic, error) {
 	row := s.db.QueryRow(`SELECT p.topic_slug, t.id, t.slug, t.name, t.status, COALESCE(t.persona, ''),
-			COALESCE(t.summary, ''), t.session_key, t.created_at, t.updated_at
+			COALESCE(t.summary, ''), t.session_key, COALESCE(t.prompt_profile, ''), t.created_at, t.updated_at
 		FROM topic_pointers p LEFT JOIN topics t ON t.slug = p.topic_slug
 		WHERE p.chat_id = ?`, chatID)
 	var ptr sql.NullString
 	var id sql.NullInt64
-	var slug, name, status, persona, summary, key, created, updated sql.NullString
-	err := row.Scan(&ptr, &id, &slug, &name, &status, &persona, &summary, &key, &created, &updated)
+	var slug, name, status, persona, summary, key, profile, created, updated sql.NullString
+	err := row.Scan(&ptr, &id, &slug, &name, &status, &persona, &summary, &key, &profile, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && ptr.String == "") {
 		return nil, nil
 	}
@@ -273,6 +285,7 @@ func (s *Store) Active(chatID string) (*Topic, error) {
 	t := &Topic{
 		ID: id.Int64, Slug: slug.String, Name: name.String, Status: Status(status.String),
 		Persona: persona.String, Summary: summary.String, SessionKey: key.String,
+		PromptProfile: profile.String,
 	}
 	t.CreatedAt, _ = database.ParseStoredTime(created.String)
 	t.UpdatedAt, _ = database.ParseStoredTime(updated.String)

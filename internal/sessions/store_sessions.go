@@ -55,6 +55,17 @@ func (s *Store) GetOrCreateSession(userID, channelID string) (*Session, error) {
 // TopicSessionKeyPrefix marks sessions owned by a topic (conduit-43vk).
 const TopicSessionKeyPrefix = "topic_"
 
+// Session-context keys that narrow the system prompt. Both hold
+// comma-separated lists; absent or empty means no narrowing.
+const (
+	// ContextSkillFilter limits the skills in the prompt and tool catalog
+	// to the named skills (cron jobs, sub-agents, topic profiles).
+	ContextSkillFilter = "skill_filter"
+	// ContextSkip names workspace context files (e.g. "AGENTS.md") left out
+	// of the prompt; SOUL.md is never skipped (conduit-331g).
+	ContextSkip = "context_skip"
+)
+
 // GetOrCreateSessionByKey returns the session with key, creating it for
 // userID/channelID when missing. Topics use it to (re)create their session
 // lazily under a fixed key (conduit-43vk).

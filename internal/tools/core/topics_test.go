@@ -47,6 +47,10 @@ func (f *fakeTopicGateway) TopicPersona(_ context.Context, slug, persona string)
 	return f.rec("persona " + slug + "|" + persona)
 }
 
+func (f *fakeTopicGateway) TopicProfile(_ context.Context, slug, profile string) (string, error) {
+	return f.rec("profile " + slug + "|" + profile)
+}
+
 func findTopicTool(t *testing.T, tools []types.Tool, name string) types.Tool {
 	t.Helper()
 	for _, tl := range tools {
@@ -82,6 +86,9 @@ func TestTopicTools(t *testing.T) {
 			args: map[string]interface{}{"from": "alpha", "to": "beta"}, wantCall: "stitch alpha|beta"},
 		{tool: "topic_persona", required: []string{"slug"},
 			args: map[string]interface{}{"slug": "alpha", "persona": ""}, wantCall: "persona alpha|"},
+		{tool: "topic_profile", required: []string{"slug"},
+			args:     map[string]interface{}{"slug": "alpha", "profile": `{"skills":["gog"]}`},
+			wantCall: `profile alpha|{"skills":["gog"]}`},
 	}
 
 	if got := len(NewTopicTools(nil)); got != len(tests) {
@@ -156,5 +163,25 @@ func TestTopicTools(t *testing.T) {
 				t.Fatalf("bare selftest = %+v", r)
 			}
 		})
+	}
+}
+
+// conduit-331g: models often send the profile as a JSON object rather than a
+// string; the tool re-encodes it so the gateway always validates JSON text.
+func TestTopicProfileTool_ObjectArgument(t *testing.T) {
+	gw := &fakeTopicGateway{}
+	tool := findTopicTool(t, NewTopicTools(&types.ToolServices{Gateway: gw}), "topic_profile")
+	res, err := tool.Execute(context.Background(), map[string]interface{}{
+		"slug":    "alpha",
+		"profile": map[string]interface{}{"skills": []interface{}{"gog"}, "skip_context": []interface{}{"TOOLS.md"}},
+	})
+	if err != nil || !res.Success {
+		t.Fatalf("execute = %+v, %v", res, err)
+	}
+	if want := `profile alpha|{"skills":["gog"],"skip_context":["TOOLS.md"]}`; gw.calls[0] != want {
+		t.Fatalf("call = %q, want %q", gw.calls[0], want)
+	}
+	if res, _ := tool.Execute(context.Background(), map[string]interface{}{"slug": "alpha"}); !res.Success || gw.calls[1] != "profile alpha|" {
+		t.Fatalf("absent profile should clear: %+v %q", res, gw.calls)
 	}
 }

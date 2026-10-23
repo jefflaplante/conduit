@@ -69,6 +69,9 @@ type TurnRunner struct {
 	// topicPrompt, when set, renders the topic prefix for a session's turn
 	// ("" for home); it rides the turn ctx to prompt build (conduit-43vk).
 	topicPrompt func(*sessions.Session) string
+	// topicProfile, when set, returns the session a turn builds its prompt
+	// from with the topic's prompt profile applied (conduit-331g).
+	topicProfile func(*sessions.Session) *sessions.Session
 
 	mu     sync.Mutex
 	queued map[string][]*queuedTurn

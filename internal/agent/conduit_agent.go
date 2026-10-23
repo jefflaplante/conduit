@@ -261,7 +261,16 @@ func (a *ConduitAgentWithIntegration) buildPromptCacheKey(session *sessions.Sess
 	if isOAuth {
 		oauthStr = "oauth"
 	}
-	return fmt.Sprintf("%s:%s:%s", sessionKey, model, oauthStr)
+	key := fmt.Sprintf("%s:%s:%s", sessionKey, model, oauthStr)
+	// conduit-331g: a topic's prompt profile narrows the static block, so a
+	// profile change must not be served the old cached prompt. Unprofiled
+	// sessions keep their old key.
+	if session != nil {
+		if f, skip := session.Context[sessions.ContextSkillFilter], session.Context[sessions.ContextSkip]; f != "" || skip != "" {
+			key += ":skills=" + f + ":skip=" + skip
+		}
+	}
+	return key
 }
 
 // copySystemBlocks creates a deep copy of system blocks to prevent cache mutation.
@@ -322,7 +331,7 @@ func (a *ConduitAgentWithIntegration) GetToolDefinitions(session *sessions.Sessi
 	// Parse skill filter from session context
 	var skillFilter map[string]bool
 	if session != nil && session.Context != nil {
-		if filterStr := session.Context["skill_filter"]; filterStr != "" {
+		if filterStr := session.Context[sessions.ContextSkillFilter]; filterStr != "" {
 			skillFilter = make(map[string]bool)
 			for _, name := range strings.Split(filterStr, ",") {
 				if trimmed := strings.TrimSpace(name); trimmed != "" {
