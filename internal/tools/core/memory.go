@@ -88,12 +88,52 @@ func (t *MemorySearchTool) Parameters() map[string]interface{} {
 				"enum":        []string{"auto", "hybrid", "vector", "fts5"},
 				"default":     "auto",
 			},
+			"tags": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "Only search memory files whose frontmatter tags include any of these (case-insensitive). Filters combine with AND; values within one list OR. Any filter limits results to memory files (no brain/session results).",
+			},
+			"people": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "Only search memory files whose frontmatter people include any of these",
+			},
+			"projects": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "Only search memory files whose frontmatter projects include any of these",
+			},
+			"category": map[string]interface{}{
+				"type":        "string",
+				"description": "Only search memory files whose frontmatter category equals this (case-insensitive)",
+			},
+			"date_after": map[string]interface{}{
+				"type":        "string",
+				"description": "Only search memory files whose frontmatter date is on or after this YYYY-MM-DD date (files without a valid date never match)",
+			},
+			"date_before": map[string]interface{}{
+				"type":        "string",
+				"description": "Only search memory files whose frontmatter date is on or before this YYYY-MM-DD date (files without a valid date never match)",
+			},
+			"summary_only": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Skip search and list one line per memory file with frontmatter (path, date, category, summary), newest first, honoring the filters above, up to maxResults (default 100). query is not needed. Use it to scan many files cheaply, then Read the relevant ones.",
+				"default":     false,
+			},
 		},
-		"required": []string{"query"},
 	}
 }
 
 func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
+	filter, err := memoryFilterFromArgs(args)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: err.Error()}, nil
+	}
+	if toolargs.GetBool(args, "summary_only", false) {
+		return t.executeSummaryScan(ctx, args, filter)
+	}
+	hasFilter := !filter.IsEmpty()
+
 	query, ok := args["query"].(string)
 	if !ok {
 		return &types.ToolResult{
@@ -111,8 +151,14 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]interfac
 	// Resolve search mode
 	effectiveMode := t.resolveSearchMode(searchMode)
 
-	// Search memory files using the resolved mode
-	fileResults, err := t.searchMemoryFiles(ctx, query, minScore, effectiveMode)
+	// Search memory files using the resolved mode; frontmatter filters
+	// pre-filter the candidate files (bd-3o6h).
+	var fileResults []MemoryResult
+	if hasFilter {
+		fileResults, err = t.searchMemoryFilesFiltered(ctx, query, effectiveMode, filter)
+	} else {
+		fileResults, err = t.searchMemoryFiles(ctx, query, minScore, effectiveMode)
+	}
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,
@@ -123,8 +169,9 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]interfac
 	var results []MemoryResult
 	results = append(results, fileResults...)
 
-	// Search brain memory if available
-	if t.services.Brain != nil {
+	// Search brain memory if available. Brain entries and session messages
+	// have no frontmatter, so they never match a filtered search.
+	if t.services.Brain != nil && !hasFilter {
 		brainResults, brainErr := t.searchBrain(ctx, query)
 		if brainErr != nil {
 			log.Printf("Warning: brain search failed: %v", brainErr)
@@ -135,7 +182,7 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]interfac
 
 	// Search session messages if requested
 	var sessionResults []MemoryResult
-	if searchSessions && t.services.SessionStore != nil {
+	if searchSessions && t.services.SessionStore != nil && !hasFilter {
 		sessionResults, err = t.searchSessionMessages(ctx, query, sessionLimit, minScore)
 		if err != nil {
 			log.Printf("Warning: session search failed: %v", err)
@@ -172,24 +219,29 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]interfac
 	// Format results
 	content := t.formatSearchResults(results, query)
 
+	data := map[string]interface{}{
+		"results":         results,
+		"query":           query,
+		"total":           len(results),
+		"fileResults":     len(fileResults),
+		"sessionResults":  len(sessionResults),
+		"minScore":        minScore,
+		"maxResults":      maxResults,
+		"searchSessions":  searchSessions,
+		"sessionLimit":    sessionLimit,
+		"searchMode":      searchMode,
+		"effectiveMode":   effectiveMode,
+		"vectorAvailable": t.services.VectorSearch != nil,
+		"brainAvailable":  t.services.Brain != nil,
+	}
+	if hasFilter {
+		data["filters"] = filter
+	}
+
 	return &types.ToolResult{
 		Success: true,
 		Content: content,
-		Data: map[string]interface{}{
-			"results":         results,
-			"query":           query,
-			"total":           len(results),
-			"fileResults":     len(fileResults),
-			"sessionResults":  len(sessionResults),
-			"minScore":        minScore,
-			"maxResults":      maxResults,
-			"searchSessions":  searchSessions,
-			"sessionLimit":    sessionLimit,
-			"searchMode":      searchMode,
-			"effectiveMode":   effectiveMode,
-			"vectorAvailable": t.services.VectorSearch != nil,
-			"brainAvailable":  t.services.Brain != nil,
-		},
+		Data:    data,
 	}, nil
 }
 

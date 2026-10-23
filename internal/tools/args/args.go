@@ -6,6 +6,7 @@ package args
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 )
 
 // GetString extracts a string value from args, returning defaultVal if not found or wrong type.
@@ -98,4 +99,25 @@ func GetBool(args map[string]interface{}, key string, defaultVal bool) bool {
 		}
 	}
 	return defaultVal
+}
+
+// GetStringSlice extracts a list of strings from args. It accepts a JSON
+// array ([]interface{}; non-string items are skipped), a []string, or a
+// single comma-separated string. Returns nil if not found or of another type.
+func GetStringSlice(args map[string]interface{}, key string) []string {
+	switch v := args[key].(type) {
+	case []string:
+		return v
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		return strings.Split(v, ",")
+	}
+	return nil
 }

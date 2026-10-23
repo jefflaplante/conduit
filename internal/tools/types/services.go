@@ -87,6 +87,16 @@ type SearchService interface {
 	Search(ctx context.Context, query string, limit int) ([]fts.SearchResult, error)
 }
 
+// DocumentMetadataSearcher is an optional SearchService extension over the
+// per-file frontmatter in search.db's document_metadata (bd-3o6h).
+// *fts.Searcher implements it; the queries fail when the backing database
+// has no document_metadata table (the gateway.db fallback).
+type DocumentMetadataSearcher interface {
+	SearchDocumentsFiltered(ctx context.Context, query string, limit int, filter fts.DocumentFilter) ([]fts.DocumentResult, error)
+	MatchingDocumentPaths(ctx context.Context, filter fts.DocumentFilter) ([]string, error)
+	ListDocumentMetadata(ctx context.Context, filter fts.DocumentFilter, limit int) ([]fts.DocumentMetadata, error)
+}
+
 // VectorSearchResult represents a single result from vector/semantic search.
 type VectorSearchResult struct {
 	ID       string            `json:"id"`
