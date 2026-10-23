@@ -38,28 +38,6 @@ type RateLimitConfig struct {
 	TrustProxy bool `json:"trustProxy"`
 }
 
-// DefaultRateLimitConfig returns default rate limiting configuration
-func DefaultRateLimitConfig() RateLimitConfig {
-	return RateLimitConfig{
-		Enabled: true,
-		Anonymous: struct {
-			WindowSeconds int `json:"windowSeconds"`
-			MaxRequests   int `json:"maxRequests"`
-		}{
-			WindowSeconds: 60,  // 1 minute
-			MaxRequests:   100, // 100 requests per minute for anonymous
-		},
-		Authenticated: struct {
-			WindowSeconds int `json:"windowSeconds"`
-			MaxRequests   int `json:"maxRequests"`
-		}{
-			WindowSeconds: 60,   // 1 minute
-			MaxRequests:   1000, // 1000 requests per minute for authenticated
-		},
-		CleanupIntervalSeconds: 300, // 5 minutes
-	}
-}
-
 // RateLimitMiddleware provides HTTP rate limiting
 type RateLimitMiddleware struct {
 	anonymousLimiter     *ratelimit.SlidingWindow

@@ -171,9 +171,9 @@ func TestGetFuelGauge_ExposesTokenWindow(t *testing.T) {
 func TestGetFuelGauge_ExposesRateLimit(t *testing.T) {
 	gw, _ := newTestGatewayWithSessions(t)
 
-	cfg := middleware.DefaultRateLimitConfig()
-	cfg.Anonymous.MaxRequests = 10
-	cfg.Authenticated.MaxRequests = 100
+	cfg := middleware.RateLimitConfig{Enabled: true, CleanupIntervalSeconds: 300}
+	cfg.Anonymous.WindowSeconds, cfg.Anonymous.MaxRequests = 60, 10
+	cfg.Authenticated.WindowSeconds, cfg.Authenticated.MaxRequests = 60, 100
 	m := middleware.NewRateLimitMiddleware(middleware.RateLimitMiddlewareConfig{Config: cfg})
 	t.Cleanup(m.Stop)
 	gw.rateLimitMiddleware = m

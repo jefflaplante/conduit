@@ -9,7 +9,7 @@ import (
 
 func newSnapshotTestMiddleware(t *testing.T) *RateLimitMiddleware {
 	t.Helper()
-	cfg := DefaultRateLimitConfig()
+	cfg := testRateLimitConfig()
 	cfg.Anonymous.WindowSeconds = 60
 	cfg.Anonymous.MaxRequests = 5
 	cfg.Authenticated.WindowSeconds = 60
@@ -19,7 +19,7 @@ func newSnapshotTestMiddleware(t *testing.T) *RateLimitMiddleware {
 }
 
 func TestRateLimitMiddleware_Snapshot_DisabledShowsConfig(t *testing.T) {
-	cfg := DefaultRateLimitConfig()
+	cfg := testRateLimitConfig()
 	cfg.Enabled = false
 	m := NewRateLimitMiddleware(RateLimitMiddlewareConfig{Config: cfg})
 	snap := m.Snapshot(5)

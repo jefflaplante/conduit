@@ -16,7 +16,7 @@ func newPreAuthTestStack(t *testing.T, anonMax, authMax int) (http.Handler, *aut
 	t.Cleanup(cleanup)
 	storage := auth.NewTokenStorage(db, "test-secret")
 
-	cfg := DefaultRateLimitConfig()
+	cfg := testRateLimitConfig()
 	cfg.Anonymous.MaxRequests = anonMax
 	cfg.Authenticated.MaxRequests = authMax
 	rl := NewRateLimitMiddleware(RateLimitMiddlewareConfig{Config: cfg})

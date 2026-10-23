@@ -20,7 +20,7 @@ func newWSTestServer(t *testing.T, anonMax int) (*httptest.Server, *auth.TokenSt
 	t.Cleanup(cleanup)
 	storage := auth.NewTokenStorage(db, "test-secret")
 
-	cfg := DefaultRateLimitConfig()
+	cfg := testRateLimitConfig()
 	cfg.Anonymous.MaxRequests = anonMax
 	cfg.Authenticated.MaxRequests = 50
 	rl := NewRateLimitMiddleware(RateLimitMiddlewareConfig{Config: cfg})
