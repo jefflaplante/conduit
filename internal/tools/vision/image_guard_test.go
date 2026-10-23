@@ -19,7 +19,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// conduit-31jg.62 test helpers.
+// NewImageTool builds the Image tool with the sandbox taken from
+// services.ConfigMgr.Tools.Sandbox (no config → every file path is denied).
+// (Test-only copy of the constructor; the registry uses NewImageToolWithSandbox.)
+func NewImageTool(services *types.ToolServices) *ImageTool {
+	var cfg config.SandboxConfig
+	if services != nil && services.ConfigMgr != nil {
+		cfg = services.ConfigMgr.Tools.Sandbox
+	}
+	return NewImageToolWithSandbox(services, cfg)
+}
 
 // sandboxedImageTool returns an Image tool whose only sandbox root is dir.
 func sandboxedImageTool(dir string) *ImageTool {

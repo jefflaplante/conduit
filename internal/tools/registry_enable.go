@@ -14,14 +14,7 @@ func normalizeToolName(name string) string {
 	return strings.ToLower(strings.ReplaceAll(name, "_", ""))
 }
 
-// isToolEnabled checks if a tool is enabled (case-insensitive, underscore-insensitive).
-func (r *Registry) isToolEnabled(name string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.isToolEnabledLocked(name)
-}
-
-// isToolEnabledLocked is isToolEnabled for callers already holding r.mu.
+// isToolEnabledLocked reports whether a tool is enabled. Callers holding
 func (r *Registry) isToolEnabledLocked(name string) bool {
 	return r.enabledTools[normalizeToolName(name)]
 }

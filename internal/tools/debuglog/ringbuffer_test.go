@@ -121,11 +121,6 @@ func TestConvenienceConstructors(t *testing.T) {
 		t.Errorf("unexpected: %+v", e3)
 	}
 
-	e4 := Thinking("Thinking...")
-	if e4.Type != EntryThinking {
-		t.Errorf("unexpected: %+v", e4)
-	}
-
 	e5 := LLMRequest("claude-sonnet-4-6", nil)
 	if e5.Type != EntryLLMRequest {
 		t.Errorf("unexpected: %+v", e5)

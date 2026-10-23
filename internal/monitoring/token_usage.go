@@ -73,13 +73,6 @@ func NewTokenWindowTracker() *TokenWindowTracker {
 	}
 }
 
-// setClock overrides the clock for tests.
-func (t *TokenWindowTracker) setClock(fn func() time.Time) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.now = fn
-}
-
 // Record observes one API call's token usage. inputTokens, outputTokens,
 // cacheReadTokens, cacheWriteTokens are counts from the provider usage
 // response. Zero values are allowed. A negative value is treated as 0.

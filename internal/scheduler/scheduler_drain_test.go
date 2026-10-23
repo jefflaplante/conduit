@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+// withRerunDelay shortens the post-restart re-run delay (test-only; lives
+// here so deadcode doesn't flag an unused prod option).
+func withRerunDelay(d time.Duration) Option {
+	return func(s *Scheduler) { s.rerunDelay = d }
+}
+
 // conduit-31jg.77: graceful drain must account for in-flight scheduler jobs.
 
 func startDrainTestScheduler(t *testing.T, jobs []*Job, exec JobExecutor, opts ...Option) *Scheduler {
