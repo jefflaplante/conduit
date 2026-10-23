@@ -86,7 +86,8 @@ func TestGogConfig_CustomOverridesDefaults(t *testing.T) {
 	if !strings.Contains(cmd, "/opt/gog/bin/gog gmail send") || !strings.Contains(cmd, `--account "$OWNER_GOG"`) {
 		t.Errorf("custom owner send:\n%s", cmd)
 	}
-	if !e.isOwnerEmailSend(Skill{Name: "gog"}, "send", map[string]interface{}{"to": "x", "from": "me@example.com"}) {
+	// isOwnerEmailSend inlined: owner-alias "from" must be approval-gated.
+	if !(isEmailSend(Skill{Name: "gog"}, "send") && e.gog.sendUsesOwner(map[string]interface{}{"to": "x", "from": "me@example.com"})) {
 		t.Error("custom owner alias must be approval-gated")
 	}
 
