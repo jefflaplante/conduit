@@ -3,7 +3,6 @@ package brain
 import (
 	"math"
 	"strconv"
-	"time"
 )
 
 // LTM salience model (conduit-31jg.53).
@@ -86,14 +85,4 @@ func (b *Brain) ltmBaseSalience(accessCount int) float64 {
 		n = 1
 	}
 	return math.Min(float64(accessCount)/float64(n), 1.0)*b.accessWeight + 0.8*b.tierWeight
-}
-
-// effectiveSalience is EffectiveSalienceSQL in Go.
-func (b *Brain) effectiveSalience(base float64, accessedAt, now time.Time) float64 {
-	hours := now.Sub(accessedAt).Hours()
-	if hours < 0 {
-		hours = 0
-	}
-	v := base + b.recencyWeight/(1.0+hours*b.recencyDecayRate)
-	return math.Min(1.0, math.Max(0.0, v))
 }
