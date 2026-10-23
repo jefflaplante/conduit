@@ -269,7 +269,7 @@ func TestBuildSituationAwareness_TimeContext(t *testing.T) {
 }
 
 func TestComputeTimeContext(t *testing.T) {
-	result := computeTimeContext("UTC")
+	result := computeTimeContextAt("UTC", time.Now(), nil)
 	if result == "" {
 		t.Fatal("expected non-empty time context")
 	}
@@ -306,14 +306,14 @@ func TestComputeTimeContext(t *testing.T) {
 
 func TestComputeTimeContext_InvalidTimezone(t *testing.T) {
 	// Should not panic with an invalid timezone.
-	result := computeTimeContext("Invalid/Timezone")
+	result := computeTimeContextAt("Invalid/Timezone", time.Now(), nil)
 	if result == "" {
 		t.Fatal("expected non-empty time context even with invalid timezone")
 	}
 }
 
 func TestComputeTimeContext_EmptyTimezone(t *testing.T) {
-	result := computeTimeContext("")
+	result := computeTimeContextAt("", time.Now(), nil)
 	if result == "" {
 		t.Fatal("expected non-empty time context with empty timezone")
 	}

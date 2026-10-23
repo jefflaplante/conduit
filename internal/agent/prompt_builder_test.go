@@ -55,7 +55,10 @@ func TestBuildFullPrompt_LargeContext(t *testing.T) {
 	pb.sectionParams.Session = sessionWithModel("claude-sonnet-4-20250514")
 	pb.sectionParams.IsMinimal = false
 
-	prompt := pb.buildFullPrompt(context.Background(), sessionWithModel("claude-sonnet-4-20250514"), false)
+	prompt := func() string {
+		split := pb.buildSplitWithParams(context.Background(), sessionWithModel("claude-sonnet-4-20250514"), false, pb.sectionParams)
+		return joinPromptParts(split.static, split.dynamic)
+	}()
 
 	// All sections should be present for a 200K model.
 	if strings.Contains(prompt, "Compact mode") {
@@ -151,7 +154,10 @@ func TestBuildFullPrompt_SmallContext(t *testing.T) {
 	pb := newTestPromptBuilder()
 	session := sessionWithModel("mistral")
 
-	prompt := pb.buildFullPrompt(context.Background(), session, false)
+	prompt := func() string {
+		split := pb.buildSplitWithParams(context.Background(), session, false, pb.sectionParams)
+		return joinPromptParts(split.static, split.dynamic)
+	}()
 
 	// P1 sections must always be present regardless of budget.
 	for _, want := range []string{"## Tooling", "## Tool Integrity", "## Silent Replies", "## Runtime"} {
@@ -175,7 +181,10 @@ func TestBuildFullPrompt_SmallContext_DropsLargeSections(t *testing.T) {
 	pb := newTestPromptBuilder()
 	session := sessionWithModel("gemma2")
 
-	prompt := pb.buildFullPrompt(context.Background(), session, false)
+	prompt := func() string {
+		split := pb.buildSplitWithParams(context.Background(), session, false, pb.sectionParams)
+		return joinPromptParts(split.static, split.dynamic)
+	}()
 
 	budgetChars := 8192 * defaultPromptBudgetPercent / 100 * defaultCharsPerToken
 	// Prompt should be near or under budget (compact notice adds a bit).
@@ -188,7 +197,10 @@ func TestBuildFullPrompt_TinyContext(t *testing.T) {
 	pb := newTestPromptBuilder()
 	session := sessionWithModel("gemma2") // 8K context
 
-	prompt := pb.buildFullPrompt(context.Background(), session, false)
+	prompt := func() string {
+		split := pb.buildSplitWithParams(context.Background(), session, false, pb.sectionParams)
+		return joinPromptParts(split.static, split.dynamic)
+	}()
 
 	// Should have compact mode with many dropped sections.
 	if !strings.Contains(prompt, "Compact mode") {
@@ -211,7 +223,10 @@ func TestBuildFullPrompt_UnknownModel(t *testing.T) {
 	pb := newTestPromptBuilder()
 	session := sessionWithModel("some-unknown-model-xyz")
 
-	prompt := pb.buildFullPrompt(context.Background(), session, false)
+	prompt := func() string {
+		split := pb.buildSplitWithParams(context.Background(), session, false, pb.sectionParams)
+		return joinPromptParts(split.static, split.dynamic)
+	}()
 
 	// Unknown models default to 200K, so no compact mode.
 	if strings.Contains(prompt, "Compact mode") {
@@ -223,7 +238,10 @@ func TestBuildFullPrompt_EmptyModel(t *testing.T) {
 	pb := newTestPromptBuilder()
 	session := sessionWithModel("")
 
-	prompt := pb.buildFullPrompt(context.Background(), session, false)
+	prompt := func() string {
+		split := pb.buildSplitWithParams(context.Background(), session, false, pb.sectionParams)
+		return joinPromptParts(split.static, split.dynamic)
+	}()
 
 	// Empty model defaults to 200K, so no compact mode.
 	if strings.Contains(prompt, "Compact mode") {
@@ -235,7 +253,7 @@ func TestPromptSectionPriorities(t *testing.T) {
 	pb := newTestPromptBuilder()
 	session := sessionWithModel("claude-sonnet-4-20250514")
 
-	sections := pb.buildSectionList(context.Background(), session, false, false)
+	sections := pb.buildSectionListWithParams(context.Background(), session, false, false, pb.sectionParams)
 
 	if len(sections) < 22 {
 		t.Errorf("expected at least 22 sections, got %d", len(sections))

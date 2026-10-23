@@ -91,13 +91,8 @@ Current time: %s
 `, now.Format("Mon 2006-01-02 15:04 MST"))
 }
 
-// computeTimeContext produces a compact time-awareness line.
-// It complements the Runtime section's timestamp with contextual hints.
-func computeTimeContext(timezone string) string {
-	return computeTimeContextAt(timezone, time.Now(), nil)
-}
-
-// computeTimeContextAt is computeTimeContext for a given instant. quiet, if
+// computeTimeContextAt renders a compact time-awareness line for a given
+// instant. quiet, if
 // non-nil, is the configured quiet window (evaluated in its own timezone via
 // config/quiet_hours.go); nil falls back to the 23:00-08:00 heuristic in
 // timezone. conduit-31jg.60

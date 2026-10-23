@@ -64,7 +64,10 @@ func TestPromptBuilder_IncludesSkillDependencies(t *testing.T) {
 		Context:   map[string]string{"model": "claude-sonnet-4-20250514"},
 	}
 
-	prompt := pb.buildFullPrompt(context.Background(), session, false)
+	prompt := func() string {
+		split := pb.buildSplitWithParams(context.Background(), session, false, pb.sectionParams)
+		return joinPromptParts(split.static, split.dynamic)
+	}()
 
 	if !strings.Contains(prompt, depBody) {
 		t.Errorf("expected dep content %q in assembled prompt; prompt sample:\n%s",

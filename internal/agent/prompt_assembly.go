@@ -100,12 +100,6 @@ func (pb *PromptBuilder) BuildDebug(ctx context.Context, session *sessions.Sessi
 	}, nil
 }
 
-// buildSectionList returns all prompt sections tagged with priorities.
-// Sections are ordered by priority (1 first), preserving relative order within each priority.
-func (pb *PromptBuilder) buildSectionList(ctx context.Context, session *sessions.Session, isOAuth, isCron bool) []promptSection {
-	return pb.buildSectionListWithParams(ctx, session, isOAuth, isCron, pb.sectionParams)
-}
-
 // buildSectionListWithParams returns all prompt sections using the provided params.
 func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session *sessions.Session, isOAuth, isCron bool, params *SectionParams) []promptSection {
 
