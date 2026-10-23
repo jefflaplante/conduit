@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"conduit/internal/database"
-	"conduit/internal/sessions"
 
 	_ "modernc.org/sqlite"
 )
@@ -47,7 +46,7 @@ func daysAgo(d int) time.Time { return testNow.AddDate(0, 0, -d) }
 
 func addSession(t *testing.T, db *sql.DB, key string, updated time.Time) {
 	t.Helper()
-	addSessionRaw(t, db, key, sessions.FormatUpdatedAt(updated))
+	addSessionRaw(t, db, key, database.FormatStoredTime(updated))
 }
 
 func addSessionRaw(t *testing.T, db *sql.DB, key, updatedAt string) {
@@ -386,7 +385,7 @@ func TestPrune_SkipsSessionsActiveSincePlan(t *testing.T) {
 	}
 	// A message arrives for one candidate, another is touched.
 	addMessage(t, db, "test_email-fast-check_58932596", "new", goString(testNow))
-	if _, err := db.Exec(`UPDATE sessions SET updated_at = ? WHERE key = 'cron_x_1_cron_aaaa0001'`, sessions.FormatUpdatedAt(testNow)); err != nil {
+	if _, err := db.Exec(`UPDATE sessions SET updated_at = ? WHERE key = 'cron_x_1_cron_aaaa0001'`, database.FormatStoredTime(testNow)); err != nil {
 		t.Fatal(err)
 	}
 	if err := ExecutePrune(context.Background(), db, rep, 100); err != nil {
@@ -415,8 +414,8 @@ func TestPrune_TimestampFormats(t *testing.T) {
 		prune   bool
 	}{
 		// Canonical updated_at, empty.
-		{"cron_a_1", sessions.FormatUpdatedAt(cutoff.Add(-time.Second)), "", true},
-		{"cron_a_2", sessions.FormatUpdatedAt(cutoff.Add(time.Second)), "", false},
+		{"cron_a_1", database.FormatStoredTime(cutoff.Add(-time.Second)), "", true},
+		{"cron_a_2", database.FormatStoredTime(cutoff.Add(time.Second)), "", false},
 		// Legacy updated_at: Go String() with monotonic suffix, UTC.
 		{"cron_b_1", goString(cutoff.Add(-time.Minute)), "", true},
 		// Go String() in a zone west of UTC: text "2026-08-30 05:30" sorts
@@ -430,12 +429,12 @@ func TestPrune_TimestampFormats(t *testing.T) {
 		{"cron_c_2", cutoff.Add(time.Hour).In(cest).Format(time.RFC3339), "", false},
 		{"cron_c_3", cutoff.Add(-time.Hour).Format("2006-01-02 15:04:05"), "", true},
 		// Messages decide when newer than updated_at.
-		{"cron_d_1", sessions.FormatUpdatedAt(daysAgo(90)), goString(cutoff.Add(time.Minute).In(mst)), false},
-		{"cron_d_2", sessions.FormatUpdatedAt(daysAgo(90)), goString(cutoff.Add(-time.Minute).In(cest)), true},
-		{"cron_d_3", sessions.FormatUpdatedAt(daysAgo(90)), cutoff.Add(time.Minute).Format(time.RFC3339), false},
+		{"cron_d_1", database.FormatStoredTime(daysAgo(90)), goString(cutoff.Add(time.Minute).In(mst)), false},
+		{"cron_d_2", database.FormatStoredTime(daysAgo(90)), goString(cutoff.Add(-time.Minute).In(cest)), true},
+		{"cron_d_3", database.FormatStoredTime(daysAgo(90)), cutoff.Add(time.Minute).Format(time.RFC3339), false},
 		// Unparseable timestamps are kept.
 		{"cron_e_1", "garbage", "", false},
-		{"cron_e_2", sessions.FormatUpdatedAt(daysAgo(90)), "not a time", false},
+		{"cron_e_2", database.FormatStoredTime(daysAgo(90)), "not a time", false},
 	}
 	for _, c := range cases {
 		addSessionRaw(t, db, c.key, c.updated)

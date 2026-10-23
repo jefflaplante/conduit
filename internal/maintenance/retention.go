@@ -29,7 +29,8 @@ import (
 // sessions.created_at ("2026-02-13 01:03:25.453024355 +0000 UTC m=+2227.79"),
 // which carries the process's zone and does not sort chronologically as
 // text. Since conduit-a636 new rows are canonical UTC text and migration 10
-// rewrote the old ones, so SQL comparisons against sessions.FormatUpdatedAt
+// rewrote the old ones, so SQL comparisons against the canonical layout
+// (database.FormatStoredTime)
 // work; parsing in Go still copes with any value the migration had to leave
 // as it was (and a bound time.Time cutoff would still compare wrongly).
 //
