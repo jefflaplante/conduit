@@ -52,6 +52,44 @@ func (s *Store) GetOrCreateSession(userID, channelID string) (*Session, error) {
 	return session, nil
 }
 
+// TopicSessionKeyPrefix marks sessions owned by a topic (conduit-43vk).
+const TopicSessionKeyPrefix = "topic_"
+
+// GetOrCreateSessionByKey returns the session with key, creating it for
+// userID/channelID when missing. Topics use it to (re)create their session
+// lazily under a fixed key (conduit-43vk).
+func (s *Store) GetOrCreateSessionByKey(key, userID, channelID string) (*Session, error) {
+	session, err := s.GetSession(key)
+	if err == nil {
+		return session, nil
+	}
+	var exists int
+	if qerr := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE key = ?`, key).Scan(&exists); qerr != nil {
+		return nil, qerr
+	}
+	if exists > 0 {
+		return nil, err // the row is there but unreadable: don't overwrite it
+	}
+
+	session = &Session{
+		Key:       key,
+		UserID:    userID,
+		ChannelID: channelID,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Context:   make(map[string]string),
+	}
+	if err := s.SaveSession(session); err != nil {
+		return nil, fmt.Errorf("failed to create session: %w", err)
+	}
+	s.stateTracker.UpdateState(session.Key, SessionStateIdle, map[string]interface{}{
+		"action":     "session_created",
+		"user_id":    session.UserID,
+		"channel_id": session.ChannelID,
+	})
+	return session, nil
+}
+
 // GetSession retrieves a session by key
 func (s *Store) GetSession(key string) (*Session, error) {
 	var session Session
@@ -102,7 +140,10 @@ func (s *Store) GetSession(key string) (*Session, error) {
 	return &session, nil
 }
 
-// GetLatestSession retrieves the most recent session for a user/channel
+// GetLatestSession retrieves the most recent session for a user/channel.
+// Topic sessions (TopicSessionKeyPrefix) share their chat's user/channel so
+// replies and wakes route back to it, but are never the chat's home session
+// (conduit-43vk).
 func (s *Store) GetLatestSession(userID, channelID string) (*Session, error) {
 	var session Session
 	var contextJSON string
@@ -111,7 +152,7 @@ func (s *Store) GetLatestSession(userID, channelID string) (*Session, error) {
 		return s.db.QueryRow(`
 			SELECT key, user_id, channel_id, created_at, updated_at, message_count, context
 			FROM sessions
-			WHERE user_id = ? AND channel_id = ?
+			WHERE user_id = ? AND channel_id = ? AND substr(key, 1, 6) != 'topic_'
 			ORDER BY updated_at DESC
 			LIMIT 1
 		`, userID, channelID).Scan(

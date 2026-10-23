@@ -286,6 +286,31 @@ Get detailed status of the current or specified session.
 {"session_key": "tui_abc123"}
 ```
 
+## Topics
+
+The topic switcher tools (conduit-43vk) let the assistant manage topics
+in-conversation — e.g. create and switch when the user starts a new project.
+They wrap the same functions as the `/topic` commands, act on the chat of the
+current turn, and every result ends with `📍 Current: <slug|home>`. Enable
+each by name in `tools.enabled_tools`. See [Topics](topics.md).
+
+| Tool | Parameters | Effect |
+|------|------------|--------|
+| `topic_list` | — | List topics (★ = this chat's current topic) |
+| `topic_create` | `slug`*, `name`, `persona` | Create without switching; errors if the slug is taken |
+| `topic_switch` | `slug`* (or `home`) | Point the chat at the topic (created if new, unparked if parked). Takes effect from the user's next message |
+| `topic_rename` | `slug`*, `new_name`, `new_slug` | Rename; a new slug moves chat pointers and the old slug stops resolving |
+| `topic_park` | `slug`* | Summarize and park; chats pointing at it go home |
+| `topic_close` | `slug`* | Final summary and archive; chats pointing at it go home |
+| `topic_stitch` | `from`*, `to`* | Prepend `from`'s summary to `to`'s topic prefix |
+| `topic_persona` | `slug`*, `persona` | Set the persona prompt fragment; empty clears it |
+
+\* required
+
+```json
+{"slug": "conduit-feature"}
+```
+
 ## Communication
 
 ### Message

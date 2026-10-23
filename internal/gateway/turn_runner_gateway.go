@@ -30,6 +30,7 @@ func (g *Gateway) turns() *TurnRunner {
 			},
 			g.logger)
 		g.turnRunner.draining = g.isDraining
+		g.turnRunner.topicPrompt = g.topicPromptFor // conduit-43vk
 		// conduit-31jg.88: tools cap their timeout to the drain budget.
 		g.turnRunner.drainDeadline = func() (time.Time, bool) {
 			if g.shutdownMgr == nil {

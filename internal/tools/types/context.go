@@ -106,3 +106,23 @@ func DrainDeadline(ctx context.Context) (time.Time, bool) {
 	}
 	return fn()
 }
+
+type ctxKeyTopicPrompt struct{}
+
+// WithTopicPrompt attaches the topic prefix (stitched context, topic line,
+// persona) the gateway renders for a topic session's turn (conduit-43vk).
+// An empty prompt is a no-op, so home turns carry nothing.
+func WithTopicPrompt(ctx context.Context, prompt string) context.Context {
+	if prompt == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyTopicPrompt{}, prompt)
+}
+
+// TopicPrompt returns the topic prefix from ctx, or "" for non-topic turns.
+func TopicPrompt(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxKeyTopicPrompt{}).(string); ok {
+		return v
+	}
+	return ""
+}

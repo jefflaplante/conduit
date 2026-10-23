@@ -259,6 +259,32 @@ func GetMigrations() []Migration {
 			Name:    "normalize_message_session_timestamps",
 			Func:    normalizeTimestampsMigration,
 		},
+		{
+			// conduit-43vk: topic switcher. A chat's pointer selects a
+			// topic, and each topic owns its own session. Home is not a
+			// row: a missing or empty pointer is the chat's default session.
+			Version: 11,
+			Name:    "create_topics_tables",
+			SQL: `
+				CREATE TABLE IF NOT EXISTS topics (
+					id          INTEGER PRIMARY KEY AUTOINCREMENT,
+					slug        TEXT NOT NULL UNIQUE,
+					name        TEXT NOT NULL,
+					status      TEXT NOT NULL DEFAULT 'active',
+					persona     TEXT DEFAULT '',
+					summary     TEXT DEFAULT '',
+					session_key TEXT NOT NULL,
+					created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+					updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+				);
+				CREATE INDEX IF NOT EXISTS idx_topics_session ON topics(session_key);
+
+				CREATE TABLE IF NOT EXISTS topic_pointers (
+					chat_id    TEXT PRIMARY KEY,
+					topic_slug TEXT DEFAULT ''
+				);
+			`,
+		},
 	}
 }
 

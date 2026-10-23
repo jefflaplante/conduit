@@ -176,7 +176,7 @@ func TestMigration10_NormalizesTimestamps(t *testing.T) {
 	if err := RunMigrations(db); err != nil {
 		t.Fatal(err)
 	}
-	if v, err := getCurrentVersion(db); err != nil || v != 10 {
+	if v, err := getCurrentVersion(db); err != nil || v != len(GetMigrations()) {
 		t.Fatalf("version = %d, %v", v, err)
 	}
 

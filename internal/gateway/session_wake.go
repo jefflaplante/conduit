@@ -177,7 +177,7 @@ func (s *wakeTurnSink) Finish(_ context.Context, res *TurnResult) {
 			},
 			ChannelID: s.session.ChannelID,
 			UserID:    s.session.UserID,
-			Text:      res.Content,
+			Text:      s.g.topicTag(key, s.session.ChannelID, s.session.UserID, res.Content), // conduit-43vk
 		}
 		if sendErr := s.g.channelManager.SendMessage(outgoingMsg); sendErr != nil {
 			s.g.logger.Warn("session wakeup: failed to send response to channel",

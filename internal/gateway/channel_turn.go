@@ -26,6 +26,8 @@ type channelTurnSink struct {
 	g       *Gateway
 	msg     *protocol.IncomingMessage
 	session *sessions.Session
+	// tag is "[slug] " for a topic session's turn, "" for home (conduit-43vk).
+	tag string
 
 	typingOnce sync.Once
 	typingDone chan struct{}
@@ -40,7 +42,8 @@ type channelTurnSink struct {
 }
 
 func newChannelTurnSink(g *Gateway, msg *protocol.IncomingMessage, session *sessions.Session) *channelTurnSink {
-	return &channelTurnSink{g: g, msg: msg, session: session, typingDone: make(chan struct{})}
+	return &channelTurnSink{g: g, msg: msg, session: session, typingDone: make(chan struct{}),
+		tag: g.topicTagPrefix(session.Key, msg.ChannelID, msg.UserID)}
 }
 
 func (s *channelTurnSink) outgoing(idPrefix, text string) *protocol.OutgoingMessage {
@@ -53,7 +56,7 @@ func (s *channelTurnSink) outgoing(idPrefix, text string) *protocol.OutgoingMess
 		ChannelID:  s.msg.ChannelID,
 		SessionKey: s.msg.SessionKey,
 		UserID:     s.msg.UserID,
-		Text:       text,
+		Text:       applyTopicTag(s.tag, text),
 	}
 }
 
@@ -118,7 +121,7 @@ func (s *channelTurnSink) Begin(ctx context.Context) ai.StreamCallback {
 		if shouldEdit && len(current) > 0 {
 			// Strip trailing silent tokens before showing to user
 			if display := channels.StripTrailingSilentTokens(current); display != "" {
-				if editErr := streamer.EditMessageText(chatID, placeholderID, display); editErr != nil {
+				if editErr := streamer.EditMessageText(chatID, placeholderID, applyTopicTag(s.tag, display)); editErr != nil {
 					logging.Warn(ctx, "streaming: edit failed", "error", editErr)
 				}
 			}
@@ -171,7 +174,7 @@ func (s *channelTurnSink) finishStreamed(ctx context.Context, res *TurnResult) b
 		s.deletePlaceholder(ctx)
 		return true
 	}
-	if err := s.streamer.EditMessageText(s.chatID, s.placeholderID, text); err != nil {
+	if err := s.streamer.EditMessageText(s.chatID, s.placeholderID, applyTopicTag(s.tag, text)); err != nil {
 		logging.Warn(ctx, "streaming: final edit failed, falling back to SendMessage", "error", err)
 		s.deletePlaceholder(ctx)
 		return false
