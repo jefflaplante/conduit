@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"conduit/internal/fts"
 )
 
 // searchMemoryFilesGrep is the fallback line-by-line grep search.
@@ -35,7 +37,11 @@ func (t *MemorySearchTool) searchMemoryFilesFTS(ctx context.Context, query strin
 	if err != nil {
 		return nil, fmt.Errorf("FTS5 document search failed: %w", err)
 	}
+	return documentMemoryResults(docResults), nil
+}
 
+// documentMemoryResults converts FTS5 document hits to file MemoryResults.
+func documentMemoryResults(docResults []fts.DocumentResult) []MemoryResult {
 	var results []MemoryResult
 	for _, dr := range docResults {
 		// Normalize BM25 rank to a 0-1 score. BM25 rank is negative (more negative = better).
@@ -68,7 +74,7 @@ func (t *MemorySearchTool) searchMemoryFilesFTS(ctx context.Context, query strin
 		})
 	}
 
-	return results, nil
+	return results
 }
 
 // searchSessionMessages searches for messages in session history.
