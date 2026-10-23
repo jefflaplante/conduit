@@ -580,9 +580,9 @@ func TestRegistry_CaseInsensitiveToolEnabling(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := registry.isToolEnabled(tt.toolName)
+			got := registry.isToolEnabledLocked(tt.toolName)
 			if got != tt.want {
-				t.Errorf("isToolEnabled(%q) = %v, want %v", tt.toolName, got, tt.want)
+				t.Errorf("isToolEnabledLocked(%q) = %v, want %v", tt.toolName, got, tt.want)
 			}
 		})
 	}

@@ -69,11 +69,6 @@ func DefaultRerunPolicy(job *Job) bool {
 	return job.Command == "heartbeat"
 }
 
-// withRerunDelay shortens the post-restart re-run delay (tests).
-func withRerunDelay(d time.Duration) Option {
-	return func(s *Scheduler) { s.rerunDelay = d }
-}
-
 // BeginDrain stops the scheduler from starting new runs (cron ticks are
 // skipped, RunNow returns ErrDraining). In-flight runs continue. Idempotent.
 func (s *Scheduler) BeginDrain() {

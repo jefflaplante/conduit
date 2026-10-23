@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// setClock overrides the clock for tests (test-only copy of the helper).
+func (t *TokenWindowTracker) setClock(fn func() time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.now = fn
+}
+
 func TestTokenWindowTracker_RecordAndSnapshot(t *testing.T) {
 	tr := NewTokenWindowTracker()
 	tr.Record(100, 50, 10, 5)

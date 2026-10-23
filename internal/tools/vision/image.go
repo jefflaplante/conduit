@@ -38,16 +38,6 @@ type ImageTool struct {
 	sandbox      *sandbox.Sandbox // conduit-31jg.62: file-path containment
 }
 
-// NewImageTool builds the Image tool with the sandbox taken from
-// services.ConfigMgr.Tools.Sandbox (no config → every file path is denied).
-func NewImageTool(services *types.ToolServices) *ImageTool {
-	var cfg config.SandboxConfig
-	if services != nil && services.ConfigMgr != nil {
-		cfg = services.ConfigMgr.Tools.Sandbox
-	}
-	return NewImageToolWithSandbox(services, cfg)
-}
-
 // NewImageToolWithSandbox builds the Image tool with an explicit sandbox
 // config (the registry passes its own, as for Read/Write/Edit).
 func NewImageToolWithSandbox(services *types.ToolServices, sandboxCfg config.SandboxConfig) *ImageTool {

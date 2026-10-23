@@ -7,6 +7,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// DefaultStyles creates the default style set using the default renderer.
+// (Test-only copy of the helper; prod code uses NewStyles with an explicit
+// renderer — over SSH via wishbubbletea.MakeRenderer.)
+func DefaultStyles() Styles {
+	return NewStyles(lipgloss.DefaultRenderer())
+}
+
 func TestDefaultStyles(t *testing.T) {
 	styles := DefaultStyles()
 

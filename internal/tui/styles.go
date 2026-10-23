@@ -60,11 +60,6 @@ type Styles struct {
 	WhiteCursor lipgloss.Style
 }
 
-// DefaultStyles creates the default style set using the default renderer.
-func DefaultStyles() Styles {
-	return NewStyles(lipgloss.DefaultRenderer())
-}
-
 // NewStyles creates the style set using the given renderer.
 // Over SSH, pass the renderer from wishbubbletea.MakeRenderer(sess)
 // so that styles emit ANSI colors appropriate for the SSH client's terminal.

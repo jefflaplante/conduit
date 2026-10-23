@@ -182,15 +182,6 @@ func ToolError(name string, duration time.Duration, err string) Entry {
 	}
 }
 
-// Thinking records an LLM thinking indicator.
-func Thinking(msg string) Entry {
-	return Entry{
-		Timestamp: time.Now(),
-		Type:      EntryThinking,
-		Result:    msg,
-	}
-}
-
 // LLMRequest records an outbound LLM API request.
 func LLMRequest(model string, meta map[string]string) Entry {
 	return Entry{
