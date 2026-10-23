@@ -304,6 +304,7 @@ each by name in `tools.enabled_tools`. See [Topics](topics.md).
 | `topic_close` | `slug`* | Final summary and archive; chats pointing at it go home |
 | `topic_stitch` | `from`*, `to`* | Prepend `from`'s summary to `to`'s topic prefix |
 | `topic_persona` | `slug`*, `persona` | Set the persona prompt fragment; empty clears it |
+| `topic_profile` | `slug`*, `profile` | Set the prompt profile JSON (`skills` allowlist, `skip_context` files; SOUL.md always loads); empty clears it. See [Topics](topics.md#prompt-profiles-lean-mode) |
 
 \* required
 

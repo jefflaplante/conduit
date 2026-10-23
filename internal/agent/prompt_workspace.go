@@ -36,7 +36,7 @@ func (pb *PromptBuilder) buildSkillsSection(ctx context.Context, session *sessio
 	// Parse skill filter from session context
 	var skillFilter map[string]bool
 	if session != nil && session.Context != nil {
-		if filterStr := session.Context["skill_filter"]; filterStr != "" {
+		if filterStr := session.Context[sessions.ContextSkillFilter]; filterStr != "" {
 			skillFilter = make(map[string]bool)
 			for _, name := range strings.Split(filterStr, ",") {
 				if trimmed := strings.TrimSpace(name); trimmed != "" {
@@ -117,7 +117,11 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 	if isHeartbeatSession {
 		coreFiles = append([]string{"HEARTBEAT.md"}, coreFiles...)
 	}
+	skip := contextSkipSet(session)
 	for _, filename := range coreFiles {
+		if skip[strings.ToUpper(filename)] {
+			continue
+		}
 		if content, exists := files[filename]; exists {
 			builder.WriteString(fmt.Sprintf("## %s\n%s\n", filename, content))
 		}
@@ -149,13 +153,29 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 	}
 
 	// MEMORY.md only in main sessions
-	if sessionType == "main" {
+	if sessionType == "main" && !skip["MEMORY.MD"] {
 		if content, exists := files["MEMORY.md"]; exists {
 			builder.WriteString(fmt.Sprintf("## MEMORY.md\n%s\n", content))
 		}
 	}
 
 	return builder.String()
+}
+
+// contextSkipSet returns the upper-cased context files the session's
+// sessions.ContextSkip key leaves out (a topic prompt profile,
+// conduit-331g). SOUL.md is never skipped: it carries identity and safety.
+func contextSkipSet(session *sessions.Session) map[string]bool {
+	if session == nil || session.Context[sessions.ContextSkip] == "" {
+		return nil
+	}
+	skip := map[string]bool{}
+	for _, name := range strings.Split(session.Context[sessions.ContextSkip], ",") {
+		if name = strings.ToUpper(strings.TrimSpace(name)); name != "" && name != "SOUL.MD" {
+			skip[name] = true
+		}
+	}
+	return skip
 }
 
 // shouldUseSummaries determines if summarized content should be used

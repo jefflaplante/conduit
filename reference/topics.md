@@ -67,10 +67,36 @@ proactive `Message` tool sends. Home messages are untagged.
 ## AI tools
 
 `topic_list`, `topic_create`, `topic_switch`, `topic_rename`, `topic_park`,
-`topic_close`, `topic_stitch`, `topic_persona` wrap the same functions as the
+`topic_close`, `topic_stitch`, `topic_persona`, `topic_profile` wrap the same functions as the
 commands and act on the chat of the current turn. Enable them in
 `tools.enabled_tools` like any tool. See the
 [Tools Reference](tools-reference.md#topics).
+
+## Prompt profiles (lean mode)
+
+A topic can carry a prompt profile (conduit-331g) so its sessions run a
+smaller, focused system prompt. Set it with the `topic_profile` tool (there
+is no slash command):
+
+```json
+{"skills": ["email", "briefing"], "skip_context": ["AGENTS.md", "TOOLS.md"]}
+```
+
+- `skills` is an allowlist: only these skills appear in the Skills section
+  and the skill tool catalog. Empty or absent = all skills.
+- `skip_context` lists workspace context files to leave out of Project
+  Context: `USER.md`, `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`,
+  `BOOTSTRAP.md`, `HEARTBEAT.md`, `MEMORY.md` (case-insensitive). `SOUL.md`
+  is always loaded (identity and safety); listing it, or an unknown file,
+  is ignored.
+- Malformed JSON or an unknown field is rejected when setting. An empty
+  value, `null` or `{}` clears the profile.
+
+The profile lives in `topics.prompt_profile` (migration 12; NULL = full
+prompt). Each topic turn applies it to its session context in memory only
+(`skill_filter`, `context_skip`), so changes take effect on the next turn.
+Home sessions and topics without a profile get the full prompt, byte for
+byte.
 
 ## Behavior notes
 

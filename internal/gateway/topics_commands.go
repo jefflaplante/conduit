@@ -159,3 +159,9 @@ func (g *Gateway) TopicPersona(ctx context.Context, slug, persona string) (strin
 	body, err := g.topicPersona(slug, persona)
 	return g.withTopicState(ctx, body, err)
 }
+
+// TopicProfile implements core.TopicManager.
+func (g *Gateway) TopicProfile(ctx context.Context, slug, profile string) (string, error) {
+	body, err := g.topicProfile(slug, profile)
+	return g.withTopicState(ctx, body, err)
+}

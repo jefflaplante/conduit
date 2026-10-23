@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -26,6 +27,7 @@ type TopicManager interface {
 	TopicClose(ctx context.Context, slug string) (string, error)
 	TopicStitch(ctx context.Context, from, to string) (string, error)
 	TopicPersona(ctx context.Context, slug, persona string) (string, error)
+	TopicProfile(ctx context.Context, slug, profile string) (string, error)
 }
 
 // topicParam describes one string parameter of a topic tool.
@@ -54,7 +56,25 @@ var (
 
 func str(args map[string]interface{}, key string) string { return toolargs.GetString(args, key, "") }
 
-// NewTopicTools returns the eight topic_* tools.
+// profileArg returns the profile argument as JSON text. Models often send
+// it as an object rather than a string, so non-strings are re-encoded; the
+// gateway validates the JSON either way (conduit-331g).
+func profileArg(args map[string]interface{}) string {
+	switch v := args["profile"].(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprint(v)
+		}
+		return string(b)
+	}
+}
+
+// NewTopicTools returns the nine topic_* tools.
 func NewTopicTools(services *types.ToolServices) []types.Tool {
 	mk := func(name, desc string, params []topicParam, call func(context.Context, TopicManager, map[string]interface{}) (string, error)) types.Tool {
 		return &TopicTool{services: services, name: name, desc: desc, params: params, call: call}
@@ -114,6 +134,14 @@ func NewTopicTools(services *types.ToolServices) []types.Tool {
 				{name: "persona", desc: "Persona text; empty clears it", examples: []interface{}{"You are a terse release engineer."}}},
 			func(ctx context.Context, m TopicManager, a map[string]interface{}) (string, error) {
 				return m.TopicPersona(ctx, str(a, "slug"), str(a, "persona"))
+			}),
+		mk("topic_profile",
+			"Set a topic's prompt profile (lean mode): a JSON object {\"skills\": [...], \"skip_context\": [...]}. skills is an allowlist of skill names (empty = all skills); skip_context lists workspace context files to leave out (USER.md, AGENTS.md, TOOLS.md, IDENTITY.md, BOOTSTRAP.md, HEARTBEAT.md, MEMORY.md; SOUL.md is always loaded). Applies from the topic's next turn. Empty profile clears it (full prompt).",
+			[]topicParam{slugParam,
+				{name: "profile", desc: "Profile JSON; empty clears it",
+					examples: []interface{}{`{"skills": ["email", "briefing"], "skip_context": ["AGENTS.md", "TOOLS.md"]}`}}},
+			func(ctx context.Context, m TopicManager, a map[string]interface{}) (string, error) {
+				return m.TopicProfile(ctx, str(a, "slug"), profileArg(a))
 			}),
 	}
 }

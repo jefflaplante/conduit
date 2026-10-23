@@ -285,7 +285,29 @@ func GetMigrations() []Migration {
 				);
 			`,
 		},
+		{
+			// conduit-331g: a topic's prompt profile (JSON skill allowlist
+			// and context-file skip list). NULL = the full prompt.
+			Version: 12,
+			Name:    "add_topics_prompt_profile",
+			Func:    addTopicsPromptProfile,
+		},
 	}
+}
+
+// addTopicsPromptProfile is migration 12. SQLite has no ADD COLUMN IF NOT
+// EXISTS, so the column is checked first: replaying the migration (as an
+// upgrade test that rewinds schema_migrations does) is a no-op.
+func addTopicsPromptProfile(tx *sql.Tx) error {
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('topics') WHERE name = 'prompt_profile'`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := tx.Exec(`ALTER TABLE topics ADD COLUMN prompt_profile TEXT`)
+	return err
 }
 
 // messagesFTSIndexedTriggersSQL is migration 9 (conduit-3dad). The delete

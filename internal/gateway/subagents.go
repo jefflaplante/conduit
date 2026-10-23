@@ -10,6 +10,7 @@ import (
 	"conduit/internal/ai"
 	"conduit/internal/channels"
 	"conduit/internal/protocol"
+	"conduit/internal/sessions"
 	"conduit/internal/tools"
 	"conduit/internal/tools/types"
 )
@@ -72,7 +73,7 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 	// from its context (conduit-31jg.66).
 	subContext := map[string]string{"model": modelToUse}
 	if len(skills) > 0 {
-		subContext["skill_filter"] = strings.Join(skills, ",")
+		subContext[sessions.ContextSkillFilter] = strings.Join(skills, ",")
 	}
 	// conduit-38cz: persisted lineage (SessionStatus shows it; survives a
 	// restart for inspection) and the label SessionsSend/SessionsCancel

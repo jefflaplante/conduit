@@ -163,6 +163,39 @@ func (g *Gateway) topicPromptFor(session *sessions.Session) string {
 	return strings.Join(lines, "\n")
 }
 
+// topicProfileSession applies a topic's prompt profile (conduit-331g) to
+// the session a turn builds its prompt from: it returns a copy whose context
+// carries the profile's skill allowlist and context-file skip list under
+// the keys the prompt builder already honors. Per turn only, nothing is
+// stored, so a profile change takes effect on the next turn and clearing it
+// restores the full prompt. Home sessions, topics without a profile and
+// unreadable profiles return session itself, unchanged.
+func (g *Gateway) topicProfileSession(session *sessions.Session) *sessions.Session {
+	if session == nil || !isTopicSessionKey(session.Key) || g.topicStore() == nil {
+		return session
+	}
+	tp, err := g.topicStore().GetBySession(session.Key)
+	if err != nil {
+		return session
+	}
+	p := tp.Profile()
+	if p == nil {
+		return session
+	}
+	cp := *session
+	cp.Context = make(map[string]string, len(session.Context)+2)
+	for k, v := range session.Context {
+		cp.Context[k] = v
+	}
+	if f := p.SkillFilter(); f != "" {
+		cp.Context[sessions.ContextSkillFilter] = f
+	}
+	if skip := p.ContextSkip(); skip != "" {
+		cp.Context[sessions.ContextSkip] = skip
+	}
+	return &cp
+}
+
 // relativeTime renders t as "just now", "5m ago", "3h ago" or "4d ago".
 func relativeTime(t time.Time) string {
 	if t.IsZero() {

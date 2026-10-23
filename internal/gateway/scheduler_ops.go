@@ -67,7 +67,7 @@ func (g *Gateway) executeScheduledJob(ctx context.Context, job *scheduler.Job) e
 	// runner re-reads the session inside the turn lock).
 	jobContext := map[string]string{"model": model}
 	if len(job.Skills) > 0 {
-		jobContext["skill_filter"] = strings.Join(job.Skills, ",")
+		jobContext[sessions.ContextSkillFilter] = strings.Join(job.Skills, ",")
 	}
 	if err := g.sessions.SetSessionContextBatch(session.Key, jobContext); err != nil {
 		return fmt.Errorf("failed to configure job session: %w", err)

@@ -282,6 +282,35 @@ func (g *Gateway) topicPersona(slug, persona string) (string, error) {
 	return fmt.Sprintf("🎭 Persona set for %s.", topicSlugRef(tp.Slug)), nil
 }
 
+// topicProfile validates and stores (or, with an empty/null/{} profile,
+// clears) slug's prompt profile (conduit-331g). Malformed JSON is rejected
+// here, so a stored profile always parses.
+func (g *Gateway) topicProfile(slug, raw string) (string, error) {
+	tp, err := g.lookupTopic(slug)
+	if err != nil {
+		return "", err
+	}
+	p, err := topics.ParseProfile(raw)
+	if err != nil {
+		return "", err
+	}
+	if err := g.topicStore().SetProfile(tp.Slug, p); err != nil {
+		return "", err
+	}
+	if p == nil {
+		return fmt.Sprintf("🎛️ Prompt profile cleared for %s: full prompt.", topicSlugRef(tp.Slug)), nil
+	}
+	skills, skip := "all", "none"
+	if len(p.Skills) > 0 {
+		skills = strings.Join(p.Skills, ", ")
+	}
+	if len(p.SkipContext) > 0 {
+		skip = strings.Join(p.SkipContext, ", ")
+	}
+	return fmt.Sprintf("🎛️ Prompt profile set for %s. Skills: %s. Skipped context: %s (%s is always loaded).",
+		topicSlugRef(tp.Slug), skills, skip, topics.PinnedContextFile), nil
+}
+
 // topicStitch prepends from's summary to to's prompt prefix (stored in to's
 // session context, replacing an earlier stitch from the same topic and
 // keeping the newest within topicStitchMaxChars). from is unchanged apart
