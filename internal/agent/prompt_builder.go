@@ -232,26 +232,6 @@ func (pb *PromptBuilder) SetClock(now func() time.Time) {
 	pb.sectionParams.Now = now
 }
 
-// buildFullPrompt creates the complete system prompt text.
-// For models with large context windows (>= threshold), all sections are included.
-// For smaller models, sections are included by priority order within a token budget.
-func (pb *PromptBuilder) buildFullPrompt(ctx context.Context, session *sessions.Session, isOAuth bool) string {
-	return pb.buildFullPromptWithParams(ctx, session, isOAuth, pb.sectionParams)
-}
-
-// buildFullPromptWithParams creates the complete system prompt text using the given params.
-// This avoids mutating shared state and is safe for concurrent use with different sessions.
-func (pb *PromptBuilder) buildFullPromptWithParams(ctx context.Context, session *sessions.Session, isOAuth bool, params *SectionParams) string {
-	return joinPromptParts(pb.buildPromptPartsWithParams(ctx, session, isOAuth, params))
-}
-
-// buildPromptPartsWithParams builds the prompt split into its byte-stable
-// static part and its per-turn dynamic part (conduit-31jg.14).
-func (pb *PromptBuilder) buildPromptPartsWithParams(ctx context.Context, session *sessions.Session, isOAuth bool, params *SectionParams) (string, string) {
-	p := pb.buildSplitWithParams(ctx, session, isOAuth, params)
-	return p.static, p.dynamic
-}
-
 // buildSplitWithParams builds the prompt split and records which dynamic
 // sections were included (conduit-31jg.65).
 func (pb *PromptBuilder) buildSplitWithParams(ctx context.Context, session *sessions.Session, isOAuth bool, params *SectionParams) promptSplit {

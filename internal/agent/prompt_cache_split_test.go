@@ -129,7 +129,8 @@ func TestBuild_JoinedFormMatchesFullPrompt(t *testing.T) {
 	pb := newTestPromptBuilder()
 	t0 := time.Date(2026, 9, 26, 9, 0, 0, 0, time.UTC)
 	blocks := buildAt(t, pb, context.Background(), t0)
-	full := pb.buildFullPromptWithParams(context.Background(), sessionWithModel("claude-sonnet-4-6"), false, pb.sectionParams)
+	split := pb.buildSplitWithParams(context.Background(), sessionWithModel("claude-sonnet-4-6"), false, pb.sectionParams)
+	full := joinPromptParts(split.static, split.dynamic)
 	if full != blocks[0].Text+"\n\n"+blocks[1].Text {
 		t.Errorf("joined blocks differ from full prompt text")
 	}
