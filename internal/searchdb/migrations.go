@@ -103,6 +103,33 @@ func getSearchMigrations() []SearchMigration {
 				);
 			`,
 		},
+		{
+			Version: 4,
+			Name:    "create_document_metadata",
+			SQL: `
+				-- bd-3o6h: per-file YAML frontmatter of indexed markdown, written by
+				-- fts.Indexer in the same transaction as the file's chunks. Every
+				-- indexed file has a row; files without (or with malformed)
+				-- frontmatter have has_frontmatter = 0 and empty fields.
+				-- tags/people/projects are JSON arrays; date is YYYY-MM-DD when
+				-- parseable, otherwise the raw value.
+				CREATE TABLE IF NOT EXISTS document_metadata (
+					path TEXT PRIMARY KEY,
+					has_frontmatter INTEGER NOT NULL DEFAULT 0,
+					date TEXT NOT NULL DEFAULT '',
+					tags TEXT NOT NULL DEFAULT '[]',
+					people TEXT NOT NULL DEFAULT '[]',
+					projects TEXT NOT NULL DEFAULT '[]',
+					category TEXT NOT NULL DEFAULT '',
+					summary TEXT NOT NULL DEFAULT '',
+					file_hash TEXT NOT NULL DEFAULT '',
+					indexed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+				);
+
+				CREATE INDEX IF NOT EXISTS idx_document_metadata_date ON document_metadata(date);
+				CREATE INDEX IF NOT EXISTS idx_document_metadata_category ON document_metadata(category);
+			`,
+		},
 	}
 }
 
