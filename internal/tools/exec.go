@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"conduit/internal/procutil"
+	"conduit/internal/tools/approvalgate"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
@@ -109,13 +110,6 @@ func (t *ExecTool) getEffectiveDenylist() []string {
 	return DefaultCommandDenylist
 }
 
-// checkCommandDenylist checks the command against all denylist patterns using
-// the configured denylist_mode (see bash_policy.go), for an interactive
-// session. Returns the matched pattern if denied, or empty string if allowed.
-func (t *ExecTool) checkCommandDenylist(command string) string {
-	return t.checkCommandPolicy(context.Background(), command).Pattern
-}
-
 func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
 	command, ok := args["command"].(string)
 	if !ok {
@@ -139,6 +133,10 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 				"Provide a valid shell command",
 			}), nil
 	}
+
+	// Audit logs show the command with credentials masked (conduit-1jts);
+	// the command that runs is unchanged.
+	logged := approvalgate.RedactCommand(command)
 
 	cwd, _ := args["cwd"].(string)
 	if cwd == "" {
@@ -165,7 +163,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 	// Check command against denylist before execution
 	if m := t.checkCommandPolicy(ctx, command); m.Pattern != "" {
 		matched := m.Pattern
-		log.Printf("[Exec] DENIED command=%q matched_pattern=%q mode=%s reason=%q cwd=%q", command, matched, m.Mode, m.Reason, cwd)
+		log.Printf("[Exec] DENIED command=%q matched_pattern=%q mode=%s reason=%q cwd=%q", logged, matched, m.Mode, m.Reason, cwd)
 		return types.NewErrorResult("command_denied",
 			fmt.Sprintf("Command blocked by security denylist (matched pattern: %q; %s)", matched, m.Reason)).
 			WithParameter("command", command).
@@ -184,7 +182,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 
 	// Audit log: command execution start
 	startTime := time.Now()
-	log.Printf("[Exec] START command=%q cwd=%q", command, cwd)
+	log.Printf("[Exec] START command=%q cwd=%q", logged, cwd)
 
 	// conduit-31jg.39: per-call timeout (default DefaultBashTimeout, which
 	// also bounds callers with no deadline, e.g. MCP). The execution engine
@@ -219,7 +217,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 	if err != nil {
 		exitCode = getExitCode(err)
 		log.Printf("[Exec] DONE command=%q cwd=%q exit_code=%d duration=%s error=%q",
-			command, cwd, exitCode, duration, err.Error())
+			logged, cwd, exitCode, duration, err.Error())
 
 		// Enhanced error categorization with detailed context
 		errorType := "command_failed"
@@ -301,7 +299,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 		return result, nil
 	}
 
-	log.Printf("[Exec] DONE command=%q cwd=%q exit_code=0 duration=%s", command, cwd, duration)
+	log.Printf("[Exec] DONE command=%q cwd=%q exit_code=0 duration=%s", logged, cwd, duration)
 
 	return &types.ToolResult{
 		Success: true,
