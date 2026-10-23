@@ -239,36 +239,6 @@ func (t *TTSTool) optimizeFormatForChannel(channel, defaultFormat string) string
 	}
 }
 
-// getAvailableVoices returns a list of available voices (placeholder)
-//
-//lint:ignore U1000 kept pending salvage review (conduit-31jg.72); see staticcheck.conf
-func (t *TTSTool) getAvailableVoices(ctx context.Context) ([]string, error) {
-	// This would execute edge-tts --list-voices and parse the output
-	cmd := exec.CommandContext(ctx, "edge-tts", "--list-voices")
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list voices: %w", err)
-	}
-
-	// Parse voice list (simplified for now)
-	lines := strings.Split(string(output), "\n")
-	var voices []string
-	for _, line := range lines {
-		if strings.Contains(line, "Name:") {
-			// Extract voice name from line
-			parts := strings.Split(line, "Name: ")
-			if len(parts) > 1 {
-				voice := strings.TrimSpace(parts[1])
-				if voice != "" {
-					voices = append(voices, voice)
-				}
-			}
-		}
-	}
-
-	return voices, nil
-}
-
 // GetSchemaHints implements types.EnhancedSchemaProvider.
 func (t *TTSTool) GetSchemaHints() map[string]schema.SchemaHints {
 	return map[string]schema.SchemaHints{
