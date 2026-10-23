@@ -36,6 +36,16 @@ func (t *MemorySearchTool) searchMemoryFilesHybrid(ctx context.Context, query st
 	// Fetch size is larger than what we return so RRF has good input
 	const fetchSize = 30
 
+	return t.mergeHybrid(
+		func() ([]MemoryResult, error) { return t.searchMemoryFilesFTS(ctx, query) },
+		func() ([]MemoryResult, error) { return t.searchMemoryFilesVectorRaw(ctx, query, fetchSize) },
+	)
+}
+
+// mergeHybrid runs the FTS5 and vector searches in parallel and fuses their
+// results with weighted RRF; if one search fails the other's results are
+// returned as-is.
+func (t *MemorySearchTool) mergeHybrid(ftsSearch, vectorSearch func() ([]MemoryResult, error)) ([]MemoryResult, error) {
 	var (
 		ftsResults    []MemoryResult
 		vectorResults []MemoryResult
@@ -49,12 +59,12 @@ func (t *MemorySearchTool) searchMemoryFilesHybrid(ctx context.Context, query st
 	go func() {
 		defer wg.Done()
 		defer types.RecoverPanic("MemorySearch FTS5 search", func(err error) { ftsErr = err })
-		ftsResults, ftsErr = t.searchMemoryFilesFTS(ctx, query)
+		ftsResults, ftsErr = ftsSearch()
 	}()
 	go func() {
 		defer wg.Done()
 		defer types.RecoverPanic("MemorySearch vector search", func(err error) { vectorErr = err })
-		vectorResults, vectorErr = t.searchMemoryFilesVectorRaw(ctx, query, fetchSize)
+		vectorResults, vectorErr = vectorSearch()
 	}()
 	wg.Wait()
 
