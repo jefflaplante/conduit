@@ -2,6 +2,7 @@ package brain
 
 import (
 	"database/sql"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -89,7 +90,7 @@ func TestEffectiveSalienceSQLMatchesGo(t *testing.T) {
 		require.NoError(t, err)
 		var sqlVal float64
 		require.NoError(t, b.db.QueryRow(`SELECT `+b.EffectiveSalienceSQL()+` FROM brain_ltm WHERE key = 'k'`).Scan(&sqlVal))
-		assert.InDelta(t, b.effectiveSalience(0.164, ts, time.Now()), sqlVal, 1e-3, "age %s", age)
+		assert.InDelta(t, b.EffectiveSalienceSQLTestShim(0.164, ts, time.Now()), sqlVal, 1e-3, "age %s", age)
 		var peak float64
 		require.NoError(t, b.db.QueryRow(`SELECT `+b.PeakSalienceSQL()+` FROM brain_ltm WHERE key = 'k'`).Scan(&peak))
 		assert.InDelta(t, 0.564, peak, 1e-9)
@@ -186,4 +187,16 @@ func TestMigration9_UsesConfiguredRecencyWeight(t *testing.T) {
 	require.NoError(t, err)
 	defer b.Close()
 	assert.InDelta(t, 0.45, storedSalience(t, b, "k"), 1e-9)
+}
+
+// EffectiveSalienceSQLTestShim is EffectiveSalienceSQL in Go. Lives in the
+// test file: its only caller is the SQL-vs-Go parity test; production code
+// uses the SQL expression directly.
+func (b *Brain) EffectiveSalienceSQLTestShim(base float64, accessedAt, now time.Time) float64 {
+	hours := now.Sub(accessedAt).Hours()
+	if hours < 0 {
+		hours = 0
+	}
+	v := base + b.recencyWeight/(1.0+hours*b.recencyDecayRate)
+	return math.Min(1.0, math.Max(0.0, v))
 }
