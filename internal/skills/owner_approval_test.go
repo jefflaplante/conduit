@@ -267,7 +267,10 @@ func TestJulesSend_NoApprovalNeeded(t *testing.T) {
 		{"account": "jules", "to": "bob@x.com"},
 		{"account": "agent@example.com", "to": "bob@x.com", "from": "agent@example.com"},
 	} {
-		if NewExecutor(ExecutionConfig{}).isOwnerEmailSend(Skill{Name: "email"}, "send", args) {
+		// isOwnerEmailSend inlined: an email/gog send is owner mail iff the
+		// args select the owner account (gogSettings.sendUsesOwner).
+		if isEmailSend(Skill{Name: "email"}, "send") && NewExecutor(ExecutionConfig{}).gog.sendUsesOwner(args) {
+
 			t.Fatalf("agent-account send must not need approval: %v", args)
 		}
 		cmd := emailCommand(t, "send", args)

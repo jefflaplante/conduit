@@ -52,11 +52,6 @@ func isEmailSend(skill Skill, action string) bool {
 	return (skill.Name == "email" || skill.Name == "gog") && normalizeAction(action) == "send"
 }
 
-// isOwnerEmailSend reports whether this call would send mail as the owner.
-func (e *Executor) isOwnerEmailSend(skill Skill, action string, args map[string]interface{}) bool {
-	return isEmailSend(skill, action) && e.gog.sendUsesOwner(args)
-}
-
 // auditSenderGate records one email sender-gate decision (conduit-1nfq).
 // decision is "allow", "approval_required" or "deny"; identity is "agent" or
 // "owner". Recipient is loggable; subject and body never are here (the
