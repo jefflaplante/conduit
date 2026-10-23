@@ -13,7 +13,6 @@ import (
 
 	"conduit/internal/config"
 	"conduit/internal/database"
-	"conduit/internal/sessions"
 )
 
 // captureMaintenanceStdout runs fn with os.Stdout redirected.
@@ -74,7 +73,7 @@ func newMaintenanceFixture(t *testing.T, mc config.MaintenanceConfig) maintenanc
 		"telegram_123_eeee", "tui_jeff_ffff", "ws_user_gggg",
 	} {
 		if _, err := db.Exec(`INSERT INTO sessions (key, user_id, channel_id, updated_at) VALUES (?, 'u', 'c', ?)`,
-			key, sessions.FormatUpdatedAt(old)); err != nil {
+			key, database.FormatStoredTime(old)); err != nil {
 			t.Fatal(err)
 		}
 		if i%2 == 0 { // some sessions have a message, stored the way the driver wrote them

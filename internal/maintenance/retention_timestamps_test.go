@@ -35,7 +35,7 @@ func TestRetention_SQLCutoffAgreesAfterMigration10(t *testing.T) {
 		t.Helper()
 		rows, err := db.Query(`SELECT key FROM sessions s
 			WHERE max(CAST(s.updated_at AS TEXT), coalesce((SELECT max(CAST(timestamp AS TEXT)) FROM messages m WHERE m.session_key = s.key), '')) < ?
-			ORDER BY key`, sessions.FormatUpdatedAt(cutoff))
+			ORDER BY key`, database.FormatStoredTime(cutoff))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -111,7 +111,7 @@ func TestRetention_SQLCutoffAgreesAfterMigration10(t *testing.T) {
 		}
 	}
 	rows.Close()
-	if n := count(t, db, `SELECT COUNT(*) FROM messages WHERE timestamp < ?`, sessions.FormatUpdatedAt(cutoff)); n != goOld || n == 0 {
+	if n := count(t, db, `SELECT COUNT(*) FROM messages WHERE timestamp < ?`, database.FormatStoredTime(cutoff)); n != goOld || n == 0 {
 		t.Fatalf("SQL old messages = %d, Go = %d", n, goOld)
 	}
 }
