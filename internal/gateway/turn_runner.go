@@ -66,6 +66,9 @@ type TurnRunner struct {
 	// draining; attached to every turn ctx for the tool layer
 	// (types.DrainDeadline, conduit-31jg.88).
 	drainDeadline func() (time.Time, bool)
+	// topicPrompt, when set, renders the topic prefix for a session's turn
+	// ("" for home); it rides the turn ctx to prompt build (conduit-43vk).
+	topicPrompt func(*sessions.Session) string
 
 	mu     sync.Mutex
 	queued map[string][]*queuedTurn

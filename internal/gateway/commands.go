@@ -76,6 +76,12 @@ func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessa
 		return true
 	}
 
+	// conduit-43vk: /topic and /home move this chat's topic pointer.
+	if reply, ok := g.topicCommand(ctx, msg.ChannelID, msg.UserID, text); ok {
+		g.sendCommandResponse(msg, reply)
+		return true
+	}
+
 	// Check for /status command
 	if text == "/status" || strings.HasPrefix(text, "/status ") {
 		g.handleStatusCommand(msg, session)
@@ -172,6 +178,10 @@ func (g *Gateway) handleStatusCommand(msg *protocol.IncomingMessage, session *se
 		currentProvider,
 		version.Info(),
 	)
+	// conduit-43vk: which topic this chat is in (home output is unchanged).
+	if isTopicSessionKey(session.Key) {
+		status += "\n" + g.topicStateLine(msg.ChannelID, msg.UserID)
+	}
 	// no-anthropic-routing: providers kept in config but never routed to.
 	if names := nonRoutableProviders(g.ai); len(names) > 0 {
 		status += "\n\n*Not routed (routable=false):* " + strings.Join(names, ", ")
@@ -200,6 +210,12 @@ func (g *Gateway) handleHelpCommand(msg *protocol.IncomingMessage) {
 /compact - Compact context by summarizing older messages
 /stop - Stop current operation
 /ring - Show debug ring buffer activity
+/topic - List topics; /topic <slug> switches (creates if new)
+/topic park|close <slug> - Summarize and park / archive a topic
+/topic rename <slug> <new> - Rename a topic
+/topic persona <slug> [text] - Set or clear a topic persona
+/topic stitch <from> <to> - Hand one topic's summary to another
+/home - Back to the main session (alias: /topic home)
 
 _Conduit Go Gateway_`
 

@@ -247,10 +247,11 @@ func TestPromptSectionPriorities(t *testing.T) {
 		counts[sec.priority]++
 	}
 
-	// P1: Identity, Runtime, Wake Context (critical, never dropped; Wake Context
-	// renders to the empty string on non-wake turns but still lives in the section list).
-	if counts[1] != 3 {
-		t.Errorf("expected 3 P1 sections, got %d", counts[1])
+	// P1: Identity, Runtime, Wake Context, Topic (critical, never dropped; Wake
+	// Context and Topic render to the empty string on non-wake / home turns but
+	// still live in the section list).
+	if counts[1] != 4 {
+		t.Errorf("expected 4 P1 sections, got %d", counts[1])
 	}
 	// P2: Grounding data and reference (Project Context, Memory, Tooling, etc.)
 	if counts[2] < 8 {

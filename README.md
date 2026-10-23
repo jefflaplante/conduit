@@ -198,6 +198,7 @@ Use `/model <alias>` to switch models. The provider auto-resolves based on the m
 | [Configuration](reference/configuration.md) | Full configuration reference |
 | [TUI & SSH](reference/tui-ssh.md) | Terminal UI and SSH access |
 | [Channels](reference/channels.md) | Channel system and adapters |
+| [Topics](reference/topics.md) | Per-project sessions in one chat: `/topic`, `/home`, topic_* tools |
 | [API & Protocol](reference/api-protocol.md) | HTTP endpoints and WebSocket protocol |
 | [Skills System](reference/skills.md) | Creating and using skills |
 | [Authentication](reference/authentication.md) | Token and OAuth setup |

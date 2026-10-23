@@ -74,8 +74,9 @@ func TestRetention_SQLCutoffAgreesAfterMigration10(t *testing.T) {
 	}
 
 	// The rows above were written in legacy formats after the migrations
-	// ran; replay migration 10 as an upgrade would.
-	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version = 10`); err != nil {
+	// ran; replay migration 10 (and the idempotent later ones) as an upgrade
+	// from version 9 would.
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version >= 10`); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.RunMigrations(db); err != nil {

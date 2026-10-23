@@ -114,6 +114,7 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 	// Within each priority, declaration order is preserved by stable sort.
 	// Ordering principle: data/context before instructions (per Anthropic prompt engineering guidelines).
 	wakeSource := types.WakeSource(ctx)
+	topicPrompt := types.TopicPrompt(ctx)
 
 	raw := []promptSection{
 		// P1 — Critical: identity and runtime facts (never dropped)
@@ -122,6 +123,7 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 			return buildRuntimeSection(params, pb.buildRuntimeInfo(session))
 		}},
 		{name: "Wake Context", priority: 1, dynamic: true, build: func() string { return buildWakeContextSection(wakeSource) }},
+		{name: "Topic", priority: 1, dynamic: true, build: func() string { return buildTopicSection(topicPrompt) }}, // conduit-43vk
 
 		// P2 — Grounding data: project context, memory, tool availability (reference)
 		{name: "Project Context", priority: 2, build: func() string { return pb.buildWorkspaceContextSection(ctx, session) }},

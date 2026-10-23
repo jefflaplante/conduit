@@ -28,6 +28,7 @@ import (
 	"conduit/internal/stt"
 	"conduit/internal/tools"
 	"conduit/internal/tools/debuglog"
+	"conduit/internal/topics"
 	"conduit/internal/workspace"
 
 	charmssh "github.com/charmbracelet/ssh"
@@ -131,6 +132,12 @@ type Gateway struct {
 	// Shared turn pipeline (conduit-31jg.35); built lazily by turns().
 	turnRunnerOnce sync.Once
 	turnRunner     *TurnRunner
+
+	// Topic switcher (conduit-43vk); store built lazily by topicStore().
+	// topicSummarize, when set, replaces summary generation (tests).
+	topicsOnce     sync.Once
+	topics         *topics.Store
+	topicSummarize func(ctx context.Context, s *sessions.Session) string
 
 	// Graceful shutdown
 	shutdownMgr *ShutdownManager

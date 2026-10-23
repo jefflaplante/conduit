@@ -205,6 +205,9 @@ func (r *Registry) registerAllTools() {
 		core.NewChainTool(r.services, r.sandboxCfg, r),
 	}...)
 
+	// Topic switcher tools (conduit-43vk)
+	allTools = append(allTools, core.NewTopicTools(r.services)...)
+
 	// Web integration tools
 	allTools = append(allTools, []types.Tool{
 		web.NewWebSearchTool(r.services),

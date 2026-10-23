@@ -50,6 +50,13 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 		session = fresh
 	}
 
+	// conduit-43vk: render the topic prefix before the user message bumps
+	// updated_at, so "last activity" is the topic's previous exchange.
+	var topicPrompt string
+	if r.topicPrompt != nil {
+		topicPrompt = r.topicPrompt(session)
+	}
+
 	// 4a. Persist the user message inside the lock (conduit-31jg.22).
 	userMsgID := req.PersistedUserMessageID
 	if userMsgID == "" {
@@ -97,6 +104,7 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 
 	// Turn context.
 	ctx = types.WithRequestContext(ctx, req.ChannelID, req.UserID, key)
+	ctx = types.WithTopicPrompt(ctx, topicPrompt)
 	// conduit-31jg.88: tools cap their timeout once a drain begins.
 	ctx = types.WithDrainDeadline(ctx, r.drainDeadline)
 	if req.Origin != nil {

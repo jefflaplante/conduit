@@ -127,7 +127,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/brain/ — Tiered cognitive memory: LTM (SQLite-persisted brain.db), working memory (in-process per-user), scratchpad (LIFO stack). Salience-scored entries with configurable weights: brain_ltm stores base salience and recency is computed at query time (salience.go). Recall-events log with rotation (recall_events.go). Own migration system (migrations.go, brain_migrations table, 9 migrations; runs in brain.New after options are applied). rem/ implements the nightly REM cycle (triage, consolidate, integrate, prune, reflect). Sub-agent WM sharing via parent context.
 - internal/reflection/ — SPAR Reflect subsystem: per-tool outcome capture (ReflectionMiddleware), session metrics (SessionReflector), farewell detection (FarewellDetector), ReflectionStore (brain_reflections table). See reference/spar.md.
 - internal/config/ — JSON config loading with ${ENV_VAR} expansion. Config struct includes: port, database, AI, agent, workspace, skills, tools, channels, debug, rate limiting, heartbeat, agent heartbeat, SSH, MQTT, brain. `Config.Validate()` (validate.go) is called by `config.Load()` and checks port range, AI credentials, channels, workspace, rate-limit sanity, and tool constraints; credential checks are intentionally soft (warn, not fatal) to allow partial configs.
-- internal/database/ — Gateway DB (gateway.db) SQLite migration system (10 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search, messages_fts sync triggers, token hash versioning, ingest DLQ, alert history, indexed messages_fts delete/update triggers, canonical timestamps). Canonical timestamp text layout, formatter and tolerant parser in timestamps.go (StoredTimeLayout, FormatStoredTime, ParseStoredTime). The brain DB has its own separate migrations in internal/brain.
+- internal/database/ — Gateway DB (gateway.db) SQLite migration system (11 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search, messages_fts sync triggers, token hash versioning, ingest DLQ, alert history, indexed messages_fts delete/update triggers, canonical timestamps, topics). Canonical timestamp text layout, formatter and tolerant parser in timestamps.go (StoredTimeLayout, FormatStoredTime, ParseStoredTime). The brain DB has its own separate migrations in internal/brain.
 - internal/fts/ — FTS5 full-text search: document chunking, indexing, and search queries (Porter stemming, unicode61 tokenizer)
 - internal/ftsquery/ — Turns free-text user queries into safe FTS5 MATCH expressions
 - internal/searchdb/ — Dedicated search.db with FTS5 indexes (document chunks, beads, messages, brain LTM). Includes BeadsIndexer, BrainIndexer, MessageSyncer
@@ -147,6 +147,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/tokens/ — Token generation (generator.go) and formatting (format.go) utilities
 - internal/approval/ — Generic human-in-the-loop approval primitive (manager, request origin)
 - internal/policy/ — Tool action policy (conduit-25lt.2): tools implement policy.Classifier (Message, email skill, google_workspace) to map a call to dotted action classes; one allow/ask/deny table (config `tool_policy`, refused by update_config) plus the origin rule (non-interactive: ask→deny). Shadow mode only: Registry.ExecuteTool records every decision to <data_dir>/logs/policy-decisions.jsonl and never blocks; `conduit policy report` reviews it
+- internal/topics/ — Topic switcher store (conduit-43vk): topics + per-chat pointers (gateway DB, migration 11). The gateway's `resolveSessionForChat` (gateway/topics.go) is the channel-ingress choke point: no pointer = `GetOrCreateSession` unchanged, active topic = its `topic_`-prefixed session (excluded from `GetLatestSession`). `/topic`/`/home` (topics_commands.go) and the topic_* tools (tools/core/topics.go, via `core.TopicManager` on the Gateway) share topics_ops.go. Topic prefix/persona reach prompt build via `types.WithTopicPrompt` → agent "Topic" dynamic section; outbound from a topic session is tagged `[slug] `. See reference/topics.md
 - internal/briefing/ — Session briefing generation (used by the `briefing` CLI; stored in brain LTM)
 - internal/chain/ — Saved multi-tool chain definitions (variables, steps) behind the `chain` CLI and Chain tool
 - internal/constants/ — Shared constant values
@@ -179,7 +180,7 @@ Config struct covers: port, database path, AI providers (Anthropic with OAuth or
 
 SQLite with WAL mode, 5s busy timeout, NORMAL synchronous, foreign keys enabled, 10000 page cache. Connection pool: max 4 open, 2 idle, no lifetime expiry. There are two independent migration systems.
 
-Gateway DB (internal/database, `schema_migrations`), ten migrations (a `Migration` has `SQL` and/or a Go `Func(tx)`, both run in the migration transaction):
+Gateway DB (internal/database, `schema_migrations`), eleven migrations (a `Migration` has `SQL` and/or a Go `Func(tx)`, both run in the migration transaction):
 
 1. Sessions and messages tables
 2. Auth tokens table (+ schema_migrations table)
@@ -191,6 +192,7 @@ Gateway DB (internal/database, `schema_migrations`), ten migrations (a `Migratio
 8. Alert history table (alert_history) for SRE audit trail
 9. messages_fts delete/update triggers find the row with a phrase MATCH on message_id (FTS index) instead of a full-table scan; ids with no ASCII letter/digit fall back to the scan via complementary `_scan` triggers (conduit-3dad). Triggers only, no data change.
 10. Data migration (Go func, migration_timestamps.go): rewrites messages.timestamp and sessions.created_at from legacy text (Go `time.String()` with zone + `m=+…`, RFC 3339, CURRENT_TIMESTAMP) into the canonical UTC `2006-01-02 15:04:05.000000000` layout that sessions.updated_at uses (conduit-a636). Idempotent; unparseable/non-text values are left untouched and logged; the messages UPDATE triggers are dropped and restored verbatim around the rewrite so messages_fts is not touched. The sessions store binds `FormatStoredTime` strings for these columns (never a raw time.Time, which the driver stores as `t.String()`).
+11. Topic switcher tables `topics` (slug UNIQUE, status active/parked/archived, persona, summary, session_key) and `topic_pointers` (chat_id → topic_slug) (conduit-43vk).
 
 messages_fts is a standalone FTS5 table (own content, `message_id` column), so FTS5 'rebuild' cannot resync it with messages; `conduit maintenance run-task fts_rebuild [--dry-run]` (internal/maintenance/fts.go) deletes stale/outdated/duplicate index rows and indexes missing messages in one transaction, and `maintenance status` reports the drift.
 

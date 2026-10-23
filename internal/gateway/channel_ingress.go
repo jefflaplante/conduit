@@ -88,11 +88,15 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		g.monitoring.MetricsCollector.MarkActivity()
 	}
 
-	// Get or create session
-	session, err := g.sessions.GetOrCreateSession(msg.UserID, msg.ChannelID)
+	// conduit-43vk: the chat's topic pointer picks the session (home when
+	// unset — exactly GetOrCreateSession).
+	session, notice, err := g.resolveSessionForChat(msg.ChannelID, msg.UserID)
 	if err != nil {
 		logging.Error(ctx, "error getting session", "error", err)
 		return
+	}
+	if notice != "" {
+		g.sendCommandResponse(msg, notice)
 	}
 
 	// conduit-31jg.43: approval replies are consumed here, before the

@@ -21,8 +21,9 @@ func (g *Gateway) SendMessage(ctx context.Context, channelID, userID, content st
 		},
 		ChannelID: channelID,
 		UserID:    userID,
-		Text:      content,
-		Metadata:  metadata,
+		// conduit-43vk: proactive sends from a topic session are tagged.
+		Text:     g.topicTag(types.RequestSessionKey(ctx), channelID, userID, content),
+		Metadata: metadata,
 	}
 
 	return g.channelManager.SendMessage(outgoingMsg)
