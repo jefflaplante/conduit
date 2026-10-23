@@ -121,7 +121,7 @@ func (g *Gateway) TopicCreate(ctx context.Context, slug, name, persona string) (
 	if err != nil {
 		return "", err
 	}
-	return g.withTopicState(ctx, "🧵 Created topic "+tp.Slug+" ("+tp.Name+"). Use topic_switch to move the chat there.", nil)
+	return g.withTopicState(ctx, "🧵 Created topic "+topicSlugRef(tp.Slug)+" ("+tp.Name+"). Use topic_switch to move the chat there.", nil)
 }
 
 // TopicSwitch implements core.TopicManager.

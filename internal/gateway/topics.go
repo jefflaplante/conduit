@@ -86,7 +86,7 @@ func (g *Gateway) resolveSessionForChat(channelID, userID string) (*sessions.Ses
 			if perr := store.SetPointer(chat, ""); perr != nil {
 				g.logger.Warn("topics: failed to reset stale pointer", "chat", chat, "error", perr)
 			}
-			notice = fmt.Sprintf("ℹ️ Topic %q is no longer active — you're back home.", slug)
+			notice = fmt.Sprintf("ℹ️ Topic %s is no longer active — you're back home.", topicSlugRef(slug))
 		default:
 			// Never let the topics table break plain messaging.
 			g.logger.Warn("topics: pointer lookup failed, using home", "chat", chat, "error", err)
@@ -129,6 +129,10 @@ func applyTopicTag(tag, text string) string {
 	}
 	return tag + text
 }
+
+// topicSlugRef renders a slug for user-facing text: bracketed so it stands
+// apart from body text, like the [slug] prefix on outbound topic messages.
+func topicSlugRef(slug string) string { return "[" + slug + "]" }
 
 // topicPromptFor renders the prefix injected into a topic session's prompt:
 // stitched context (prepended), then "Topic: <name> — <summary>. Last

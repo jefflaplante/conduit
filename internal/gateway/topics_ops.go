@@ -28,7 +28,7 @@ func (e *topicError) Error() string { return e.msg }
 func (e *topicError) Unwrap() error { return e.err }
 
 func errNoTopic(slug string) error {
-	return &topicError{msg: fmt.Sprintf("No topic %q — /topic lists them.", slug), err: topics.ErrNotFound}
+	return &topicError{msg: fmt.Sprintf("No topic %s — /topic lists them.", topicSlugRef(slug)), err: topics.ErrNotFound}
 }
 
 var errNoTopicStore = errors.New("topics are not available")
@@ -76,7 +76,7 @@ func (g *Gateway) topicStateLine(channelID, userID string) string {
 			cur = tp.Slug
 		}
 	}
-	return "📍 Current: " + cur
+	return "📍 Current: " + topicSlugRef(cur)
 }
 
 // topicCreate creates a topic without switching to it. Its session is
@@ -163,13 +163,13 @@ func (g *Gateway) topicSwitch(ctx context.Context, channelID, userID, slugIn str
 	}
 
 	if created {
-		return fmt.Sprintf("🧵 Topic: %s — new", tp.Name), nil
+		return fmt.Sprintf("🧵 Topic: %s — new", topicSlugRef(tp.Slug)), nil
 	}
 	summary := strings.TrimRight(strings.TrimSpace(tp.Summary), ". ")
 	if summary == "" {
 		summary = "no summary yet"
 	}
-	return fmt.Sprintf("🧵 Topic: %s — %s. Last activity: %s.%s", tp.Name, summary, relativeTime(sess.UpdatedAt), note), nil
+	return fmt.Sprintf("🧵 Topic: %s — %s. Last activity: %s.%s", topicSlugRef(tp.Slug), summary, relativeTime(sess.UpdatedAt), note), nil
 }
 
 // topicGoHome clears the chat's pointer.
@@ -205,7 +205,7 @@ func (g *Gateway) topicPark(ctx context.Context, slug string) (string, error) {
 	if _, err := g.topicStore().ClearPointersTo(tp.Slug); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("🅿️ Parked %s. Summary: %s", tp.Slug, summary), nil
+	return fmt.Sprintf("🅿️ Parked %s. Summary: %s", topicSlugRef(tp.Slug), summary), nil
 }
 
 // topicClose writes a final summary to the topic and its session context,
@@ -227,7 +227,7 @@ func (g *Gateway) topicClose(ctx context.Context, slug string) (string, error) {
 	if _, err := g.topicStore().ClearPointersTo(tp.Slug); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("📦 Closed %s. Final summary: %s", tp.Slug, summary), nil
+	return fmt.Sprintf("📦 Closed %s. Final summary: %s", topicSlugRef(tp.Slug), summary), nil
 }
 
 // topicRename changes slug's display name and/or slug. Without newSlugIn the
@@ -261,9 +261,9 @@ func (g *Gateway) topicRename(slug, newName, newSlugIn string) (string, error) {
 		return "", err
 	}
 	if newSlug == tp.Slug {
-		return fmt.Sprintf("✏️ Renamed %s: name is now %q.", tp.Slug, newName), nil
+		return fmt.Sprintf("✏️ Renamed %s: name is now %q.", topicSlugRef(tp.Slug), newName), nil
 	}
-	return fmt.Sprintf("✏️ Renamed %s → %s (%s). The old slug no longer resolves.", tp.Slug, newSlug, newName), nil
+	return fmt.Sprintf("✏️ Renamed %s → %s (%s). The old slug no longer resolves.", topicSlugRef(tp.Slug), topicSlugRef(newSlug), newName), nil
 }
 
 // topicPersona sets or (with empty text) clears slug's persona.
@@ -277,9 +277,9 @@ func (g *Gateway) topicPersona(slug, persona string) (string, error) {
 		return "", err
 	}
 	if persona == "" {
-		return fmt.Sprintf("🎭 Persona cleared for %s.", tp.Slug), nil
+		return fmt.Sprintf("🎭 Persona cleared for %s.", topicSlugRef(tp.Slug)), nil
 	}
-	return fmt.Sprintf("🎭 Persona set for %s.", tp.Slug), nil
+	return fmt.Sprintf("🎭 Persona set for %s.", topicSlugRef(tp.Slug)), nil
 }
 
 // topicStitch prepends from's summary to to's prompt prefix (stored in to's
@@ -304,7 +304,7 @@ func (g *Gateway) topicStitch(ctx context.Context, channelID, userID, fromSlug, 
 		return "", err
 	}
 
-	marker := fmt.Sprintf("From topic %s ", from.Slug)
+	marker := fmt.Sprintf("From topic %s ", topicSlugRef(from.Slug))
 	lines := []string{fmt.Sprintf("%s(%s): %s", marker, from.Name, summary)}
 	for _, l := range strings.Split(sess.Context[topicCtxStitched], "\n") {
 		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, marker) {
@@ -322,7 +322,7 @@ func (g *Gateway) topicStitch(ctx context.Context, channelID, userID, fromSlug, 
 	if err := g.sessions.SetSessionContext(sess.Key, topicCtxStitched, strings.Join(lines, "\n")); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("🪡 Stitched %s → %s.", from.Slug, to.Slug), nil
+	return fmt.Sprintf("🪡 Stitched %s → %s.", topicSlugRef(from.Slug), topicSlugRef(to.Slug)), nil
 }
 
 // topicList renders the topics with ★ on the chat's current one.
@@ -357,7 +357,7 @@ func (g *Gateway) topicList(channelID, userID string) (string, error) {
 		if tp.Status == topics.StatusActive && !last.IsZero() && time.Since(last) > topicStaleAfter {
 			stale = " · stale"
 		}
-		fmt.Fprintf(&b, "%s%s — %s [%s] · %s%s%s\n", mark, tp.Slug, tp.Name, tp.Status, relativeTime(last), tokens, stale)
+		fmt.Fprintf(&b, "%s%s — %s [%s] · %s%s%s\n", mark, topicSlugRef(tp.Slug), tp.Name, tp.Status, relativeTime(last), tokens, stale)
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
 }

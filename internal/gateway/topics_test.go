@@ -274,12 +274,12 @@ func TestTopicCommand(t *testing.T) {
 		{
 			name: "list empty",
 			cmd:  "/topic",
-			want: []string{"No topics yet", "📍 Current: home"},
+			want: []string{"No topics yet", "📍 Current: [home]"},
 		},
 		{
 			name: "switch creates",
 			cmd:  "/topic alpha",
-			want: []string{"Topic: alpha — new", "📍 Current: alpha"},
+			want: []string{"Topic: [alpha] — new", "📍 Current: [alpha]"},
 			verify: func(t *testing.T, gw *Gateway, store *sessions.Store) {
 				tp, err := gw.topicStore().Get("alpha")
 				if err != nil || tp.Status != topics.StatusActive {
@@ -297,19 +297,19 @@ func TestTopicCommand(t *testing.T) {
 		{
 			name: "switch normalizes slug",
 			cmd:  "/topic Solar_Panels",
-			want: []string{"Topic: solar-panels — new"},
+			want: []string{"Topic: [solar-panels] — new"},
 		},
 		{
 			name: "list marks current",
 			pre:  []string{"/topic alpha", "/topic beta"},
 			cmd:  "/topic",
-			want: []string{"★ beta", "alpha", "active", "📍 Current: beta"},
+			want: []string{"★ [beta]", "[alpha]", "active", "📍 Current: [beta]"},
 		},
 		{
 			name: "switch to existing resumes with summary",
 			pre:  []string{"/topic alpha", "/topic park alpha"},
 			cmd:  "/topic alpha",
-			want: []string{"Topic: alpha — Summary of", "📍 Current: alpha"},
+			want: []string{"Topic: [alpha] — Summary of", "📍 Current: [alpha]"},
 			verify: func(t *testing.T, gw *Gateway, _ *sessions.Store) {
 				tp, _ := gw.topicStore().Get("alpha")
 				if tp.Status != topics.StatusActive {
@@ -332,7 +332,7 @@ func TestTopicCommand(t *testing.T) {
 			name: "topic home",
 			pre:  []string{"/topic alpha"},
 			cmd:  "/topic home",
-			want: []string{"📍 Current: home"},
+			want: []string{"📍 Current: [home]"},
 			verify: func(t *testing.T, gw *Gateway, _ *sessions.Store) {
 				if slug, _ := gw.topicStore().Pointer(tgChat); slug != "" {
 					t.Fatalf("pointer = %q", slug)
@@ -343,7 +343,7 @@ func TestTopicCommand(t *testing.T) {
 			name: "home alias",
 			pre:  []string{"/topic alpha"},
 			cmd:  "/home",
-			want: []string{"📍 Current: home"},
+			want: []string{"📍 Current: [home]"},
 			verify: func(t *testing.T, gw *Gateway, _ *sessions.Store) {
 				if slug, _ := gw.topicStore().Pointer(tgChat); slug != "" {
 					t.Fatalf("pointer = %q", slug)
@@ -354,7 +354,7 @@ func TestTopicCommand(t *testing.T) {
 			name: "park current moves home",
 			pre:  []string{"/topic alpha"},
 			cmd:  "/topic park alpha",
-			want: []string{"Parked alpha", "📍 Current: home"},
+			want: []string{"Parked [alpha]", "📍 Current: [home]"},
 			verify: func(t *testing.T, gw *Gateway, _ *sessions.Store) {
 				tp, _ := gw.topicStore().Get("alpha")
 				if tp.Status != topics.StatusParked || tp.Summary == "" {
@@ -369,13 +369,13 @@ func TestTopicCommand(t *testing.T) {
 			name: "park other keeps pointer",
 			pre:  []string{"/topic alpha", "/topic beta"},
 			cmd:  "/topic park alpha",
-			want: []string{"Parked alpha", "📍 Current: beta"},
+			want: []string{"Parked [alpha]", "📍 Current: [beta]"},
 		},
 		{
 			name: "close archives with final summary",
 			pre:  []string{"/topic alpha"},
 			cmd:  "/topic close alpha",
-			want: []string{"Closed alpha", "📍 Current: home"},
+			want: []string{"Closed [alpha]", "📍 Current: [home]"},
 			verify: func(t *testing.T, gw *Gateway, store *sessions.Store) {
 				tp, _ := gw.topicStore().Get("alpha")
 				if tp.Status != topics.StatusArchived || tp.Summary == "" {
@@ -391,7 +391,7 @@ func TestTopicCommand(t *testing.T) {
 			name: "rename display name only",
 			pre:  []string{"/topic alpha"},
 			cmd:  "/topic rename alpha Alpha",
-			want: []string{"Renamed alpha", "📍 Current: alpha"},
+			want: []string{"Renamed [alpha]", "📍 Current: [alpha]"},
 			verify: func(t *testing.T, gw *Gateway, _ *sessions.Store) {
 				tp, err := gw.topicStore().Get("alpha")
 				if err != nil || tp.Name != "Alpha" {
@@ -403,7 +403,7 @@ func TestTopicCommand(t *testing.T) {
 			name: "rename slug cascades pointer",
 			pre:  []string{"/topic alpha"},
 			cmd:  "/topic rename alpha Gamma Ray",
-			want: []string{"gamma-ray", "📍 Current: gamma-ray"},
+			want: []string{"gamma-ray", "📍 Current: [gamma-ray]"},
 			verify: func(t *testing.T, gw *Gateway, _ *sessions.Store) {
 				if slug, _ := gw.topicStore().Pointer(tgChat); slug != "gamma-ray" {
 					t.Fatalf("pointer = %q", slug)
@@ -429,7 +429,7 @@ func TestTopicCommand(t *testing.T) {
 			name: "persona set",
 			pre:  []string{"/topic alpha"},
 			cmd:  "/topic persona alpha Be terse and cite files.",
-			want: []string{"Persona set for alpha", "📍"},
+			want: []string{"Persona set for [alpha]", "📍"},
 			verify: func(t *testing.T, gw *Gateway, _ *sessions.Store) {
 				tp, _ := gw.topicStore().Get("alpha")
 				if tp.Persona != "Be terse and cite files." {
@@ -441,7 +441,7 @@ func TestTopicCommand(t *testing.T) {
 			name: "persona clear",
 			pre:  []string{"/topic alpha", "/topic persona alpha x"},
 			cmd:  "/topic persona alpha",
-			want: []string{"Persona cleared for alpha"},
+			want: []string{"Persona cleared for [alpha]"},
 			verify: func(t *testing.T, gw *Gateway, _ *sessions.Store) {
 				tp, _ := gw.topicStore().Get("alpha")
 				if tp.Persona != "" {
@@ -453,7 +453,7 @@ func TestTopicCommand(t *testing.T) {
 			name: "stitch",
 			pre:  []string{"/topic alpha", "/topic park alpha", "/topic beta"},
 			cmd:  "/topic stitch alpha beta",
-			want: []string{"Stitched alpha → beta", "📍 Current: beta"},
+			want: []string{"Stitched [alpha] → [beta]", "📍 Current: [beta]"},
 			verify: func(t *testing.T, gw *Gateway, store *sessions.Store) {
 				a, _ := gw.topicStore().Get("alpha")
 				b, _ := gw.topicStore().Get("beta")
@@ -469,7 +469,7 @@ func TestTopicCommand(t *testing.T) {
 		{
 			name: "invalid slug",
 			cmd:  "/topic !!!",
-			want: []string{"❌", "📍 Current: home"},
+			want: []string{"❌", "📍 Current: [home]"},
 		},
 		{
 			name: "reserved slug",
@@ -479,7 +479,7 @@ func TestTopicCommand(t *testing.T) {
 		{
 			name: "unknown subcommand",
 			cmd:  "/topic frobnicate alpha beta",
-			want: []string{"Usage", "/topic park <slug>", "📍 Current: home"},
+			want: []string{"Usage", "/topic park <slug>", "📍 Current: [home]"},
 		},
 		{name: "park missing arg", cmd: "/topic park", want: []string{"Usage"}},
 		{name: "close missing arg", cmd: "/topic close", want: []string{"Usage"}},
@@ -640,7 +640,7 @@ func TestIngress_CommandsUseResolvedSession(t *testing.T) {
 	gw.handleIncomingMessage(context.Background(), tgMsg("/status"))
 	tp, _ := gw.topicStore().Get("alpha")
 	got := ad.waitSent(t, 2)
-	if !strings.Contains(got[0], "Topic: alpha — new") {
+	if !strings.Contains(got[0], "Topic: [alpha] — new") {
 		t.Fatalf("switch reply = %q", got[0])
 	}
 	if !strings.Contains(got[1], tp.SessionKey) {
@@ -877,10 +877,10 @@ func TestTopicManager_ToolWrappers(t *testing.T) {
 	if slug, _ := gw.topicStore().Pointer(tgChat); slug != "" {
 		t.Fatalf("create must not switch: pointer = %q", slug)
 	}
-	if out, err := gw.TopicSwitch(ctx, "alpha"); err != nil || !strings.Contains(out, "📍 Current: alpha") {
+	if out, err := gw.TopicSwitch(ctx, "alpha"); err != nil || !strings.Contains(out, "📍 Current: [alpha]") {
 		t.Fatalf("switch = %q, %v", out, err)
 	}
-	if out, err := gw.TopicList(ctx); err != nil || !strings.Contains(out, "★ alpha") {
+	if out, err := gw.TopicList(ctx); err != nil || !strings.Contains(out, "★ [alpha]") {
 		t.Fatalf("list = %q, %v", out, err)
 	}
 	if _, err := gw.TopicRename(ctx, "alpha", "", "alpha-two"); err != nil {
@@ -898,7 +898,7 @@ func TestTopicManager_ToolWrappers(t *testing.T) {
 	if _, err := gw.TopicPark(ctx, "beta"); err != nil {
 		t.Fatalf("park: %v", err)
 	}
-	if out, err := gw.TopicClose(ctx, "alpha-two"); err != nil || !strings.Contains(out, "📍 Current: home") {
+	if out, err := gw.TopicClose(ctx, "alpha-two"); err != nil || !strings.Contains(out, "📍 Current: [home]") {
 		t.Fatalf("close = %q, %v", out, err)
 	}
 
