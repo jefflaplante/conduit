@@ -50,6 +50,20 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 		}
 	}
 
+	// bd-vo77: a cron schedule may be pinned to a zone; delayMinutes is
+	// relative, so it stays zone-free.
+	zone := ""
+	if toolargs.GetInt(args, "delayMinutes", 0) <= 0 {
+		var err error
+		schedule, zone, err = applyTimezone(schedule, strings.TrimSpace(toolargs.GetString(args, "timezone", "")))
+		if err != nil {
+			return &types.ToolResult{
+				Success: false,
+				Error:   err.Error(),
+			}, nil
+		}
+	}
+
 	// Determine job type
 	jobType := toolargs.GetString(args, "jobType", "go")
 	if jobType != "go" && jobType != "system" {
@@ -100,6 +114,16 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 		}
 	}
 
+	// Compute the next fire time before creating the job so a bad schedule
+	// fails fast without leaving an orphan behind.
+	next, err := nextRunTime(job.Schedule, job.Type, t.clock())
+	if err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to schedule job: %v", err),
+		}, nil
+	}
+
 	// Schedule the job
 	if err := t.services.Gateway.ScheduleJob(job); err != nil {
 		return &types.ToolResult{
@@ -113,16 +137,26 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 	if oneshot {
 		description = "Reminder set."
 	}
+	if zone != "" {
+		if oneshot {
+			description = fmt.Sprintf("Reminder set for %s.", next.Format("2006-01-02 15:04 MST"))
+		} else {
+			description += fmt.Sprintf("\nNext run: %s (%s)", next.Format(time.RFC3339), zone)
+		}
+	}
 
 	return &types.ToolResult{
 		Success: true,
 		Content: description,
 		Data: map[string]interface{}{
-			"jobId":    job.ID,
-			"name":     job.Name,
-			"schedule": job.Schedule,
-			"type":     job.Type,
-			"oneshot":  job.OneShot,
+			"jobId":        job.ID,
+			"name":         job.Name,
+			"schedule":     job.Schedule,
+			"type":         job.Type,
+			"oneshot":      job.OneShot,
+			"timezone":     zone,
+			"nextRun":      next.Format(time.RFC3339),
+			"nextRunLocal": next.In(time.Local).Format(time.RFC3339),
 		},
 	}, nil
 }
@@ -165,7 +199,12 @@ func (t *CronTool) listJobs(ctx context.Context, args map[string]interface{}) (*
 		}
 
 		builder.WriteString(fmt.Sprintf("%d. %s%s%s\n", i+1, name, jobType, status))
-		builder.WriteString(fmt.Sprintf("   %s\n", job.Schedule))
+		if zone, expr := splitScheduleZone(job.Schedule); zone != "" {
+			builder.WriteString(fmt.Sprintf("   %s\n", expr))
+			builder.WriteString(fmt.Sprintf("   tz: %s\n", zone))
+		} else {
+			builder.WriteString(fmt.Sprintf("   %s\n", job.Schedule))
+		}
 		if len(job.Skills) > 0 {
 			builder.WriteString(fmt.Sprintf("   skills: %s\n", strings.Join(job.Skills, ", ")))
 		}
