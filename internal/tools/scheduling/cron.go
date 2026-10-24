@@ -39,6 +39,13 @@ Regular Actions:
 - Daily report: action=schedule, schedule="0 9 * * *", command="Generate daily briefing", type="go"
 - Scoped job: action=schedule, schedule="*/30 * * * *", command="Check solar production", model="haiku", skills=["solar"]
 - System backup: action=schedule, schedule="0 2 * * *", command="/usr/local/bin/backup.sh", type="system"
+- Weekly report in a specific timezone: action=schedule, schedule="0 9 * * 1", tz="America/Los_Angeles", command="Generate weekly report"
+
+Timezones:
+- Schedules run in the server's local timezone unless a zone is given
+- Set tz to an IANA timezone name (e.g. "America/Los_Angeles"); it is applied as a CRON_TZ=<zone> prefix and handles DST
+- Equivalently, a schedule may itself start with "CRON_TZ=<zone> " (e.g. "CRON_TZ=Europe/Paris 0 9 * * *"); do not combine the prefix with tz
+- tz cannot be combined with delayMinutes
 
 Heartbeat Management:
 - List heartbeat jobs: action=heartbeat_list
@@ -94,6 +101,10 @@ func (t *CronTool) Parameters() map[string]interface{} {
 			"delayMinutes": map[string]interface{}{
 				"type":        "integer",
 				"description": "Schedule to run in X minutes (alternative to cron expression)",
+			},
+			"tz": map[string]interface{}{
+				"type":        "string",
+				"description": "IANA timezone name for the schedule (e.g. 'America/Los_Angeles'), applied via a CRON_TZ=<zone> prefix. Not allowed with delayMinutes or a schedule that already has a CRON_TZ= prefix.",
 			},
 			"skills": map[string]interface{}{
 				"type":        "array",

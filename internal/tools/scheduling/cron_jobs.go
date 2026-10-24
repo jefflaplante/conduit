@@ -50,6 +50,31 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 		}
 	}
 
+	// Optional per-job timezone, expressed via the scheduler's CRON_TZ prefix.
+	if tz := strings.TrimSpace(toolargs.GetString(args, "tz", "")); tz != "" {
+		if toolargs.GetInt(args, "delayMinutes", 0) > 0 {
+			return &types.ToolResult{
+				Success: false,
+				Error:   "tz cannot be combined with delayMinutes (the delay is relative to now)",
+			}, nil
+		}
+		// The scheduler accepts both CRON_TZ= and TZ= prefixes; adding a
+		// second one would corrupt the expression.
+		if trimmed := strings.TrimSpace(schedule); strings.HasPrefix(trimmed, "CRON_TZ=") || strings.HasPrefix(trimmed, "TZ=") {
+			return &types.ToolResult{
+				Success: false,
+				Error:   "schedule already has a CRON_TZ=/TZ= prefix; use either the prefix or the tz parameter, not both",
+			}, nil
+		}
+		if _, err := time.LoadLocation(tz); err != nil {
+			return &types.ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("invalid tz %q: must be an IANA timezone name such as America/Los_Angeles (%v)", tz, err),
+			}, nil
+		}
+		schedule = "CRON_TZ=" + tz + " " + schedule
+	}
+
 	// Determine job type
 	jobType := toolargs.GetString(args, "jobType", "go")
 	if jobType != "go" && jobType != "system" {

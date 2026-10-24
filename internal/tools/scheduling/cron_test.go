@@ -1026,3 +1026,81 @@ func TestCronToolHeartbeatDisableWithErrors(t *testing.T) {
 	assert.Len(t, errors, 1)
 	assert.Contains(t, errors[0], "heartbeat_main")
 }
+
+// TestCronToolScheduleTZ tests the tz parameter of the schedule action (bd-vo77).
+func TestCronToolScheduleTZ(t *testing.T) {
+	tests := []struct {
+		name         string
+		args         map[string]interface{}
+		wantSchedule string // stored schedule on success
+		wantErr      string // substring of result.Error; empty = success
+	}{
+		{
+			name:         "go job gets CRON_TZ prefix",
+			args:         map[string]interface{}{"schedule": "0 9 * * 1", "jobType": "go", "tz": "America/Los_Angeles"},
+			wantSchedule: "CRON_TZ=America/Los_Angeles 0 9 * * 1",
+		},
+		{
+			name:         "system job gets CRON_TZ prefix",
+			args:         map[string]interface{}{"schedule": "0 9 * * 1", "jobType": "system", "tz": "America/Los_Angeles"},
+			wantSchedule: "CRON_TZ=America/Los_Angeles 0 9 * * 1",
+		},
+		{
+			name:         "no tz leaves schedule unchanged",
+			args:         map[string]interface{}{"schedule": "0 9 * * 1", "jobType": "go"},
+			wantSchedule: "0 9 * * 1",
+		},
+		{
+			name:         "empty tz leaves schedule unchanged",
+			args:         map[string]interface{}{"schedule": "0 9 * * 1", "tz": ""},
+			wantSchedule: "0 9 * * 1",
+		},
+		{
+			name:    "invalid zone",
+			args:    map[string]interface{}{"schedule": "0 9 * * 1", "tz": "Mars/Olympus"},
+			wantErr: "invalid tz",
+		},
+		{
+			name:    "tz with delayMinutes",
+			args:    map[string]interface{}{"delayMinutes": 30, "tz": "America/Los_Angeles"},
+			wantErr: "delayMinutes",
+		},
+		{
+			name:    "tz with existing CRON_TZ prefix",
+			args:    map[string]interface{}{"schedule": "CRON_TZ=UTC 0 9 * * 1", "tz": "America/Los_Angeles"},
+			wantErr: "already",
+		},
+		{
+			name:    "tz with existing TZ prefix",
+			args:    map[string]interface{}{"schedule": "TZ=UTC 0 9 * * 1", "tz": "America/Los_Angeles"},
+			wantErr: "already",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGw := &fullMockGatewayService{}
+			tool := NewCronTool(&types.ToolServices{Gateway: mockGw})
+
+			args := map[string]interface{}{"action": "schedule", "command": "Weekly report"}
+			for k, v := range tt.args {
+				args[k] = v
+			}
+
+			result, err := tool.Execute(context.Background(), args)
+			require.NoError(t, err)
+
+			if tt.wantErr != "" {
+				assert.False(t, result.Success)
+				assert.Contains(t, result.Error, tt.wantErr)
+				assert.Empty(t, mockGw.jobs, "no job may be stored on error")
+				return
+			}
+
+			require.True(t, result.Success, result.Error)
+			require.Len(t, mockGw.jobs, 1)
+			assert.Equal(t, tt.wantSchedule, mockGw.jobs[0].Schedule)
+			assert.Equal(t, tt.wantSchedule, result.Data["schedule"])
+		})
+	}
+}
