@@ -22,14 +22,16 @@ func TestExtractAvailableActionsNoPaddingWhenDeclared(t *testing.T) {
 	}
 }
 
-// Skills with no declared actions keep the curated fallback (status/help).
-func TestExtractAvailableActionsFallbackWhenUndeclared(t *testing.T) {
+// Skills with no declared actions get NO padded fallback verbs: the generic
+// [status help] had no execution path for doc-only skills (conduit-7ny5,
+// conduit-1jd9), so the tool schema omits the enum entirely and the model is
+// steered to Read SKILL.md instead.
+func TestExtractAvailableActionsNoFallbackWhenUndeclared(t *testing.T) {
 	i := &SkillIntegrator{loader: NewSkillLoader()}
 	skill := Skill{Name: "testskill"}
 
-	got := i.extractAvailableActions(skill)
-	if len(got) != 2 || got[0] != "status" || got[1] != "help" {
-		t.Fatalf("fallback actions = %v, want [status help]", got)
+	if got := i.extractAvailableActions(skill); len(got) != 0 {
+		t.Fatalf("doc-only skill actions = %v, want empty (no padded fallback)", got)
 	}
 }
 
