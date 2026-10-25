@@ -95,9 +95,9 @@ Key locations: MEMORY.md (long-term memory), memory/ (daily logs), HEARTBEAT.md 
 ## Skills (mandatory)
 [## Available Skills
  The following specialized skills are available:
- - `skill_alpha-skill` 🔧 — Fixture skill alpha-skill (actions: [status help])
- - `skill_beta-skill` 🔧 — Fixture skill beta-skill (actions: [status help])
- - `skill_gamma-skill` 🔧 — Fixture skill gamma-skill (actions: [status help])
+ - `skill_alpha-skill` 🔧 — Fixture skill alpha-skill (actions: doc-only — Read skills/alpha-skill/SKILL.md)
+ - `skill_beta-skill` 🔧 — Fixture skill beta-skill (actions: doc-only — Read skills/beta-skill/SKILL.md)
+ - `skill_gamma-skill` 🔧 — Fixture skill gamma-skill (actions: doc-only — Read skills/gamma-skill/SKILL.md)
 ]
 
 ## Tool Strategy
