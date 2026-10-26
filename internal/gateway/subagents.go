@@ -248,7 +248,7 @@ func (g *Gateway) finishSubAgent(sessionKey string, sp subAgentSpawn, out subAge
 		errorMsg := fmt.Sprintf("Error: %v", out.err)
 		// Announce failure if requested
 		if sp.announce && sp.parentChannelID != "" && sp.parentUserID != "" {
-			g.announceToParent(sp.parentChannelID, sp.parentUserID, fmt.Sprintf("❌ Sub-agent failed: %v", out.err))
+			g.announceToParent(sp.parentSessionKey, sp.parentChannelID, sp.parentUserID, fmt.Sprintf("❌ Sub-agent failed: %v", out.err))
 		}
 		// Wake the parent session so it knows the sub-agent failed (even in silent mode)
 		if sp.parentSessionKey != "" {
@@ -281,7 +281,7 @@ func (g *Gateway) finishSubAgent(sessionKey string, sp subAgentSpawn, out subAge
 			// the live one.
 			channelID := g.resolveAnnounceChannelID(sp.parentSessionKey, sp.parentChannelID)
 			if channelID != "" {
-				g.announceToParent(channelID, sp.parentUserID, announceText)
+				g.announceToParent(sp.parentSessionKey, channelID, sp.parentUserID, announceText)
 				announced = true
 			} else {
 				log.Printf("[SubAgent] Cannot announce result for session %s: no live channel (captured=%q)",
@@ -324,8 +324,11 @@ func (g *Gateway) resolveAnnounceChannelID(parentSessionKey, capturedChannelID s
 	return capturedChannelID
 }
 
-// announceToParent sends a message back to the parent session
-func (g *Gateway) announceToParent(channelID, userID, message string) {
+// announceToParent sends a message back to the parent session. The text is
+// tagged with the parent's topic slug when the parent lives in a topic
+// session and the destination is that topic's own chat (see topicTag), so
+// sub-agent announces read like every other message from that topic.
+func (g *Gateway) announceToParent(parentSessionKey, channelID, userID, message string) {
 	outgoingMsg := &protocol.OutgoingMessage{
 		BaseMessage: protocol.BaseMessage{
 			Type:      protocol.TypeOutgoingMessage,
@@ -334,7 +337,7 @@ func (g *Gateway) announceToParent(channelID, userID, message string) {
 		},
 		ChannelID: channelID,
 		UserID:    userID,
-		Text:      message,
+		Text:      g.topicTag(parentSessionKey, channelID, userID, message),
 	}
 
 	if err := g.channelManager.SendMessage(outgoingMsg); err != nil {

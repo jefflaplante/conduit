@@ -137,7 +137,7 @@ func TestShutdownManager_SetOnShutdownAndTriggerAction(t *testing.T) {
 func TestAnnounceToParent(t *testing.T) {
 	gw, _ := newTestGatewayWithSessions(t)
 	// The function just sends a message via channelManager.SendMessage — no return value
-	gw.announceToParent("tui_u1", "u1", "hello parent")
+	gw.announceToParent("", "tui_u1", "u1", "hello parent")
 }
 
 func TestSpawnSubAgent_NoAI(t *testing.T) {

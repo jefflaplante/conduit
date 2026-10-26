@@ -926,3 +926,26 @@ func TestTopicManager_ToolWrappers(t *testing.T) {
 }
 
 func second(_ string, err error) error { return err }
+
+func TestAnnounceToParentTopicTag(t *testing.T) {
+	gw, store := newTopicTestGateway(t)
+	tp := mustSwitch(t, gw, "alpha")
+	home, _ := store.GetOrCreateSession(tgUser, tgChannel)
+
+	tests := []struct {
+		name                          string
+		parentSessionKey, ch, user    string
+		text, want                    string
+	}{
+		{"topic parent tagged", tp.SessionKey, tgChannel, tgUser, "Sub-agent done.", "[alpha] Sub-agent done."},
+		{"home parent untagged", home.Key, tgChannel, tgUser, "Sub-agent done.", "Sub-agent done."},
+		{"empty session untagged", "", tgChannel, tgUser, "Sub-agent done.", "Sub-agent done."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := gw.topicTag(tt.parentSessionKey, tt.ch, tt.user, tt.text); got != tt.want {
+				t.Fatalf("topicTag = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
