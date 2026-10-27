@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"conduit/internal/protocol"
+	"conduit/internal/sessions"
 )
 
 // handleWebSocketCommand processes a slash command from a WebSocket client
@@ -15,6 +16,34 @@ func (g *Gateway) handleWebSocketCommand(ctx context.Context, client *Client, ms
 	sessionKey := msg.SessionKey
 	if sessionKey == "" {
 		sessionKey = client.SessionKey()
+	}
+
+	// Commands carry no user ID: the chat is the addressed session's user
+	// (the user chat messages name, e.g. the SSH user), else the client's.
+	// A topic session opened from another channel says nothing about it.
+	var existing *sessions.Session
+	if sessionKey != "" {
+		existing, _ = g.sessions.GetSession(sessionKey)
+	}
+	userID, _ := wsUserID(client, "")
+	if existing != nil && (!isTopicSessionKey(existing.Key) || existing.ChannelID == wsChatChannel(existing.UserID)) {
+		if u, ok := wsUserID(client, existing.UserID); ok {
+			userID = u
+		}
+	}
+	channelID := wsChatChannel(userID)
+
+	// Route like handleWebSocketChat: the chat's home session (or the
+	// connection's remembered topic session) follows the topic pointer, an
+	// explicit other key wins (conduit-tui-topics-c90u). Commands never
+	// create a session, so no key and unknown keys are left as they are.
+	if existing != nil && g.wsFollowsTopicPointer(existing, msg.SessionKey != "", channelID, userID) {
+		if session, notice, err := g.resolveSessionForChat(channelID, userID); err == nil {
+			sessionKey = session.Key
+			if notice != "" {
+				g.sendWSNotice(client, sessionKey, notice)
+			}
+		}
 	}
 
 	commandText := msg.Command
@@ -25,11 +54,12 @@ func (g *Gateway) handleWebSocketCommand(ctx context.Context, client *Client, ms
 		commandText = "/" + commandText
 	}
 
-	g.handleWebSocketCommandFromChat(ctx, client, sessionKey, commandText)
+	g.handleWebSocketCommandFromChat(ctx, client, channelID, userID, sessionKey, commandText)
 }
 
-// handleWebSocketCommandFromChat handles a slash command that was detected in chat text
-func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Client, sessionKey, text string) {
+// handleWebSocketCommandFromChat handles a slash command that was detected in
+// chat text. channelID/userID identify the client's chat for /topic and /home.
+func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Client, channelID, userID, sessionKey, text string) {
 	text = strings.TrimSpace(text)
 	command := strings.Fields(text)[0]
 
@@ -128,8 +158,16 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 			"/cost - Show detailed cost breakdown\n" +
 			"/compact - Compact context by summarizing older messages\n" +
 			"/stop - Stop current operation\n" +
+			"/topic [slug|home|park|close|rename|persona|stitch] - List/switch/manage topics\n" +
+			"/home - Back to the home session\n" +
 			"/quit - Exit TUI"
 		sendResponse(help)
+
+	case text == "/topic" || text == "/home" || strings.HasPrefix(text, "/topic ") || strings.HasPrefix(text, "/home "):
+		// conduit-tui-topics-c90u: shared with channel ingress (conduit-43vk).
+		if reply, ok := g.topicCommand(ctx, channelID, userID, text); ok {
+			sendResponse(reply)
+		}
 
 	case text == "/context" || strings.HasPrefix(text, "/context "):
 		if sessionKey == "" {
