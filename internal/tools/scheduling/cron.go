@@ -95,7 +95,7 @@ func (t *CronTool) Parameters() map[string]interface{} {
 			},
 			"timezone": map[string]interface{}{
 				"type":        "string",
-				"description": "IANA timezone for the schedule (e.g., 'America/Los_Angeles'). Empty = server local time. Applied to 'schedule'; ignored with delayMinutes (relative).",
+				"description": "IANA timezone for the schedule (e.g., 'America/Los_Angeles'). Empty = server local time. Applied to 'schedule'; rejected with delayMinutes (relative, zone-free).",
 			},
 			"delayMinutes": map[string]interface{}{
 				"type":        "integer",
