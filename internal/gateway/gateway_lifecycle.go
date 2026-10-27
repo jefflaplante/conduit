@@ -267,6 +267,10 @@ func (g *Gateway) stopAll(shutdownCtx context.Context, server *http.Server) {
 	if g.mqttService != nil {
 		g.mqttService.Stop()
 	}
+	// After the service: no more events arrive; drains queued actions.
+	if g.mqttEvents != nil {
+		g.mqttEvents.Stop()
+	}
 
 	// Stop vector indexer before closing the service it references, then
 	// close the vector search service (no-op when disabled).
@@ -403,6 +407,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 			}
 		}
 	}()
+
+	// Start the MQTT event rule worker before events can arrive (bd-39mx).
+	if g.mqttEvents != nil {
+		g.mqttEvents.Start(ctx)
+	}
 
 	// Start MQTT service if configured
 	if g.mqttService != nil {

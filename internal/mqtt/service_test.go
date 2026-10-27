@@ -297,3 +297,52 @@ func TestService_Status_UpdatesWithEvents(t *testing.T) {
 	assert.Equal(t, 2, status.ActiveTopics)
 	assert.Equal(t, int64(2), status.TotalEvents)
 }
+
+func TestService_OnEvent_ObserversInvokedOnMessage(t *testing.T) {
+	svc := NewService(config.MQTTConfig{BufferMaxAge: 3600, BufferMaxEvents: 100, BufferMaxTopics: 10})
+
+	var got []Event
+	var sawBuffered bool
+	svc.OnEvent(func(e Event) {
+		got = append(got, e)
+		// Observers run after the buffer write, so history lookups see the event.
+		sawBuffered = len(svc.RecentForTopic(e.Topic, 1)) == 1
+	})
+	calls := 0
+	svc.OnEvent(func(Event) { calls++ })
+
+	e := Event{Topic: "sensors/total/battery/state", Payload: []byte("42"), Timestamp: time.Now()}
+	svc.handleMessage(e)
+
+	if len(got) != 1 || got[0].Topic != e.Topic || string(got[0].Payload) != "42" {
+		t.Fatalf("first observer got %+v", got)
+	}
+	if calls != 1 {
+		t.Fatalf("second observer calls = %d, want 1", calls)
+	}
+	if !sawBuffered {
+		t.Fatal("observer ran before the event was buffered")
+	}
+}
+
+func TestService_OnEvent_PanickingObserverIsContained(t *testing.T) {
+	svc := NewService(config.MQTTConfig{BufferMaxAge: 3600, BufferMaxEvents: 100, BufferMaxTopics: 10})
+	svc.OnEvent(func(Event) { panic("boom") })
+	after := false
+	svc.OnEvent(func(Event) { after = true })
+	svc.handleMessage(Event{Topic: "a/b", Payload: []byte("x"), Timestamp: time.Now()})
+	if !after {
+		t.Fatal("a panicking observer must not starve later observers")
+	}
+	if svc.buffer.TotalEvents() != 1 {
+		t.Fatal("event not buffered")
+	}
+}
+
+func TestService_NoObservers_Unchanged(t *testing.T) {
+	svc := NewService(config.MQTTConfig{BufferMaxAge: 3600, BufferMaxEvents: 100, BufferMaxTopics: 10})
+	svc.handleMessage(Event{Topic: "a/b", Payload: []byte("x"), Timestamp: time.Now(), Retained: true})
+	if svc.buffer.TotalEvents() != 1 || len(svc.RetainedByPrefix("a")) != 1 {
+		t.Fatal("handleMessage must keep buffer + retained behaviour")
+	}
+}

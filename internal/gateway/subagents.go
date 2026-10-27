@@ -33,6 +33,14 @@ func deriveSubAgentContext(gatewayCtx context.Context, timeoutSeconds int) (cont
 
 // SpawnSubAgentWithCallback spawns a sub-agent with optional result announcement and skill filtering
 func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, parentChannelID, parentUserID string, announce bool, skills []string) (string, error) {
+	return g.spawnSubAgent(ctx, task, agentId, model, label, timeoutSeconds, parentChannelID, parentUserID, announce, skills, nil)
+}
+
+// spawnSubAgent is SpawnSubAgentWithCallback plus an optional onDone, called
+// once after the sub-agent's turn has finished and its result was routed. It
+// is not called when the spawn itself returns an error (bd-39mx: the MQTT
+// event engine uses it to free its concurrency slot).
+func (g *Gateway) spawnSubAgent(ctx context.Context, task, agentId, model, label string, timeoutSeconds int, parentChannelID, parentUserID string, announce bool, skills []string, onDone func()) (string, error) {
 	// Check if caller's context is already done (don't spawn if request was canceled)
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("cannot spawn sub-agent: parent context already canceled")
@@ -119,6 +127,9 @@ func (g *Gateway) SpawnSubAgentWithCallback(ctx context.Context, task, agentId, 
 
 	// Run the sub-agent in a goroutine
 	go func() {
+		if onDone != nil {
+			defer onDone()
+		}
 		defer cancel()
 
 		// Own WM bucket + read-only fallback to the parent's WM. conduit-31jg.30
