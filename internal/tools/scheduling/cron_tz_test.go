@@ -59,10 +59,9 @@ func TestCronToolScheduleTimezone(t *testing.T) {
 			wantErr: []string{"conflict", "America/New_York", "America/Los_Angeles"},
 		},
 		{
-			name:       "delayMinutes ignores timezone",
-			args:       map[string]interface{}{"delayMinutes": 5, "timezone": "America/Los_Angeles"},
-			wantPrefix: boolPtr(false),
-			wantTZ:     "",
+			name:    "delayMinutes rejects timezone",
+			args:    map[string]interface{}{"delayMinutes": 5, "timezone": "America/Los_Angeles"},
+			wantErr: []string{"delayMinutes", "timezone"},
 		},
 		{
 			name:         "system job with timezone",

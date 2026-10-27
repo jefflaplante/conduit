@@ -35,6 +35,15 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 
 	// Check if delayMinutes is provided (simple scheduling)
 	if delayMinutes := toolargs.GetInt(args, "delayMinutes", 0); delayMinutes > 0 {
+		// bd-vo77 (from ae8a665): delayMinutes is relative to now, so a
+		// timezone param is meaningless here — fail loudly instead of
+		// silently dropping it.
+		if tz := strings.TrimSpace(toolargs.GetString(args, "timezone", "")); tz != "" {
+			return &types.ToolResult{
+				Success: false,
+				Error:   "timezone cannot be combined with delayMinutes (the delay is relative to now and needs no zone)",
+			}, nil
+		}
 		// Convert minutes to a cron schedule for the target time
 		targetTime := time.Now().Add(time.Duration(delayMinutes) * time.Minute)
 		schedule = fmt.Sprintf("%d %d %d %d *",
