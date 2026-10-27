@@ -933,9 +933,9 @@ func TestAnnounceToParentTopicTag(t *testing.T) {
 	home, _ := store.GetOrCreateSession(tgUser, tgChannel)
 
 	tests := []struct {
-		name                          string
-		parentSessionKey, ch, user    string
-		text, want                    string
+		name                       string
+		parentSessionKey, ch, user string
+		text, want                 string
 	}{
 		{"topic parent tagged", tp.SessionKey, tgChannel, tgUser, "Sub-agent done.", "[alpha] Sub-agent done."},
 		{"home parent untagged", home.Key, tgChannel, tgUser, "Sub-agent done.", "Sub-agent done."},
