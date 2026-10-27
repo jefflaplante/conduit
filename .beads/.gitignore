@@ -19,3 +19,6 @@ beads.base.jsonl
 *.db.bak*
 *.bak[0-9]*
 dolt/
+*fsqlite*
+*.db-wal*
+*.db-shm*
