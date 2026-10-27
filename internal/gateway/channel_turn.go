@@ -60,18 +60,57 @@ func (s *channelTurnSink) outgoing(idPrefix, text string) *protocol.OutgoingMess
 	}
 }
 
+// busyAckCooldown is how long a busy-ack of one kind suppresses another of
+// the same kind (conduit-1mnp).
+const busyAckCooldown = 30 * time.Second
+
+// Busy-ack kinds, stored in session context "last_busy_ack_kind".
+const (
+	busyAckKindQueued = "queued" // busyAckText: runs after the current turn
+	busyAckKindSteer  = "steer"  // steerAckText: offered to the running turn
+)
+
+// shouldSendBusyAck applies the busy-ack cooldown to the session context
+// values. Only a repeat of the SAME kind within the cooldown is suppressed:
+// the two acks promise different things, so a steering ack is never
+// swallowed by a recent "queued" ack or vice versa (conduit-5uw3). Sessions
+// from before kinds were recorded count as "queued".
+func shouldSendBusyAck(sessCtx map[string]string, kind string, now time.Time) bool {
+	lastKind := sessCtx["last_busy_ack_kind"]
+	if lastKind == "" {
+		lastKind = busyAckKindQueued
+	}
+	if lastKind != kind {
+		return true
+	}
+	lastAck, _ := strconv.ParseInt(sessCtx["last_busy_ack"], 10, 64)
+	return now.Unix()-lastAck > int64(busyAckCooldown/time.Second)
+}
+
 // Queued: conduit-1mnp busy-ack. If a turn is already in flight for this
-// session, tell the user immediately instead of leaving them in silence. 30s
-// cooldown per session so rapid nudges don't spam acks.
+// session, tell the user immediately instead of leaving them in silence,
+// with a per-kind cooldown so rapid nudges don't spam acks.
 func (s *channelTurnSink) Queued(ctx context.Context) {
-	now := time.Now().Unix()
-	lastAck, _ := strconv.ParseInt(s.session.Context["last_busy_ack"], 10, 64)
-	if now-lastAck <= 30 {
+	kind, text := busyAckKindQueued, busyAckText
+	if steerOffered(ctx) {
+		kind, text = busyAckKindSteer, steerAckText // conduit-5uw3
+	}
+	// Read the cooldown fresh: s.session was loaded at ingress, possibly
+	// before a concurrent message's ack was recorded.
+	sessCtx := s.session.Context
+	if fresh, err := s.g.sessions.GetSession(s.session.Key); err == nil && fresh != nil {
+		sessCtx = fresh.Context
+	}
+	now := time.Now()
+	if !shouldSendBusyAck(sessCtx, kind, now) {
 		return
 	}
-	s.g.channelManager.SendMessage(s.outgoing("busyack", busyAckText))
-	_ = s.g.sessions.SetSessionContext(s.session.Key, "last_busy_ack", strconv.FormatInt(now, 10))
-	logging.Info(ctx, "busy-ack sent, message queued behind in-flight turn", "session_key", s.session.Key)
+	s.g.channelManager.SendMessage(s.outgoing("busyack", text))
+	_ = s.g.sessions.SetSessionContextBatch(s.session.Key, map[string]string{
+		"last_busy_ack":      strconv.FormatInt(now.Unix(), 10),
+		"last_busy_ack_kind": kind,
+	})
+	logging.Info(ctx, "busy-ack sent, message queued behind in-flight turn", "session_key", s.session.Key, "kind", kind)
 }
 
 // startTyping refreshes the typing indicator every 4 seconds until stopTyping.
@@ -188,6 +227,8 @@ func (s *channelTurnSink) Finish(ctx context.Context, res *TurnResult) {
 	switch {
 	case res.Dropped:
 		return // stopped while queued; /stop already replied
+	case res.Steered:
+		return // folded into the running turn, whose reply answers it (conduit-5uw3)
 	case res.Err != nil:
 		if s.streamer != nil {
 			s.deletePlaceholder(ctx)

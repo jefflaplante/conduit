@@ -226,6 +226,7 @@ func (c *DirectClient) streamChatWithID(session *sessions.Session, text, request
 			SessionKey: session.Key, Notify: c.directApprovalNotifier(session.Key),
 		},
 		SanitizeStored: true,
+		SteerScope:     fmt.Sprintf("tui:%p", c), // conduit-5uw3: replies go to this client
 	}, &directTurnSink{c: c, session: session, requestID: requestID})
 }
 
@@ -238,12 +239,16 @@ type directTurnSink struct {
 
 // Queued tells the TUI the message is waiting behind the session's running
 // turn (conduit-31jg.66); the turn's StreamStart arrives once that finished.
-func (s *directTurnSink) Queued(context.Context) {
+func (s *directTurnSink) Queued(ctx context.Context) {
+	text := queuedNoticeText
+	if steerOffered(ctx) {
+		text = steerAckText // conduit-5uw3
+	}
 	s.c.send(tui.CommandResponseMsg{
 		SessionKey: s.session.Key,
 		RequestID:  s.requestID,
 		Command:    tui.QueuedNoticeCommand,
-		Response:   queuedNoticeText,
+		Response:   text,
 	})
 }
 
@@ -283,6 +288,12 @@ func (s *directTurnSink) Finish(_ context.Context, res *TurnResult) {
 	switch {
 	case res.Dropped:
 		return // stopped while queued; nothing was started
+	case res.Steered:
+		// conduit-5uw3: folded into the running turn; close this request
+		// without a StreamEnd, which would end that turn's stream in the tab.
+		s.c.send(tui.CommandResponseMsg{SessionKey: key, RequestID: s.requestID,
+			Command: tui.SteeredNoticeCommand, Response: steeredNoticeText})
+		return
 	case res.Cancelled:
 		log.Printf("[DirectClient] Request cancelled for session: %s", key)
 		return

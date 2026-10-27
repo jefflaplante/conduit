@@ -178,5 +178,6 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 			Source: msg.ChannelID, ChannelID: msg.ChannelID, UserID: msg.UserID,
 			SessionKey: session.Key, Notify: notify,
 		},
+		SteerScope: "channel:" + msg.ChannelID + ":" + msg.UserID, // conduit-5uw3
 	}, newChannelTurnSink(g, msg, session))
 }

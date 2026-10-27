@@ -209,6 +209,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusBar.SessionState = s.State
 			}
 		}
+		// conduit-5uw3: the request was folded into the running turn; it
+		// will never stream. Undo "queued" and drop its correlation.
+		if msg.Command == SteeredNoticeCommand {
+			if s != nil && s.State == "queued" {
+				s.State = "processing"
+				if tabIdx == m.tabBar.ActiveIdx {
+					m.sidebar.SessionState = s.State
+					m.statusBar.SessionState = s.State
+				}
+			}
+			if msg.RequestID != "" {
+				delete(m.chatRequests, msg.RequestID)
+			}
+		}
 		if msg.Command == "/model" && msg.Model != "" {
 			m.sidebar.Model = msg.Model
 			m.statusBar.Model = msg.Model

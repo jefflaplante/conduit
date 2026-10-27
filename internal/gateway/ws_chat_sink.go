@@ -29,7 +29,16 @@ const queuedNoticeText = "Queued — I'll handle this right after the current re
 // running turn (conduit-31jg.66); its StreamStart arrives once that turn has
 // finished. Sent as a command_response with command "queued", which older
 // clients show as a plain system line.
-func (s *wsTurnSink) Queued(context.Context) {
+func (s *wsTurnSink) Queued(ctx context.Context) {
+	text := queuedNoticeText
+	if steerOffered(ctx) {
+		text = steerAckText // conduit-5uw3
+	}
+	s.notice(tui.QueuedNoticeCommand, text)
+}
+
+// notice sends a command_response tied to this sink's request.
+func (s *wsTurnSink) notice(command, text string) {
 	s.g.sendToClient(s.client, &protocol.CommandResponse{
 		BaseMessage: protocol.BaseMessage{
 			Type:      protocol.TypeCommandResponse,
@@ -37,8 +46,9 @@ func (s *wsTurnSink) Queued(context.Context) {
 			Timestamp: time.Now(),
 		},
 		SessionKey: s.sessionKey,
-		Command:    tui.QueuedNoticeCommand,
-		Response:   queuedNoticeText,
+		RequestID:  s.requestID,
+		Command:    command,
+		Response:   text,
 	})
 }
 
@@ -115,6 +125,11 @@ func (s *wsTurnSink) Finish(_ context.Context, res *TurnResult) {
 	switch {
 	case res.Dropped:
 		return // stopped while queued; nothing was started
+	case res.Steered:
+		// conduit-5uw3: folded into the running turn. Close this request
+		// with a "steered" notice; a StreamEnd would end that turn's stream.
+		s.notice(tui.SteeredNoticeCommand, steeredNoticeText)
+		return
 	case res.Cancelled:
 		log.Printf("WS request cancelled for session: %s", s.sessionKey)
 		return

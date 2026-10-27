@@ -329,6 +329,7 @@ func (c *WSClient) readPump() {
 		case *protocol.CommandResponse:
 			c.send(CommandResponseMsg{
 				SessionKey: msg.SessionKey,
+				RequestID:  msg.RequestID,
 				Command:    msg.Command,
 				Response:   msg.Response,
 				Model:      msg.Model,

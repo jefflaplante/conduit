@@ -83,6 +83,9 @@ type TurnRunner struct {
 	// Both guarded by mu (conduit-31jg.88).
 	inflight map[*turnState]struct{}
 	drainLog []TurnSnapshot
+	// steer holds the steering box of each running steerable turn
+	// (conduit-5uw3). Guarded by mu.
+	steer map[string]*steerBox
 
 	// subagents tracks parent→child sub-agent sessions for SessionsCancel
 	// and the /stop cascade (conduit-38cz, conduit-31jg.84). Own lock.
@@ -180,6 +183,16 @@ type TurnRequest struct {
 	// ParentSessionKey links a sub-agent turn to the session that spawned
 	// it (TurnSnapshot, conduit-38cz).
 	ParentSessionKey string
+
+	// SteerScope opts a live human turn into mid-turn steering
+	// (conduit-5uw3, turn_runner_steer.go). It names the delivery endpoint
+	// (a channel chat + user, one WS connection, one TUI client): while the
+	// turn runs, later messages with the same scope are folded into its tool
+	// loop, and when it queues it may be folded into a running turn of the
+	// same scope instead of running on its own. Same scope means the running
+	// turn's reply reaches the client that sent the folded message. "" = not
+	// steerable.
+	SteerScope string
 }
 
 // TurnResult is what the runner hands to TurnSink.Finish.
@@ -206,6 +219,9 @@ type TurnResult struct {
 	// Dropped: cancelled while queued; the turn never ran and its user
 	// message was not persisted.
 	Dropped bool
+	// Steered: the message was folded into the session's running turn
+	// (conduit-5uw3); that turn's reply answers it. Nothing to deliver.
+	Steered bool
 
 	// UserMessageID is the transcript row of this turn's user message
 	// ("" when the turn was dropped or the message could not be stored).
@@ -214,7 +230,7 @@ type TurnResult struct {
 
 // Delivered reports whether the result carries a reply for the user.
 func (r *TurnResult) Delivered() bool {
-	return r.Err == nil && !r.Cancelled && !r.Dropped && !r.Silent && !r.Empty && r.Content != ""
+	return r.Err == nil && !r.Cancelled && !r.Dropped && !r.Steered && !r.Silent && !r.Empty && r.Content != ""
 }
 
 // TurnSink adapts the runner to one entry point's output transport.
@@ -259,6 +275,7 @@ func NewTurnRunner(store *sessions.Store, router *ai.Router, compactor turnCompa
 		queued:    make(map[string][]*queuedTurn),
 		scheduled: make(map[string]string),
 		inflight:  make(map[*turnState]struct{}),
+		steer:     make(map[string]*steerBox),
 		subagents: newSubAgentRegistry(),
 	}
 }
@@ -328,24 +345,49 @@ func (r *TurnRunner) Run(ctx context.Context, req TurnRequest, sink TurnSink) *T
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// 1. Queue registration + busy-ack.
+	// 1. Queue registration + busy-ack. A busy session's running turn may
+	// take the message mid-turn instead (conduit-5uw3): waitCtx ends the
+	// lock wait once it did.
 	q := &queuedTurn{cancel: cancel}
 	ts := newTurnState(req) // conduit-31jg.88: visible to Snapshot/DrainReport
+	waitCtx, wake := context.WithCancel(reqCtx)
+	defer wake()
+	var steer *steerEntry
 	r.mu.Lock()
 	busy := r.busyLocked(key)
+	if busy {
+		if steer = r.offerSteerLocked(key, req); steer != nil {
+			steer.wake = wake
+		}
+	}
 	r.queued[key] = append(r.queued[key], q)
 	r.inflight[ts] = struct{}{}
 	r.mu.Unlock()
 	if busy {
-		rec.Queued(reqCtx)
+		qctx := reqCtx
+		if steer != nil {
+			qctx = withSteerOffered(reqCtx)
+		}
+		rec.Queued(qctx)
 	}
 
 	// 2. Per-session turn lock; a /stop while queued makes this return.
-	lockedCtx, release, lockErr := r.ai.AcquireTurn(reqCtx, key)
+	lockedCtx, release, lockErr := r.ai.AcquireTurn(waitCtx, key)
 
 	// 3. queued → running, atomically with respect to Stop.
 	r.mu.Lock()
 	r.removeQueued(key, q)
+	if steer != nil && r.withdrawSteerLocked(key, steer) {
+		// conduit-5uw3: the running turn took this message; it never runs.
+		if lockErr == nil {
+			release()
+		}
+		msgID := steer.msgID
+		r.endTurnLocked(ts, TurnSteered)
+		r.mu.Unlock()
+		rec.Finish(ctx, &TurnResult{Steered: true, UserMessageID: msgID})
+		return rec.res
+	}
 	if lockErr == nil && reqCtx.Err() != nil {
 		// Stopped between acquiring the lock and this hand-off: still a
 		// queued turn from /stop's point of view, so drop it.
@@ -369,6 +411,7 @@ func (r *TurnRunner) Run(ctx context.Context, req TurnRequest, sink TurnSink) *T
 		if req.ScheduledJob != "" {
 			r.scheduled[key] = req.ScheduledJob
 		}
+		r.openSteerLocked(key, req) // conduit-5uw3
 		ts.snap.Running = true
 	} else {
 		outcome := TurnStopped
@@ -399,6 +442,7 @@ func (r *TurnRunner) Run(ctx context.Context, req TurnRequest, sink TurnSink) *T
 			r.mu.Lock()
 			r.endTurnLocked(ts, outcome)
 			delete(r.scheduled, key)
+			r.closeSteerLocked(key) // conduit-5uw3
 			r.active.mu.Lock()
 			delete(r.active.get(), key)
 			n := len(r.active.get())

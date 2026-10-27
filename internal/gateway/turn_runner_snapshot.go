@@ -20,6 +20,9 @@ const (
 	TurnDropped TurnOutcome = "dropped"
 	// TurnStopped: cancelled by /stop during the drain (no notice).
 	TurnStopped TurnOutcome = "stopped"
+	// TurnSteered: folded into the session's running turn; never ran on its
+	// own (conduit-5uw3).
+	TurnSteered TurnOutcome = "steered"
 )
 
 // Turn kinds recorded in TurnSnapshot.Kind (conduit-31jg.88).

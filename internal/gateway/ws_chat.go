@@ -128,5 +128,6 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 		Origin:               origin,
 		NonInteractiveSource: nonInteractive,
 		SanitizeStored:       true,
+		SteerScope:           "ws:" + client.ID, // conduit-5uw3: replies go to this connection
 	}, &wsTurnSink{g: g, client: client, sessionKey: session.Key, requestID: requestID})
 }

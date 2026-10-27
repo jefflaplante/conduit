@@ -60,6 +60,11 @@ type ToolEventMsg struct {
 // system line.
 const QueuedNoticeCommand = "queued"
 
+// SteeredNoticeCommand ends a chat request whose message the gateway folded
+// into the session's running turn (conduit-5uw3): that turn's reply answers
+// it, and the request gets no StreamStart/StreamEnd of its own.
+const SteeredNoticeCommand = "steered"
+
 // CommandResponseMsg delivers the result of a slash command
 type CommandResponseMsg struct {
 	SessionKey string

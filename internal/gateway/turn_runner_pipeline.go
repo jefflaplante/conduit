@@ -129,6 +129,13 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 		ctx = ai.WithAttachments(ctx, req.Attachments)
 	}
 	ctx = tools.WithToolEventCallback(ctx, func(ev tools.ToolEventInfo) { sink.ToolEvent(ctx, ev) })
+	// conduit-5uw3: always set, so a non-steerable turn never inherits an
+	// outer turn's source.
+	var steering tools.SteeringSource
+	if r.canSteer(req) {
+		steering = r.steeringSource(key, userMsgID)
+	}
+	ctx = tools.WithSteeringSource(ctx, steering)
 	if req.Decorate != nil {
 		ctx = req.Decorate(ctx)
 	}

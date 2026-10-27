@@ -30,6 +30,8 @@ type turnProvider struct {
 	content func(n int) string
 	// fail, when set and returning non-nil, fails call n with that error.
 	fail func(n int) error
+	// toolCalls, when set, returns call n's tool calls (conduit-5uw3).
+	toolCalls func(n int) []ai.ToolCall
 }
 
 func newTurnProvider() *turnProvider {
@@ -60,7 +62,7 @@ func (p *turnProvider) GenerateResponse(ctx context.Context, req *ai.GenerateReq
 	p.requests = append(p.requests, msgs)
 	gate := p.gates[n]
 	usage := p.usage
-	content, fail := p.content, p.fail
+	content, fail, toolCalls := p.content, p.fail, p.toolCalls
 	p.mu.Unlock()
 	p.entered <- n
 	if gate != nil {
@@ -82,7 +84,13 @@ func (p *turnProvider) GenerateResponse(ctx context.Context, req *ai.GenerateReq
 	if content != nil {
 		text = content(n)
 	}
-	return &ai.GenerateResponse{Content: text, FinishReason: "stop", Usage: usage}, nil
+	resp := &ai.GenerateResponse{Content: text, FinishReason: "stop", Usage: usage}
+	if toolCalls != nil {
+		if resp.ToolCalls = toolCalls(n); len(resp.ToolCalls) > 0 {
+			resp.FinishReason = "tool_use"
+		}
+	}
+	return resp, nil
 }
 
 func (p *turnProvider) request(n int) []ai.ChatMessage {

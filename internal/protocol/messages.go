@@ -228,9 +228,12 @@ type MessageInfo struct {
 type CommandResponse struct {
 	BaseMessage
 	SessionKey string `json:"session_key"`
-	Command    string `json:"command"`
-	Response   string `json:"response"`
-	Model      string `json:"model,omitempty"`
+	// RequestID ties a notice to the chat request it is about ("queued",
+	// "steered"; conduit-5uw3). Empty for slash-command responses.
+	RequestID string `json:"request_id,omitempty"`
+	Command   string `json:"command"`
+	Response  string `json:"response"`
+	Model     string `json:"model,omitempty"`
 }
 
 // ErrorResponse delivers an error notification to the client

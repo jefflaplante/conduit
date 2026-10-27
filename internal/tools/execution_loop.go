@@ -161,6 +161,15 @@ func (e *ExecutionEngine) runToolLoop(ctx context.Context, ts *turnState) (*Conv
 			})
 		}
 
+		// conduit-5uw3: human messages that arrived mid-turn. Real user
+		// messages (not Injected), kept in history for the rest of the turn,
+		// and placed before the guidance so guidanceAt stays the last slot.
+		// The Anthropic converter merges them into the tool_result message.
+		for _, text := range takeSteering(ctx) {
+			log.Printf("[ExecutionEngine] Folding mid-turn user message into the tool loop at depth %d (conduit-5uw3)", depth)
+			ts.history = append(ts.history, ai.ChatMessage{Role: "user", Content: text})
+		}
+
 		// conduit-31jg.13: failure-pivot and circular-pattern guidance, once
 		// per trigger, from this turn's trackers only. Sent as a USER-role
 		// message after the tool results — not system-role — so providers
