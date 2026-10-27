@@ -29,6 +29,11 @@ type Service struct {
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
 
+	// observers are called with every inbound event after it is buffered
+	// (bd-39mx: the MQTT event rule engine). Register before Start.
+	obsMu     sync.RWMutex
+	observers []func(Event)
+
 	// pruneExited, when non-nil, is closed by the prune goroutine just before
 	// it returns. Used by tests to assert synchronous shutdown ordering.
 	pruneExited chan struct{}
@@ -47,21 +52,7 @@ func NewService(cfg config.MQTTConfig) *Service {
 
 // Start connects to the broker and begins background maintenance.
 func (s *Service) Start(ctx context.Context) error {
-	s.client = NewClient(s.cfg, func(e Event) {
-		s.buffer.Add(e)
-
-		// Store retained messages persistently
-		if e.Retained {
-			s.retained.Set(e.Topic, e.Payload, e.Timestamp)
-		}
-
-		// Parse zigbee2mqtt device list
-		if e.Topic == "zigbee2mqtt/bridge/devices" {
-			if err := s.deviceRegistry.Update(e.Payload); err != nil {
-				log.Printf("[MQTT] Failed to parse bridge/devices: %v", err)
-			}
-		}
-	})
+	s.client = NewClient(s.cfg, s.handleMessage)
 
 	if err := s.client.Connect(ctx); err != nil {
 		return err
@@ -71,6 +62,52 @@ func (s *Service) Start(ctx context.Context) error {
 	s.startPruneLoop(ctx, 60*time.Second)
 
 	return nil
+}
+
+// OnEvent registers fn to be called with every inbound event, on the MQTT
+// callback goroutine, after the event is buffered. fn must not block.
+func (s *Service) OnEvent(fn func(Event)) {
+	if fn == nil {
+		return
+	}
+	s.obsMu.Lock()
+	s.observers = append(s.observers, fn)
+	s.obsMu.Unlock()
+}
+
+// handleMessage is the client's message callback.
+func (s *Service) handleMessage(e Event) {
+	s.buffer.Add(e)
+
+	// Store retained messages persistently
+	if e.Retained {
+		s.retained.Set(e.Topic, e.Payload, e.Timestamp)
+	}
+
+	// Parse zigbee2mqtt device list
+	if e.Topic == "zigbee2mqtt/bridge/devices" {
+		if err := s.deviceRegistry.Update(e.Payload); err != nil {
+			log.Printf("[MQTT] Failed to parse bridge/devices: %v", err)
+		}
+	}
+
+	s.obsMu.RLock()
+	observers := s.observers
+	s.obsMu.RUnlock()
+	for _, fn := range observers {
+		notifyObserver(fn, e)
+	}
+}
+
+// notifyObserver runs one observer, containing a panic so it cannot take
+// down the paho callback goroutine or starve later observers.
+func notifyObserver(fn func(Event), e Event) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[MQTT] Event observer panicked on %s: %v", e.Topic, r)
+		}
+	}()
+	fn(e)
 }
 
 // startPruneLoop launches the background prune goroutine. It is called by

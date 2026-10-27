@@ -22,6 +22,7 @@ import (
 	"conduit/internal/mcp"
 	"conduit/internal/middleware"
 	"conduit/internal/mqtt"
+	"conduit/internal/mqttevents"
 	"conduit/internal/scheduler"
 	"conduit/internal/sessions"
 	"conduit/internal/skills"
@@ -105,6 +106,7 @@ type Gateway struct {
 
 	// MQTT event ingest (optional)
 	mqttService *mqtt.Service
+	mqttEvents  *mqttevents.Engine // nil unless mqtt.events is enabled (bd-39mx)
 
 	// Cognition (optional): Brain cognitive architecture, REM cycle and SPAR
 	// reflection (session-end detection and metrics). Held by value so a
@@ -436,6 +438,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 	if workspaceDir == "" {
 		workspaceDir = "./workspace"
 	}
+	// MQTT event rules (bd-39mx): queued events go to the workspace alert queue.
+	gw.initMQTTEvents(cfg, workspaceDir)
+
 	// conduit-31jg.34: cron stays in time.Local on purpose. Existing
 	// cron_jobs.json expressions were written for the server zone (UTC);
 	// scheduler.WithLocation(cfg.GetLocation()) would shift them. Per-job
