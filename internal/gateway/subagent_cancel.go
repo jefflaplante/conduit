@@ -100,6 +100,18 @@ func (g *Gateway) subAgentParentGone(parent string) bool {
 	return ok && info.Status == SubAgentCanceled
 }
 
+// subAgentParentMissing reports whether parent's session can no longer be
+// read from the store (deleted by scheduler prompt-only cleanup or pruned
+// by maintenance): a wake would fail with "session not found by key" and
+// the result would be lost.
+func (g *Gateway) subAgentParentMissing(parent string) bool {
+	if parent == "" {
+		return false
+	}
+	_, err := g.sessions.GetSession(parent)
+	return err != nil
+}
+
 // wakeParentCanceled tells the parent its sub-agent was canceled
 // (WakeSourceSubAgentCanceled), unless the cancel was quiet (/stop cascade,
 // descendant of a canceled sub-agent).

@@ -251,7 +251,10 @@ func (g *Gateway) finishSubAgent(sessionKey string, sp subAgentSpawn, out subAge
 			g.announceToParent(sp.parentChannelID, sp.parentUserID, fmt.Sprintf("❌ Sub-agent failed: %v", out.err))
 		}
 		// Wake the parent session so it knows the sub-agent failed (even in silent mode)
-		if sp.parentSessionKey != "" {
+		if g.subAgentParentMissing(sp.parentSessionKey) {
+			announced := sp.announce && sp.parentChannelID != "" && sp.parentUserID != ""
+			g.reportSubAgentDeadParent(sessionKey, sp, status, errorMsg, announced)
+		} else if sp.parentSessionKey != "" {
 			if wakeErr := g.sendToSessionWakeWithSource(context.Background(), sp.parentSessionKey, "", errorMsg, types.WakeSourceSubAgentFailed); wakeErr != nil {
 				log.Printf("[SubAgent] Failed to wake parent session %s on error: %v", sp.parentSessionKey, wakeErr)
 			}
@@ -293,6 +296,10 @@ func (g *Gateway) finishSubAgent(sessionKey string, sp subAgentSpawn, out subAge
 	// Wake the parent session so it can process sub-agent output autonomously.
 	// This works regardless of announce mode — the parent session always gets woken.
 	if sp.parentSessionKey != "" && result != "" && !channels.IsSilentResponse(result) {
+		if g.subAgentParentMissing(sp.parentSessionKey) {
+			g.reportSubAgentDeadParent(sessionKey, sp, status, result, announced)
+			return
+		}
 		wakeResult := result
 		if len(wakeResult) > 3500 {
 			wakeResult = wakeResult[:3500] + "\n\n_(truncated)_"
@@ -305,6 +312,24 @@ func (g *Gateway) finishSubAgent(sessionKey string, sp subAgentSpawn, out subAge
 			log.Printf("[SubAgent] Failed to wake parent session %s: %v", sp.parentSessionKey, wakeErr)
 		}
 	}
+}
+
+// reportSubAgentDeadParent replaces the parent wake when the parent session
+// is gone (subAgentParentMissing): the wake would fail and drop the result.
+// It WARNs with a preview of text (result or error) and, unless the human
+// was already sent it (announced), posts a one-line notice to the channel
+// and user captured at spawn. The full output stays in the sub-agent's
+// own session transcript.
+func (g *Gateway) reportSubAgentDeadParent(sessionKey string, sp subAgentSpawn, status SubAgentStatus, text string, announced bool) {
+	preview := strings.Join(strings.Fields(text), " ")
+	log.Printf("[SubAgent] WARN %s ended (%s) but parent session %s is gone; skipping wake. Output preserved in %s: %s",
+		sessionKey, status, sp.parentSessionKey, sessionKey, truncateRunes(preview, 500))
+	if announced || sp.parentChannelID == "" || sp.parentUserID == "" {
+		return
+	}
+	g.announceToParent(sp.parentChannelID, sp.parentUserID,
+		fmt.Sprintf("⚠️ Sub-agent %s finished (%s) but its parent session is gone; result preserved in sub-agent session %s: %s",
+			sessionKey, status, sessionKey, truncateRunes(preview, 200)))
 }
 
 // resolveAnnounceChannelID returns the parent session's current ChannelID if it
