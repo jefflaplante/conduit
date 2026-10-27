@@ -327,7 +327,7 @@ func (g *Gateway) reportSubAgentDeadParent(sessionKey string, sp subAgentSpawn, 
 	if announced || sp.parentChannelID == "" || sp.parentUserID == "" {
 		return
 	}
-	g.announceToParent(sp.parentChannelID, sp.parentUserID,
+	g.announceToParent(sp.parentSessionKey, sp.parentChannelID, sp.parentUserID,
 		fmt.Sprintf("⚠️ Sub-agent %s finished (%s) but its parent session is gone; result preserved in sub-agent session %s: %s",
 			sessionKey, status, sessionKey, truncateRunes(preview, 200)))
 }
