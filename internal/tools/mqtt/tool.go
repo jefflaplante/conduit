@@ -54,7 +54,8 @@ Examples:
 Publishing Commands:
 - FIRST check device history (action=topics or action=history) to learn the correct topic and payload format
 - Payload formats vary by device—some use simple values (ON, OFF), others use JSON
-- Store learned device patterns in memory so you don't have to re-learn them`
+- Store learned device patterns in memory so you don't have to re-learn them
+- A publish does not run immediately: the owner gets an approval prompt in chat and it is sent only if they approve. It is refused in non-interactive turns (cron, heartbeat, sub-agents)`
 }
 
 func (t *MQTTTool) Parameters() map[string]interface{} {
@@ -340,6 +341,21 @@ func (t *MQTTTool) publish(ctx context.Context, args map[string]interface{}) (*t
 	}
 	retained := toolargs.GetBool(args, "retained", false)
 
+	// Don't ask the owner to approve a publish the service will refuse.
+	if !t.services.MQTTService.Status().PublishAllowed {
+		return &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("publish failed: %v", types.ErrMQTTPublishNotAllowed),
+		}, nil
+	}
+
+	// H11: a publish controls a real device, so it runs only after a human
+	// approves the frozen topic/payload (approval.go).
+	return t.gatePublish(ctx, topic, payloadStr, qos, retained)
+}
+
+// runPublish sends an approved publish.
+func (t *MQTTTool) runPublish(ctx context.Context, topic, payloadStr string, qos byte, retained bool) (*types.ToolResult, error) {
 	result, err := t.services.MQTTService.Publish(ctx, topic, []byte(payloadStr), qos, retained)
 	if err != nil {
 		return &types.ToolResult{
