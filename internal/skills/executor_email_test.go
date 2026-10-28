@@ -113,6 +113,64 @@ func TestEmailSkill_SendDefaultsToJulesAccount(t *testing.T) {
 	}
 }
 
+// bd-or5: send must pass cc/bcc through to gog (silently dropping them meant
+// missing recipients), shell-quoted exactly once like to/subject/body
+// (conduit-31jg.2). Empty values and non-send actions emit no flag.
+func TestBuildGogCommand_SendCcBcc(t *testing.T) {
+	cases := []struct {
+		name    string
+		action  string
+		args    map[string]interface{}
+		want    []string
+		notWant []string
+	}{
+		{"cc", "send",
+			map[string]interface{}{"to": "x@y.z", "cc": "cc@example.com"},
+			[]string{" --cc 'cc@example.com'"}, []string{"--bcc"}},
+		{"cc with single quote", "send",
+			map[string]interface{}{"to": "x@y.z", "cc": "o'brien@example.com"},
+			[]string{` --cc 'o'\''brien@example.com'`}, nil},
+		{"bcc", "send",
+			map[string]interface{}{"to": "x@y.z", "bcc": "bcc@example.com"},
+			[]string{" --bcc 'bcc@example.com'"}, []string{"--cc"}},
+		{"bcc with single quote", "send",
+			map[string]interface{}{"to": "x@y.z", "bcc": "o'brien@example.com"},
+			[]string{` --bcc 'o'\''brien@example.com'`}, nil},
+		{"cc and bcc", "send",
+			map[string]interface{}{"to": "x@y.z", "cc": "a@example.com,b@example.com", "bcc": "c@example.com"},
+			[]string{" --cc 'a@example.com,b@example.com'", " --bcc 'c@example.com'"}, nil},
+		{"neither", "send",
+			map[string]interface{}{"to": "x@y.z", "subject": "s", "body": "b"},
+			[]string{"gmail send --to 'x@y.z' --subject 's' --body 'b' --account"},
+			[]string{"--cc", "--bcc"}},
+		{"empty cc and bcc", "send",
+			map[string]interface{}{"to": "x@y.z", "cc": "", "bcc": ""},
+			[]string{"gmail send --to 'x@y.z' --account"},
+			[]string{"--cc", "--bcc"}},
+		{"search ignores cc/bcc", "search",
+			map[string]interface{}{"query": "is:unread", "cc": "cc@example.com", "bcc": "bcc@example.com"},
+			[]string{"gmail search"}, []string{"--cc", "--bcc", "cc@example.com"}},
+		{"read ignores cc/bcc", "read",
+			map[string]interface{}{"message_id": "m1", "cc": "cc@example.com", "bcc": "bcc@example.com"},
+			[]string{"gmail read"}, []string{"--cc", "--bcc", "cc@example.com"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := emailCommand(t, tc.action, tc.args)
+			for _, w := range tc.want {
+				if !strings.Contains(cmd, w) {
+					t.Errorf("missing %q in:\n%s", w, cmd)
+				}
+			}
+			for _, nw := range tc.notWant {
+				if strings.Contains(cmd, nw) {
+					t.Errorf("unexpected %q in:\n%s", nw, cmd)
+				}
+			}
+		})
+	}
+}
+
 // Cleanup must run the real blocklist junk sweep, not an echo stub.
 func TestEmailSkill_CleanupRunsJunkSweep(t *testing.T) {
 	cmd := emailCommand(t, "cleanup", map[string]interface{}{})

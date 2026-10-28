@@ -767,6 +767,14 @@ func (e *Executor) buildGogCommand(action string, args map[string]interface{}, c
 		if body != "" {
 			cmd += fmt.Sprintf(" --body %s", shellQuote(body))
 		}
+		// bd-or5: cc/bcc were silently dropped (missing recipients). gog
+		// takes them comma-separated; quote once like the other free text.
+		if cc := getArg("cc"); cc != "" {
+			cmd += fmt.Sprintf(" --cc %s", shellQuote(cc))
+		}
+		if bcc := getArg("bcc"); bcc != "" {
+			cmd += fmt.Sprintf(" --bcc %s", shellQuote(bcc))
+		}
 		cmd += fmt.Sprintf(" --account %s --force", sendAccount)
 		command.WriteString(cmd + "\n")
 
