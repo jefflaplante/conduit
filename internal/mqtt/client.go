@@ -13,6 +13,16 @@ import (
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
+// Connect timings (variables so tests can shorten them).
+var (
+	// initialConnectWait bounds how long Connect waits for the first
+	// connection before returning and leaving paho retrying in the
+	// background (H13).
+	initialConnectWait = 2 * time.Second
+	// connectRetryInterval is paho's wait between initial connect attempts.
+	connectRetryInterval = 5 * time.Second
+)
+
 // Client wraps paho.mqtt.golang with auto-reconnect and topic subscription.
 type Client struct {
 	cfg        config.MQTTConfig
@@ -21,6 +31,8 @@ type Client struct {
 
 	mu        sync.RWMutex
 	connected bool
+	// subscribeRounds counts finished OnConnect subscription passes.
+	subscribeRounds int
 }
 
 // NewClient creates a new MQTT client (does not connect yet).
@@ -58,7 +70,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	opts.SetAutoReconnect(true)
 	opts.SetMaxReconnectInterval(2 * time.Minute)
 	opts.SetConnectRetry(true)
-	opts.SetConnectRetryInterval(5 * time.Second)
+	opts.SetConnectRetryInterval(connectRetryInterval)
 
 	// Connection handlers
 	opts.SetOnConnectHandler(func(client pahomqtt.Client) {
@@ -67,6 +79,9 @@ func (c *Client) Connect(ctx context.Context) error {
 		c.connected = true
 		c.mu.Unlock()
 		c.subscribeAll(client)
+		c.mu.Lock()
+		c.subscribeRounds++
+		c.mu.Unlock()
 	})
 
 	opts.SetConnectionLostHandler(func(client pahomqtt.Client, err error) {
@@ -104,23 +119,31 @@ func (c *Client) Connect(ctx context.Context) error {
 	opts.SetKeepAlive(60 * time.Second)
 	opts.SetPingTimeout(10 * time.Second)
 
-	c.pahoClient = pahomqtt.NewClient(opts)
+	client := pahomqtt.NewClient(opts)
+	c.pahoClient = client
 
-	token := c.pahoClient.Connect()
-	// Wait with context awareness
-	done := make(chan struct{})
-	go func() {
-		token.Wait()
-		close(done)
-	}()
+	// With ConnectRetry the token completes only once a broker accepts the
+	// connection (or Disconnect aborts it), so waiting on it alone hung
+	// gateway startup while the broker was down (H13). Wait briefly for the
+	// first connection, then leave paho retrying in the background;
+	// OnConnect subscribes when it comes up and Close stops it.
+	token := client.Connect()
+	timer := time.NewTimer(initialConnectWait)
+	defer timer.Stop()
 
 	select {
 	case <-ctx.Done():
+		// Stop the retry loop. Disconnect waits for the in-flight attempt
+		// (up to connectRetryInterval), so don't hold the caller for it.
+		go client.Disconnect(0)
 		return ctx.Err()
-	case <-done:
-		if token.Error() != nil {
-			return fmt.Errorf("mqtt connect: %w", token.Error())
+	case <-token.Done():
+		if err := token.Error(); err != nil {
+			go client.Disconnect(0)
+			return fmt.Errorf("mqtt connect: %w", err)
 		}
+	case <-timer.C:
+		log.Printf("[MQTT] Broker %s not reachable yet; retrying in the background", c.cfg.BrokerURL)
 	}
 
 	return nil
