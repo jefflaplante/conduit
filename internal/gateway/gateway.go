@@ -377,6 +377,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// using a revoked token. This callback lives on *Gateway because it needs
 	// access to the client map (which isn't owned by AuthService).
 	gw.auth.AuthStorage.OnRevoke(gw.handleTokenRevocation)
+	// H2: revocations from the CLI (another process), role changes and
+	// expiry are caught by re-checking each live connection's token.
+	gw.ws.TokenCheck = gw.wsTokenCheck
 
 	// Initialize channel manager and register factories
 	gw.channelManager = channels.NewManager()
