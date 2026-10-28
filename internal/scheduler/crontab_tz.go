@@ -147,11 +147,46 @@ func CrontabLine(job *Job, marker string) (string, error) {
 // crontabLineIn is CrontabLine with an explicit daemon zone and reference
 // time (migration planning and tests).
 func crontabLineIn(job *Job, marker string, daemon *time.Location, now time.Time) (string, error) {
+	// C2: a CR/LF in job data would plant a second, unmanaged crontab line
+	// that cancel never removes.
+	for field, v := range map[string]string{"schedule": job.Schedule, "command": job.Command, "id": job.ID, "marker": marker} {
+		if strings.ContainsAny(v, crontabControlChars) {
+			return "", fmt.Errorf("system job %s must not contain control characters (CR, LF or NUL)", field)
+		}
+	}
 	r, err := renderCrontabSchedule(job.Schedule, daemon, now)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s %s%s %s "+CrontabJobIDFormat, r.Fields, r.Guard(), job.Command, marker, job.ID), nil
+	line := fmt.Sprintf("%s %s%s %s "+CrontabJobIDFormat, r.Fields, r.Guard(), job.Command, marker, job.ID)
+	if strings.ContainsAny(line, crontabControlChars) {
+		return "", fmt.Errorf("refusing to render a crontab line with control characters")
+	}
+	return line, nil
+}
+
+// crontabControlChars may never appear in a managed crontab line.
+const crontabControlChars = "\r\n\x00"
+
+// validateJobText rejects CR, LF and NUL in a job's schedule and name, and in
+// a system job's command (C2). Go-job commands are AI prompts kept in
+// cron_jobs.json and may span lines, but never contain NUL.
+func validateJobText(job *Job) error {
+	cmdBad := "\x00"
+	if job.Type == JobTypeSystem {
+		cmdBad = crontabControlChars
+	}
+	for _, f := range []struct{ name, v, bad string }{
+		{"schedule", job.Schedule, crontabControlChars},
+		{"name", job.Name, crontabControlChars},
+		{"id", job.ID, crontabControlChars},
+		{"command", job.Command, cmdBad},
+	} {
+		if strings.ContainsAny(f.v, f.bad) {
+			return fmt.Errorf("job %s must not contain control characters (CR, LF or NUL)", f.name)
+		}
+	}
+	return nil
 }
 
 // lineHasJobID reports whether a crontab line carries the managed marker for

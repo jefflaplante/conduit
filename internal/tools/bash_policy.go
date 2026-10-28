@@ -40,6 +40,7 @@ import (
 
 	"conduit/internal/approval"
 	"conduit/internal/config"
+	"conduit/internal/tools/approvalgate"
 	"conduit/internal/tools/types"
 )
 
@@ -96,6 +97,20 @@ func (t *ExecTool) checkCommandPolicy(ctx context.Context, command string) denyM
 		}
 	}
 	return denyMatch{}
+}
+
+// scheduledCommandDenial vets a command that will run later from cron, with
+// no human in the loop (Cron jobType=system, C2). It applies the configured
+// denylist mode as for a non-interactive Bash call, so strict_autonomous
+// also adds the substring check. It returns "" when the command is allowed.
+func (t *ExecTool) scheduledCommandDenial(ctx context.Context, command string) string {
+	m := t.checkCommandPolicy(approval.WithNonInteractive(ctx, "cron"), command)
+	if m.Pattern == "" {
+		return ""
+	}
+	log.Printf("[Cron] DENIED system job command=%q matched_pattern=%q mode=%s reason=%q",
+		approvalgate.RedactCommand(command), m.Pattern, m.Mode, m.Reason)
+	return fmt.Sprintf("matches denylist entry %q (%s)", m.Pattern, m.Reason)
 }
 
 // isAutonomousSession reports whether the current turn has no live human:

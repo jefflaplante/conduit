@@ -100,6 +100,15 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 		}
 	}
 
+	if err := validateJobFields(job); err != nil {
+		return &types.ToolResult{Success: false, Error: err.Error()}, nil
+	}
+
+	// System jobs land in the user's crontab: Bash policy + human approval (C2).
+	if job.Type == "system" {
+		return t.scheduleSystemJob(ctx, job), nil
+	}
+
 	// Schedule the job
 	if err := t.services.Gateway.ScheduleJob(job); err != nil {
 		return &types.ToolResult{

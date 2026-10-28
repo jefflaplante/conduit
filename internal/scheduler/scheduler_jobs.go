@@ -9,6 +9,10 @@ import (
 // If a job with the same ID already exists its cron entry is removed before
 // the new one is registered, preventing duplicate concurrent executions.
 func (s *Scheduler) AddJob(job *Job) error {
+	if err := validateJobText(job); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

@@ -73,6 +73,12 @@ func (s *Scheduler) readSystemCrontab() ([]string, error) {
 
 // writeSystemCrontab writes entries to the user's crontab
 func (s *Scheduler) writeSystemCrontab(entries []string) error {
+	// C2 defence in depth: every entry is exactly one line.
+	for _, e := range entries {
+		if strings.ContainsAny(e, "\n\x00") {
+			return fmt.Errorf("refusing to write crontab: an entry contains a newline or NUL")
+		}
+	}
 	content := strings.Join(entries, "\n")
 	if len(entries) > 0 {
 		content += "\n"
