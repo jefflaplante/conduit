@@ -342,7 +342,8 @@ func (t *MQTTTool) publish(ctx context.Context, args map[string]interface{}) (*t
 	retained := toolargs.GetBool(args, "retained", false)
 
 	// Don't ask the owner to approve a publish the service will refuse.
-	if !t.services.MQTTService.Status().PublishAllowed {
+	st := t.services.MQTTService.Status()
+	if !st.PublishAllowed {
 		return &types.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("publish failed: %v", types.ErrMQTTPublishNotAllowed),
@@ -350,8 +351,9 @@ func (t *MQTTTool) publish(ctx context.Context, args map[string]interface{}) (*t
 	}
 
 	// H11: a publish controls a real device, so it runs only after a human
-	// approves the frozen topic/payload (approval.go).
-	return t.gatePublish(ctx, topic, payloadStr, qos, retained)
+	// approves the frozen topic/payload, unless config exempts the topic
+	// (approval.go).
+	return t.gatePublish(ctx, st, topic, payloadStr, qos, retained)
 }
 
 // runPublish sends an approved publish.

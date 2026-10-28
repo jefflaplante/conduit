@@ -175,3 +175,48 @@ func TestMonitorApproval_ReadsAndInvalidArgsNeedNoApproval(t *testing.T) {
 	assert.Empty(t, h.mgr.Pending("s1"))
 	assert.Empty(t, h.sent())
 }
+
+// require_approval / approval_exempt_actions (H11 follow-up).
+
+func TestMonitorApproval_ConfigDisabledRunsDirectly(t *testing.T) {
+	for name, args := range ddWriteCases() {
+		t.Run(name, func(t *testing.T) {
+			h := newDDApprovalHarness(t)
+			off := false
+			h.tool.config.RequireApproval = &off
+			res, err := h.tool.Execute(approval.WithNonInteractive(context.Background(), "cron"), args)
+			require.NoError(t, err)
+			assert.True(t, res.Success, res.Error)
+			assert.Nil(t, res.Data["approval_status"])
+			assert.Len(t, h.sent(), 1)
+			assert.Empty(t, h.mgr.Pending("s1"))
+
+			// confirmed=true is still required.
+			noConfirm := map[string]interface{}{}
+			for k, v := range args {
+				noConfirm[k] = v
+			}
+			delete(noConfirm, "confirmed")
+			res, err = h.tool.Execute(h.interactive(), noConfirm)
+			require.NoError(t, err)
+			assert.False(t, res.Success)
+			assert.Len(t, h.sent(), 1)
+		})
+	}
+}
+
+func TestMonitorApproval_ExemptActionSkipsOtherStillPrompts(t *testing.T) {
+	h := newDDApprovalHarness(t)
+	h.tool.config.ApprovalExemptActions = []string{"unmute_monitor"}
+	cases := ddWriteCases()
+	res, err := h.tool.Execute(h.interactive(), cases["unmute_monitor"])
+	require.NoError(t, err)
+	assert.True(t, res.Success, res.Error)
+	assert.Nil(t, res.Data["approval_status"])
+	assert.Len(t, h.sent(), 1)
+
+	res, err = h.tool.Execute(h.interactive(), cases["mute_monitor"])
+	require.NoError(t, err)
+	assert.Equal(t, "pending", res.Data["approval_status"])
+	assert.Len(t, h.sent(), 1, "mute ran without approval")
+}

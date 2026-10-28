@@ -786,6 +786,13 @@ Optional MQTT event ingest for IoT/home automation. See [MQTT Integration](mqtt.
 | `buffer_max_events` | int | `1000` | Max events per topic |
 | `buffer_max_topics` | int | `500` | Max tracked topics |
 | `publish_allowed` | bool | `false` | Allow AI to publish messages |
+| `require_approval` | bool | `true` | Each publish asks the owner for `YES <code>` in the originating chat first; non-interactive turns (cron, heartbeat, sub-agents) fail closed. `false` publishes without asking, from any origin. Config-only (see below) |
+| `approval_exempt_topics` | string array | `[]` | MQTT topic filters (`+`, `#`) whose publishes skip approval while every other topic still asks, e.g. `["zigbee2mqtt/lights/#"]`. Matching is exact and case-sensitive. Exempt publishes run from any origin, cron included |
+
+`require_approval` and the `approval_exempt_*` lists (and the Kubernetes and
+remote SSH `require_approval` tiers) can only be changed by editing the config
+file: `update_config` refuses any patch that changes them, so the model, or an
+automation token driving it, cannot switch off its own approval prompt.
 
 ### Vector Search (Vecgo)
 
@@ -1016,6 +1023,8 @@ PagerDuty REST API v2 integration for incident management.
 | `default_escalation_policy_id` | string | `""` | Default escalation policy |
 | `base_url` | string | `"https://api.pagerduty.com"` | API base URL |
 | `rate_limit_rps` | float | `5.0` | Requests per second limit |
+| `require_approval` | bool | `true` | Write actions (`acknowledge`, `snooze`, `add_note`, `resolve`, `trigger`) ask the owner for `YES <code>` first; non-interactive turns fail closed. `false` runs them without asking. Config-only (see below) |
+| `approval_exempt_actions` | string array | `[]` | Write actions that skip approval, e.g. `["acknowledge", "add_note"]`; the rest still ask. Exempt actions run from any origin |
 
 ### Datadog
 
@@ -1040,6 +1049,8 @@ Datadog API integration for metrics, logs, and monitors.
 | `app_key` | string | required | Application key (supports `${ENV_VAR}`) |
 | `site` | string | `"datadoghq.com"` | Datadog site (e.g., `us5.datadoghq.com`, `datadoghq.eu`) |
 | `rate_limit_rps` | float | `5.0` | Requests per second limit |
+| `require_approval` | bool | `true` | `mute_monitor` and `unmute_monitor` ask the owner for `YES <code>` first (`confirmed=true` is still required); non-interactive turns fail closed. `false` runs them without asking. Config-only (see below) |
+| `approval_exempt_actions` | string array | `[]` | `mute_monitor` and/or `unmute_monitor` to skip approval; the other still asks. Exempt actions run from any origin |
 
 ### MCP Server Auth
 
@@ -1251,7 +1262,12 @@ mechanism as gated Kubernetes and SSH operations):
 4. Non-interactive turns (cron, heartbeat, sub-agents, wakes, MCP) and a
    gateway without an approval channel fail closed: nothing is applied.
 5. `tool_policy` keys are refused outright, even with approval: the agent
-   must not be able to widen its own permissions.
+   must not be able to widen its own permissions. The same holds for every
+   setting that decides whether a tool write asks a human first
+   (`mqtt`/`pagerduty`/`datadog` `require_approval` and `approval_exempt_*`,
+   `kubernetes.require_approval`, `remote_ssh.security.require_approval`).
+   The check compares the parsed configs, so no key spelling, nesting or
+   deletion of a parent section gets around it.
 
 ### Audit
 

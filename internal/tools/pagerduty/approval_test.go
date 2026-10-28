@@ -218,3 +218,46 @@ func TestPagerDutyApproval_PromptRedactsSecrets(t *testing.T) {
 	assert.NotContains(t, prompt, "tok_0123456789abcdef")
 	assert.Contains(t, prompt, "Incident: PINC001")
 }
+
+// require_approval / approval_exempt_actions (H11 follow-up).
+
+func TestPagerDutyApproval_ConfigDisabledRunsDirectly(t *testing.T) {
+	for name, args := range pdWriteCases() {
+		t.Run(name, func(t *testing.T) {
+			h := newPDApprovalHarness(t)
+			off := false
+			h.tool.config.RequireApproval = &off
+			res, err := h.tool.Execute(approval.WithNonInteractive(context.Background(), "cron"), args)
+			require.NoError(t, err)
+			assert.True(t, res.Success, res.Error)
+			assert.Nil(t, res.Data["approval_status"])
+			assert.Len(t, h.writes(), 1)
+			assert.Empty(t, h.mgr.Pending("s1"))
+		})
+	}
+}
+
+func TestPagerDutyApproval_ExemptActionsSkipOthersStillPrompt(t *testing.T) {
+	h := newPDApprovalHarness(t)
+	h.tool.config.ApprovalExemptActions = []string{"acknowledge", "add_note"}
+	cases := pdWriteCases()
+	for _, name := range []string{"acknowledge", "add_note"} {
+		res, err := h.tool.Execute(h.interactive(), cases[name])
+		require.NoError(t, err)
+		assert.True(t, res.Success, "%s: %s", name, res.Error)
+		assert.Nil(t, res.Data["approval_status"], name)
+	}
+	assert.Len(t, h.writes(), 2)
+	for _, name := range []string{"snooze", "resolve", "trigger"} {
+		res, err := h.tool.Execute(h.interactive(), cases[name])
+		require.NoError(t, err)
+		assert.Equal(t, "pending", res.Data["approval_status"], name)
+	}
+	assert.Len(t, h.writes(), 2, "a non-exempt action ran without approval")
+
+	// Invalid args are still refused before anything is sent.
+	res, err := h.tool.Execute(h.interactive(), map[string]interface{}{"action": "add_note", "incident_id": "PINC001"})
+	require.NoError(t, err)
+	assert.False(t, res.Success)
+	assert.Len(t, h.writes(), 2)
+}

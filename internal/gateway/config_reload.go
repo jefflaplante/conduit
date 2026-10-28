@@ -374,6 +374,16 @@ func (g *Gateway) planConfigUpdate(patch map[string]interface{}) (*configPlan, e
 	plan.candidate = candidate
 
 	running := g.currentConfig()
+	// H11 follow-up: whether a tool write asks a human first is config-only,
+	// like tool_policy. Compare the parsed result, not key paths, so no
+	// spelling, nesting or delete of a parent section slips a change past.
+	base := running
+	if prev, perr := config.Parse(oldData); perr == nil {
+		base = prev
+	}
+	if base != nil && config.ApprovalSettingsChanged(base, candidate) {
+		return nil, rejectInvalid(errors.New("approval settings (require_approval, approval_exempt_topics, approval_exempt_actions) cannot be changed through update_config; the owner edits them in the config file"))
+	}
 	res.Readback = map[string]interface{}{}
 	for _, c := range changes {
 		mode := toolstypes.ConfigChangeRestart

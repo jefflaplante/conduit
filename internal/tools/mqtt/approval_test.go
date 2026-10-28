@@ -173,3 +173,54 @@ func TestMQTTApproval_ReadsAndRefusedPublishNeedNoApproval(t *testing.T) {
 	assert.Empty(t, h.mgr.Pending("s1"))
 	assert.Empty(t, h.svc.published())
 }
+
+// require_approval / approval_exempt_topics (H11 follow-up).
+
+func TestMQTTApproval_ConfigDisabledPublishesDirectly(t *testing.T) {
+	h := newMQTTApprovalHarness(t)
+	h.svc.status.ApprovalDisabled = true
+	cron := approval.WithNonInteractive(context.Background(), "cron")
+	res, err := h.tool.Execute(cron, publishArgs())
+	require.NoError(t, err)
+	assert.True(t, res.Success, res.Error)
+	assert.Nil(t, res.Data["approval_status"])
+	assert.Equal(t, []published{{"zigbee2mqtt/Lamp/set", `{"state":"ON"}`, 1, true}}, h.svc.published())
+	assert.Empty(t, h.mgr.Pending("s1"))
+
+	// Off does not override publish_allowed.
+	h.svc.status.PublishAllowed = false
+	res, err = h.tool.Execute(cron, publishArgs())
+	require.NoError(t, err)
+	assert.False(t, res.Success)
+	assert.Len(t, h.svc.published(), 1)
+}
+
+func TestMQTTApproval_ExemptTopicsSkipOthersStillPrompt(t *testing.T) {
+	h := newMQTTApprovalHarness(t)
+	h.svc.status.ApprovalExemptTopics = []string{"zigbee2mqtt/lights/#", "home/+/lamp"}
+
+	for _, topic := range []string{"zigbee2mqtt/lights/kitchen/set", "zigbee2mqtt/lights", "home/den/lamp"} {
+		args := publishArgs()
+		args["topic"] = topic
+		res, err := h.tool.Execute(h.interactive(), args)
+		require.NoError(t, err)
+		assert.True(t, res.Success, "%s: %s", topic, res.Error)
+		assert.Nil(t, res.Data["approval_status"], topic)
+	}
+	assert.Len(t, h.svc.published(), 3)
+	assert.Empty(t, h.mgr.Pending("s1"))
+
+	for _, topic := range []string{"zigbee2mqtt/locks/front/set", "zigbee2mqtt/lightsout", "home/den/lamp/set", "Zigbee2mqtt/lights/x"} {
+		args := publishArgs()
+		args["topic"] = topic
+		res, err := h.tool.Execute(h.interactive(), args)
+		require.NoError(t, err)
+		assert.Equal(t, "pending", res.Data["approval_status"], topic)
+	}
+	assert.Len(t, h.svc.published(), 3, "a non-exempt topic was published without approval")
+}
+
+func TestMQTTApproval_ZeroStatusRequiresApproval(t *testing.T) {
+	assert.True(t, publishNeedsApproval(types.MQTTServiceStatus{}, "any/topic"))
+	assert.False(t, publishNeedsApproval(types.MQTTServiceStatus{ApprovalDisabled: true}, "any/topic"))
+}

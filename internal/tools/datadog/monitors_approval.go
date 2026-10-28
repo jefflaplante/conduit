@@ -19,7 +19,10 @@ import (
 // run only after a human approves them (H11). confirmed=true is still
 // required but is not sufficient: the model sets it itself, and log or
 // alert text can talk it into that. Non-interactive turns (cron,
-// heartbeat, sub-agents) and a missing approver fail closed.
+// heartbeat, sub-agents) and a missing approver fail closed. The owner can
+// exempt either action, or turn approval off, in config
+// (datadog.require_approval, datadog.approval_exempt_actions); an exempt
+// action runs directly from any origin, still only with confirmed=true.
 
 func (t *MonitorTool) approver() approval.Requester {
 	if t.services == nil {
@@ -29,7 +32,8 @@ func (t *MonitorTool) approver() approval.Requester {
 }
 
 // gateMonitorWrite validates a mute/unmute call, freezes its arguments and
-// hands it to the approval manager. The frozen arguments are what runs.
+// hands it to the approval manager, or runs it directly when config
+// exempts it. The frozen arguments are what runs.
 func (t *MonitorTool) gateMonitorWrite(ctx context.Context, action string, args map[string]interface{}) (*types.ToolResult, error) {
 	if result := checkConfirmation(action, args); result != nil {
 		return result, nil
@@ -62,6 +66,20 @@ func (t *MonitorTool) gateMonitorWrite(ctx context.Context, action string, args 
 	}
 	fields = append(fields, approval.Field{Name: "Risk", Value: "modify tier (changes Datadog alerting)"})
 
+	run := func(ctx context.Context) (*types.ToolResult, error) {
+		args := make(map[string]interface{}, len(frozen))
+		for k, v := range frozen {
+			args[k] = v
+		}
+		if action == "mute_monitor" {
+			return t.executeMuteMonitor(ctx, args)
+		}
+		return t.executeUnmuteMonitor(ctx, args)
+	}
+	if !t.config.ActionNeedsApproval(action) {
+		return run(ctx)
+	}
+
 	verb := strings.TrimSuffix(action, "_monitor")
 	audit := make(map[string]string, len(params))
 	for k, v := range params {
@@ -76,14 +94,5 @@ func (t *MonitorTool) gateMonitorWrite(ctx context.Context, action string, args 
 		Summary: fmt.Sprintf("Datadog %s of monitor %d", verb, monitorID),
 		Data:    map[string]interface{}{"action": action, "monitor_id": monitorID, "requires_approval": true},
 	}
-	return approvalgate.Request(ctx, t.approver(), op, func(ctx context.Context) (*types.ToolResult, error) {
-		run := make(map[string]interface{}, len(frozen))
-		for k, v := range frozen {
-			run[k] = v
-		}
-		if action == "mute_monitor" {
-			return t.executeMuteMonitor(ctx, run)
-		}
-		return t.executeUnmuteMonitor(ctx, run)
-	}), nil
+	return approvalgate.Request(ctx, t.approver(), op, run), nil
 }

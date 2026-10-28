@@ -17,6 +17,9 @@ type ServiceStatus struct {
 	ActiveTopics     int      `json:"active_topics"`
 	TotalEvents      int64    `json:"total_events"`
 	PublishAllowed   bool     `json:"publish_allowed"`
+
+	ApprovalDisabled     bool     `json:"approval_disabled,omitempty"`
+	ApprovalExemptTopics []string `json:"approval_exempt_topics,omitempty"`
 }
 
 // Service owns the MQTT client and event buffer, providing the query API.
@@ -164,6 +167,9 @@ func (s *Service) Status() ServiceStatus {
 		ActiveTopics:     s.buffer.ActiveTopics(),
 		TotalEvents:      s.buffer.TotalEvents(),
 		PublishAllowed:   s.cfg.PublishAllowed,
+
+		ApprovalDisabled:     !s.cfg.ApprovalEnabled(),
+		ApprovalExemptTopics: s.cfg.ApprovalExemptTopics,
 	}
 }
 

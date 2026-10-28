@@ -18,6 +18,9 @@ import (
 // model's confirmed=true flag is still accepted but is not sufficient:
 // incident or log text can talk the model into setting it. Non-interactive
 // turns (cron, heartbeat, sub-agents) and a missing approver fail closed.
+// The owner can exempt actions, or turn approval off, in config
+// (pagerduty.require_approval, pagerduty.approval_exempt_actions); an
+// exempt action runs directly from any origin.
 
 // isWriteAction reports whether action changes PagerDuty state.
 func isWriteAction(action string) bool {
@@ -32,11 +35,15 @@ func (t *PagerDutyTool) approver() approval.Requester {
 }
 
 // gateWrite validates a write action, freezes the arguments it uses, and
-// hands it to the approval manager. The frozen arguments are what runs.
+// hands it to the approval manager, or runs it directly when config
+// exempts it. The frozen arguments are what runs.
 func (t *PagerDutyTool) gateWrite(ctx context.Context, action string, args map[string]interface{}) (*types.ToolResult, error) {
 	frozen, bad := t.freezeWriteArgs(action, args)
 	if bad != nil {
 		return bad, nil
+	}
+	if !t.config.ActionNeedsApproval(action) {
+		return t.runWrite(ctx, action, frozen)
 	}
 
 	params := map[string]string{"action": action}
