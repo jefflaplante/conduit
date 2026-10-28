@@ -434,6 +434,13 @@ func (g *GatewayIntegration) executeCommand(ctx context.Context, action Heartbea
 
 	// Send a notification about the command that was requested
 	target := g.resolveTarget(action.Target, job.Target)
+	// bd-conduit-alert-misroute-a0jr: "system" means a local/command action, not a
+	// chat destination. Delivering it as a chat ID fails in every channel adapter
+	// (telegram: "invalid chat ID: system"). Log-and-skip instead of sending.
+	if target == "system" || target == "" {
+		log.Printf("[HeartbeatIntegration] Command action %q: target %q is not a channel destination; skipping channel notification", job.ID, target)
+		return nil
+	}
 	message := fmt.Sprintf("🔧 Maintenance action: %s", action.Content)
 	return g.deliverToTarget(ctx, target, message, actionAlertMeta(action, job.ID), mode)
 }

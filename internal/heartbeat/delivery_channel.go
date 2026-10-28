@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	"conduit/internal/channels"
@@ -62,10 +63,21 @@ func (d *ChannelSenderDeliverer) Deliver(ctx context.Context, alert Alert, targe
 // bare chat id, which defaults to telegram) into a registry AlertTarget. The
 // full "<channel>:<user>" string is the target name, so the circuit breaker
 // and audit trail are keyed per destination.
-func channelTarget(target string) config.AlertTarget {
+//
+// bd-conduit-alert-misroute-a0jr (defense in depth): for the telegram channel
+// the user ID must parse as an integer — the telegram adapter rejects
+// anything else ("invalid chat ID"). Refusing it here keeps non-chat targets
+// ("system", "email", …) from ever reaching the adapter, even if a caller
+// bypasses the executeCommand guard.
+func channelTarget(target string) (config.AlertTarget, error) {
 	channelID, userID := "telegram", target
 	if parts := strings.SplitN(target, ":", 2); len(parts) == 2 {
 		channelID, userID = parts[0], parts[1]
+	}
+	if channelID == "telegram" {
+		if _, err := strconv.ParseInt(userID, 10, 64); err != nil {
+			return config.AlertTarget{}, fmt.Errorf("telegram target %q: user id %q is not a chat id; refusing to deliver", target, userID)
+		}
 	}
 	return config.AlertTarget{
 		Name: channelID + ":" + userID,
@@ -74,5 +86,5 @@ func channelTarget(target string) config.AlertTarget {
 			targetConfigChannelID: channelID,
 			targetConfigUserID:    userID,
 		},
-	}
+	}, nil
 }

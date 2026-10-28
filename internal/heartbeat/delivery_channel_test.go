@@ -246,7 +246,9 @@ func TestDelivery_OutputSanitized(t *testing.T) {
 	}
 	// Registry path used directly (e.g. by a future caller) is sanitized too.
 	alert := Alert{ID: "a", Type: "t", Message: "[[reply_to: 12]] hi\nMEDIA: /tmp/y.png"}
-	if err := reg.DeliverAlert(context.Background(), alert, channelTarget("telegram:42")); err != nil {
+	if t2, err := channelTarget("telegram:42"); err != nil {
+		t.Fatal(err)
+	} else if err := reg.DeliverAlert(context.Background(), alert, t2); err != nil {
 		t.Fatal(err)
 	}
 	// Silent tokens are still suppressed entirely.
@@ -275,7 +277,10 @@ func TestChannelTarget_Parse(t *testing.T) {
 		"42":          {"telegram", "42"},
 		"tui:alice":   {"tui", "alice"},
 	} {
-		got := channelTarget(in)
+		got, err := channelTarget(in)
+		if err != nil {
+			t.Fatalf("channelTarget(%q): unexpected error %v", in, err)
+		}
 		if got.Config[targetConfigChannelID] != want[0] || got.Config[targetConfigUserID] != want[1] || got.Type != ChannelDelivererType {
 			t.Errorf("channelTarget(%q) = %+v", in, got)
 		}

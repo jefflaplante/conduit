@@ -159,9 +159,13 @@ func (g *GatewayIntegration) dispatch(ctx context.Context, target, message strin
 		Status:    AlertStatusPending,
 		CreatedAt: now,
 	}
-	t := channelTarget(target)
+	t, err := channelTarget(target)
+	if err != nil {
+		log.Printf("[HeartbeatIntegration] Refusing delivery to %q: %v", target, err)
+		return err
+	}
 
-	err := reg.DeliverAlert(ctx, alert, t)
+	err = reg.DeliverAlert(ctx, alert, t)
 	if err == nil || mode != deliverWithRetry || errors.Is(err, ErrCircuitOpen) {
 		return err
 	}
