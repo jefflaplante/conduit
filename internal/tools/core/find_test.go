@@ -137,7 +137,7 @@ func TestFindToolExecuteAllScope(t *testing.T) {
 		Searcher: mockSearcher,
 	})
 
-	ctx := context.Background()
+	ctx := ownerFindCtx() // H4: only the owner searches every session
 	result, err := tool.Execute(ctx, map[string]interface{}{
 		"query": "test",
 	})
@@ -192,7 +192,7 @@ func TestFindToolExecuteSessionScope(t *testing.T) {
 		Searcher: mockSearcher,
 	})
 
-	ctx := context.Background()
+	ctx := ownerFindCtx() // H4: only the owner searches every session
 	result, err := tool.Execute(ctx, map[string]interface{}{
 		"query": "test",
 		"scope": "session",

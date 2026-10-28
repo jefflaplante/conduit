@@ -23,7 +23,7 @@ func (t *SessionsSendTool) Name() string {
 }
 
 func (t *SessionsSendTool) Description() string {
-	return "Send a message to another session by session key or label"
+	return "Send a message to another session by session key or label. Only your own user's sessions, your sub-agents and the sessions above you can be reached; wake chains stop after 3 hops."
 }
 
 func (t *SessionsSendTool) Parameters() map[string]interface{} {

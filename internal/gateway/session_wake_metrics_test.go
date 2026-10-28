@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -40,7 +39,7 @@ func TestSessionWake_OverflowIncrementsDropCounter(t *testing.T) {
 		monitoring:  &MonitoringService{GatewayMetrics: metrics},
 	}
 
-	if err := gw.SendToSessionWake(context.Background(), target.Key, "", "first"); err != nil {
+	if err := gw.SendToSessionWake(ownerTestCtx(), target.Key, "", "first"); err != nil {
 		t.Fatalf("SendToSessionWake: %v", err)
 	}
 	if got := metrics.GetSessionWakeDrops(); got != 1 {
@@ -49,7 +48,7 @@ func TestSessionWake_OverflowIncrementsDropCounter(t *testing.T) {
 
 	// Same-session second attempt while the channel is still full and nothing
 	// is pending for target.Key: also a drop.
-	if err := gw.SendToSessionWake(context.Background(), target.Key, "", "second"); err != nil {
+	if err := gw.SendToSessionWake(ownerTestCtx(), target.Key, "", "second"); err != nil {
 		t.Fatalf("SendToSessionWake 2: %v", err)
 	}
 	if got := metrics.GetSessionWakeDrops(); got != 2 {
@@ -87,7 +86,7 @@ func TestSessionWake_DedupCoalescesRepeatedWakes(t *testing.T) {
 	}
 
 	// First wake: reserves the slot AND sends into the channel.
-	if err := gw.SendToSessionWake(context.Background(), target.Key, "", "first"); err != nil {
+	if err := gw.SendToSessionWake(ownerTestCtx(), target.Key, "", "first"); err != nil {
 		t.Fatalf("SendToSessionWake 1: %v", err)
 	}
 	if got := len(gw.sessionWake); got != 1 {
@@ -98,7 +97,7 @@ func TestSessionWake_DedupCoalescesRepeatedWakes(t *testing.T) {
 	// buffered (drainer not running in this test): each should coalesce, not
 	// enqueue, and not count as drops.
 	for i := 0; i < 3; i++ {
-		if err := gw.SendToSessionWake(context.Background(), target.Key, "", "repeat"); err != nil {
+		if err := gw.SendToSessionWake(ownerTestCtx(), target.Key, "", "repeat"); err != nil {
 			t.Fatalf("SendToSessionWake repeat %d: %v", i, err)
 		}
 	}
@@ -120,7 +119,7 @@ func TestSessionWake_DedupCoalescesRepeatedWakes(t *testing.T) {
 	}
 	gw.clearPendingWake(target.Key)
 
-	if err := gw.SendToSessionWake(context.Background(), target.Key, "", "after-drain"); err != nil {
+	if err := gw.SendToSessionWake(ownerTestCtx(), target.Key, "", "after-drain"); err != nil {
 		t.Fatalf("SendToSessionWake after drain: %v", err)
 	}
 	if got := len(gw.sessionWake); got != 1 {
@@ -156,7 +155,7 @@ func TestSessionWake_MissingMonitoringDoesNotPanic(t *testing.T) {
 		sessionWake: wakeCh,
 	}
 
-	if err := gw.SendToSessionWake(context.Background(), target.Key, "", "msg"); err != nil {
+	if err := gw.SendToSessionWake(ownerTestCtx(), target.Key, "", "msg"); err != nil {
 		t.Fatalf("SendToSessionWake: %v", err)
 	}
 	// If we reach here without panic, the nil-safe path worked.

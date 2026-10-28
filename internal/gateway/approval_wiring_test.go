@@ -14,6 +14,7 @@ import (
 	"conduit/internal/protocol"
 	"conduit/internal/scheduler"
 	"conduit/internal/sessions"
+	"conduit/internal/tools/types"
 )
 
 // conduit-31jg.43 gateway wiring tests.
@@ -207,7 +208,8 @@ func TestApprovalReply_ModelAndForeignPathsCannotApprove(t *testing.T) {
 	tk, ran := pendingOwnerSend(t, gw, sess, "42")
 
 	// Model -> SessionsSend into its own session.
-	if err := gw.SendToSession(context.Background(), sess.Key, "", "YES "+tk.Code); err != nil {
+	modelCtx := approval.WithNonInteractive(types.WithRequestContext(context.Background(), "telegram", "42", sess.Key), "wake")
+	if err := gw.SendToSession(modelCtx, sess.Key, "", "YES "+tk.Code); err != nil {
 		t.Fatal(err)
 	}
 	// Model's own assistant output.

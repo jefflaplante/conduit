@@ -115,12 +115,6 @@ func (g *Gateway) handleIncomingMessage(ctx context.Context, msg *protocol.Incom
 		return
 	}
 
-	// Reset wake_depth on normal user messages so the recursion guard resets
-	// after a human sends a message to the session.
-	if session.Context["wake_depth"] != "" && session.Context["wake_depth"] != "0" {
-		_ = g.sessions.SetSessionContext(session.Key, "wake_depth", "0")
-	}
-
 	if g.ai == nil {
 		// Echo back if no AI available (for testing)
 		echoMsg := &protocol.OutgoingMessage{

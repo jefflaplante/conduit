@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	"conduit/internal/ai"
@@ -29,9 +28,11 @@ func wakeTurnBudget(parent context.Context) (context.Context, context.CancelFunc
 // wakeSession re-activates a session to process its most recent inter-session message.
 // It is called from the session wakeup listener goroutine started in Start().
 //
-// Recursion guard: the session's wake_depth context key is checked before processing.
-// If depth >= 3 (sessions messaging each other back and forth), the wake is skipped and
-// the message remains in the session for processing on the next normal activation.
+// Recursion guard (H4): every wake message carries the depth of the wake
+// that delivered it (metaWakeDepth, the waking turn's depth + 1). A message
+// deeper than maxWakeDepth is not processed now; it stays in the session for
+// the next normal activation. The woken turn runs at that depth, so a wake it
+// sends goes one level deeper. A human message starts again at depth 0.
 func (g *Gateway) wakeSession(sessionKey string) {
 	if g.ai == nil {
 		return
@@ -43,38 +44,20 @@ func (g *Gateway) wakeSession(sessionKey string) {
 		return
 	}
 
-	// Recursion guard: check current wake depth.
-	depth := 0
-	if d := session.Context["wake_depth"]; d != "" {
-		if parsed, parseErr := strconv.Atoi(d); parseErr == nil {
-			depth = parsed
-		}
-	}
-	const maxWakeDepth = 3
-	if depth >= maxWakeDepth {
-		g.logger.Warn("session wakeup: max depth reached, message queued for next activation",
-			"session_key", sessionKey, "wake_depth", depth)
-		return
-	}
-
-	// Increment wake depth before processing (guards against recursive wakeups).
-	if setErr := g.sessions.SetSessionContext(sessionKey, "wake_depth", strconv.Itoa(depth+1)); setErr != nil {
-		g.logger.Warn("session wakeup: failed to set wake_depth", "session_key", sessionKey, "error", setErr)
-	}
-
 	// Find the most recent user message (the inter-session message just delivered).
 	messages, err := g.sessions.GetMessages(sessionKey, 20)
 	if err != nil || len(messages) == 0 {
 		g.logger.Warn("session wakeup: no messages found", "session_key", sessionKey)
-		_ = g.sessions.SetSessionContext(sessionKey, "wake_depth", "0")
 		return
 	}
 	var wakeMessage, wakeMessageID string
 	var wakeSource string
+	depth := 0
 	resumeInteractive := false
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
 			wakeMessage, wakeMessageID = messages[i].Content, messages[i].ID
+			depth = messageWakeDepth(messages[i].Metadata)
 			if src, ok := messages[i].Metadata["wake_source"]; ok && src != "" {
 				wakeSource = src
 			} else if src, ok := messages[i].Metadata["source"]; ok && src == "inter_session" {
@@ -89,12 +72,16 @@ func (g *Gateway) wakeSession(sessionKey string) {
 	}
 	if wakeMessage == "" {
 		g.logger.Warn("session wakeup: no user message to process", "session_key", sessionKey)
-		_ = g.sessions.SetSessionContext(sessionKey, "wake_depth", "0")
+		return
+	}
+	if depth > maxWakeDepth {
+		g.logger.Warn("session wakeup: max depth reached, message queued for next activation",
+			"session_key", sessionKey, "wake_depth", depth)
 		return
 	}
 
 	g.logger.Info("waking session for inter-session message",
-		"session_key", sessionKey, "wake_depth", depth+1, "wake_source", wakeSource)
+		"session_key", sessionKey, "wake_depth", depth, "wake_source", wakeSource)
 
 	// Derive a context from the gateway lifecycle context (not a request context).
 	//
@@ -125,7 +112,7 @@ func (g *Gateway) wakeSession(sessionKey string) {
 		// human message — approval-gated actions fail closed.
 		NonInteractiveSource: "wake:" + wakeSource,
 		Decorate: func(ctx context.Context) context.Context {
-			return types.WithWakeSource(ctx, wakeSource)
+			return withWakeDepth(types.WithWakeSource(ctx, wakeSource), depth) // H4
 		},
 	}
 	if resumeInteractive {
@@ -138,9 +125,6 @@ func (g *Gateway) wakeSession(sessionKey string) {
 		}
 	}
 	g.turns().Run(wakeCtx, req, &wakeTurnSink{g: g, session: session, wakeSource: wakeSource, wakeMessageChars: len(wakeMessage)})
-
-	// Always reset wake depth when done (success or failure).
-	_ = g.sessions.SetSessionContext(sessionKey, "wake_depth", "0")
 }
 
 // wakeTurnSink routes a woken session's reply to the session's channel.
