@@ -128,6 +128,7 @@ func init() {
 	rootCmd.AddCommand(BrainRootCmd())
 	rootCmd.AddCommand(CronRootCmd())   // conduit-31jg.60
 	rootCmd.AddCommand(PolicyRootCmd()) // conduit-25lt.2
+	rootCmd.AddCommand(EvalRootCmd())   // bd-18u
 
 	// If no command is specified, default to server
 	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {
