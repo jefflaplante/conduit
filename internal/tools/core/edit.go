@@ -121,6 +121,14 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 
 	path = realPath
 
+	if err := sandbox.CheckWrite(path); err != nil {
+		return types.NewErrorResult("path_protected", err.Error()).
+			WithParameter("path", path).
+			WithSuggestions([]string{
+				"Use the Gateway tool's update_config (config or config_file); the owner approves the diff",
+			}), nil
+	}
+
 	// Check if file exists with rich error
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return types.NewErrorResult("file_not_found",

@@ -488,7 +488,7 @@ Query MQTT device data and optionally publish messages. Requires `mqtt.enabled: 
 {"action": "publish", "topic": "zigbee2mqtt/Light/set", "payload": "{\"state\":\"ON\"}"}
 ```
 
-Publish is gated by `mqtt.publish_allowed` config (default `false`) and then by human approval unless `mqtt.require_approval` is `false` or the topic matches `mqtt.approval_exempt_topics`.
+Publish is gated by `mqtt.publish_allowed` config (default `false`) and then by human approval unless `mqtt.approval.required` is `false` or the topic matches `mqtt.approval.exempt`.
 
 ## Infrastructure / SRE
 

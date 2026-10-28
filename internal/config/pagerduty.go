@@ -11,12 +11,10 @@ type PagerDutyConfig struct {
 	BaseURL                   string  `json:"base_url,omitempty"`
 	RateLimitRPS              float64 `json:"rate_limit_rps,omitempty"`
 
-	// RequireApproval: write actions (acknowledge, snooze, add_note,
-	// resolve, trigger) ask the owner for "YES <code>" first. Unset means
-	// true. ApprovalExemptActions lists write actions that skip approval.
-	// Config-only: update_config refuses both (approval.go).
-	RequireApproval       *bool    `json:"require_approval,omitempty"`
-	ApprovalExemptActions []string `json:"approval_exempt_actions,omitempty"`
+	// Approval: write actions (acknowledge, snooze, add_note, resolve,
+	// trigger) ask the owner for "YES <code>" first unless
+	// approval.required is false or the action is in approval.exempt.
+	Approval ToolApproval `json:"approval,omitempty"`
 }
 
 // DefaultPagerDutyConfig returns sensible defaults for PagerDuty configuration.
@@ -38,7 +36,7 @@ func (p *PagerDutyConfig) Validate() error {
 		return fmt.Errorf("pagerduty: api_token is required when enabled")
 	}
 
-	if err := validateExemptActions("pagerduty", p.ApprovalExemptActions, PagerDutyWriteActions); err != nil {
+	if err := validateExemptActions("pagerduty", p.Approval.Exempt, PagerDutyWriteActions); err != nil {
 		return err
 	}
 

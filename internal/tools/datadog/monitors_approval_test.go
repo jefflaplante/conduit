@@ -176,14 +176,14 @@ func TestMonitorApproval_ReadsAndInvalidArgsNeedNoApproval(t *testing.T) {
 	assert.Empty(t, h.sent())
 }
 
-// require_approval / approval_exempt_actions (H11 follow-up).
+// approval.required / approval.exempt (H11 follow-up).
 
 func TestMonitorApproval_ConfigDisabledRunsDirectly(t *testing.T) {
 	for name, args := range ddWriteCases() {
 		t.Run(name, func(t *testing.T) {
 			h := newDDApprovalHarness(t)
 			off := false
-			h.tool.config.RequireApproval = &off
+			h.tool.config.Approval.Required = &off
 			res, err := h.tool.Execute(approval.WithNonInteractive(context.Background(), "cron"), args)
 			require.NoError(t, err)
 			assert.True(t, res.Success, res.Error)
@@ -207,7 +207,7 @@ func TestMonitorApproval_ConfigDisabledRunsDirectly(t *testing.T) {
 
 func TestMonitorApproval_ExemptActionSkipsOtherStillPrompts(t *testing.T) {
 	h := newDDApprovalHarness(t)
-	h.tool.config.ApprovalExemptActions = []string{"unmute_monitor"}
+	h.tool.config.Approval.Exempt = []string{"unmute_monitor"}
 	cases := ddWriteCases()
 	res, err := h.tool.Execute(h.interactive(), cases["unmute_monitor"])
 	require.NoError(t, err)

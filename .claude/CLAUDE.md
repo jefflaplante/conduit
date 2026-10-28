@@ -157,7 +157,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/mcp/ — MCP server exposing Conduit's tools to external MCP clients (bearer auth, calls via the ExecutionEngine)
 - internal/procutil/ — Process-execution helpers shared by the Bash tool and others (process groups, platform splits)
 - internal/redact/ — Scrubs credentials (e.g. Telegram bot tokens) from strings, errors and log output; NewWriter wraps stderr
-- internal/sandbox/ — Single file-path containment check shared by file tools
+- internal/sandbox/ — Single file-path containment check shared by file tools, plus the protected-file set (protected.go: the gateway's config.json, its .bak and approved snapshot, registered by Gateway.SetConfigPath). Write/Edit/scp_download call `sandbox.CheckWrite`; Bash runs the best-effort `protectedPathDenial` (tools/bash_protect.go). The config changes only via update_config (classifier `config.KeyRisk`, approval-weakening warnings, `config_file` full-file mode); startup compares it with `.<config>.approved` and logs an ERROR on mismatch (gateway/config_snapshot.go)
 - internal/stt/ — Speech-to-text (Transcriber interface, Whisper backend)
 - internal/vecgo/ — Optional VecGo vector/semantic search service and indexer (module replaced from ./vecgo)
 - internal/workspace/ — Workspace context loading and caching (core files, daily memory, beads, security, summaries)

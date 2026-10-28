@@ -168,8 +168,8 @@ func (s *Service) Status() ServiceStatus {
 		TotalEvents:      s.buffer.TotalEvents(),
 		PublishAllowed:   s.cfg.PublishAllowed,
 
-		ApprovalDisabled:     !s.cfg.ApprovalEnabled(),
-		ApprovalExemptTopics: s.cfg.ApprovalExemptTopics,
+		ApprovalDisabled:     !s.cfg.Approval.Enabled(),
+		ApprovalExemptTopics: s.cfg.Approval.Exempt,
 	}
 }
 

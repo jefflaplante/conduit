@@ -119,11 +119,18 @@ func (g *Gateway) recordConfigApproval(r approval.Resolution) {
 var errConfigReloadUnavailable = errors.New("config update unavailable: the gateway was not started from a config file")
 
 // SetConfigPath records the config file the gateway was loaded from; it
-// enables update_config (conduit-rmho).
+// enables update_config (conduit-rmho). It also protects the file from the
+// Write, Edit and Bash tools and checks it against the last approved write
+// (config_snapshot.go).
 func (g *Gateway) SetConfigPath(path string) {
 	g.reload.mu.Lock()
 	defer g.reload.mu.Unlock()
 	g.reload.path = path
+	if path == "" {
+		return
+	}
+	protectConfigFiles(path)
+	g.checkApprovedConfig(path)
 }
 
 // currentConfig returns the effective configuration: the startup config
@@ -271,6 +278,7 @@ func (g *Gateway) applyConfigUpdate(ctx context.Context, patch map[string]interf
 		}
 		return nil, 0, fmt.Errorf("config update: save %s: %w", plan.path, err)
 	}
+	g.recordApprovedConfig(plan.path, plan.newData)
 
 	// Phase 3: commit (cannot fail).
 	if prep != nil {
@@ -337,6 +345,10 @@ func (g *Gateway) planConfigUpdate(patch map[string]interface{}) (*configPlan, e
 	if err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	oldDoc, err := config.ParseDocument(oldData) // doc is edited in place
+	if err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
 
 	type change struct {
 		path []string
@@ -374,15 +386,16 @@ func (g *Gateway) planConfigUpdate(patch map[string]interface{}) (*configPlan, e
 	plan.candidate = candidate
 
 	running := g.currentConfig()
-	// H11 follow-up: whether a tool write asks a human first is config-only,
-	// like tool_policy. Compare the parsed result, not key paths, so no
-	// spelling, nesting or delete of a parent section slips a change past.
+	// Changes that make tools ask a human less often are allowed (the owner
+	// approves every update) but flagged in the prompt. Compare the parsed
+	// configs, not key paths, so no spelling, nesting or delete of a parent
+	// section hides one.
 	base := running
 	if prev, perr := config.Parse(oldData); perr == nil {
 		base = prev
 	}
-	if base != nil && config.ApprovalSettingsChanged(base, candidate) {
-		return nil, rejectInvalid(errors.New("approval settings (require_approval, approval_exempt_topics, approval_exempt_actions) cannot be changed through update_config; the owner edits them in the config file"))
+	if base != nil {
+		res.Warnings = config.ApprovalWeakenings(base, candidate)
 	}
 	res.Readback = map[string]interface{}{}
 	for _, c := range changes {
@@ -395,11 +408,18 @@ func (g *Gateway) planConfigUpdate(patch map[string]interface{}) (*configPlan, e
 		if !c.op.Delete {
 			shown = displayValue(c.path, c.op.Value)
 		}
+		was := "(absent)"
+		if v, _, found, err := oldDoc.Lookup(c.path); err == nil && found {
+			was = displayValue(c.path, v)
+		}
+		risk := config.KeyRisk(c.path)
 		res.Changes = append(res.Changes, toolstypes.ConfigChange{
 			Path:              key,
 			Value:             shown,
+			OldValue:          was,
 			Mode:              mode,
-			SecuritySensitive: securitySensitive(c.path),
+			SecuritySensitive: risk != "",
+			Risk:              risk,
 		})
 		if v, _, found, err := doc.Lookup(c.path); err == nil && found {
 			res.Readback[key] = redactedAt(c.path, v)
@@ -480,34 +500,6 @@ func findProvider(ps []config.ProviderConfig, name string) *config.ProviderConfi
 	return nil
 }
 
-// securityTopLevel are top-level sections whose every key is security-
-// sensitive (sandbox, tool policy, auth, remote access, ingress).
-var securityTopLevel = map[string]bool{
-	"tools": true, "auth": true, "mcp": true, "ssh": true, "remote_ssh": true,
-	"kubernetes": true, "allowed_origins": true, "websocket": true, "rateLimiting": true,
-	"channels": true, "secrets_file": true, "skills": true, "tui": true,
-	"database": true, "data_dir": true,
-}
-
-// securitySensitive reports whether a key affects sandboxing, credentials,
-// provider endpoints, authentication, approvals or remote access. Every
-// update is approval-gated anyway; this marks the keys in the approval
-// prompt and the audit log.
-func securitySensitive(path []string) bool {
-	if securityTopLevel[path[0]] {
-		return true
-	}
-	for _, s := range path {
-		ls := strings.ToLower(s)
-		if config.IsSecretKey(ls) || strings.Contains(ls, "approval") || strings.Contains(ls, "sandbox") ||
-			strings.Contains(ls, "denylist") || strings.Contains(ls, "require_auth") || ls == "auth" ||
-			ls == "base_url" || strings.Contains(ls, "allowed_") {
-			return true
-		}
-	}
-	return false
-}
-
 // redactedAt redacts v as the value of the last key of path.
 func redactedAt(path []string, v interface{}) interface{} {
 	key := path[len(path)-1]
@@ -535,4 +527,42 @@ func displayValue(path []string, v interface{}) string {
 		s = string(r[:maxShownValue]) + "..."
 	}
 	return s
+}
+
+// RedactedConfigFile returns the config file with secrets redacted
+// (types.ConfigFileEditor).
+func (g *Gateway) RedactedConfigFile(ctx context.Context) (string, error) {
+	data, err := g.readConfigFile()
+	if err != nil {
+		return "", err
+	}
+	return config.RedactedFile(data)
+}
+
+// ConfigPatchFromFile diffs a proposed whole config file against the file
+// on disk (types.ConfigFileEditor). It changes nothing.
+func (g *Gateway) ConfigPatchFromFile(ctx context.Context, proposed string) (map[string]interface{}, error) {
+	data, err := g.readConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	patch, err := config.PatchFromFiles(data, []byte(proposed))
+	if err != nil {
+		return nil, rejectInvalid(err)
+	}
+	return patch, nil
+}
+
+func (g *Gateway) readConfigFile() ([]byte, error) {
+	g.reload.mu.Lock()
+	path := g.reload.path
+	g.reload.mu.Unlock()
+	if path == "" {
+		return nil, errConfigReloadUnavailable
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+	return data, nil
 }

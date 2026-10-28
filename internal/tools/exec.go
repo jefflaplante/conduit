@@ -180,6 +180,19 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 			}), nil
 	}
 
+	// The gateway's config file changes only through update_config, which
+	// shows the owner the diff and needs approval.
+	if why := protectedPathDenial(command, cwd); why != "" {
+		log.Printf("[Exec] DENIED command=%q reason=%q cwd=%q", logged, why, cwd)
+		return types.NewErrorResult("path_protected",
+			"Command refused: "+why+". The gateway config can only be changed through the Gateway tool's update_config action, which needs the owner's approval.").
+			WithParameter("command", command).
+			WithSuggestions([]string{
+				"Use Gateway action=update_config with config (a patch) or config_file (the whole proposed file)",
+				"Read the current config with Gateway action=config raw=true",
+			}), nil
+	}
+
 	// Audit log: command execution start
 	startTime := time.Now()
 	log.Printf("[Exec] START command=%q cwd=%q", logged, cwd)

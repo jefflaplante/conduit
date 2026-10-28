@@ -174,7 +174,7 @@ func TestMQTTApproval_ReadsAndRefusedPublishNeedNoApproval(t *testing.T) {
 	assert.Empty(t, h.svc.published())
 }
 
-// require_approval / approval_exempt_topics (H11 follow-up).
+// approval.required / approval.exempt (H11 follow-up).
 
 func TestMQTTApproval_ConfigDisabledPublishesDirectly(t *testing.T) {
 	h := newMQTTApprovalHarness(t)

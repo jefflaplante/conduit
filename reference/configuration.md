@@ -786,13 +786,20 @@ Optional MQTT event ingest for IoT/home automation. See [MQTT Integration](mqtt.
 | `buffer_max_events` | int | `1000` | Max events per topic |
 | `buffer_max_topics` | int | `500` | Max tracked topics |
 | `publish_allowed` | bool | `false` | Allow AI to publish messages |
-| `require_approval` | bool | `true` | Each publish asks the owner for `YES <code>` in the originating chat first; non-interactive turns (cron, heartbeat, sub-agents) fail closed. `false` publishes without asking, from any origin. Config-only (see below) |
-| `approval_exempt_topics` | string array | `[]` | MQTT topic filters (`+`, `#`) whose publishes skip approval while every other topic still asks, e.g. `["zigbee2mqtt/lights/#"]`. Matching is exact and case-sensitive. Exempt publishes run from any origin, cron included |
+| `approval.required` | bool | `true` | Each publish asks the owner for `YES <code>` in the originating chat first; non-interactive turns (cron, heartbeat, sub-agents) fail closed. `false` publishes without asking, from any origin |
+| `approval.exempt` | string array | `[]` | MQTT topic filters (`+`, `#`) whose publishes skip approval while every other topic still asks, e.g. `["zigbee2mqtt/lights/#"]`. Matching is exact and case-sensitive. Exempt publishes run from any origin, cron included |
 
-`require_approval` and the `approval_exempt_*` lists (and the Kubernetes and
-remote SSH `require_approval` tiers) can only be changed by editing the config
-file: `update_config` refuses any patch that changes them, so the model, or an
-automation token driving it, cannot switch off its own approval prompt.
+Approval settings sit in one `approval` block per tool (`mqtt`, `pagerduty`,
+`datadog`); leave it out for the default, approval on for every write:
+
+```json
+"mqtt": {"publish_allowed": true, "approval": {"exempt": ["zigbee2mqtt/lights/#"]}}
+```
+
+`update_config` can change `approval` blocks (and the Kubernetes and remote
+SSH `require_approval` tiers) like any other key: the owner approves the diff,
+and a change that makes a tool ask less often is marked `LOWERS HUMAN APPROVAL`
+at the top of the approval prompt. See [Approval policy](#approval-policy).
 
 ### Vector Search (Vecgo)
 
@@ -1023,8 +1030,8 @@ PagerDuty REST API v2 integration for incident management.
 | `default_escalation_policy_id` | string | `""` | Default escalation policy |
 | `base_url` | string | `"https://api.pagerduty.com"` | API base URL |
 | `rate_limit_rps` | float | `5.0` | Requests per second limit |
-| `require_approval` | bool | `true` | Write actions (`acknowledge`, `snooze`, `add_note`, `resolve`, `trigger`) ask the owner for `YES <code>` first; non-interactive turns fail closed. `false` runs them without asking. Config-only (see below) |
-| `approval_exempt_actions` | string array | `[]` | Write actions that skip approval, e.g. `["acknowledge", "add_note"]`; the rest still ask. Exempt actions run from any origin |
+| `approval.required` | bool | `true` | Write actions (`acknowledge`, `snooze`, `add_note`, `resolve`, `trigger`) ask the owner for `YES <code>` first; non-interactive turns fail closed. `false` runs them without asking |
+| `approval.exempt` | string array | `[]` | Write actions that skip approval, e.g. `["acknowledge", "add_note"]`; the rest still ask. Exempt actions run from any origin |
 
 ### Datadog
 
@@ -1049,8 +1056,8 @@ Datadog API integration for metrics, logs, and monitors.
 | `app_key` | string | required | Application key (supports `${ENV_VAR}`) |
 | `site` | string | `"datadoghq.com"` | Datadog site (e.g., `us5.datadoghq.com`, `datadoghq.eu`) |
 | `rate_limit_rps` | float | `5.0` | Requests per second limit |
-| `require_approval` | bool | `true` | `mute_monitor` and `unmute_monitor` ask the owner for `YES <code>` first (`confirmed=true` is still required); non-interactive turns fail closed. `false` runs them without asking. Config-only (see below) |
-| `approval_exempt_actions` | string array | `[]` | `mute_monitor` and/or `unmute_monitor` to skip approval; the other still asks. Exempt actions run from any origin |
+| `approval.required` | bool | `true` | `mute_monitor` and `unmute_monitor` ask the owner for `YES <code>` first (`confirmed=true` is still required); non-interactive turns fail closed. `false` runs them without asking |
+| `approval.exempt` | string array | `[]` | `mute_monitor` and/or `unmute_monitor` to skip approval; the other still asks. Exempt actions run from any origin |
 
 ### MCP Server Auth
 
@@ -1199,6 +1206,18 @@ Secret-named keys (`api_key`, `*_token`, `password`, `secret`, ...) and URL
 passwords only accept a `${ENV_VAR}` reference; a literal credential is
 rejected, and so is the `[redacted]` marker from the `config` action.
 
+Instead of `config`, the agent can pass `config_file`: the whole proposed
+file. It reads the file first with `{"action": "config", "raw": true}`, which
+returns the config file itself (not the effective config) with every secret
+shown as `"[redacted]"`, edits it, and proposes it back. The proposal is
+diffed against the file on disk into the equivalent patch (objects key by
+key, arrays whole, missing keys deleted), which then goes through exactly the
+same validation, classification and approval. A `"[redacted]"` value left
+unchanged keeps the current secret; one inside a changed value (an edited
+array element, a new key) is refused, since it would overwrite the secret.
+Either way the file is edited in place (see Persistence), so a full-file
+proposal changes only the lines of the keys that differ.
+
 ### What applies live and what needs a restart
 
 | Key | Mode | How it is applied |
@@ -1253,21 +1272,56 @@ mechanism as gated Kubernetes and SSH operations):
 1. The patch is validated and classified first. An invalid patch is rejected
    immediately, with nothing changed and no prompt.
 2. A valid plan is frozen (the exact patch bytes are fingerprinted) and the
-   owner is prompted on the originating channel with each key, its new
-   (redacted) value, whether it applies live or needs a restart, and whether it
-   is security-sensitive (sandbox, tools, credentials, `base_url`, auth,
-   approvals, channels, SSH, MCP, ...).
+   owner is prompted on the originating channel with each key as
+   `old -> new` (redacted), whether it applies live or needs a restart, and
+   whether it is security-sensitive and why. Sensitivity comes from a fixed
+   table (`config.KeyRisk`), not a model, so nothing the agent read can talk
+   a key into the benign bucket: whole sections (`tools`, `tool_policy`,
+   `auth`, `mcp`, `ssh`, `remote_ssh`, `kubernetes`, `channels`, `skills`,
+   `workspace`, heartbeats, ...), credentials, URLs and `site`, enabling an
+   integration that can act, and any key about approval, exemptions,
+   sandbox, allow/deny/block lists, pairing or owners.
 3. Only after a `YES <code>` reply is the update applied, re-validated
    against the file as it is at that moment. The model never sees the code.
 4. Non-interactive turns (cron, heartbeat, sub-agents, wakes, MCP) and a
    gateway without an approval channel fail closed: nothing is applied.
-5. `tool_policy` keys are refused outright, even with approval: the agent
-   must not be able to widen its own permissions. The same holds for every
-   setting that decides whether a tool write asks a human first
-   (`mqtt`/`pagerduty`/`datadog` `require_approval` and `approval_exempt_*`,
-   `kubernetes.require_approval`, `remote_ssh.security.require_approval`).
-   The check compares the parsed configs, so no key spelling, nesting or
-   deletion of a parent section gets around it.
+5. A change that makes a tool ask a human less often (an `approval` block
+   turned off or given new `exempt` entries, a tier dropped from
+   `kubernetes.require_approval` or `remote_ssh.security.require_approval`)
+   is allowed, but the prompt opens with a `WARNING: LOWERS HUMAN APPROVAL`
+   line naming each one and the title says so. The check compares the parsed
+   configs, so no key spelling, nesting or deletion of a parent section hides
+   it.
+6. `tool_policy` keys are refused outright, even with approval.
+
+### Protected config file
+
+`update_config` is the only way the agent can change the config. The config
+file, its `.bak` and its approved snapshot are protected: the `Write` and
+`Edit` tools and SSH `scp_download` refuse them by any name (relative path,
+symlink, hard link), and `Bash` refuses a command that could write them:
+output redirection, `tee`, `cp`/`mv`/`install`/`ln`, `sed -i`, `dd of=`,
+`rm`, interpreters given the path (`python3 -c`, `sh -c`, `eval`,
+`env -S`, sudo-style wrappers), `cd` into the directory followed by a
+relative name, globs that match the file, `~`/`$HOME`/`$PWD` spellings,
+variables assigned the path, and commands that touch the directory itself.
+Read-only programs (`cat`, `jq`, `grep`, `diff`, ...) may still read it. A
+shell is not a sandbox, so this is a tripwire, not a guarantee: a path
+assembled at run time (pieces in variables, `base64`/`printf` encodings,
+`$(...)` output without the file name in the command), a script file the
+command runs, or a program that reads the path from a file or the
+environment gets past it. The startup check catches what it misses.
+
+### Startup check
+
+Each approved write is copied to `.<config name>.approved` (0600, next to
+the config). At startup the loaded file is compared with it; any difference
+is logged at `ERROR` (`config file changed outside update_config`) with the
+changed key paths, the security-sensitive ones and any lowered approval,
+never values. The gateway still starts with the file as it is (a hand edit
+is the owner's normal way to configure it) and the snapshot is re-based, so
+each change is logged once. Without a snapshot (first start) one is
+recorded.
 
 ### Audit
 

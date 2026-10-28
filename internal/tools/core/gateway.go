@@ -53,6 +53,16 @@ func (t *GatewayTool) Parameters() map[string]interface{} {
 					"Example: {\"ai.providers.z-ai.timeout_seconds\": 600}. Secrets only as ${ENV_VAR} references. " +
 					"Every update needs the owner's approval in chat.",
 			},
+			"config_file": map[string]interface{}{
+				"type": "string",
+				"description": "Alternative to config for update_config: the whole proposed config file as JSON, usually an edited copy of " +
+					"what config with raw=true returned. It is diffed against the file on disk and approved key by key like a patch; " +
+					"leave \"[redacted]\" values as they are to keep the current secret.",
+			},
+			"raw": map[string]interface{}{
+				"type":        "boolean",
+				"description": "For config: return the config file itself (secrets redacted) instead of the summary, to edit and pass back as config_file.",
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -83,14 +93,18 @@ func (t *GatewayTool) GetActionDocs() map[string]types.ActionDoc {
 			Returns:        "confirmation with channelId and timestamp",
 		},
 		"config": {
-			Description: "Get current gateway configuration",
-			Returns:     "AI providers/models and workspace settings, secrets redacted",
+			Description:    "Get current gateway configuration; raw=true returns the config file itself",
+			OptionalParams: []string{"raw"},
+			Returns:        "AI providers/models and workspace settings, or the whole file (raw), secrets redacted",
 		},
 		"update_config": {
 			Description: "Change config.json and hot-reload what can be applied live (provider settings of existing providers, " +
 				"pricing overrides, call_log, subagent_default_model). Other keys are saved and need a restart. " +
-				"Always requires the owner's approval (\"YES <code>\" in chat); fails closed in non-interactive turns.",
-			RequiredParams: []string{"config"},
+				"Always requires the owner's approval (\"YES <code>\" in chat), which shows each key's old and new value and flags " +
+				"security-sensitive keys and anything that lowers human approval; fails closed in non-interactive turns. " +
+				"Pass config (a patch) or config_file (a whole proposed file). This is the only way to change config.json: " +
+				"Bash, Write and Edit refuse to write it.",
+			RequiredParams: []string{"config or config_file"},
 			Returns:        "pending approval; once approved, the keys applied live, the keys saved for restart, and their redacted values",
 		},
 		"metrics": {
@@ -146,6 +160,9 @@ func (t *GatewayTool) Execute(ctx context.Context, args map[string]interface{}) 
 	case "disable_channel":
 		return t.disableChannel(ctx, args)
 	case "config":
+		if raw, _ := args["raw"].(bool); raw {
+			return t.getConfigFile(ctx)
+		}
 		return t.getConfig(ctx)
 	case "update_config":
 		return t.updateConfig(ctx, args)

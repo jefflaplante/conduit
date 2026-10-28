@@ -35,8 +35,8 @@ type MQTTServiceStatus struct {
 	TotalEvents      int64    `json:"total_events"`
 	PublishAllowed   bool     `json:"publish_allowed"`
 
-	// Approval for publishes (config mqtt.require_approval and
-	// mqtt.approval_exempt_topics). The zero value means every publish
+	// Approval for publishes (config mqtt.approval.required and
+	// mqtt.approval.exempt). The zero value means every publish
 	// needs approval, so an implementation that leaves these unset fails
 	// closed.
 	ApprovalDisabled     bool     `json:"approval_disabled,omitempty"`

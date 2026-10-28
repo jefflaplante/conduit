@@ -17,8 +17,8 @@ import (
 // message is replayed to every subscriber, so it runs only after a human
 // approves it (H11). Non-interactive turns (cron, heartbeat, sub-agents)
 // and a missing approver fail closed. The owner can exempt topics, or turn
-// approval off, in config (mqtt.require_approval,
-// mqtt.approval_exempt_topics); an exempt publish runs directly from any
+// approval off, in config (mqtt.approval.required,
+// mqtt.approval.exempt); an exempt publish runs directly from any
 // origin.
 
 // publishNeedsApproval applies the service's approval settings to topic.

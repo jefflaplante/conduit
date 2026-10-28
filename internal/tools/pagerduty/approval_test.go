@@ -219,14 +219,14 @@ func TestPagerDutyApproval_PromptRedactsSecrets(t *testing.T) {
 	assert.Contains(t, prompt, "Incident: PINC001")
 }
 
-// require_approval / approval_exempt_actions (H11 follow-up).
+// approval.required / approval.exempt (H11 follow-up).
 
 func TestPagerDutyApproval_ConfigDisabledRunsDirectly(t *testing.T) {
 	for name, args := range pdWriteCases() {
 		t.Run(name, func(t *testing.T) {
 			h := newPDApprovalHarness(t)
 			off := false
-			h.tool.config.RequireApproval = &off
+			h.tool.config.Approval.Required = &off
 			res, err := h.tool.Execute(approval.WithNonInteractive(context.Background(), "cron"), args)
 			require.NoError(t, err)
 			assert.True(t, res.Success, res.Error)
@@ -239,7 +239,7 @@ func TestPagerDutyApproval_ConfigDisabledRunsDirectly(t *testing.T) {
 
 func TestPagerDutyApproval_ExemptActionsSkipOthersStillPrompt(t *testing.T) {
 	h := newPDApprovalHarness(t)
-	h.tool.config.ApprovalExemptActions = []string{"acknowledge", "add_note"}
+	h.tool.config.Approval.Exempt = []string{"acknowledge", "add_note"}
 	cases := pdWriteCases()
 	for _, name := range []string{"acknowledge", "add_note"} {
 		res, err := h.tool.Execute(h.interactive(), cases[name])

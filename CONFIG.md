@@ -1147,16 +1147,23 @@ MQTT event ingest. Subscribes to topics and buffers events for the MQTT tool. Se
 | `topics` | string array | — | Topic subscriptions (wildcards supported). Required |
 | `qos` | int | `0` | QoS level: 0, 1, or 2 |
 | `publish_allowed` | bool | `false` | Allow MQTT tool to publish messages |
-| `require_approval` | bool | `true` | Each publish asks the owner for `YES <code>` in the originating chat first; non-interactive turns (cron, heartbeat, sub-agents) fail closed. `false` publishes without asking, from any origin. Config-only (see below) |
-| `approval_exempt_topics` | string array | `[]` | MQTT topic filters (`+`, `#`) whose publishes skip approval while every other topic still asks, e.g. `["zigbee2mqtt/lights/#"]`. Matching is exact and case-sensitive. Exempt publishes run from any origin, cron included |
+| `approval.required` | bool | `true` | Each publish asks the owner for `YES <code>` in the originating chat first; non-interactive turns (cron, heartbeat, sub-agents) fail closed. `false` publishes without asking, from any origin |
+| `approval.exempt` | string array | `[]` | MQTT topic filters (`+`, `#`) whose publishes skip approval while every other topic still asks, e.g. `["zigbee2mqtt/lights/#"]`. Matching is exact and case-sensitive. Exempt publishes run from any origin, cron included |
 | `buffer_max_age_seconds` | int | `3600` | Max event age in buffer |
 | `buffer_max_events` | int | `1000` | Max events per topic |
 | `buffer_max_topics` | int | `500` | Max tracked topics |
 
-`require_approval` and the `approval_exempt_*` lists (and the Kubernetes and
-remote SSH `require_approval` tiers) can only be changed by editing the config
-file: `update_config` refuses any patch that changes them, so the model, or an
-automation token driving it, cannot switch off its own approval prompt.
+Approval settings sit in one `approval` block per tool (`mqtt`, `pagerduty`,
+`datadog`); leave it out for the default, approval on for every write:
+
+```json
+"mqtt": {"publish_allowed": true, "approval": {"exempt": ["zigbee2mqtt/lights/#"]}}
+```
+
+`update_config` can change `approval` blocks (and the Kubernetes and remote
+SSH `require_approval` tiers) like any other key: the owner approves the diff,
+and a change that makes a tool ask less often is marked `LOWERS HUMAN APPROVAL`
+at the top of the approval prompt. See [Approval policy](reference/configuration.md#approval-policy).
 
 ---
 
@@ -1219,8 +1226,8 @@ PagerDuty integration. See [SRE Tools Reference](reference/sre-tools.md).
 | `default_escalation_policy_id` | string | `""` | Default escalation policy |
 | `base_url` | string | `"https://api.pagerduty.com"` | API base URL |
 | `rate_limit_rps` | float | `5.0` | Max API requests per second |
-| `require_approval` | bool | `true` | Write actions (`acknowledge`, `snooze`, `add_note`, `resolve`, `trigger`) ask the owner for `YES <code>` first; non-interactive turns fail closed. `false` runs them without asking. Config-only (see below) |
-| `approval_exempt_actions` | string array | `[]` | Write actions that skip approval, e.g. `["acknowledge", "add_note"]`; the rest still ask. Exempt actions run from any origin |
+| `approval.required` | bool | `true` | Write actions (`acknowledge`, `snooze`, `add_note`, `resolve`, `trigger`) ask the owner for `YES <code>` first; non-interactive turns fail closed. `false` runs them without asking |
+| `approval.exempt` | string array | `[]` | Write actions that skip approval, e.g. `["acknowledge", "add_note"]`; the rest still ask. Exempt actions run from any origin |
 
 ---
 
@@ -1247,8 +1254,8 @@ Datadog integration. See [SRE Tools Reference](reference/sre-tools.md).
 | `app_key` | string | — | Datadog app key. Required. Supports `${ENV_VAR}` |
 | `site` | string | `"datadoghq.com"` | Datadog site |
 | `rate_limit_rps` | float | `5.0` | Max API requests per second |
-| `require_approval` | bool | `true` | `mute_monitor` and `unmute_monitor` ask the owner for `YES <code>` first (`confirmed=true` is still required); non-interactive turns fail closed. `false` runs them without asking. Config-only (see below) |
-| `approval_exempt_actions` | string array | `[]` | `mute_monitor` and/or `unmute_monitor` to skip approval; the other still asks. Exempt actions run from any origin |
+| `approval.required` | bool | `true` | `mute_monitor` and `unmute_monitor` ask the owner for `YES <code>` first (`confirmed=true` is still required); non-interactive turns fail closed. `false` runs them without asking |
+| `approval.exempt` | string array | `[]` | `mute_monitor` and/or `unmute_monitor` to skip approval; the other still asks. Exempt actions run from any origin |
 
 ---
 

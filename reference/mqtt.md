@@ -183,16 +183,16 @@ Publish a message to a topic. **Gated by `publish_allowed` config** (default `fa
 
 Returns an error if `publish_allowed` is `false`. Otherwise the publish needs
 the owner's `YES <code>` approval in the originating chat (non-interactive
-turns fail closed) unless `mqtt.require_approval` is `false` or the topic
-matches an `mqtt.approval_exempt_topics` filter:
+turns fail closed) unless `mqtt.approval.required` is `false` or the topic
+matches an `mqtt.approval.exempt` filter:
 
 ```json
-{"mqtt": {"publish_allowed": true, "require_approval": true,
-          "approval_exempt_topics": ["zigbee2mqtt/lights/#"]}}
+{"mqtt": {"publish_allowed": true, "approval": {"exempt": ["zigbee2mqtt/lights/#"]}}}
 ```
 
 Here lights publish directly (from any origin, cron included) and every other
-topic still asks. These keys are config-only: `update_config` refuses them.
+topic still asks. `update_config` can change the `approval` block only with
+the owner's approval, and flags a change that asks less often.
 
 ## zigbee2mqtt Topic Patterns
 
@@ -309,7 +309,7 @@ The MQTT client uses `paho.mqtt.golang` with:
 ### Safety
 
 - **Publish is off by default**: `publish_allowed` must be explicitly set to `true`
-- **Publish needs approval by default**: `require_approval` defaults to `true`; exempt topics with `approval_exempt_topics`
+- **Publish needs approval by default**: `approval.required` defaults to `true`; exempt topics with `approval.exempt`
 - **No persistent state**: Buffer is in-memory only, no database writes
 - **No channel adapter**: MQTT does not create conversational sessions
 - **Credentials via env vars**: Username/password support `${ENV_VAR}` expansion

@@ -19,7 +19,7 @@ import (
 // incident or log text can talk the model into setting it. Non-interactive
 // turns (cron, heartbeat, sub-agents) and a missing approver fail closed.
 // The owner can exempt actions, or turn approval off, in config
-// (pagerduty.require_approval, pagerduty.approval_exempt_actions); an
+// (pagerduty.approval.required, pagerduty.approval.exempt); an
 // exempt action runs directly from any origin.
 
 // isWriteAction reports whether action changes PagerDuty state.

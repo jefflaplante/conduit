@@ -58,11 +58,12 @@ Incident management via the PagerDuty REST API v2. Supports incident CRUD, on-ca
 | `default_escalation_policy_id` | string | — | Default escalation policy for `trigger` action |
 | `base_url` | string | `https://api.pagerduty.com` | API base URL |
 | `rate_limit_rps` | float | `5.0` | Max requests per second |
-| `require_approval` | bool | `true` | Write actions need the owner's `YES <code>` approval in the originating chat; non-interactive turns fail closed. `false` runs them without asking |
-| `approval_exempt_actions` | string array | `[]` | Write actions that skip approval, e.g. `["acknowledge", "add_note"]` |
+| `approval.required` | bool | `true` | Write actions need the owner's `YES <code>` approval in the originating chat; non-interactive turns fail closed. `false` runs them without asking |
+| `approval.exempt` | string array | `[]` | Write actions that skip approval, e.g. `["acknowledge", "add_note"]` |
 
-`require_approval` and `approval_exempt_actions` are config-only:
-`update_config` refuses them. An exempt action runs from any origin.
+An exempt action runs from any origin. `update_config` can change the
+`approval` block only with the owner's approval, and flags any change that
+asks less often (`LOWERS HUMAN APPROVAL`).
 
 ### Security Tiers
 
@@ -400,7 +401,7 @@ Dedicated tool for Datadog monitor management. Uses the same `datadog` config se
 | Tier | Actions | Behavior |
 |------|---------|----------|
 | **read** | `list_monitors`, `get_monitor`, `get_monitor_status` | Auto-approved |
-| **modify** | `mute_monitor`, `unmute_monitor` | `confirmed=true` plus human approval, unless `datadog.require_approval` is `false` or the action is in `datadog.approval_exempt_actions` (config-only keys) |
+| **modify** | `mute_monitor`, `unmute_monitor` | `confirmed=true` plus human approval, unless `datadog.approval.required` is `false` or the action is in `datadog.approval.exempt` |
 
 ### Actions
 

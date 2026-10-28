@@ -21,7 +21,7 @@ import (
 // alert text can talk it into that. Non-interactive turns (cron,
 // heartbeat, sub-agents) and a missing approver fail closed. The owner can
 // exempt either action, or turn approval off, in config
-// (datadog.require_approval, datadog.approval_exempt_actions); an exempt
+// (datadog.approval.required, datadog.approval.exempt); an exempt
 // action runs directly from any origin, still only with confirmed=true.
 
 func (t *MonitorTool) approver() approval.Requester {

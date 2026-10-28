@@ -84,9 +84,7 @@
     "buffer_max_age_seconds": 3600,
     "buffer_max_events": 1000,
     "buffer_max_topics": 500,
-    "publish_allowed": false,
-    "require_approval": true,
-    "approval_exempt_topics": []
+    "publish_allowed": false
   },
   "channels": [
     {
