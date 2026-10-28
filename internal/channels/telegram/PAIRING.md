@@ -22,7 +22,8 @@ CREATE TABLE telegram_pairings (
     user_id TEXT NOT NULL,              -- Telegram user ID (chat ID)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP NOT NULL,      -- 1 hour expiration
-    is_active BOOLEAN DEFAULT 1,        -- 0 = approved/used, 1 = pending
+    is_active BOOLEAN DEFAULT 1,        -- 1 = pending, 0 = approved or superseded
+    status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | superseded (migration v13)
     metadata TEXT DEFAULT '{}'
 );
 ```
@@ -33,7 +34,7 @@ CREATE TABLE telegram_pairings (
 
 - `GeneratePairingCode(userID string) (string, error)`: Creates new UUID-based pairing code
 - `ValidatePairingCode(code string) (*PairingRecord, error)`: Validates code and checks expiration
-- `ApprovePairing(code string) error`: Approves pairing (marks code as inactive)
+- `ApprovePairing(code string) error`: Approves pairing (status approved)
 - `IsUserPaired(userID string) (bool, error)`: Checks if user has approved pairing
 - `HandlePairingForUser(bot, userID, chatID)`: Complete pairing flow handler
 
@@ -68,7 +69,7 @@ CREATE TABLE telegram_pairings (
 
 1. Administrator receives pairing code from user
 2. Administrator approves via API/CLI: `ApprovePairingCode(code)`
-3. System marks code as approved (is_active = 0)
+3. System marks code as approved (status = 'approved', is_active = 0); only an approved row pairs the user. A code replaced by a newer one is superseded and never pairs
 4. System sends approval notification to user
 5. User can now send messages normally
 

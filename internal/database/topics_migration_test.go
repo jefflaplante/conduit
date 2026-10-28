@@ -103,8 +103,8 @@ func TestMigration12_TopicsPromptProfile(t *testing.T) {
 	if err := RunMigrations(db); err != nil {
 		t.Fatalf("RunMigrations: %v", err)
 	}
-	if v, err := getCurrentVersion(db); err != nil || v != 12 || v != len(GetMigrations()) {
-		t.Fatalf("version = %d, %v; want 12 (latest)", v, err)
+	if v, err := getCurrentVersion(db); err != nil || v < 12 || v != len(GetMigrations()) {
+		t.Fatalf("version = %d, %v; want latest (>= 12)", v, err)
 	}
 	if !topicsColumns(t, db, "topics")["prompt_profile"] {
 		t.Fatal("prompt_profile column missing after migration 12")

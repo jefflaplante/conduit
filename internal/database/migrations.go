@@ -292,6 +292,13 @@ func GetMigrations() []Migration {
 			Name:    "add_topics_prompt_profile",
 			Func:    addTopicsPromptProfile,
 		},
+		{
+			// C1: explicit telegram_pairings.status (pending, approved,
+			// superseded); is_active=0 no longer means "approved".
+			Version: 13,
+			Name:    "add_telegram_pairings_status",
+			Func:    addTelegramPairingsStatus,
+		},
 	}
 }
 

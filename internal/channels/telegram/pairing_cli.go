@@ -95,7 +95,7 @@ func ApprovePairingCmd(config *PairingCLIConfig) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "approve <CODE>",
 		Short: "Approve a Telegram pairing code",
-		Long:  `Approve a Telegram pairing code by marking it as inactive. The code will no longer be available for pairing.`,
+		Long:  `Approve a Telegram pairing code by marking it approved, which pairs its user. The code will no longer be available for pairing.`,
 		Example: `  conduit pairing telegram approve 550e8400-e29b-41d4-a716-446655440000
   conduit pairing telegram approve 550e8400`,
 		Args: cobra.ExactArgs(1),
@@ -169,12 +169,7 @@ func listPairings(config *PairingCLIConfig, includeExpired bool) error {
 			codePrefix = codePrefix[:8] + "..."
 		}
 
-		status := "Active"
-		if !pairing.IsActive {
-			status = "Used"
-		} else if time.Now().After(pairing.ExpiresAt) {
-			status = "Expired"
-		}
+		status := pairingStatusLabel(pairing)
 
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			codePrefix,
@@ -219,12 +214,7 @@ func approvePairing(config *PairingCLIConfig, codeInput string) error {
 		if len(matches) > 1 {
 			fmt.Printf("Multiple pairing codes match prefix '%s':\n", codeInput)
 			for _, match := range matches {
-				status := "Active"
-				if !match.IsActive {
-					status = "Used"
-				} else if time.Now().After(match.ExpiresAt) {
-					status = "Expired"
-				}
+				status := pairingStatusLabel(match)
 				fmt.Printf("  %s (User: %s) - %s\n", match.Code[:8]+"...", match.UserID, status)
 			}
 			return fmt.Errorf("ambiguous prefix, please provide more characters")
@@ -268,6 +258,22 @@ func approvePairing(config *PairingCLIConfig, codeInput string) error {
 
 // Helper functions
 
+// pairingStatusLabel is the STATUS column text for a pairing row.
+func pairingStatusLabel(p PairingInfo) string {
+	switch {
+	case p.Status == PairingStatusApproved:
+		return "Approved"
+	case p.Status == PairingStatusSuperseded:
+		return "Superseded"
+	case !p.IsActive || p.Status != PairingStatusPending:
+		return "Inactive"
+	case time.Now().After(p.ExpiresAt):
+		return "Expired"
+	default:
+		return "Active"
+	}
+}
+
 // openPairingDatabase opens the SQLite database and runs migrations
 func openPairingDatabase(dbPath string) (*sql.DB, error) {
 	// Same DSN (busy_timeout, WAL, ...) as the server so CLI writes wait on a
@@ -295,7 +301,7 @@ func openPairingDatabase(dbPath string) (*sql.DB, error) {
 // getAllPairings is a helper method for listing all pairings including expired ones
 func (ps *PairingStorage) getAllPairings() ([]PairingInfo, error) {
 	query := `
-		SELECT code, user_id, created_at, expires_at, is_active, metadata
+		SELECT code, user_id, created_at, expires_at, is_active, status, metadata
 		FROM telegram_pairings
 		ORDER BY created_at DESC
 	`
@@ -312,7 +318,7 @@ func (ps *PairingStorage) getAllPairings() ([]PairingInfo, error) {
 		var metadataJSON string
 		var createdAtStr, expiresAtStr string
 
-		err := rows.Scan(&p.Code, &p.UserID, &createdAtStr, &expiresAtStr, &p.IsActive, &metadataJSON)
+		err := rows.Scan(&p.Code, &p.UserID, &createdAtStr, &expiresAtStr, &p.IsActive, &p.Status, &metadataJSON)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan pairing row: %w", err)
 		}
