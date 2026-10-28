@@ -11,18 +11,28 @@ import (
 	"conduit/internal/sessions"
 )
 
+// GenerateResponse makes one provider call (no tool execution) for a
+// session. session.Context["model"], when set, picks the (provider, model)
+// exactly as a turn's model override does (resolveTurnRoute); the side-call
+// callers (compaction, topic and workspace summaries) rely on it.
 func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session, userMessage string, providerName string) (*GenerateResponse, error) {
-	// Use default provider if none specified
-	if providerName == "" {
-		providerName = r.default_
-	}
+	return r.generateResponse(ctx, session, userMessage, providerName, true)
+}
 
-	provider, err := r.routableProvider(providerName, "") // no-anthropic-routing
+// generateResponse is GenerateResponse; withTools=false sends the request
+// with no tool definitions (summary side calls, which can never run tools).
+func (r *Router) generateResponse(ctx context.Context, session *sessions.Session, userMessage string, providerName string, withTools bool) (*GenerateResponse, error) {
+	var model string
+	if session != nil {
+		model = session.Context["model"]
+	}
+	// no-anthropic-routing: resolution + the routable=false refusal.
+	providerName, model, provider, err := r.resolveTurnRoute("Generate", providerName, model)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Printf("[Router] Generate: provider=%q", providerName)
+	log.Printf("[Router] Generate: provider=%q model=%q", providerName, model)
 	ctx = r.withCallTurn(ctx, session) // conduit-2lzv
 
 	// Build system prompt using agent system
@@ -43,12 +53,13 @@ func (r *Router) GenerateResponse(ctx context.Context, session *sessions.Session
 
 	// Include tool definitions from agent system
 	var tools []Tool
-	if r.agentSystem != nil {
+	if r.agentSystem != nil && withTools {
 		tools = r.agentSystem.GetToolDefinitions(session)
 	}
 
 	req := &GenerateRequest{
 		Messages:  messages,
+		Model:     model,
 		Tools:     tools,
 		MaxTokens: r.chainMaxTokens(),
 	}
