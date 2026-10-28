@@ -2,8 +2,11 @@ package rem
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -26,6 +29,35 @@ func isFilePath(source string) bool {
 		return true
 	}
 	return false
+}
+
+// sourceFileMissing reports whether a file-path source definitely no longer
+// exists. Relative paths resolve against WorkspaceDir, as in Groom, never
+// against the process working directory (H6); with no WorkspaceDir a
+// relative source cannot be checked and is kept. A "#fragment" suffix
+// ("file:MEMORY.md#L3") is ignored unless the name itself contains '#'.
+// Any stat error other than not-exist keeps the entry.
+func (r *REMCycle) sourceFileMissing(source string) bool {
+	p := strings.TrimPrefix(source, "file:")
+	candidates := []string{p}
+	if i := strings.IndexByte(p, '#'); i >= 0 {
+		candidates = append(candidates, p[:i])
+	}
+	for _, c := range candidates {
+		if c == "" {
+			return false
+		}
+		if !filepath.IsAbs(c) {
+			if r.config.WorkspaceDir == "" {
+				return false
+			}
+			c = filepath.Join(r.config.WorkspaceDir, c)
+		}
+		if _, err := os.Stat(c); !errors.Is(err, fs.ErrNotExist) {
+			return false // exists, or cannot tell
+		}
+	}
+	return true
 }
 
 // Prune moves low-value entries to the archive (safe deletion).
@@ -427,10 +459,7 @@ func (r *REMCycle) pruneOrphansOnly(ctx context.Context, result *PruneResult, dr
 			continue
 		}
 
-		// Resolve the actual path to stat.
-		pathToCheck := strings.TrimPrefix(o.source, "file:")
-
-		if _, err := os.Stat(pathToCheck); os.IsNotExist(err) {
+		if r.sourceFileMissing(o.source) {
 			orphans = append(orphans, o)
 		}
 	}
