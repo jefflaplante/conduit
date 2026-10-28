@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"conduit/internal/config"
 	"conduit/internal/sandbox"
 )
 
@@ -75,69 +76,43 @@ func TestConfigFile_RefusesOverwritingSecretWithPlaceholder(t *testing.T) {
 	}
 }
 
-// SetConfigPath protects the config, its backup and its snapshot from the
-// file tools, and records the first approved snapshot.
-func TestSetConfigPath_ProtectsAndBaselines(t *testing.T) {
+// SetConfigPath protects the config, its backup, its snapshot and the
+// snapshot's hash record from the file tools.
+func TestSetConfigPath_ProtectsApprovalFiles(t *testing.T) {
 	t.Cleanup(sandbox.ResetProtected)
+	t.Setenv("CONDUIT_DATA_DIR", "")
 	f := newReloadFixture(t)
-	for _, p := range []string{f.path, f.path + ".bak", approvedSnapshotPath(f.path)} {
+	state := approvedStateDir(f.gw.currentConfig().DataDir)
+	for _, p := range []string{f.path, f.path + ".bak", config.ApprovedSnapshotPath(f.path), config.ApprovedRecordPath(f.path, state)} {
 		if err := sandbox.CheckWrite(p); !errors.Is(err, sandbox.ErrProtected) {
 			t.Errorf("%s not protected: %v", p, err)
 		}
 	}
-	snap, err := os.ReadFile(approvedSnapshotPath(f.path))
-	if err != nil || string(snap) != f.orig {
-		t.Fatalf("baseline snapshot = %q, %v", snap, err)
-	}
-	if st, _ := os.Stat(approvedSnapshotPath(f.path)); st.Mode().Perm() != 0o600 {
-		t.Errorf("snapshot mode %v, want 0600", st.Mode().Perm())
-	}
 }
 
-// An approved update moves the snapshot; a later change made outside
-// update_config is logged at ERROR at the next start, with key names (no
-// values) and the lowered approval, and then becomes the new baseline.
-func TestConfigSnapshot_DetectsUnapprovedChange(t *testing.T) {
+// An approved update records the new file as approved, so the next start
+// accepts it; a later change made outside update_config is refused.
+func TestApplyConfigUpdate_RecordsApprovedConfig(t *testing.T) {
 	t.Cleanup(sandbox.ResetProtected)
+	t.Setenv("CONDUIT_DATA_DIR", "")
 	f := newReloadFixture(t)
+	state := approvedStateDir(f.gw.currentConfig().DataDir)
+	if _, err := config.VerifyApproved(f.path, state); err != nil { // first start
+		t.Fatal(err)
+	}
 	if _, err := f.gw.ApplyConfigUpdate(context.Background(), map[string]interface{}{"tools.max_tool_chains": 30.0}); err != nil {
 		t.Fatal(err)
 	}
-	snap, _ := os.ReadFile(approvedSnapshotPath(f.path))
-	if string(snap) != f.file(t) {
-		t.Fatal("snapshot not updated after an approved write")
+	if st, err := config.VerifyApproved(f.path, state); err != nil || st != config.ApprovedMatch {
+		t.Fatalf("after approved write: state %v err %v", st, err)
 	}
-
-	// Restart with the approved file: nothing logged.
-	f.logs.Reset()
-	f.gw.SetConfigPath(f.path)
-	if strings.Contains(f.logs.String(), "outside update_config") {
-		t.Fatalf("approved file flagged:\n%s", f.logs.String())
-	}
-
-	// A hand edit (or an uncaught tool write) that turns MQTT approval off.
-	edited := strings.Replace(f.file(t), `"tools": {`, `"mqtt": {"approval": {"required": false}},
-  "tools": {`, 1)
+	edited := strings.Replace(f.file(t), `"max_tool_chains": 30`, `"max_tool_chains": 31`, 1)
 	if err := os.WriteFile(f.path, []byte(edited), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	f.logs.Reset()
-	f.gw.SetConfigPath(f.path)
-	logs := f.logs.String()
-	for _, want := range []string{"level=ERROR", "outside update_config", "mqtt.approval.required", "approval_lowered", "turned off"} {
-		if !strings.Contains(logs, want) {
-			t.Errorf("log lacks %q:\n%s", want, logs)
-		}
-	}
-	if strings.Contains(logs, reloadSecret) {
-		t.Fatal("log leaks a secret")
-	}
-
-	// Logged once: the edited file is the new baseline.
-	f.logs.Reset()
-	f.gw.SetConfigPath(f.path)
-	if strings.Contains(f.logs.String(), "outside update_config") {
-		t.Fatal("same change logged twice")
+	var ue *config.UnapprovedConfigError
+	if _, err := config.VerifyApproved(f.path, state); !errors.As(err, &ue) || len(ue.Keys) != 1 || ue.Keys[0] != "tools.max_tool_chains" {
+		t.Fatalf("hand edit: %v", err)
 	}
 }
 

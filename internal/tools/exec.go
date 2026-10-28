@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"conduit/internal/config"
 	"conduit/internal/procutil"
 	"conduit/internal/tools/approvalgate"
 	toolargs "conduit/internal/tools/args"
@@ -211,6 +213,8 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 	// wait, and capped output so timeouts return and `yes` cannot OOM us.
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = cwd
+	// Marks the agent's shell: `conduit config accept` refuses to run here.
+	cmd.Env = append(os.Environ(), config.ToolShellEnv+"=1")
 	procutil.ConfigureGroupKill(cmd, 0, 0)
 	buf := procutil.NewCappedBuffer(MaxBashOutputBytes)
 	cmd.Stdout = buf

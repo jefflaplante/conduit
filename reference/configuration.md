@@ -1312,16 +1312,35 @@ assembled at run time (pieces in variables, `base64`/`printf` encodings,
 command runs, or a program that reads the path from a file or the
 environment gets past it. The startup check catches what it misses.
 
-### Startup check
+### Startup check (fails closed)
 
-Each approved write is copied to `.<config name>.approved` (0600, next to
-the config). At startup the loaded file is compared with it; any difference
-is logged at `ERROR` (`config file changed outside update_config`) with the
-changed key paths, the security-sensitive ones and any lowered approval,
-never values. The gateway still starts with the file as it is (a hand edit
-is the owner's normal way to configure it) and the snapshot is re-based, so
-each change is logged once. Without a snapshot (first start) one is
-recorded.
+The gateway only starts with the config file the owner last approved. Each
+approved `update_config` write is copied to `.<config name>.approved` (0600,
+next to the config) and its SHA-256 is recorded in the data directory
+(`<data_dir>/config/approved-config-<id>.sha256`). At startup:
+
+| State | Result |
+|-------|--------|
+| No snapshot and no record (first start) | The current file is recorded; the gateway starts |
+| Snapshot equals the config | Starts |
+| Snapshot differs from the config | Refuses, naming the changed keys, the security-sensitive ones and any lowered approval (never values), and the command to run |
+| Snapshot missing but a record exists | Refuses (the snapshot was deleted) |
+| Snapshot is not JSON, or does not match its recorded hash | Refuses (corrupt, or edited together with the config) |
+
+After a hand edit, review and approve it:
+
+```bash
+conduit --config /path/to/config.json config accept        # shows the key diff, type yes
+conduit --config /path/to/config.json config accept --yes  # for your own scripts
+```
+
+`config accept` shows each changed key as `old -> new` with secrets
+redacted, refuses a config that does not load, and repairs a missing or
+corrupt snapshot by recording the current file. It refuses to run inside
+the agent's tools: every Bash tool command carries `CONDUIT_TOOL_SHELL=1`,
+and on Linux it also refuses when a parent process is the gateway binary.
+The Bash tool and system cron jobs refuse `config accept` and any command
+naming `CONDUIT_TOOL_SHELL`.
 
 ### Audit
 

@@ -85,6 +85,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - `chain` — Manage and execute saved tool chains (list, show, create, run, delete, validate)
 - `cron` — Scheduler job maintenance for cron_jobs.json (migrate-tz)
 - `policy` — Tool action policy decisions (report)
+- `config` — `config accept`: approve the config file after a hand edit (key diff, type yes or --yes); the server refuses to start on an unapproved config (config.VerifyApproved)
 - `loadtest` — Load test against the AI provider using a mock backend
 - `metrics` — Start the metrics dashboard HTTP server
 - `restart` / `stop` / `status` — Signal or check a running Conduit process (signals, not HTTP)
@@ -157,7 +158,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/mcp/ — MCP server exposing Conduit's tools to external MCP clients (bearer auth, calls via the ExecutionEngine)
 - internal/procutil/ — Process-execution helpers shared by the Bash tool and others (process groups, platform splits)
 - internal/redact/ — Scrubs credentials (e.g. Telegram bot tokens) from strings, errors and log output; NewWriter wraps stderr
-- internal/sandbox/ — Single file-path containment check shared by file tools, plus the protected-file set (protected.go: the gateway's config.json, its .bak and approved snapshot, registered by Gateway.SetConfigPath). Write/Edit/scp_download call `sandbox.CheckWrite`; Bash runs the best-effort `protectedPathDenial` (tools/bash_protect.go). The config changes only via update_config (classifier `config.KeyRisk`, approval-weakening warnings, `config_file` full-file mode); startup compares it with `.<config>.approved` and logs an ERROR on mismatch (gateway/config_snapshot.go)
+- internal/sandbox/ — Single file-path containment check shared by file tools, plus the protected-file set (protected.go: the gateway's config.json, its .bak and approved snapshot, registered by Gateway.SetConfigPath). Write/Edit/scp_download call `sandbox.CheckWrite`; Bash runs the best-effort `protectedPathDenial` (tools/bash_protect.go). The config changes only via update_config (classifier `config.KeyRisk`, approval-weakening warnings, `config_file` full-file mode); startup refuses a config that differs from `.<config>.approved` (hash recorded in <data_dir>/config) until `conduit config accept` (config/approved.go, cmd/gateway/config_accept.go); Bash commands carry CONDUIT_TOOL_SHELL=1 and accept refuses to run there
 - internal/stt/ — Speech-to-text (Transcriber interface, Whisper backend)
 - internal/vecgo/ — Optional VecGo vector/semantic search service and indexer (module replaced from ./vecgo)
 - internal/workspace/ — Workspace context loading and caching (core files, daily memory, beads, security, summaries)

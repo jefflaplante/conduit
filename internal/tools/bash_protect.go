@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"conduit/internal/config"
 	"conduit/internal/sandbox"
 )
 
@@ -59,6 +60,9 @@ func protectedTargets() []protectedTarget {
 // protectedPathDenial returns why command may write a protected file, or
 // "" when it does not appear to. cwd is the directory the command runs in.
 func protectedPathDenial(command, cwd string) string {
+	if why := configAcceptDenial(command); why != "" {
+		return why
+	}
 	targets := protectedTargets()
 	if len(targets) == 0 {
 		return ""
@@ -295,4 +299,20 @@ func (c *protectCheck) otherExistingFile(s string) bool {
 		return false
 	}
 	return sandbox.CheckWrite(p) == nil
+}
+
+// configAcceptDenial refuses `conduit config accept` (approving the config
+// file is the owner's step, never the agent's) and any command that names
+// the variable that marks the agent's shell, since unsetting it is the
+// first step around the CLI's own refusal. Quotes and backslashes are
+// dropped first, so "config" 'accept' or con\fig still match.
+func configAcceptDenial(command string) string {
+	flat := strings.NewReplacer(`"`, "", "'", "", `\`, "").Replace(command)
+	if strings.Contains(flat, config.ToolShellEnv) {
+		return "the command names " + config.ToolShellEnv
+	}
+	if strings.Contains(" "+strings.Join(strings.Fields(strings.ToLower(flat)), " ")+" ", " "+config.AcceptCommand+" ") {
+		return "`conduit " + config.AcceptCommand + "` approves the config file and only the owner may run it"
+	}
+	return ""
 }

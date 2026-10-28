@@ -119,9 +119,10 @@ func (g *Gateway) recordConfigApproval(r approval.Resolution) {
 var errConfigReloadUnavailable = errors.New("config update unavailable: the gateway was not started from a config file")
 
 // SetConfigPath records the config file the gateway was loaded from; it
-// enables update_config (conduit-rmho). It also protects the file from the
-// Write, Edit and Bash tools and checks it against the last approved write
-// (config_snapshot.go).
+// enables update_config (conduit-rmho). It also protects the file and its
+// approval records from the Write, Edit and Bash tools (config_snapshot.go).
+// The server checks the file against the approved snapshot before it builds
+// the gateway (config.VerifyApproved).
 func (g *Gateway) SetConfigPath(path string) {
 	g.reload.mu.Lock()
 	defer g.reload.mu.Unlock()
@@ -129,8 +130,7 @@ func (g *Gateway) SetConfigPath(path string) {
 	if path == "" {
 		return
 	}
-	protectConfigFiles(path)
-	g.checkApprovedConfig(path)
+	protectConfigFiles(path, approvedStateDir(g.currentConfig().DataDir))
 }
 
 // currentConfig returns the effective configuration: the startup config

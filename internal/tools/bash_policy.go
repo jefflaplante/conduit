@@ -104,6 +104,12 @@ func (t *ExecTool) checkCommandPolicy(ctx context.Context, command string) denyM
 // denylist mode as for a non-interactive Bash call, so strict_autonomous
 // also adds the substring check. It returns "" when the command is allowed.
 func (t *ExecTool) scheduledCommandDenial(ctx context.Context, command string) string {
+	// A system cron job runs outside the gateway (no tool-shell marker), so
+	// the protected config and `conduit config accept` are checked here.
+	if why := protectedPathDenial(command, t.registry.sandboxCfg.WorkspaceDir); why != "" {
+		log.Printf("[Cron] DENIED system job command=%q reason=%q", approvalgate.RedactCommand(command), why)
+		return why
+	}
 	m := t.checkCommandPolicy(approval.WithNonInteractive(ctx, "cron"), command)
 	if m.Pattern == "" {
 		return ""

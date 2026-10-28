@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"conduit/internal/sandbox"
@@ -160,5 +161,62 @@ func TestWriteFileTool_RefusesProtectedFile(t *testing.T) {
 	res, _ := tool.Execute(context.Background(), map[string]interface{}{"path": "notes.md", "content": "ok"})
 	if !res.Success {
 		t.Fatalf("unprotected write failed: %+v", res)
+	}
+}
+
+// Approving the config is the owner's step: the Bash tool refuses
+// `conduit config accept` however it is spelled or wrapped, and any command
+// that names the tool-shell marker.
+func TestProtectedPathDenial_ConfigAccept(t *testing.T) {
+	sandbox.ResetProtected() // refused even with nothing protected
+	cwd := t.TempDir()
+	for _, cmd := range []string{
+		"conduit config accept",
+		"./bin/conduit --config ~/app/config.json config accept --yes",
+		"go run ./cmd/gateway config  accept --yes",
+		`conduit "config" 'accept' --yes`,
+		`sh -c "conduit config accept --yes"`,
+		"echo yes | conduit config acc\\ept",
+		"CONDUIT_TOOL_SHELL= conduit config show",
+		"env -u CONDUIT_TOOL_SHELL ./bin/conduit",
+		"unset CONDUIT_TOOL_SHELL; true",
+	} {
+		if why := protectedPathDenial(cmd, cwd); why == "" {
+			t.Errorf("not refused: %s", cmd)
+		}
+	}
+	for _, cmd := range []string{"conduit version", "conduit config --help", "grep -rn accept internal/config"} {
+		if why := protectedPathDenial(cmd, cwd); why != "" {
+			t.Errorf("refused %q: %s", cmd, why)
+		}
+	}
+}
+
+// Every command the Bash tool runs carries the tool-shell marker, which
+// `conduit config accept` checks.
+func TestExecTool_SetsToolShellMarker(t *testing.T) {
+	sandbox.ResetProtected()
+	tool := newExecToolForTest(t, nil)
+	res, err := tool.Execute(context.Background(), map[string]interface{}{"command": "printenv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Success || !strings.Contains(res.Content, "CONDUIT_TOOL_SHELL=1") {
+		t.Fatalf("marker missing: %+v", res)
+	}
+}
+
+// System cron jobs run outside the gateway, so their command gets the same
+// protected-file and accept checks.
+func TestScheduledCommandDenial_ProtectedConfigAndAccept(t *testing.T) {
+	cfg, _ := protectFixture(t)
+	tool := newExecToolForTest(t, nil)
+	for _, cmd := range []string{"echo x > " + cfg, "conduit config accept --yes"} {
+		if why := tool.scheduledCommandDenial(context.Background(), cmd); why == "" {
+			t.Errorf("cron command not refused: %s", cmd)
+		}
+	}
+	if why := tool.scheduledCommandDenial(context.Background(), "echo ok"); why != "" {
+		t.Errorf("harmless cron command refused: %s", why)
 	}
 }
