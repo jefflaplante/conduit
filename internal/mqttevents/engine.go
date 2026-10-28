@@ -4,13 +4,17 @@
 // all throttling are Go; an LLM only appears after a rule has fired.
 //
 // Evaluation runs inline on the MQTT callback goroutine and is O(rules for
-// the topic) with no IO. Actions run on one worker goroutine fed by a
+// the topic) with no IO: rule topics (MQTT filters, wildcards allowed) are
+// compiled into a trie once in NewEngine, so routing an event costs its topic
+// depth, not the rule count. Actions run on one worker goroutine fed by a
 // bounded channel. All state is in memory.
 package mqttevents
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +22,7 @@ import (
 	"conduit/internal/config"
 	"conduit/internal/mqtt"
 	"conduit/internal/ratelimit"
+	"conduit/internal/trie"
 )
 
 const (
@@ -55,8 +60,12 @@ type counters struct {
 
 // Engine evaluates rules and dispatches their actions.
 type Engine struct {
-	deps       Deps
-	byTopic    map[string][]*Rule
+	deps Deps
+	// routes, rules and byID are built in NewEngine and read-only afterwards, which
+	// is what lets HandleEvent route without taking a lock.
+	routes     *trie.Trie
+	rules      []*Rule        // enabled rules, in config order
+	byID       map[string]int // rule ID -> index into rules
 	perRule    *ratelimit.SlidingWindow
 	global     *ratelimit.SlidingWindow
 	maxSpawns  int
@@ -83,7 +92,8 @@ func NewEngine(cfg config.MQTTEventsConfig, deps Deps) (*Engine, error) {
 	cfg.ApplyDefaults()
 	e := &Engine{
 		deps:       deps,
-		byTopic:    make(map[string][]*Rule),
+		routes:     trie.New(),
+		byID:       make(map[string]int),
 		maxSpawns:  cfg.MaxConcurrentSpawns,
 		payloadMax: cfg.PayloadMaxBytes,
 		jobs:       make(chan job, jobQueueDepth),
@@ -95,9 +105,20 @@ func NewEngine(cfg config.MQTTEventsConfig, deps Deps) (*Engine, error) {
 		if err != nil {
 			return nil, err
 		}
-		if rc.IsEnabled() {
-			e.byTopic[rc.Topic] = append(e.byTopic[rc.Topic], r)
+		if !rc.IsEnabled() {
+			continue
 		}
+		// Config validation already rejects duplicate IDs and invalid topic
+		// filters; these guard configs built in code. A duplicate would
+		// silently shadow a rule, since the trie routes by ID.
+		if _, dup := e.byID[rc.ID]; dup {
+			return nil, fmt.Errorf("rule %q: duplicate id", rc.ID)
+		}
+		if err := e.routes.Insert(rc.Topic, rc.ID); err != nil {
+			return nil, fmt.Errorf("rule %q: %w", rc.ID, err)
+		}
+		e.byID[rc.ID] = len(e.rules)
+		e.rules = append(e.rules, r)
 	}
 	e.ctx, e.cancel = context.WithCancel(context.Background())
 	e.perRule = newWindow(cfg.PerRuleBudget)
@@ -157,16 +178,25 @@ func (e *Engine) drain() {
 	}
 }
 
-// HandleEvent is the mqtt.Service observer. It evaluates every rule on the
-// event topic and enqueues fired actions; it never blocks.
+// HandleEvent is the mqtt.Service observer. It evaluates every rule whose
+// topic filter matches the event topic, each exactly once, and enqueues fired
+// actions; it never blocks.
 func (e *Engine) HandleEvent(ev mqtt.Event) {
-	rules := e.byTopic[ev.Topic]
-	if len(rules) == 0 {
+	ids := e.routes.Match(ev.Topic)
+	if len(ids) == 0 {
 		return
 	}
+	// Match sorts by ID; config order is what decides which of several rules
+	// on one topic gets the last of a shared budget.
+	idx := make([]int, len(ids))
+	for i, id := range ids {
+		idx[i] = e.byID[id]
+	}
+	sort.Ints(idx)
 	e.evalMu.Lock()
 	defer e.evalMu.Unlock()
-	for _, r := range rules {
+	for _, i := range idx {
+		r := e.rules[i]
 		out, value := r.evaluate(ev)
 		switch out {
 		case swallowed:

@@ -90,14 +90,33 @@ func TestMQTTEvents_PartialBudgetDefaults(t *testing.T) {
 	}
 }
 
-func TestMQTTEvents_RejectsWildcardTopics(t *testing.T) {
-	for _, topic := range []string{"sensors/#", "sensors/+/battery/state", "#", "+"} {
+func TestMQTTEvents_AcceptsSpecValidWildcardTopics(t *testing.T) {
+	for _, topic := range []string{"sensors/#", "sensors/+/battery/state", "sensors/+/temp", "+/+", "#", "+"} {
+		r := validEventRule()
+		r.Topic = topic
+		m := baseMQTTWithEvents(&MQTTEventsConfig{Enabled: true, Rules: []MQTTEventRule{r}})
+		if err := m.Validate(); err != nil {
+			t.Errorf("topic %q: want accepted, got %v", topic, err)
+		}
+	}
+}
+
+func TestMQTTEvents_RejectsSpecInvalidTopics(t *testing.T) {
+	cases := map[string]string{
+		"a+/b":  "entire level",
+		"a/b#":  "entire level",
+		"a/b+":  "entire level",
+		"#/a":   "final level",
+		"a/#/b": "final level",
+		"":      "topic is required",
+	}
+	for topic, want := range cases {
 		r := validEventRule()
 		r.Topic = topic
 		m := baseMQTTWithEvents(&MQTTEventsConfig{Enabled: true, Rules: []MQTTEventRule{r}})
 		err := m.Validate()
-		if err == nil || !strings.Contains(err.Error(), "wildcard") {
-			t.Errorf("topic %q: want wildcard rejection, got %v", topic, err)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("topic %q: want error containing %q, got %v", topic, want, err)
 		}
 	}
 }
