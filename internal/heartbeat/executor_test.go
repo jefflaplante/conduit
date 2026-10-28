@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,5 +167,105 @@ func TestExecuteHeartbeatJob_ReportsStoredSessionKey(t *testing.T) {
 	}
 	if _, ok := store.sessions[result.SessionKey]; !ok || result.SessionKey != used {
 		t.Fatalf("SessionKey = %q, want the stored key %q", result.SessionKey, used)
+	}
+}
+
+// writeHeartbeatTasks writes a minimal HEARTBEAT.md into a temp workspace.
+func writeHeartbeatTasks(t *testing.T) string {
+	t.Helper()
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "HEARTBEAT.md"), []byte("# HEARTBEAT.md\n\n## Check status\nCheck the system status.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return tempDir
+}
+
+// bd-bjho: timeout_seconds is per attempt, so an attempt that exhausts its
+// deadline is retried with a fresh one.
+func TestExecuteHeartbeatJob_AttemptDeadlineRetried(t *testing.T) {
+	config := DefaultExecutorConfig()
+	config.TimeoutSeconds = 1
+	config.RetryDelaySeconds = 0
+	config.MaxRetries = 1
+	executor := NewJobExecutor(writeHeartbeatTasks(t), newMockSessionStore(), config)
+
+	calls := 0
+	aiExec := &funcMockAIExecutor{
+		execFunc: func(ctx context.Context, session *sessions.Session, prompt, model string) (AIResponse, error) {
+			calls++
+			if calls == 1 {
+				<-ctx.Done() // hang until the attempt deadline fires
+				return nil, ctx.Err()
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return &mockAIResponse{content: "HEARTBEAT_OK"}, nil
+		},
+	}
+
+	if _, err := executor.ExecuteHeartbeatJob(context.Background(), aiExec); err != nil {
+		t.Fatalf("ExecuteHeartbeatJob failed: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("attempts = %d, want 2", calls)
+	}
+}
+
+// bd-bjho: canceling the parent context stops the run without a retry.
+func TestExecuteHeartbeatJob_ParentCancelNotRetried(t *testing.T) {
+	config := DefaultExecutorConfig()
+	config.TimeoutSeconds = 10
+	config.RetryDelaySeconds = 0
+	config.MaxRetries = 2
+	executor := NewJobExecutor(writeHeartbeatTasks(t), newMockSessionStore(), config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	aiExec := &funcMockAIExecutor{
+		execFunc: func(actx context.Context, session *sessions.Session, prompt, model string) (AIResponse, error) {
+			calls++
+			cancel()
+			<-actx.Done()
+			return nil, actx.Err()
+		},
+	}
+
+	if _, err := executor.ExecuteHeartbeatJob(ctx, aiExec); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if calls != 1 {
+		t.Fatalf("attempts = %d, want 1 (no retry after parent cancel)", calls)
+	}
+}
+
+// bd-bjho: when every attempt hits its deadline the error reports all
+// MaxRetries+1 attempts.
+func TestExecuteHeartbeatJob_AllAttemptsDeadlineExceeded(t *testing.T) {
+	config := DefaultExecutorConfig()
+	config.TimeoutSeconds = 1
+	config.RetryDelaySeconds = 0
+	config.MaxRetries = 1
+	executor := NewJobExecutor(writeHeartbeatTasks(t), newMockSessionStore(), config)
+
+	calls := 0
+	aiExec := &funcMockAIExecutor{
+		execFunc: func(ctx context.Context, session *sessions.Session, prompt, model string) (AIResponse, error) {
+			calls++
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+
+	_, err := executor.ExecuteHeartbeatJob(context.Background(), aiExec)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+	if want := "after 2 attempt(s)"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to mention %q", err, want)
+	}
+	if calls != 2 {
+		t.Fatalf("attempts = %d, want 2", calls)
 	}
 }

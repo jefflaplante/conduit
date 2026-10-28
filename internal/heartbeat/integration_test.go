@@ -347,6 +347,7 @@ Just a quick check.
 
 	config := DefaultExecutorConfig()
 	config.TimeoutSeconds = 1 // Very short timeout
+	config.MaxRetries = 0     // timeouts are per attempt (bd-bjho); test one
 	executor := NewJobExecutor(tempDir, mockSessions, config)
 
 	ctx := context.Background()

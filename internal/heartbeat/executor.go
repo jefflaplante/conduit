@@ -21,7 +21,8 @@ type JobExecutor struct {
 
 // ExecutorConfig holds configuration for the heartbeat job executor
 type ExecutorConfig struct {
-	// Timeout for heartbeat task execution (default: 60 seconds)
+	// Timeout for each AI prompt attempt, not the whole run; every retry
+	// gets a fresh deadline (default: 60 seconds)
 	TimeoutSeconds int
 
 	// Session name prefix for heartbeat sessions
@@ -64,13 +65,6 @@ func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExec
 	startTime := time.Now()
 	log.Printf("[Heartbeat] Starting heartbeat task execution")
 
-	// Create timeout context
-	if e.config.TimeoutSeconds > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(e.config.TimeoutSeconds)*time.Second)
-		defer cancel()
-	}
-
 	// Read and interpret HEARTBEAT.md
 	tasks, err := e.taskInterpreter.ReadHeartbeatTasks()
 	if err != nil {
@@ -106,7 +100,9 @@ func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExec
 		defer f.FinalizeSession(session)
 	}
 
-	// Execute AI prompt with retries
+	// Execute AI prompt with retries. TimeoutSeconds bounds each attempt,
+	// not the whole run (bd-bjho): every attempt gets a fresh deadline
+	// derived from ctx, so cancellation still propagates immediately.
 	var response AIResponse
 	var lastErr error
 	attempts := 0
@@ -123,11 +119,13 @@ func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExec
 		}
 
 		attempts++
-		response, lastErr = aiExecutor.ExecutePrompt(ctx, session, prompt, e.config.DefaultModel)
+		response, lastErr = e.executeAttempt(ctx, aiExecutor, session, prompt)
 		if lastErr == nil {
 			break
 		}
 		// conduit-31jg.66: a stopped turn (/stop, shutdown) is not retried.
+		// ctx is the parent, so an attempt that only hit its own deadline
+		// (bd-bjho) falls through and is retried.
 		if errors.Is(lastErr, context.Canceled) || ctx.Err() != nil {
 			log.Printf("[Heartbeat] Attempt %d stopped: %v", attempt+1, lastErr)
 			break
@@ -153,6 +151,17 @@ func (e *JobExecutor) ExecuteHeartbeatJob(ctx context.Context, aiExecutor AIExec
 		result.Status, len(result.Actions))
 
 	return result, nil
+}
+
+// executeAttempt runs one prompt attempt under its own TimeoutSeconds
+// deadline (bd-bjho).
+func (e *JobExecutor) executeAttempt(ctx context.Context, aiExecutor AIExecutor, session *sessions.Session, prompt string) (AIResponse, error) {
+	if e.config.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(e.config.TimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+	return aiExecutor.ExecutePrompt(ctx, session, prompt, e.config.DefaultModel)
 }
 
 // AIExecutor defines the interface for executing AI prompts
