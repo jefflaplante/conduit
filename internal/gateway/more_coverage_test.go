@@ -60,7 +60,7 @@ func TestHandleWebSocketCommandFromChat_Goodbye(t *testing.T) {
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/goodbye")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/goodbye")
 	// Drain at least one message
 	out := drainClientMessage(t, c)
 	// The /goodbye path calls handleReflectiveSessionEnd which may send

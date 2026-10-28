@@ -115,7 +115,7 @@ func TestHandleWebSocketCommand_AddsSlashPrefix(t *testing.T) {
 func TestHandleWebSocketCommandFromChat_Help(t *testing.T) {
 	gw, _, _ := newTestGatewayWithRouter(t)
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "/help")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", "", "/help")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "/reset") {
@@ -126,14 +126,14 @@ func TestHandleWebSocketCommandFromChat_Help(t *testing.T) {
 func TestHandleWebSocketCommandFromChat_Commands(t *testing.T) {
 	gw, _, _ := newTestGatewayWithRouter(t)
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "/commands")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", "", "/commands")
 	drainClientMessage(t, c)
 }
 
 func TestHandleWebSocketCommandFromChat_Unknown(t *testing.T) {
 	gw, _, _ := newTestGatewayWithRouter(t)
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, "sess", "/nope")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", "sess", "/nope")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "Unknown") {
@@ -145,7 +145,7 @@ func TestHandleWebSocketCommandFromChat_Stop_NoActive(t *testing.T) {
 	gw, _, _ := newTestGatewayWithRouter(t)
 	gw.ws.ActiveRequests = make(map[string]context.CancelFunc)
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, "sess-1", "/stop")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", "sess-1", "/stop")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "No active") {
@@ -159,7 +159,7 @@ func TestHandleWebSocketCommandFromChat_Stop_Active(t *testing.T) {
 	called := false
 	gw.ws.ActiveRequests["sess-1"] = func() { called = true }
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, "sess-1", "/stop")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", "sess-1", "/stop")
 	drainClientMessage(t, c)
 	if !called {
 		t.Error("expected cancel called")
@@ -169,7 +169,7 @@ func TestHandleWebSocketCommandFromChat_Stop_Active(t *testing.T) {
 func TestHandleWebSocketCommandFromChat_Reset_NoSession(t *testing.T) {
 	gw, _, _ := newTestGatewayWithRouter(t)
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "/reset")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", "", "/reset")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "No active session") {
@@ -184,7 +184,7 @@ func TestHandleWebSocketCommandFromChat_Reset_WithSession(t *testing.T) {
 	_ = store.SetSessionContext(sess.Key, "last_prompt_tokens", "500")
 
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/reset")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/reset")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "Session reset") {
@@ -201,7 +201,7 @@ func TestHandleWebSocketCommandFromChat_Status(t *testing.T) {
 	gw, store, _ := newTestGatewayWithRouter(t)
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/status")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/status")
 	drainClientMessage(t, c)
 }
 
@@ -209,7 +209,7 @@ func TestHandleWebSocketCommandFromChat_Context(t *testing.T) {
 	gw, store, _ := newTestGatewayWithRouter(t)
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/context")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/context")
 	drainClientMessage(t, c)
 }
 
@@ -217,7 +217,7 @@ func TestHandleWebSocketCommandFromChat_Cost(t *testing.T) {
 	gw, store, _ := newTestGatewayWithRouter(t)
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/cost")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/cost")
 	drainClientMessage(t, c)
 }
 
@@ -225,7 +225,7 @@ func TestHandleWebSocketCommandFromChat_Provider_List(t *testing.T) {
 	gw, store, _ := newTestGatewayWithRouter(t)
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/provider")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/provider")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "Current Provider") {
@@ -237,7 +237,7 @@ func TestHandleWebSocketCommandFromChat_Provider_Unknown(t *testing.T) {
 	gw, store, _ := newTestGatewayWithRouter(t)
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/provider bogus")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/provider bogus")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "Unknown provider") {
@@ -249,7 +249,7 @@ func TestHandleWebSocketCommandFromChat_Provider_Switch(t *testing.T) {
 	gw, store, _ := newTestGatewayWithRouter(t)
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/provider testprov")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/provider testprov")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "Switched to provider") {
@@ -265,7 +265,7 @@ func TestHandleWebSocketCommandFromChat_Model_List(t *testing.T) {
 	gw, store, _ := newTestGatewayWithRouter(t)
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/model")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/model")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "Current Model") {
@@ -277,7 +277,7 @@ func TestHandleWebSocketCommandFromChat_Model_KnownAlias(t *testing.T) {
 	gw, store, _ := newTestGatewayWithRouter(t)
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/model sonnet")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/model sonnet")
 	drainClientMessage(t, c)
 	refreshed, _ := store.GetSession(sess.Key)
 	if refreshed.Context["model"] != "claude-sonnet-4-20250514" {
@@ -289,7 +289,7 @@ func TestHandleWebSocketCommandFromChat_Model_RawName(t *testing.T) {
 	gw, store, _ := newTestGatewayWithRouter(t)
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/model claude-haiku-4-5-20251001")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/model claude-haiku-4-5-20251001")
 	drainClientMessage(t, c)
 	refreshed, _ := store.GetSession(sess.Key)
 	if refreshed.Context["model"] != "claude-haiku-4-5-20251001" {
@@ -301,7 +301,7 @@ func TestHandleWebSocketCommandFromChat_Model_UnknownShort(t *testing.T) {
 	gw, store, _ := newTestGatewayWithRouter(t)
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/model xx")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/model xx")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "Unknown model") {
@@ -313,7 +313,7 @@ func TestHandleWebSocketCommandFromChat_Compact_NoEngine(t *testing.T) {
 	gw, store, _ := newTestGatewayWithRouter(t)
 	sess, _ := store.GetOrCreateSession("u1", "ws_u1")
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, sess.Key, "/compact")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", sess.Key, "/compact")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "not configured") {
@@ -324,7 +324,7 @@ func TestHandleWebSocketCommandFromChat_Compact_NoEngine(t *testing.T) {
 func TestHandleWebSocketCommandFromChat_Compact_NoSession(t *testing.T) {
 	gw, _, _ := newTestGatewayWithRouter(t)
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "/compact")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", "", "/compact")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "No active session") {
@@ -335,7 +335,7 @@ func TestHandleWebSocketCommandFromChat_Compact_NoSession(t *testing.T) {
 func TestHandleWebSocketCommandFromChat_Goodbye_NoSession(t *testing.T) {
 	gw, _, _ := newTestGatewayWithRouter(t)
 	c := newTestWSClient("c1")
-	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "/goodbye")
+	gw.handleWebSocketCommandFromChat(context.Background(), c, "", "", "", "/goodbye")
 	out := drainClientMessage(t, c)
 	r, _ := out["response"].(string)
 	if !strings.Contains(r, "No active session") {

@@ -60,30 +60,37 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	}
 
 	// Determine session key
+	channelID := wsChatChannel(userID)
+	explicit := msg.SessionKey != ""
 	sessionKey := msg.SessionKey
 	if sessionKey == "" {
 		sessionKey = client.SessionKey()
 	}
 
-	// Retrieve existing session by key, or create a new one.
+	// Retrieve existing session by key. An explicit key wins (TUI tabs); no
+	// key, an unknown key or the chat's home session follows the chat's
+	// topic pointer like channel ingress (conduit-tui-topics-c90u).
 	var session *sessions.Session
+	var notice string
 	var err error
 	if sessionKey != "" {
 		session, err = g.sessions.GetSession(sessionKey)
 	}
-	if session != nil && !wsCanAccessSession(client, session) {
-		g.logger.Warn("websocket session access denied", "client", client.Role, "session_key", sessionKey)
-		g.sendErrorToClient(client, sessionKey, "forbidden", "This token cannot access that session")
-		return
-	}
-	if session == nil {
-		channelID := fmt.Sprintf("tui_%s", userID)
-		session, err = g.sessions.GetOrCreateSession(userID, channelID)
+	if g.wsFollowsTopicPointer(session, explicit, channelID, userID) {
+		session, notice, err = g.resolveSessionForChat(channelID, userID)
 	}
 	if err != nil {
 		log.Printf("Error getting session for WS client %s: %v", client.ID, err)
 		g.sendErrorToClient(client, sessionKey, "session_error", "Failed to get or create session")
 		return
+	}
+	if !wsCanAccessSession(client, session) {
+		g.logger.Warn("websocket session access denied", "client", client.Role, "session_key", session.Key)
+		g.sendErrorToClient(client, sessionKey, "forbidden", "This token cannot access that session")
+		return
+	}
+	if notice != "" {
+		g.sendWSNotice(client, session.Key, notice)
 	}
 
 	// Update client's active session
@@ -102,7 +109,7 @@ func (g *Gateway) handleWebSocketChat(ctx context.Context, client *Client, msg *
 	// Check for commands
 	text := strings.TrimSpace(msg.Text)
 	if strings.HasPrefix(text, "/") {
-		g.handleWebSocketCommandFromChat(ctx, client, session.Key, text)
+		g.handleWebSocketCommandFromChat(ctx, client, channelID, userID, session.Key, text)
 		return
 	}
 

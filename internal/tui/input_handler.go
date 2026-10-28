@@ -268,6 +268,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool) {
 						"/model [alias] - View/switch model\n"+
 						"/context - Show context window usage\n"+
 						"/stop - Stop current operation\n"+
+						"/topic [slug|home|park|close|...] - List/switch/manage topics\n"+
+						"/home - Back to the home session\n"+
 						"/quit, /exit - Exit TUI\n\n"+
 						"Shell Escape (! prefix):\n"+
 						"! <cmd> - Execute shell command (tracks cwd)\n"+
