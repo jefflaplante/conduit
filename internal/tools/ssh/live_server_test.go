@@ -164,6 +164,11 @@ func (s *liveSSHServer) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 	defer ch.Close()
 	for req := range reqs {
 		if req.Type == "shell" {
+			// Count the shell before replying: the client's Shell() returns
+			// on the reply, and a test may check shellsOpened right away.
+			s.mu.Lock()
+			s.shells++
+			s.mu.Unlock()
 			_ = req.Reply(true, nil)
 			go ssh.DiscardRequests(reqs)
 			s.serveShell(ch)
@@ -216,9 +221,6 @@ var shellLineRe = regexp.MustCompile(`^echo '([^']*)'; (.*); __exit_code=\$\?; e
 // (conduit-1kxf): each marker-wrapped command line is recorded and answered
 // with its start marker, "ran: <command>" and the end marker with exit 0.
 func (s *liveSSHServer) serveShell(ch ssh.Channel) {
-	s.mu.Lock()
-	s.shells++
-	s.mu.Unlock()
 	r := bufio.NewReader(ch)
 	for {
 		line, err := r.ReadString('\n')
