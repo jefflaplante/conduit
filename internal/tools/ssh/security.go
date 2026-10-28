@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"conduit/internal/config"
+	"conduit/internal/tools"
 )
 
 // SecurityTier represents the security classification of a command
@@ -105,7 +106,13 @@ func NewSecurityEngine(cfg config.SSHSecurityConfig) (*SecurityEngine, error) {
 	return engine, nil
 }
 
-// ClassifyCommand analyzes a command and returns its security classification
+// ClassifyCommand analyzes a command and returns its security classification.
+//
+// The command line is split with the shell lexer into simple commands (on
+// ; && || & | |& newlines, ( ) subshells, $( ), backticks, <( ) and >( ));
+// every segment is classified and the worst tier wins (C3). Output
+// redirection, heredocs and process substitution raise the tier to at least
+// modify. A line that cannot be tokenized gets the default tier.
 func (e *SecurityEngine) ClassifyCommand(command string) *ClassificationResult {
 	result := &ClassificationResult{
 		Command:  command,
@@ -121,31 +128,47 @@ func (e *SecurityEngine) ClassifyCommand(command string) *ClassificationResult {
 		return result
 	}
 
-	// Check for blocked patterns first (highest priority)
-	for _, pattern := range e.blockedPatterns {
-		if pattern.MatchString(command) {
-			result.Tier = TierBlocked
-			result.Blocked = true
-			result.Reason = fmt.Sprintf("matches blocked pattern: %s", pattern.String())
-			return result
+	parsed, parseErr := tools.ParseShellSegments(command)
+
+	// Check for blocked patterns first (highest priority), against the raw
+	// command and its quote-removed, path-normalised rendering.
+	for _, subject := range patternSubjects(command, parsed) {
+		for _, pattern := range e.blockedPatterns {
+			if pattern.MatchString(subject) {
+				result.Tier = TierBlocked
+				result.Blocked = true
+				result.Reason = fmt.Sprintf("matches blocked pattern: %s", pattern.String())
+				return result
+			}
 		}
 	}
 
-	// Check for subshells
-	hasSubshell := e.detectSubshells(command)
+	if parseErr != nil {
+		return e.classifyUntokenized(result)
+	}
+
+	// Check for subshells: command and process substitution, plus text the
+	// lexer could not split (an unquoted heredoc body or ${...} holding one).
+	hasSubshell := parsed.CommandSubstitution || parsed.ProcessSubstitution || len(parsed.Untokenized) > 0
 	result.HasSubshell = hasSubshell
 	if hasSubshell && !e.config.AllowSubshells {
 		result.Tier = TierBlocked
 		result.Blocked = true
 		result.Reason = "command substitution (subshells) not allowed"
-		result.Warnings = append(result.Warnings, "detected $() or backtick command substitution")
+		result.Warnings = append(result.Warnings, "detected $(), backtick or process substitution")
 		return result
 	}
 
 	// Check for pipes
-	pipeChain := e.extractPipeChain(command)
-	result.PipeChain = pipeChain
-	if len(pipeChain) > 1 && !e.config.AllowPipes {
+	hasPipe := false
+	for _, seg := range parsed.Segments {
+		result.PipeChain = append(result.PipeChain, strings.Join(seg.Words, " "))
+		hasPipe = hasPipe || seg.AfterPipe
+		if len(seg.Redirects) > 0 || seg.Heredoc {
+			result.HasRedirection = true
+		}
+	}
+	if hasPipe && !e.config.AllowPipes {
 		result.Tier = TierBlocked
 		result.Blocked = true
 		result.Reason = "pipe chains not allowed"
@@ -153,21 +176,19 @@ func (e *SecurityEngine) ClassifyCommand(command string) *ClassificationResult {
 	}
 
 	// Check for redirections
-	result.HasRedirection = e.detectRedirection(command)
 	if result.HasRedirection {
 		result.Warnings = append(result.Warnings, "command contains I/O redirection")
 	}
 
-	// Classify based on pipe chain (worst tier wins)
-	if len(pipeChain) > 1 {
-		result.Tier, result.BaseCommand, result.Reason = e.classifyPipeChain(pipeChain)
-	} else {
-		// Single command classification
-		result.Tier, result.BaseCommand, result.Reason = e.classifySingleCommand(command)
-	}
+	// Classify every segment (worst tier wins)
+	result.Tier, result.BaseCommand, result.Reason = e.classifySegments(parsed)
 
-	// Check if explicitly blocked command
-	if e.isBlockedCommand(command) {
+	// Check if explicitly blocked command, in any segment
+	blocked := e.isBlockedCommand(command)
+	for _, seg := range parsed.Segments {
+		blocked = blocked || e.isBlockedCommand(renderSegment(seg))
+	}
+	if blocked {
 		result.Tier = TierBlocked
 		result.Blocked = true
 		result.Reason = "command is in the blocked list"
@@ -178,6 +199,38 @@ func (e *SecurityEngine) ClassifyCommand(command string) *ClassificationResult {
 	result.RequiresApproval = e.requiresApproval(result.Tier)
 	result.Blocked = result.Tier == TierBlocked
 
+	return result
+}
+
+// classifyUntokenized fails closed for a command line the lexer cannot
+// split: it gets the default tier, never below dangerous.
+func (e *SecurityEngine) classifyUntokenized(result *ClassificationResult) *ClassificationResult {
+	command := result.Command
+	result.HasSubshell = e.detectSubshells(command)
+	if result.HasSubshell && !e.config.AllowSubshells {
+		result.Tier = TierBlocked
+		result.Blocked = true
+		result.Reason = "command substitution (subshells) not allowed"
+		result.Warnings = append(result.Warnings, "detected $() or backtick command substitution")
+		return result
+	}
+	result.HasRedirection = e.detectRedirection(command)
+	result.Warnings = append(result.Warnings, "command could not be tokenized")
+	if e.isBlockedCommand(command) {
+		result.Tier = TierBlocked
+		result.Blocked = true
+		result.Reason = "command is in the blocked list"
+		return result
+	}
+	tier := SecurityTier(e.config.DefaultTier)
+	if tierSeverity(tier) < tierSeverity(TierDangerous) {
+		tier = TierDangerous
+	}
+	result.Tier = tier
+	result.BaseCommand = e.extractBaseCommand(command)
+	result.Reason = fmt.Sprintf("command could not be tokenized, using default tier: %s", tier)
+	result.RequiresApproval = e.requiresApproval(tier)
+	result.Blocked = tier == TierBlocked
 	return result
 }
 
@@ -228,61 +281,6 @@ func (e *SecurityEngine) detectSubshells(command string) bool {
 	return false
 }
 
-// extractPipeChain splits a command into its pipe components
-func (e *SecurityEngine) extractPipeChain(command string) []string {
-	// Handle quoted strings and escaped pipes
-	var parts []string
-	var current strings.Builder
-	inSingleQuote := false
-	inDoubleQuote := false
-	escaped := false
-
-	for _, c := range command {
-		if escaped {
-			current.WriteRune(c)
-			escaped = false
-			continue
-		}
-
-		if c == '\\' {
-			escaped = true
-			current.WriteRune(c)
-			continue
-		}
-
-		if c == '\'' && !inDoubleQuote {
-			inSingleQuote = !inSingleQuote
-			current.WriteRune(c)
-			continue
-		}
-
-		if c == '"' && !inSingleQuote {
-			inDoubleQuote = !inDoubleQuote
-			current.WriteRune(c)
-			continue
-		}
-
-		if c == '|' && !inSingleQuote && !inDoubleQuote {
-			// Check for || (logical OR) - not a pipe
-			part := strings.TrimSpace(current.String())
-			if part != "" {
-				parts = append(parts, part)
-			}
-			current.Reset()
-			continue
-		}
-
-		current.WriteRune(c)
-	}
-
-	// Add the last part
-	if part := strings.TrimSpace(current.String()); part != "" {
-		parts = append(parts, part)
-	}
-
-	return parts
-}
-
 // detectRedirection checks for I/O redirection operators
 func (e *SecurityEngine) detectRedirection(command string) bool {
 	// Check for common redirection patterns
@@ -329,40 +327,26 @@ func (e *SecurityEngine) detectRedirection(command string) bool {
 	return false
 }
 
-// classifyPipeChain classifies a pipe chain (worst tier wins)
-func (e *SecurityEngine) classifyPipeChain(chain []string) (SecurityTier, string, string) {
-	worstTier := TierRead
-	var worstCommand string
-	var reasons []string
-
-	for _, cmd := range chain {
-		tier, baseCmd, reason := e.classifySingleCommand(cmd)
-		if tierSeverity(tier) > tierSeverity(worstTier) {
-			worstTier = tier
-			worstCommand = baseCmd
-		}
-		reasons = append(reasons, fmt.Sprintf("%s: %s", baseCmd, reason))
-	}
-
-	return worstTier, worstCommand, fmt.Sprintf("pipe chain classification (worst): %s", strings.Join(reasons, " | "))
-}
-
-// classifySingleCommand classifies a single command (no pipes)
-func (e *SecurityEngine) classifySingleCommand(command string) (SecurityTier, string, string) {
+// classifyWords classifies one simple command given as its words.
+func (e *SecurityEngine) classifyWords(words []string) (SecurityTier, string, string) {
 	// Extract the base command (first word)
-	baseCmd := e.extractBaseCommand(command)
+	baseCmd, idx := baseCommand(words)
 	if baseCmd == "" {
 		return TierBlocked, "", "empty command"
 	}
 
 	// Check classification in order of increasing severity
 	if e.readCommands[baseCmd] {
+		// Some read commands write or run things through their arguments
+		if tier, reason := checkReadArgs(baseCmd, words[idx+1:]); tier != TierRead {
+			return tier, baseCmd, reason
+		}
 		return TierRead, baseCmd, "classified as read-only command"
 	}
 
 	if e.modifyCommands[baseCmd] {
 		// Check for dangerous flags/arguments that might upgrade the tier
-		if upgraded, reason := e.checkDangerousArgs(baseCmd, command); upgraded {
+		if upgraded, reason := e.checkDangerousArgs(baseCmd, strings.Join(words, " ")); upgraded {
 			return TierDangerous, baseCmd, reason
 		}
 		return TierModify, baseCmd, "classified as state-modifying command"
@@ -383,9 +367,15 @@ func (e *SecurityEngine) classifySingleCommand(command string) (SecurityTier, st
 
 // extractBaseCommand gets the first word of a command, handling common prefixes
 func (e *SecurityEngine) extractBaseCommand(command string) string {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return ""
+	name, _ := baseCommand(strings.Fields(command))
+	return name
+}
+
+// baseCommand returns the command name in words, skipping common prefixes
+// (sudo, env, timeout, ...), and the index of the word it came from.
+func baseCommand(words []string) (string, int) {
+	if len(words) == 0 {
+		return "", 0
 	}
 
 	// Prefixes that don't take arguments (next word is the command)
@@ -405,11 +395,6 @@ func (e *SecurityEngine) extractBaseCommand(command string) string {
 		"timeout": true,
 		"watch":   true,
 		"env":     true,
-	}
-
-	words := strings.Fields(command)
-	if len(words) == 0 {
-		return ""
 	}
 
 	// Skip prefix commands to get to the actual command
@@ -455,7 +440,7 @@ func (e *SecurityEngine) extractBaseCommand(command string) string {
 
 	if idx >= len(words) {
 		// Command was all prefixes, use the last one
-		return words[len(words)-1]
+		idx = len(words) - 1
 	}
 
 	// Get the command name, handling paths
@@ -465,7 +450,7 @@ func (e *SecurityEngine) extractBaseCommand(command string) string {
 		cmd = cmd[lastSlash+1:]
 	}
 
-	return cmd
+	return cmd, idx
 }
 
 // isNumeric checks if a string is a numeric value

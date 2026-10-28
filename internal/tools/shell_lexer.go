@@ -39,6 +39,10 @@ type shWord struct {
 type shCmd struct {
 	words     []shWord
 	redirects []string
+	// redirOut[i] reports whether redirects[i] is an output redirection
+	// (>, >>, >|, >&, &>, &>>, <>).
+	redirOut  []bool
+	heredoc   bool // has a << / <<- heredoc or <<< here-string
 	afterPipe bool
 }
 
@@ -48,8 +52,10 @@ type shCmd struct {
 // containing substitutions, complex ${...} expansions); the policy runs the
 // legacy substring check over them.
 type shParse struct {
-	cmds        []shCmd
-	legacyTexts []string
+	cmds         []shCmd
+	legacyTexts  []string
+	substitution bool // saw $( ) or backtick command substitution
+	procSubst    bool // saw <( ) or >( ) process substitution
 }
 
 type heredocSpec struct {
@@ -162,9 +168,10 @@ func (l *shLexer) parseList(term byte) error {
 	}
 
 	var (
-		cur   shCmd
-		w     wordBuilder
-		redir = redirNone
+		cur      shCmd
+		w        wordBuilder
+		redir    = redirNone
+		redirOut bool
 	)
 	endWord := func() {
 		if !w.started {
@@ -176,6 +183,7 @@ func (l *shLexer) parseList(term byte) error {
 			l.heredocs = append(l.heredocs, heredocSpec{delim: word.text, quoted: word.quoted, strip: redir == redirHeredocStrip})
 		case redirFile:
 			cur.redirects = append(cur.redirects, word.text)
+			cur.redirOut = append(cur.redirOut, redirOut)
 		default:
 			cur.words = append(cur.words, word)
 		}
@@ -225,7 +233,7 @@ func (l *shLexer) parseList(term byte) error {
 				if l.peek(0) == '>' {
 					l.i++
 				}
-				redir = redirFile
+				redir, redirOut = redirFile, true
 			default:
 				endCmd(false)
 				l.i++
@@ -261,6 +269,7 @@ func (l *shLexer) parseList(term byte) error {
 				return nil
 			}
 			w.markDynamic()
+			l.out.substitution = true
 			l.i++
 			if err := l.parseList('`'); err != nil {
 				return err
@@ -289,6 +298,7 @@ func (l *shLexer) parseList(term byte) error {
 			if l.peek(1) == '(' { // process substitution <( ) / >( )
 				l.i += 2
 				w.markDynamic()
+				l.out.procSubst = true
 				w.addString("<(...)", false)
 				if err := l.parseList(')'); err != nil {
 					return err
@@ -296,17 +306,24 @@ func (l *shLexer) parseList(term byte) error {
 				continue
 			}
 			op := l.s[l.i:min(l.i+3, len(l.s))]
+			redirOut = c == '>'
 			switch {
 			case strings.HasPrefix(op, "<<<"):
 				l.i += 3
 				redir = redirFile
+				cur.heredoc = true
 			case strings.HasPrefix(op, "<<-"):
 				l.i += 3
 				redir = redirHeredocStrip
+				cur.heredoc = true
 			case strings.HasPrefix(op, "<<"):
 				l.i += 2
 				redir = redirHeredoc
-			case strings.HasPrefix(op, "<>"), strings.HasPrefix(op, "<&"),
+				cur.heredoc = true
+			case strings.HasPrefix(op, "<>"):
+				l.i += 2
+				redir, redirOut = redirFile, true
+			case strings.HasPrefix(op, "<&"),
 				strings.HasPrefix(op, ">>"), strings.HasPrefix(op, ">&"), strings.HasPrefix(op, ">|"):
 				l.i += 2
 				redir = redirFile
@@ -360,6 +377,7 @@ func (l *shLexer) readDouble(w *wordBuilder) error {
 			}
 		case '`':
 			w.markDynamic()
+			l.out.substitution = true
 			l.i++
 			if err := l.parseList('`'); err != nil {
 				return err
@@ -378,6 +396,7 @@ func (l *shLexer) readDollar(w *wordBuilder) error {
 	switch {
 	case n == '(':
 		w.markDynamic()
+		l.out.substitution = true
 		w.addString("$(...)", false)
 		l.i += 2
 		return l.parseList(')')
