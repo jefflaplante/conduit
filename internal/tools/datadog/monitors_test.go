@@ -330,7 +330,9 @@ func TestMonitorTool_MuteMonitor_WithConfirmation(t *testing.T) {
 
 	tool := createTestTool(t, srv)
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	// Execute only asks for approval (H11, monitors_approval_test.go);
+	// this exercises the approved run.
+	result, err := tool.executeMuteMonitor(context.Background(), map[string]interface{}{
 		"action":     "mute_monitor",
 		"monitor_id": 123,
 		"confirmed":  true,
@@ -353,7 +355,9 @@ func TestMonitorTool_MuteMonitor_WithScope(t *testing.T) {
 
 	tool := createTestTool(t, srv)
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	// Execute only asks for approval (H11, monitors_approval_test.go);
+	// this exercises the approved run.
+	result, err := tool.executeMuteMonitor(context.Background(), map[string]interface{}{
 		"action":     "mute_monitor",
 		"monitor_id": 123,
 		"scope":      "host:myhost",
@@ -393,7 +397,9 @@ func TestMonitorTool_UnmuteMonitor_WithConfirmation(t *testing.T) {
 
 	tool := createTestTool(t, srv)
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	// Execute only asks for approval (H11, monitors_approval_test.go);
+	// this exercises the approved run.
+	result, err := tool.executeUnmuteMonitor(context.Background(), map[string]interface{}{
 		"action":     "unmute_monitor",
 		"monitor_id": 123,
 		"confirmed":  true,
@@ -416,7 +422,9 @@ func TestMonitorTool_UnmuteMonitor_WithScope(t *testing.T) {
 
 	tool := createTestTool(t, srv)
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	// Execute only asks for approval (H11, monitors_approval_test.go);
+	// this exercises the approved run.
+	result, err := tool.executeUnmuteMonitor(context.Background(), map[string]interface{}{
 		"action":     "unmute_monitor",
 		"monitor_id": 123,
 		"scope":      "host:myhost",
