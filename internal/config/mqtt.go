@@ -11,6 +11,8 @@ import (
 	"text/template"
 	"text/template/parse"
 	"unicode/utf8"
+
+	"conduit/internal/trie"
 )
 
 // MQTTConfig holds configuration for the optional MQTT event ingest service.
@@ -149,10 +151,16 @@ type MQTTEventBudget struct {
 	MaxActions int `json:"max_actions"`
 }
 
-// MQTTEventRule is one owner-authored rule on an exact topic.
+// MQTTEventRule is one owner-authored rule on an MQTT topic filter.
+//
+// Topic may use the "+" and "#" wildcards (MQTT 4.7). A wildcard rule acts
+// like one subscription: its state (cooldown, threshold run, state_change
+// baseline, per-rule budget) is shared across every topic it matches, so a
+// fire on one topic can cool down or reset the rule for its siblings. Write
+// one rule per topic where per-topic state matters.
 type MQTTEventRule struct {
 	ID             string             `json:"id"`
-	Topic          string             `json:"topic"` // exact topic, no wildcards
+	Topic          string             `json:"topic"` // MQTT topic filter; "+" and "#" allowed
 	Condition      MQTTEventCondition `json:"condition"`
 	Action         MQTTEventAction    `json:"action"`
 	CooldownS      int                `json:"cooldown_s,omitempty"`
@@ -265,8 +273,8 @@ func (r *MQTTEventRule) validate() error {
 	if r.Topic == "" {
 		return fmt.Errorf("topic is required")
 	}
-	if strings.ContainsAny(r.Topic, "+#") {
-		return fmt.Errorf("topic %q: wildcards (+, #) are not allowed in rule topics; use an exact topic", r.Topic)
+	if err := trie.ValidateFilter(r.Topic); err != nil {
+		return fmt.Errorf("topic: %w", err)
 	}
 	if r.CooldownS < 0 {
 		return fmt.Errorf("cooldown_s cannot be negative")
