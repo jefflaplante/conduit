@@ -65,8 +65,8 @@ func (t *GatewayTool) GetActionDocs() map[string]types.ActionDoc {
 			Returns:     "status, version (plus any other fields the gateway reports)",
 		},
 		"restart": {
-			Description: "Restart the gateway (requires confirmation from user)",
-			Returns:     "restart confirmation with timestamp",
+			Description: "Restart the gateway. Needs the owner's approval in chat; refused from cron, heartbeat, sub-agent and wake turns",
+			Returns:     "pending approval; the restart starts once the owner approves",
 		},
 		"channels": {
 			Description: "List all configured channels with their status",
