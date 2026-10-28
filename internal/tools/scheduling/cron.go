@@ -12,6 +12,7 @@ import (
 // CronTool manages scheduled jobs via the gateway's scheduler
 type CronTool struct {
 	services *types.ToolServices
+	now      func() time.Time // clock for nextRun; nil = time.Now (tests inject)
 }
 
 func NewCronTool(services *types.ToolServices) *CronTool {
@@ -37,6 +38,7 @@ Skill Scoping (important for small-context models):
 Regular Actions:
 - Schedule a reminder: action=schedule, command="Remind the user to check email", delayMinutes=30
 - Daily report: action=schedule, schedule="0 9 * * *", command="Generate daily briefing", type="go"
+- Wall-clock in a zone: action=schedule, schedule="40 10 * * *", timezone="America/Los_Angeles", command="Stand-up reminder"
 - Scoped job: action=schedule, schedule="*/30 * * * *", command="Check solar production", model="haiku", skills=["solar"]
 - System backup: action=schedule, schedule="0 2 * * *", command="/usr/local/bin/backup.sh", type="system"
 
@@ -90,6 +92,10 @@ func (t *CronTool) Parameters() map[string]interface{} {
 				"type":        "boolean",
 				"description": "Run once then delete (for reminders)",
 				"default":     false,
+			},
+			"timezone": map[string]interface{}{
+				"type":        "string",
+				"description": "IANA timezone for the schedule (e.g., 'America/Los_Angeles'). Empty = server local time. Applied to 'schedule'; rejected with delayMinutes (relative, zone-free).",
 			},
 			"delayMinutes": map[string]interface{}{
 				"type":        "integer",

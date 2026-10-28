@@ -13,6 +13,12 @@ import (
 // splitTZPrefix separates a leading "CRON_TZ=<zone> " or "TZ=<zone> " from a
 // cron expression (robfig/cron understands the prefix natively).
 func splitTZPrefix(schedule string) (prefix, rest string) {
+	return SplitTZPrefix(schedule)
+}
+
+// SplitTZPrefix is the exported form of splitTZPrefix for callers outside the
+// scheduler (the Cron tool, bd-vo77). prefix keeps its trailing space.
+func SplitTZPrefix(schedule string) (prefix, rest string) {
 	schedule = strings.TrimSpace(schedule)
 	if strings.HasPrefix(schedule, "CRON_TZ=") || strings.HasPrefix(schedule, "TZ=") {
 		if i := strings.IndexAny(schedule, " \t"); i > 0 {
