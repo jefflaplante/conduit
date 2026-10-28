@@ -246,6 +246,97 @@ func TestParameters_EnumOnlyWithHonestActions(t *testing.T) {
 	}
 }
 
+// --- bd-3f3l.1: SkillTool.Execute must hoist top-level tool-call params ---
+
+// captureSkillForTool runs a SkillTool against a real executor + temp-dir bash
+// script that echoes its stdin envelope back as JSON, then returns the decoded
+// map the skill invocation actually received.
+func captureSkillForTool(t *testing.T, args map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	dir := t.TempDir()
+	skill := writeScript(t, dir, "dispatch.sh", `#!/bin/bash
+line=$(cat)
+echo "$line"
+`)
+	skill.Name = "hoist-probe"
+	e := NewExecutor(ExecutionConfig{TimeoutSeconds: 10})
+	tool := &SkillTool{skill: skill, executor: e}
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("SkillTool.Execute error: %v", err)
+	}
+	if result == nil || !result.Success {
+		t.Fatalf("skill probe failed: %v (output: %s)", result, resultContentFor(result))
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal([]byte(result.Content), &got); err != nil {
+		t.Fatalf("probe output not JSON: %v (raw: %q)", err, result.Content)
+	}
+	return got
+}
+
+// TestSkillTool_ExecuteHoistsTopLevelParams: providers send extra top-level
+// keys (e.g. account, query) in skill_<name> tool calls; the schema only
+// declares action+args with no additionalProperties:false, so those keys pass
+// validation and are silently dropped today. They must reach the skill.
+func TestSkillTool_ExecuteHoistsTopLevelParams(t *testing.T) {
+	got := captureSkillForTool(t, map[string]interface{}{
+		"action":  "dispatch",
+		"account": "test@example.com", // synthetic — public repo
+		"query":   "invoice",
+		"args":    map[string]interface{}{"limit": 10},
+	})
+
+	if acct, ok := got["account"].(string); !ok || acct != "test@example.com" {
+		t.Errorf("top-level account not hoisted into skill args; got: %v", got)
+	}
+	if q, ok := got["query"].(string); !ok || q != "invoice" {
+		t.Errorf("top-level query not hoisted into skill args; got: %v", got)
+	}
+	if lim, ok := got["limit"].(float64); !ok || lim != 10 {
+		t.Errorf("nested args.limit lost during hoist; got: %v", got)
+	}
+	if act, ok := got["action"].(string); !ok || act != "dispatch" {
+		t.Errorf("action key must not be hoisted into skill args; got: %v", got)
+	}
+}
+
+// TestSkillTool_ExecuteArgsWinOverHoisted: when a key exists both top-level
+// and inside args, the explicit args value must win (the nested args object is
+// the documented channel; top-level keys are the convenience passthrough).
+func TestSkillTool_ExecuteArgsWinOverHoisted(t *testing.T) {
+	got := captureSkillForTool(t, map[string]interface{}{
+		"action":  "dispatch",
+		"account": "top-level@example.com",
+		"args": map[string]interface{}{
+			"account": "nested@example.com",
+		},
+	})
+
+	if acct, ok := got["account"].(string); !ok || acct != "nested@example.com" {
+		t.Errorf("nested args.account must win over hoisted top-level account; got: %v", got)
+	}
+}
+
+// TestSkillTool_ExecuteNoHoistBypass: without extra top-level keys, behavior
+// is unchanged — nested args flow through untouched (regression guard).
+func TestSkillTool_ExecuteNoHoistBypass(t *testing.T) {
+	got := captureSkillForTool(t, map[string]interface{}{
+		"action": "dispatch",
+		"args":   map[string]interface{}{"payload": "keep-me"},
+	})
+
+	if len(got) != 2 { // payload + action envelope key
+		t.Errorf("unexpected envelope keys; got: %v", got)
+	}
+	if p, ok := got["payload"].(string); !ok || p != "keep-me" {
+		t.Errorf("payload lost; got: %v", got)
+	}
+	if _, leaked := got["args"]; leaked {
+		t.Errorf("raw args container must not be forwarded as a key; got: %v", got)
+	}
+}
+
 // --- bd-312l: SkillActionTool.Execute hoist must be args-wins ---
 
 // captureSkillForActionTool runs a SkillActionTool against a real executor +
