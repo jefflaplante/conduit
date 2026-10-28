@@ -50,10 +50,27 @@ func toMapSlice(obj interface{}) ([]map[string]interface{}, error) {
 
 // ---------- Secret redaction ----------
 
+// lastAppliedAnnotation holds the full object as last applied by kubectl,
+// so for a Secret it carries every value in data and stringData.
+const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
+
+// redactSecretData replaces a Secret's values with <REDACTED>: data and
+// stringData, and the last-applied-configuration annotation, which repeats
+// them. managedFields is dropped. Keys and other metadata are kept (H10).
 func redactSecretData(m map[string]interface{}) {
-	if data, ok := m["data"].(map[string]interface{}); ok {
-		for k := range data {
-			data[k] = "<REDACTED>"
+	for _, field := range []string{"data", "stringData"} {
+		if data, ok := m[field].(map[string]interface{}); ok {
+			for k := range data {
+				data[k] = "<REDACTED>"
+			}
+		}
+	}
+	if meta, ok := m["metadata"].(map[string]interface{}); ok {
+		delete(meta, "managedFields")
+		if ann, ok := meta["annotations"].(map[string]interface{}); ok {
+			if _, ok := ann[lastAppliedAnnotation]; ok {
+				ann[lastAppliedAnnotation] = "<REDACTED>"
+			}
 		}
 	}
 }
