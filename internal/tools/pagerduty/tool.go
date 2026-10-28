@@ -18,8 +18,8 @@ type SecurityTier string
 
 const (
 	TierRead      SecurityTier = "read"      // list, get - auto-approved
-	TierModify    SecurityTier = "modify"    // ack, snooze, add_note - auto-approved
-	TierDangerous SecurityTier = "dangerous" // resolve, trigger - requires confirmation
+	TierModify    SecurityTier = "modify"    // ack, snooze, add_note - human approval
+	TierDangerous SecurityTier = "dangerous" // resolve, trigger - confirmed=true and human approval
 )
 
 // actionTier maps each action to its security tier.
@@ -71,8 +71,12 @@ func (t *PagerDutyTool) Description() string {
 
 Security Tiers:
 - Read (auto-approved): list_incidents, get_incident
-- Modify (auto-approved): acknowledge, snooze, add_note
-- Dangerous (requires confirmation): resolve, trigger`
+- Modify (owner approval): acknowledge, snooze, add_note
+- Dangerous (confirmed=true and owner approval): resolve, trigger
+
+Write actions do not run immediately: the owner gets an approval prompt in
+chat and the action runs only if they approve. They are refused in
+non-interactive turns (cron, heartbeat, sub-agents).`
 }
 
 // Parameters returns the JSON schema for the tool's parameters.
@@ -129,7 +133,7 @@ func (t *PagerDutyTool) Parameters() map[string]interface{} {
 			},
 			"confirmed": map[string]interface{}{
 				"type":        "boolean",
-				"description": "Confirmation flag for dangerous actions (resolve, trigger). Set to true to proceed.",
+				"description": "Confirmation flag for dangerous actions (resolve, trigger). Required for them, but the owner must still approve the action.",
 			},
 		},
 		"required": []string{"action"},
@@ -205,6 +209,12 @@ func (t *PagerDutyTool) Execute(ctx context.Context, args map[string]interface{}
 				Error:   fmt.Sprintf("action %q is dangerous and requires confirmed=true to proceed", action),
 			}, nil
 		}
+	}
+
+	// H11: confirmed=true is set by the model itself, so every write also
+	// needs a human approval (see approval.go).
+	if isWriteAction(action) {
+		return t.gateWrite(ctx, action, args)
 	}
 
 	switch action {

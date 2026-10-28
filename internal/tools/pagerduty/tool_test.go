@@ -240,7 +240,9 @@ func TestPagerDutyTool_Execute_Acknowledge(t *testing.T) {
 	tool, server := setupTestTool(t, handler)
 	defer server.Close()
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	// Execute only asks for approval (H11, approval_test.go); this
+	// exercises the approved run.
+	result, err := tool.runWrite(context.Background(), "acknowledge", map[string]interface{}{
 		"action":      "acknowledge",
 		"incident_id": "P1234567",
 	})
@@ -283,7 +285,9 @@ func TestPagerDutyTool_Execute_Resolve_WithConfirmation(t *testing.T) {
 	tool, server := setupTestTool(t, handler)
 	defer server.Close()
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	// Execute only asks for approval (H11, approval_test.go); this
+	// exercises the approved run.
+	result, err := tool.runWrite(context.Background(), "resolve", map[string]interface{}{
 		"action":      "resolve",
 		"incident_id": "P1234567",
 		"confirmed":   true,
@@ -309,7 +313,9 @@ func TestPagerDutyTool_Execute_Snooze(t *testing.T) {
 	tool, server := setupTestTool(t, handler)
 	defer server.Close()
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	// Execute only asks for approval (H11, approval_test.go); this
+	// exercises the approved run.
+	result, err := tool.runWrite(context.Background(), "snooze", map[string]interface{}{
 		"action":          "snooze",
 		"incident_id":     "P1234567",
 		"snooze_duration": float64(3600), // 1 hour
@@ -357,7 +363,9 @@ func TestPagerDutyTool_Execute_AddNote(t *testing.T) {
 	tool, server := setupTestTool(t, handler)
 	defer server.Close()
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	// Execute only asks for approval (H11, approval_test.go); this
+	// exercises the approved run.
+	result, err := tool.runWrite(context.Background(), "add_note", map[string]interface{}{
 		"action":      "add_note",
 		"incident_id": "P1234567",
 		"note":        "Investigating the issue",
@@ -423,7 +431,9 @@ func TestPagerDutyTool_Execute_Trigger_WithConfirmation(t *testing.T) {
 	tool, server := setupTestTool(t, handler)
 	defer server.Close()
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
+	// Execute only asks for approval (H11, approval_test.go); this
+	// exercises the approved run.
+	result, err := tool.runWrite(context.Background(), "trigger", map[string]interface{}{
 		"action":    "trigger",
 		"title":     "New Incident",
 		"confirmed": true,
