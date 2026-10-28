@@ -9,7 +9,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"conduit/internal/approval"
 	"conduit/internal/sessions"
+	"conduit/internal/tools/types"
 	"conduit/internal/topics"
 )
 
@@ -33,6 +35,62 @@ func errNoTopic(slug string) error {
 
 var errNoTopicStore = errors.New("topics are not available")
 
+// topicScope is who a topic operation acts for (H1). Slugs are global, so
+// without it any WS token or non-interactive turn could rewrite the owner's
+// personas (which reach the owner's prompts), read summaries via park/close,
+// or route chats into sessions it can read. The owner (owner-role WS
+// clients, channel ingress, interactive turns) sees every topic; everyone
+// else only topics scoped to its own chat, and creates scoped topics.
+type topicScope struct {
+	owner     bool
+	channelID string
+	userID    string
+}
+
+// topicOwnerAccessKey marks a /topic command issued by the owner (channel
+// ingress, owner-role WS clients). Tool calls use the turn's origin instead.
+type topicOwnerAccessKey struct{}
+
+// withTopicOwnerAccess marks ctx's /topic command as the owner's.
+func withTopicOwnerAccess(ctx context.Context) context.Context {
+	return context.WithValue(ctx, topicOwnerAccessKey{}, true)
+}
+
+// commandTopicScope is the scope of a /topic command from the chat
+// channelID/userID: the owner's only when ctx is marked so.
+func commandTopicScope(ctx context.Context, channelID, userID string) topicScope {
+	owner, _ := ctx.Value(topicOwnerAccessKey{}).(bool)
+	return topicScope{owner: owner, channelID: channelID, userID: userID}
+}
+
+// toolTopicScope is the scope of a topic_* tool call: the request chat, as
+// the owner only in an interactive turn (an unknown origin is not one).
+func toolTopicScope(ctx context.Context) topicScope {
+	o, ok := approval.OriginFrom(ctx)
+	return topicScope{owner: ok && o.Interactive, channelID: types.RequestChannelID(ctx), userID: types.RequestUserID(ctx)}
+}
+
+func (sc topicScope) chat() string { return topicChatKey(sc.channelID, sc.userID) }
+
+// owns reports whether tp is scoped to sc's chat.
+func (sc topicScope) owns(tp *topics.Topic) bool {
+	return tp.Scoped() && sc.chat() != "" && tp.OwnerChannel == sc.channelID && tp.OwnerUser == sc.userID
+}
+
+// canSee reports whether sc may list, read or change tp.
+func (sc topicScope) canSee(tp *topics.Topic) bool { return sc.owner || sc.owns(tp) }
+
+// canEnter reports whether sc's chat may be pointed at tp. A scoped topic
+// takes only its own chat's messages, even the owner's: otherwise a bot
+// could create a slug first and collect the owner's messages in a session
+// it can read.
+func (sc topicScope) canEnter(tp *topics.Topic) bool {
+	if tp.Scoped() {
+		return sc.owns(tp)
+	}
+	return sc.owner
+}
+
 func (g *Gateway) requireTopicStore() (*topics.Store, error) {
 	if s := g.topicStore(); s != nil {
 		return s, nil
@@ -40,8 +98,9 @@ func (g *Gateway) requireTopicStore() (*topics.Store, error) {
 	return nil, errNoTopicStore
 }
 
-// lookupTopic normalizes slug and loads the topic.
-func (g *Gateway) lookupTopic(slug string) (*topics.Topic, error) {
+// lookupTopic normalizes slug and loads the topic. A topic sc may not see
+// reads as missing.
+func (g *Gateway) lookupTopic(sc topicScope, slug string) (*topics.Topic, error) {
 	store, err := g.requireTopicStore()
 	if err != nil {
 		return nil, err
@@ -51,16 +110,21 @@ func (g *Gateway) lookupTopic(slug string) (*topics.Topic, error) {
 		return nil, errNoTopic(slug)
 	}
 	tp, err := store.Get(norm)
-	if errors.Is(err, topics.ErrNotFound) {
+	if errors.Is(err, topics.ErrNotFound) || (err == nil && !sc.canSee(tp)) {
 		return nil, errNoTopic(norm)
 	}
 	return tp, err
 }
 
-// topicSession returns tp's session, creating it for the chat if missing.
+// topicSession returns tp's session, creating it if missing: for a scoped
+// topic always under its owning chat, otherwise for the caller's chat
+// (only the owner reaches unscoped topics).
 func (g *Gateway) topicSession(tp *topics.Topic, channelID, userID string) (*sessions.Session, error) {
 	if s, err := g.sessions.GetSession(tp.SessionKey); err == nil {
 		return s, nil
+	}
+	if tp.Scoped() {
+		channelID, userID = tp.OwnerChannel, tp.OwnerUser
 	}
 	if channelID == "" || userID == "" {
 		return nil, fmt.Errorf("topic %s has no session yet and no chat to create it for", tp.Slug)
@@ -80,8 +144,9 @@ func (g *Gateway) topicStateLine(channelID, userID string) string {
 }
 
 // topicCreate creates a topic without switching to it. Its session is
-// created lazily on first use.
-func (g *Gateway) topicCreate(slugIn, name, persona string) (*topics.Topic, error) {
+// created lazily on first use. Outside the owner's scope the topic is
+// scoped to the caller's chat.
+func (g *Gateway) topicCreate(sc topicScope, slugIn, name, persona string) (*topics.Topic, error) {
 	store, err := g.requireTopicStore()
 	if err != nil {
 		return nil, err
@@ -90,11 +155,18 @@ func (g *Gateway) topicCreate(slugIn, name, persona string) (*topics.Topic, erro
 	if err != nil {
 		return nil, err
 	}
+	var ownerChannel, ownerUser string
+	if !sc.owner {
+		if sc.chat() == "" {
+			return nil, errors.New("no chat in context to own the topic")
+		}
+		ownerChannel, ownerUser = sc.channelID, sc.userID
+	}
 	if strings.TrimSpace(name) == "" {
 		name = slug
 	}
 	key := sessions.TopicSessionKeyPrefix + strings.ReplaceAll(uuid.New().String(), "-", "")[:12]
-	tp, err := store.Create(slug, strings.TrimSpace(name), key)
+	tp, err := store.CreateOwned(slug, strings.TrimSpace(name), key, ownerChannel, ownerUser)
 	if err != nil {
 		return nil, err
 	}
@@ -110,15 +182,16 @@ func (g *Gateway) topicCreate(slugIn, name, persona string) (*topics.Topic, erro
 // topicSwitch points the chat at slug, creating the topic when unknown and
 // unparking (or reopening) it otherwise. The topic being left gets its
 // summary refreshed.
-func (g *Gateway) topicSwitch(ctx context.Context, channelID, userID, slugIn string) (string, error) {
+func (g *Gateway) topicSwitch(ctx context.Context, sc topicScope, slugIn string) (string, error) {
 	if strings.EqualFold(strings.TrimSpace(slugIn), "home") {
-		return g.topicGoHome(ctx, channelID, userID)
+		return g.topicGoHome(ctx, sc)
 	}
 	store, err := g.requireTopicStore()
 	if err != nil {
 		return "", err
 	}
-	chat := topicChatKey(channelID, userID)
+	channelID, userID := sc.channelID, sc.userID
+	chat := sc.chat()
 	if chat == "" {
 		return "", errors.New("no chat in context to switch")
 	}
@@ -130,12 +203,18 @@ func (g *Gateway) topicSwitch(ctx context.Context, channelID, userID, slugIn str
 	tp, err := store.Get(slug)
 	created := false
 	if errors.Is(err, topics.ErrNotFound) {
-		if tp, err = g.topicCreate(slug, "", ""); err != nil {
+		if tp, err = g.topicCreate(sc, slug, "", ""); err != nil {
 			return "", err
 		}
 		created = true
 	} else if err != nil {
 		return "", err
+	}
+	if !sc.canSee(tp) {
+		return "", &topicError{msg: fmt.Sprintf("Topic %s is taken by another chat — pick another slug.", topicSlugRef(tp.Slug)), err: topics.ErrExists}
+	}
+	if !sc.canEnter(tp) {
+		return "", fmt.Errorf("topic %s belongs to another chat; this chat cannot switch into it", topicSlugRef(tp.Slug))
 	}
 
 	if prev, _ := store.Active(chat); prev != nil && prev.Slug != tp.Slug && prev.Status == topics.StatusActive {
@@ -173,12 +252,12 @@ func (g *Gateway) topicSwitch(ctx context.Context, channelID, userID, slugIn str
 }
 
 // topicGoHome clears the chat's pointer.
-func (g *Gateway) topicGoHome(ctx context.Context, channelID, userID string) (string, error) {
+func (g *Gateway) topicGoHome(ctx context.Context, sc topicScope) (string, error) {
 	store, err := g.requireTopicStore()
 	if err != nil {
 		return "", err
 	}
-	chat := topicChatKey(channelID, userID)
+	chat := sc.chat()
 	if chat == "" {
 		return "", errors.New("no chat in context to switch")
 	}
@@ -193,8 +272,8 @@ func (g *Gateway) topicGoHome(ctx context.Context, channelID, userID string) (st
 
 // topicPark summarizes slug, marks it parked and sends chats pointing at it
 // home.
-func (g *Gateway) topicPark(ctx context.Context, slug string) (string, error) {
-	tp, err := g.lookupTopic(slug)
+func (g *Gateway) topicPark(ctx context.Context, sc topicScope, slug string) (string, error) {
+	tp, err := g.lookupTopic(sc, slug)
 	if err != nil {
 		return "", err
 	}
@@ -210,8 +289,8 @@ func (g *Gateway) topicPark(ctx context.Context, slug string) (string, error) {
 
 // topicClose writes a final summary to the topic and its session context,
 // archives it and sends chats pointing at it home.
-func (g *Gateway) topicClose(ctx context.Context, slug string) (string, error) {
-	tp, err := g.lookupTopic(slug)
+func (g *Gateway) topicClose(ctx context.Context, sc topicScope, slug string) (string, error) {
+	tp, err := g.lookupTopic(sc, slug)
 	if err != nil {
 		return "", err
 	}
@@ -234,8 +313,8 @@ func (g *Gateway) topicClose(ctx context.Context, slug string) (string, error) {
 // slug is derived from newName; without newName a default name (equal to
 // the slug) follows the new slug and a custom one is kept. The store moves
 // chat pointers in the same transaction; nothing else references the slug.
-func (g *Gateway) topicRename(slug, newName, newSlugIn string) (string, error) {
-	tp, err := g.lookupTopic(slug)
+func (g *Gateway) topicRename(sc topicScope, slug, newName, newSlugIn string) (string, error) {
+	tp, err := g.lookupTopic(sc, slug)
 	if err != nil {
 		return "", err
 	}
@@ -267,8 +346,8 @@ func (g *Gateway) topicRename(slug, newName, newSlugIn string) (string, error) {
 }
 
 // topicPersona sets or (with empty text) clears slug's persona.
-func (g *Gateway) topicPersona(slug, persona string) (string, error) {
-	tp, err := g.lookupTopic(slug)
+func (g *Gateway) topicPersona(sc topicScope, slug, persona string) (string, error) {
+	tp, err := g.lookupTopic(sc, slug)
 	if err != nil {
 		return "", err
 	}
@@ -285,8 +364,8 @@ func (g *Gateway) topicPersona(slug, persona string) (string, error) {
 // topicProfile validates and stores (or, with an empty/null/{} profile,
 // clears) slug's prompt profile (conduit-331g). Malformed JSON is rejected
 // here, so a stored profile always parses.
-func (g *Gateway) topicProfile(slug, raw string) (string, error) {
-	tp, err := g.lookupTopic(slug)
+func (g *Gateway) topicProfile(sc topicScope, slug, raw string) (string, error) {
+	tp, err := g.lookupTopic(sc, slug)
 	if err != nil {
 		return "", err
 	}
@@ -315,12 +394,12 @@ func (g *Gateway) topicProfile(slug, raw string) (string, error) {
 // session context, replacing an earlier stitch from the same topic and
 // keeping the newest within topicStitchMaxChars). from is unchanged apart
 // from a summary refresh.
-func (g *Gateway) topicStitch(ctx context.Context, channelID, userID, fromSlug, toSlug string) (string, error) {
-	from, err := g.lookupTopic(fromSlug)
+func (g *Gateway) topicStitch(ctx context.Context, sc topicScope, fromSlug, toSlug string) (string, error) {
+	from, err := g.lookupTopic(sc, fromSlug)
 	if err != nil {
 		return "", err
 	}
-	to, err := g.lookupTopic(toSlug)
+	to, err := g.lookupTopic(sc, toSlug)
 	if err != nil {
 		return "", err
 	}
@@ -328,7 +407,7 @@ func (g *Gateway) topicStitch(ctx context.Context, channelID, userID, fromSlug, 
 		return "", errors.New("cannot stitch a topic into itself")
 	}
 	summary := g.summarizeTopic(ctx, from)
-	sess, err := g.topicSession(to, channelID, userID)
+	sess, err := g.topicSession(to, sc.channelID, sc.userID)
 	if err != nil {
 		return "", err
 	}
@@ -354,20 +433,26 @@ func (g *Gateway) topicStitch(ctx context.Context, channelID, userID, fromSlug, 
 	return fmt.Sprintf("🪡 Stitched %s → %s.", topicSlugRef(from.Slug), topicSlugRef(to.Slug)), nil
 }
 
-// topicList renders the topics with ★ on the chat's current one.
-func (g *Gateway) topicList(channelID, userID string) (string, error) {
+// topicList renders the topics sc may see with ★ on the chat's current one.
+func (g *Gateway) topicList(sc topicScope) (string, error) {
 	store, err := g.requireTopicStore()
 	if err != nil {
 		return "", err
 	}
-	list, err := store.List()
+	all, err := store.List()
 	if err != nil {
 		return "", err
+	}
+	var list []*topics.Topic
+	for _, tp := range all {
+		if sc.canSee(tp) {
+			list = append(list, tp)
+		}
 	}
 	if len(list) == 0 {
 		return "No topics yet. Start one with /topic <slug>.", nil
 	}
-	current, _ := store.Pointer(topicChatKey(channelID, userID))
+	current, _ := store.Pointer(sc.chat())
 	var b strings.Builder
 	b.WriteString("🧵 *Topics*\n")
 	for _, tp := range list {

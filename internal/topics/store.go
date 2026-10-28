@@ -58,9 +58,18 @@ type Topic struct {
 	// PromptProfile is the raw stored prompt profile JSON, "" for none
 	// (conduit-331g). Use Profile() to read it.
 	PromptProfile string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// OwnerChannel and OwnerUser name the chat a topic is scoped to (H1,
+	// migration 14). Both are "" for an owner topic; they are set when a
+	// restricted caller (non-owner client, non-interactive turn) creates
+	// the topic, and only that chat may then see it or route into it.
+	OwnerChannel string
+	OwnerUser    string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
+
+// Scoped reports whether the topic belongs to one chat (see OwnerChannel).
+func (t *Topic) Scoped() bool { return t.OwnerChannel != "" || t.OwnerUser != "" }
 
 // NormalizeSlug lowercases s, turns every run of characters outside
 // [a-z0-9] into a single hyphen, trims hyphens and caps the length at
@@ -106,7 +115,7 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-const topicColumns = `id, slug, name, status, COALESCE(persona, ''), COALESCE(summary, ''), session_key, COALESCE(prompt_profile, ''), created_at, updated_at`
+const topicColumns = `id, slug, name, status, COALESCE(persona, ''), COALESCE(summary, ''), session_key, COALESCE(prompt_profile, ''), COALESCE(owner_channel, ''), COALESCE(owner_user, ''), created_at, updated_at`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -114,7 +123,7 @@ func scanTopic(row rowScanner) (*Topic, error) {
 	var t Topic
 	var status string
 	var created, updated sql.NullString
-	if err := row.Scan(&t.ID, &t.Slug, &t.Name, &status, &t.Persona, &t.Summary, &t.SessionKey, &t.PromptProfile, &created, &updated); err != nil {
+	if err := row.Scan(&t.ID, &t.Slug, &t.Name, &status, &t.Persona, &t.Summary, &t.SessionKey, &t.PromptProfile, &t.OwnerChannel, &t.OwnerUser, &created, &updated); err != nil {
 		return nil, err
 	}
 	t.Status = Status(status)
@@ -125,14 +134,20 @@ func scanTopic(row rowScanner) (*Topic, error) {
 
 func now() string { return database.FormatStoredTime(time.Now()) }
 
-// Create inserts an active topic. A taken slug returns ErrExists.
+// Create inserts an active owner topic. A taken slug returns ErrExists.
 func (s *Store) Create(slug, name, sessionKey string) (*Topic, error) {
+	return s.CreateOwned(slug, name, sessionKey, "", "")
+}
+
+// CreateOwned inserts an active topic scoped to the chat ownerChannel /
+// ownerUser (both "" = an owner topic, like Create).
+func (s *Store) CreateOwned(slug, name, sessionKey, ownerChannel, ownerUser string) (*Topic, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := now()
 	err := database.RetryOnBusy(5, func() error {
-		_, err := s.db.Exec(`INSERT INTO topics (slug, name, status, session_key, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?)`, slug, name, string(StatusActive), sessionKey, ts, ts)
+		_, err := s.db.Exec(`INSERT INTO topics (slug, name, status, session_key, owner_channel, owner_user, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, slug, name, string(StatusActive), sessionKey, nullIfEmpty(ownerChannel), nullIfEmpty(ownerUser), ts, ts)
 		return err
 	})
 	if err != nil {
@@ -266,13 +281,14 @@ func (s *Store) Pointer(chatID string) (string, error) {
 // exists. The caller decides what a non-active status means.
 func (s *Store) Active(chatID string) (*Topic, error) {
 	row := s.db.QueryRow(`SELECT p.topic_slug, t.id, t.slug, t.name, t.status, COALESCE(t.persona, ''),
-			COALESCE(t.summary, ''), t.session_key, COALESCE(t.prompt_profile, ''), t.created_at, t.updated_at
+			COALESCE(t.summary, ''), t.session_key, COALESCE(t.prompt_profile, ''), COALESCE(t.owner_channel, ''),
+			COALESCE(t.owner_user, ''), t.created_at, t.updated_at
 		FROM topic_pointers p LEFT JOIN topics t ON t.slug = p.topic_slug
 		WHERE p.chat_id = ?`, chatID)
 	var ptr sql.NullString
 	var id sql.NullInt64
-	var slug, name, status, persona, summary, key, profile, created, updated sql.NullString
-	err := row.Scan(&ptr, &id, &slug, &name, &status, &persona, &summary, &key, &profile, &created, &updated)
+	var slug, name, status, persona, summary, key, profile, ownerCh, ownerUser, created, updated sql.NullString
+	err := row.Scan(&ptr, &id, &slug, &name, &status, &persona, &summary, &key, &profile, &ownerCh, &ownerUser, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && ptr.String == "") {
 		return nil, nil
 	}
@@ -285,7 +301,7 @@ func (s *Store) Active(chatID string) (*Topic, error) {
 	t := &Topic{
 		ID: id.Int64, Slug: slug.String, Name: name.String, Status: Status(status.String),
 		Persona: persona.String, Summary: summary.String, SessionKey: key.String,
-		PromptProfile: profile.String,
+		PromptProfile: profile.String, OwnerChannel: ownerCh.String, OwnerUser: ownerUser.String,
 	}
 	t.CreatedAt, _ = database.ParseStoredTime(created.String)
 	t.UpdatedAt, _ = database.ParseStoredTime(updated.String)
@@ -323,6 +339,14 @@ func (s *Store) ClearPointersTo(slug string) (int64, error) {
 		return err
 	})
 	return n, err
+}
+
+// nullIfEmpty stores "" as NULL.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func isUniqueViolation(err error) bool {

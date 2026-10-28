@@ -103,8 +103,8 @@ func TestMigration12_TopicsPromptProfile(t *testing.T) {
 	if err := RunMigrations(db); err != nil {
 		t.Fatalf("RunMigrations: %v", err)
 	}
-	if v, err := getCurrentVersion(db); err != nil || v < 12 || v != len(GetMigrations()) {
-		t.Fatalf("version = %d, %v; want latest (>= 12)", v, err)
+	if v, err := getCurrentVersion(db); err != nil || v != GetMigrations()[len(GetMigrations())-1].Version {
+		t.Fatalf("version = %d, %v; want the latest", v, err)
 	}
 	if !topicsColumns(t, db, "topics")["prompt_profile"] {
 		t.Fatal("prompt_profile column missing after migration 12")
@@ -143,5 +143,48 @@ func TestMigration12_Idempotent(t *testing.T) {
 	var profile string
 	if err := db.QueryRow(`SELECT prompt_profile FROM topics WHERE slug = 'alpha'`).Scan(&profile); err != nil || profile != `{"skills":["gog"]}` {
 		t.Fatalf("profile after replay = %q, %v", profile, err)
+	}
+}
+
+// TestMigration14_TopicsOwner verifies migration #14 adds the nullable
+// topics.owner_channel and owner_user columns (H1): existing topics keep
+// NULL (owner topics) and a replay is a no-op that keeps stored owners.
+func TestMigration14_TopicsOwner(t *testing.T) {
+	db := openDBAtVersion(t, 12)
+	if _, err := db.Exec(`INSERT INTO topics (slug, name, session_key) VALUES ('alpha', 'Alpha', 'topic_x')`); err != nil {
+		t.Fatal(err)
+	}
+	cols := topicsColumns(t, db, "topics")
+	if cols["owner_channel"] || cols["owner_user"] {
+		t.Fatal("owner columns exist before migration 14")
+	}
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+	if v, err := getCurrentVersion(db); err != nil || v != 14 {
+		t.Fatalf("version = %d, %v; want 14", v, err)
+	}
+	cols = topicsColumns(t, db, "topics")
+	if !cols["owner_channel"] || !cols["owner_user"] {
+		t.Fatalf("owner columns missing after migration 14: %v", cols)
+	}
+	var nulls int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM topics WHERE owner_channel IS NULL AND owner_user IS NULL`).Scan(&nulls); err != nil || nulls != 1 {
+		t.Fatalf("existing topic owner NULLs = %d, %v; want 1", nulls, err)
+	}
+
+	if _, err := db.Exec(`INSERT INTO topics (slug, name, session_key, owner_channel, owner_user) VALUES ('beta', 'Beta', 'topic_y', 'tui_bot', 'bot')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version >= 14`); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("replay migration 14: %v", err)
+	}
+	var ch, user string
+	if err := db.QueryRow(`SELECT owner_channel, owner_user FROM topics WHERE slug = 'beta'`).Scan(&ch, &user); err != nil || ch != "tui_bot" || user != "bot" {
+		t.Fatalf("owner after replay = %q/%q, %v", ch, user, err)
 	}
 }

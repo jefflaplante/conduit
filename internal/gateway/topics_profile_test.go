@@ -67,7 +67,7 @@ func TestTopicProfile_SetValidateClear(t *testing.T) {
 
 func TestTopicProfileSession(t *testing.T) {
 	gw, store := newTopicTestGateway(t)
-	ctx := types.WithRequestContext(context.Background(), tgChannel, tgUser, "")
+	ctx := ownerCtx() // the owner's interactive turn may profile owner topics (H1)
 	alpha := mustSwitch(t, gw, "alpha")
 	beta := mustSwitch(t, gw, "beta")
 	if _, err := gw.TopicProfile(ctx, "alpha", `{"skills": ["gog"], "skip_context": ["TOOLS.md", "MEMORY.md"]}`); err != nil {
@@ -158,7 +158,7 @@ func TestTopics_TurnAppliesProfile(t *testing.T) {
 	}
 	stubSummaries(gw)
 	attachRecorder(t, gw)
-	ctx := types.WithRequestContext(context.Background(), tgChannel, tgUser, "")
+	ctx := ownerCtx()
 
 	gw.handleIncomingMessage(context.Background(), tgMsg("home turn"))
 	gw.handleIncomingMessage(context.Background(), tgMsg("/topic alpha"))

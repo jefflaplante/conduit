@@ -76,8 +76,9 @@ func (g *Gateway) handleCommand(ctx context.Context, msg *protocol.IncomingMessa
 		return true
 	}
 
-	// conduit-43vk: /topic and /home move this chat's topic pointer.
-	if reply, ok := g.topicCommand(ctx, msg.ChannelID, msg.UserID, text); ok {
+	// conduit-43vk: /topic and /home move this chat's topic pointer. Channel
+	// ingress is the owner's human side (its turns are interactive), H1.
+	if reply, ok := g.topicCommand(withTopicOwnerAccess(ctx), msg.ChannelID, msg.UserID, text); ok {
 		g.sendCommandResponse(msg, reply)
 		return true
 	}

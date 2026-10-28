@@ -244,7 +244,7 @@ func TestResolveSessionForChat_HomeMatchesGetOrCreate(t *testing.T) {
 
 func mustSwitch(t *testing.T, gw *Gateway, slug string) *topics.Topic {
 	t.Helper()
-	if _, err := gw.topicSwitch(context.Background(), tgChannel, tgUser, slug); err != nil {
+	if _, err := gw.topicSwitch(context.Background(), topicScope{owner: true, channelID: tgChannel, userID: tgUser}, slug); err != nil {
 		t.Fatalf("switch %s: %v", slug, err)
 	}
 	tp, err := gw.topicStore().Get(slug)
@@ -256,7 +256,8 @@ func mustSwitch(t *testing.T, gw *Gateway, slug string) *topics.Topic {
 
 func runTopicCmd(t *testing.T, gw *Gateway, text string) string {
 	t.Helper()
-	reply, ok := gw.topicCommand(context.Background(), tgChannel, tgUser, text)
+	// The Telegram chat is channel ingress: the owner's side.
+	reply, ok := gw.topicCommand(withTopicOwnerAccess(context.Background()), tgChannel, tgUser, text)
 	if !ok {
 		t.Fatalf("%q not handled as a topic command", text)
 	}

@@ -165,7 +165,12 @@ func (g *Gateway) handleWebSocketCommandFromChat(ctx context.Context, client *Cl
 
 	case text == "/topic" || text == "/home" || strings.HasPrefix(text, "/topic ") || strings.HasPrefix(text, "/home "):
 		// conduit-tui-topics-c90u: shared with channel ingress (conduit-43vk).
-		if reply, ok := g.topicCommand(ctx, channelID, userID, text); ok {
+		// Only owner-role tokens reach other chats' topics (H1).
+		topicCtx := ctx
+		if client.Owner {
+			topicCtx = withTopicOwnerAccess(ctx)
+		}
+		if reply, ok := g.topicCommand(topicCtx, channelID, userID, text); ok {
 			sendResponse(reply)
 		}
 

@@ -299,7 +299,34 @@ func GetMigrations() []Migration {
 			Name:    "add_telegram_pairings_status",
 			Func:    addTelegramPairingsStatus,
 		},
+		{
+			// H1: the chat a topic is scoped to, set only for topics a
+			// restricted caller (non-owner client, non-interactive turn)
+			// created; such callers see and change only their own topics.
+			// NULL = an owner topic, shared across the owner's chats.
+			Version: 14,
+			Name:    "add_topics_owner",
+			Func:    addTopicsOwner,
+		},
 	}
+}
+
+// addTopicsOwner is migration 14. Like migration 12 it checks each column
+// first, so replaying it is a no-op.
+func addTopicsOwner(tx *sql.Tx) error {
+	for _, col := range []string{"owner_channel", "owner_user"} {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('topics') WHERE name = ?`, col).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := tx.Exec(`ALTER TABLE topics ADD COLUMN ` + col + ` TEXT`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // addTopicsPromptProfile is migration 12. SQLite has no ADD COLUMN IF NOT
