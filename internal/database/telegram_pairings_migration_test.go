@@ -33,8 +33,8 @@ func TestMigration13_TelegramPairingsStatus(t *testing.T) {
 	if err := RunMigrations(db); err != nil {
 		t.Fatalf("RunMigrations: %v", err)
 	}
-	if v, err := getCurrentVersion(db); err != nil || v != 13 || v != len(GetMigrations()) {
-		t.Fatalf("version = %d, %v; want 13 (latest)", v, err)
+	if v, err := getCurrentVersion(db); err != nil || v < 13 || v != GetMigrations()[len(GetMigrations())-1].Version {
+		t.Fatalf("version = %d, %v; want the latest (>= 13)", v, err)
 	}
 
 	status := func(code string) string {
