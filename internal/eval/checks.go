@@ -47,7 +47,6 @@ func runCheck(item RubricItem, c *Case, turns []Turn) checkResult {
 		err = checkToolAllowlist(c, turns)
 	case check == fragmentsExpr || strings.HasPrefix(check, fragmentsExpr+" "):
 		err = checkFragments(c, turns)
-		err = checkFragments(c, turns)
 	default:
 		err = fmt.Errorf("unsupported deterministic check %q", item.Check)
 	}

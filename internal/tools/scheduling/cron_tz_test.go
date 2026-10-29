@@ -196,5 +196,3 @@ func TestCronToolParametersTimezone(t *testing.T) {
 	assert.Contains(t, tz["description"], "IANA")
 	assert.Contains(t, tool.Description(), "timezone=")
 }
-
-func boolPtr(b bool) *bool { return &b }
