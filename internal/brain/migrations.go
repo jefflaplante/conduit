@@ -141,6 +141,26 @@ var migrations = []migration{
 			return err
 		},
 	},
+	// Migration 10 (bd-31u): fact versioning. brain_archive keeps one row per
+	// key, so superseded and deleted LTM values go to brain_history instead,
+	// which holds any number of versions per key. created_at preserves the
+	// archived fact's ORIGINAL birth time. Write-only for now.
+	{
+		Version: 10,
+		SQL: `CREATE TABLE IF NOT EXISTS brain_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			key TEXT NOT NULL,
+			value TEXT NOT NULL,
+			created_at DATETIME,
+			source TEXT DEFAULT '',
+			tier TEXT DEFAULT 'longterm',
+			salience REAL DEFAULT 0.0,
+			archived_at DATETIME DEFAULT (datetime('now')),
+			reason TEXT DEFAULT 'superseded'
+		);
+		CREATE INDEX IF NOT EXISTS idx_brain_history_key ON brain_history(key);
+		CREATE INDEX IF NOT EXISTS idx_brain_history_archived_at ON brain_history(archived_at);`,
+	},
 }
 
 func runMigrations(db *sql.DB, p migrationParams) error {
