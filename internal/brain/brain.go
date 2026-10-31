@@ -49,6 +49,7 @@ type Entry struct {
 	AccessedAt  time.Time  `json:"accessed_at"`
 	AccessCount int        `json:"access_count"`
 	Salience    float64    `json:"salience"`
+	Weight      float64    `json:"weight,omitempty"` // importance multiplier (bd-2xd); 1.0 = neutral, omitted from JSON when unset
 	Warmth      float64    `json:"warmth,omitempty"`
 	Source      string     `json:"source,omitempty"`
 	Stale       bool       `json:"stale,omitempty"`

@@ -62,7 +62,7 @@ func (b *Brain) Promote(ctx context.Context, key string) error {
 	if entry == nil {
 		return fmt.Errorf("key %q not found in working memory", key)
 	}
-	return b.storeLTM(key, entry.Value, entry.Source, time.Now(), entry.ExpiresAt)
+	return b.storeLTM(key, entry.Value, entry.Source, time.Now(), entry.ExpiresAt, 1.0, false)
 }
 
 // WorkingMemoryEntries returns a snapshot of all WM entries for the given user.
@@ -134,7 +134,7 @@ func (b *Brain) Consolidate(ctx context.Context, autoPromote bool) (*Consolidati
 
 	var promotedKeys []string
 	for _, entry := range toPromote {
-		if err := b.storeLTM(entry.Key, entry.Value, entry.Source, time.Now(), entry.ExpiresAt); err != nil {
+		if err := b.storeLTM(entry.Key, entry.Value, entry.Source, time.Now(), entry.ExpiresAt, 1.0, false); err != nil {
 			log.Printf("Brain: failed to promote %q: %v", entry.Key, err)
 			continue
 		}

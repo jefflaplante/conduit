@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"time"
 
 	"conduit/internal/database"
@@ -12,7 +13,9 @@ import (
 
 // storeOpts holds options for Store calls, populated by StoreOption funcs.
 type storeOpts struct {
-	ttl time.Duration
+	ttl       time.Duration
+	weight    float64
+	weightSet bool
 }
 
 // StoreOption configures an individual Store call.
@@ -42,6 +45,35 @@ const archiveDeletedSQL = `
 	SELECT key, value, created_at, COALESCE(source, ''), 'longterm', salience, datetime('now'), 'deleted'
 	FROM brain_ltm WHERE key = ?`
 
+// WithWeight sets the importance weight of the stored entry (bd-2xd). The
+// weight is a direct multiplier on effective salience during recall scoring
+// (1.5 = modest boost, 2.0 ≈ resists half-decay equivalent) and entries with
+// weight > 1.0 are exempt from REM batch decay. The default is 1.0, which is
+// behaviour-identical to storing without this option. Only meaningful for
+// TierLongTerm entries; working-memory stores ignore it.
+func WithWeight(w float64) StoreOption {
+	return func(o *storeOpts) { o.weight = normalizeWeight(w); o.weightSet = true }
+}
+
+// normalizeWeight coerces a caller-supplied weight into the stored range.
+// Non-positive or non-finite values mean "unset" and become the neutral 1.0.
+func normalizeWeight(w float64) float64 {
+	if w <= 0 || math.IsNaN(w) || math.IsInf(w, 0) {
+		return 1.0
+	}
+	return w
+}
+
+// weightConflictClause returns the ON CONFLICT fragment for the weight column.
+// An explicit WithWeight overwrites; any other store path leaves the existing
+// weight untouched (sticky, bd-2xd).
+func weightConflictClause(weightSet bool) string {
+	if weightSet {
+		return ",\n\t\t\t\tweight = excluded.weight"
+	}
+	return ""
+}
+
 func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source string, opts ...StoreOption) error {
 	if err := ValidateSource(source); err != nil {
 		log.Printf("Brain: warning: %v (key=%q)", err, key)
@@ -51,6 +83,12 @@ func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source 
 		opt(o)
 	}
 	now := time.Now()
+	weight := 1.0
+	weightSet := false
+	if o.weightSet {
+		weight = o.weight
+		weightSet = true
+	}
 	var expiresAt *time.Time
 	if o.ttl > 0 {
 		t := now.Add(o.ttl)
@@ -58,7 +96,7 @@ func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source 
 	}
 	switch tier {
 	case TierLongTerm:
-		return b.storeLTM(key, value, source, now, expiresAt)
+		return b.storeLTM(key, value, source, now, expiresAt, weight, weightSet)
 	case TierWorking:
 		userID := userIDFromCtx(ctx)
 		b.mu.Lock()
@@ -91,11 +129,16 @@ func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source 
 
 // BulkEntry is a single key/value entry for StoreBulk. Tier defaults to
 // TierWorking when empty; TierScratch is rejected. Source is optional.
+// Weight defaults to 1.0 when zero; only TierLongTerm entries persist it.
+// Weight is written on insert and sticky on conflict: re-storing a key via
+// StoreBulk without a weight never strips an existing one — use Store with
+// WithWeight for an explicit overwrite.
 type BulkEntry struct {
 	Key    string
 	Value  string
 	Tier   Tier
 	Source string
+	Weight float64
 }
 
 // StoreBulk stores many entries atomically. Long-term entries are written in
@@ -130,7 +173,7 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 			// Match Store(): warn but do not fail on weird sources.
 			log.Printf("Brain.StoreBulk: warning: %v (key=%q)", err, e.Key)
 		}
-		normalized[i] = BulkEntry{Key: e.Key, Value: e.Value, Tier: tier, Source: e.Source}
+		normalized[i] = BulkEntry{Key: e.Key, Value: e.Value, Tier: tier, Source: e.Source, Weight: normalizeWeight(e.Weight)}
 	}
 
 	now := time.Now()
@@ -160,10 +203,12 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 			}
 			defer archiveStmt.Close()
 			// conduit-31jg.53: store base salience only (access + tier);
-			// recency is computed at query time.
+			// recency is computed at query time. bd-2xd: weight rides along
+			// on insert and is sticky on conflict (only an explicit Store
+			// with WithWeight changes it).
 			stmt, err := tx.PrepareContext(ctx, `
-				INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience)
-				VALUES (?, ?, ?, ?, ?, 1, ?)
+				INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience, weight)
+				VALUES (?, ?, ?, ?, ?, 1, ?, ?)
 				ON CONFLICT(key) DO UPDATE SET
 					value = excluded.value,
 					source = excluded.source,
@@ -197,7 +242,7 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 					return err
 				}
 				if _, err := stmt.ExecContext(ctx, e.Key, e.Value, e.Source, nowStr, nowStr,
-					b.ltmBaseSalience(1)); err != nil {
+					b.ltmBaseSalience(1), e.Weight); err != nil {
 					tx.Rollback()
 					return err
 				}
@@ -253,7 +298,7 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 	return nil
 }
 
-func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *time.Time) error {
+func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *time.Time, weight float64, weightSet bool) error {
 	nowStr := now.UTC().Format("2006-01-02 15:04:05")
 	var expiresStr interface{}
 	if expiresAt != nil {
@@ -264,7 +309,10 @@ func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *ti
 		expiresStr = nil
 	}
 	// conduit-31jg.53: the column holds base salience (access + tier) only;
-	// recency is computed at query time (see salience.go).
+	// recency is computed at query time (see salience.go). bd-2xd: weight is
+	// written on insert; on conflict it is sticky — only an explicit Store
+	// with WithWeight overwrites it, so the WM promote/eviction paths (which
+	// pass weightSet=false) can never strip a scar's protection.
 	err := database.RetryOnBusy(5, func() error {
 		tx, err := b.db.Begin()
 		if err != nil {
@@ -275,16 +323,17 @@ func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *ti
 			return err
 		}
 		_, err = tx.Exec(`
-			INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience, expires_at)
-			VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+			INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience, expires_at, weight)
+			VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
 			ON CONFLICT(key) DO UPDATE SET
 				value = excluded.value,
 				source = excluded.source,
 				accessed_at = excluded.accessed_at,
 				access_count = access_count + 1,
 				expires_at = excluded.expires_at,
-				salience = `+b.ltmBaseSalienceSQL("access_count + 1")+`
-		`, key, value, source, nowStr, nowStr, b.ltmBaseSalience(1), expiresStr)
+				salience = `+b.ltmBaseSalienceSQL("access_count + 1")+
+			weightConflictClause(weightSet)+`
+		`, key, value, source, nowStr, nowStr, b.ltmBaseSalience(1), expiresStr, weight)
 		if err != nil {
 			tx.Rollback()
 			return err
@@ -368,13 +417,13 @@ func (b *Brain) getLTM(key string) (*Entry, error) {
 			access_count = access_count + 1,
 			salience = `+b.ltmBaseSalienceSQL("access_count + 1")+`
 		WHERE key = ? AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))
-		RETURNING key, value, created_at, accessed_at, access_count, `+b.EffectiveSalienceSQL()+`, source, stale, expires_at, warmth
+		RETURNING key, value, created_at, accessed_at, access_count, `+b.EffectiveSalienceSQL()+`, source, stale, expires_at, warmth, weight
 	`, key)
 	entry := &Entry{Tier: TierLongTerm}
 	var staleInt int
 	var expiresAt sql.NullTime
 	err := row.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-		&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAt, &entry.Warmth)
+		&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAt, &entry.Warmth, &entry.Weight)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

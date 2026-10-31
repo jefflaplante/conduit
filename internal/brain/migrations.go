@@ -161,6 +161,42 @@ var migrations = []migration{
 		CREATE INDEX IF NOT EXISTS idx_brain_history_key ON brain_history(key);
 		CREATE INDEX IF NOT EXISTS idx_brain_history_archived_at ON brain_history(archived_at);`,
 	},
+	// Migration 11 (bd-2xd): per-entry importance weighting. weight is a
+	// direct multiplier on effective salience (2.0 resists half-decay
+	// equivalent; 1.5 a modest boost) and entries with weight > 1.0 are
+	// exempt from REM batch decay. 1.0 is the identity: pre-existing rows
+	// default to it and the scored expressions reduce to their pre-column
+	// form when every row holds 1.0. Idempotent: test flows rewind
+	// brain_migrations to replay earlier versions (salience_migration_test),
+	// and ALTER TABLE ADD COLUMN is not, so guard on PRAGMA table_info.
+	{
+		Version: 11,
+		SQL:     `SELECT 1;`,
+		Fn: func(tx *sql.Tx, p migrationParams) error {
+			rows, err := tx.Query(`PRAGMA table_info(brain_ltm)`)
+			if err != nil {
+				return fmt.Errorf("inspect brain_ltm columns: %w", err)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var cid int
+				var name, typ string
+				var notNull, pk int
+				var dflt sql.NullString
+				if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+					return fmt.Errorf("scan brain_ltm column: %w", err)
+				}
+				if name == "weight" {
+					return nil // column already present — migration already applied
+				}
+			}
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf("iterate brain_ltm columns: %w", err)
+			}
+			_, err = tx.Exec(`ALTER TABLE brain_ltm ADD COLUMN weight REAL NOT NULL DEFAULT 1.0`)
+			return err
+		},
+	},
 }
 
 func runMigrations(db *sql.DB, p migrationParams) error {

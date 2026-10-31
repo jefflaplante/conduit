@@ -200,12 +200,14 @@ func (r *REMCycle) applySalienceDecay(ctx context.Context, result *Consolidation
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
 
 	if dryRun {
-		// Just count how many would be decayed
+		// Just count how many would be decayed. Weighted entries
+		// (weight > 1.0, bd-2xd) are exempt from batch decay.
 		var count int
 		err := r.db.QueryRow(`
 			SELECT COUNT(*)
 			FROM brain_ltm
 			WHERE accessed_at < ?
+			AND COALESCE(weight, 1.0) <= 1.0
 		`, sevenDaysAgo).Scan(&count)
 		if err != nil {
 			return fmt.Errorf("count decay candidates: %w", err)
@@ -215,11 +217,14 @@ func (r *REMCycle) applySalienceDecay(ctx context.Context, result *Consolidation
 	}
 
 	// Apply decay. The floor is peak salience 0.0, i.e. base = -recencyWeight
-	// (conduit-31jg.53: the column stores base salience).
+	// (conduit-31jg.53: the column stores base salience). Weighted entries
+	// (weight > 1.0, bd-2xd) are exempt: critical facts must not be pushed
+	// toward the floor just because they haven't been touched in >7 days.
 	res, err := r.db.Exec(`
 		UPDATE brain_ltm
 		SET salience = MAX(0.0 - ?, salience - ?)
 		WHERE accessed_at < ?
+		AND COALESCE(weight, 1.0) <= 1.0
 	`, r.recencyWeight(), r.config.SalienceDecayRate, sevenDaysAgo)
 	if err != nil {
 		return fmt.Errorf("apply decay: %w", err)

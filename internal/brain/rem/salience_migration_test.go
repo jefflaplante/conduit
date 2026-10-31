@@ -36,8 +36,10 @@ func openLegacyBrain(t *testing.T, rows []legacyRow) (*REMCycle, *brain.Brain) {
 
 	db, err := sql.Open("sqlite", database.BuildDSN(path))
 	require.NoError(t, err)
-	// The runner resumes from MAX(version), so drop every later version too;
-	// migrations after 9 are idempotent and simply re-run.
+	// Rewind past the base-salience conversion and everything after it (the
+	// weight-column migration renumbered to 11 for bd-31u collision-avoidance)
+	// so the reopen replays them; the weight migration is column-add and
+	// idempotent via its PRAGMA guard.
 	_, err = db.Exec(`DELETE FROM brain_migrations WHERE version >= 9`)
 	require.NoError(t, err)
 	for _, r := range rows {
