@@ -176,7 +176,22 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 				return err
 			}
 			defer stmt.Close()
+			// bd-r1f3: dedupe to last-value-wins per key so a batch is one
+			// net upsert per key. The archive SELECT then compares the batch's
+			// FINAL value against the PRE-BATCH live row — in-batch
+			// intermediates never archive (and never appear in history).
+			// The order slice keeps execution deterministic (insert order,
+			// one pass per unique key).
+			lastByKey := make(map[string]BulkEntry, len(ltmBatch))
+			order := make([]string, 0, len(ltmBatch))
 			for _, e := range ltmBatch {
+				if _, seen := lastByKey[e.Key]; !seen {
+					order = append(order, e.Key)
+				}
+				lastByKey[e.Key] = e
+			}
+			for _, key := range order {
+				e := lastByKey[key]
 				if _, err := archiveStmt.ExecContext(ctx, e.Key, e.Value); err != nil {
 					tx.Rollback()
 					return err

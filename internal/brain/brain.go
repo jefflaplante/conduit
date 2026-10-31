@@ -55,6 +55,12 @@ type Entry struct {
 	ClusterHit  bool       `json:"cluster_hit,omitempty"`
 	WarmthHit   bool       `json:"warmth_hit,omitempty"` // injected by warmth-floor, not a keyword/cluster match
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	// ArchivedReason is populated only by temporal reads (ValueAsOf): it
+	// names the brain_history reason row that carried the value
+	// ("superseded" or "deleted") — i.e. why the value eventually stopped
+	// being live. Empty for live reads and for values that were live at T
+	// and never archived.
+	ArchivedReason string `json:"archived_reason,omitempty"`
 }
 
 type ConsolidationReport struct {
