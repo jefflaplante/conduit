@@ -17,6 +17,16 @@ type fakeBrainService struct {
 	singleStores []types.BrainBulkEntry
 	ttlCalls     []fakeTTLCall
 	scratchUIDs  []string // userID argument of every Push/Pop/Peek call
+	ctxStores    []fakeCtxStore
+}
+
+// fakeCtxStore records a Store call carrying a context argument (bd-lfrd).
+type fakeCtxStore struct {
+	Key     string
+	Value   string
+	Tier    types.BrainTier
+	Source  string
+	Context string
 }
 
 type fakeTTLCall struct {
@@ -27,8 +37,15 @@ type fakeTTLCall struct {
 	TTL    time.Duration
 }
 
-func (f *fakeBrainService) Store(ctx context.Context, key, value string, tier types.BrainTier, source string) error {
+func (f *fakeBrainService) Store(ctx context.Context, key, value string, tier types.BrainTier, source string, opts ...types.BrainStoreOption) error {
+	c := fakeCtxStore{Key: key, Value: value, Tier: tier, Source: source}
+	for _, opt := range opts {
+		o := types.BrainStoreOptions{}
+		opt(&o)
+		c.Context = o.Context
+	}
 	f.singleStores = append(f.singleStores, types.BrainBulkEntry{Key: key, Value: value, Tier: tier, Source: source})
+	f.ctxStores = append(f.ctxStores, c)
 	return nil
 }
 
@@ -297,4 +314,99 @@ func TestBrainTool_ScratchpadDefersUserToContext(t *testing.T) {
 			t.Errorf("call %d passed explicit userID %q; want empty (context decides)", i, uid)
 		}
 	}
+}
+
+// bd-lfrd: the brain tool's store action accepts an optional context param and
+// forwards it through the BrainService seam.
+func TestBrainTool_StoreWithContext(t *testing.T) {
+	fake := &fakeBrainService{}
+	tool := NewBrainTool(&types.ToolServices{Brain: fake})
+
+	res, _ := tool.Execute(context.Background(), map[string]interface{}{
+		"action":  "store",
+		"key":     "svc.recovery",
+		"value":   "cache hit rate recovered",
+		"tier":    "longterm",
+		"context": "billing spike investigation",
+	})
+	if err := toolErr(res); err != "" {
+		t.Fatalf("store with context failed: %s", err)
+	}
+	if len(fake.ctxStores) != 1 {
+		t.Fatalf("expected 1 Store call, got %d", len(fake.ctxStores))
+	}
+	if fake.ctxStores[0].Context != "billing spike investigation" {
+		t.Errorf("context not forwarded: got %q", fake.ctxStores[0].Context)
+	}
+}
+
+// A store without a context omits the option entirely (zero-cost default).
+func TestBrainTool_StoreWithoutContext(t *testing.T) {
+	fake := &fakeBrainService{}
+	tool := NewBrainTool(&types.ToolServices{Brain: fake})
+
+	res, _ := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "store",
+		"key":    "k",
+		"value":  "v",
+	})
+	if err := toolErr(res); err != "" {
+		t.Fatalf("plain store failed: %s", err)
+	}
+	if len(fake.ctxStores) != 1 {
+		t.Fatalf("expected 1 Store call, got %d", len(fake.ctxStores))
+	}
+	if fake.ctxStores[0].Context != "" {
+		t.Errorf("plain store must not set context, got %q", fake.ctxStores[0].Context)
+	}
+}
+
+// store_bulk entries carry per-entry context.
+func TestBrainTool_StoreBulkWithContext(t *testing.T) {
+	fake := &fakeBrainService{}
+	tool := NewBrainTool(&types.ToolServices{Brain: fake})
+
+	res, _ := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "store_bulk",
+		"entries": []interface{}{
+			map[string]interface{}{
+				"key":   "bulk.plain",
+				"value": "v",
+				"tier":  "longterm",
+			},
+			map[string]interface{}{
+				"key":     "bulk.ctx",
+				"value":   "v",
+				"tier":    "longterm",
+				"context": "from a daily log",
+			},
+		},
+	})
+	if err := toolErr(res); err != "" {
+		t.Fatalf("store_bulk with context failed: %s", err)
+	}
+	if len(fake.bulkCalls) != 1 {
+		t.Fatalf("expected 1 StoreBulk call, got %d", len(fake.bulkCalls))
+	}
+	got := fake.bulkCalls[0]
+	if len(got) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(got))
+	}
+	if got[0].Context != "" {
+		t.Errorf("entry 0 must have empty context, got %q", got[0].Context)
+	}
+	if got[1].Context != "from a daily log" {
+		t.Errorf("entry 1 context not forwarded: got %q", got[1].Context)
+	}
+}
+
+// toolErr extracts the error string from a ToolResult.
+func toolErr(res *types.ToolResult) string {
+	if res == nil {
+		return "nil result"
+	}
+	if !res.Success {
+		return res.Error
+	}
+	return ""
 }

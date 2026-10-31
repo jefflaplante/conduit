@@ -130,6 +130,25 @@ func getSearchMigrations() []SearchMigration {
 				CREATE INDEX IF NOT EXISTS idx_document_metadata_category ON document_metadata(category);
 			`,
 		},
+		{
+			// bd-lfrd: brain FTS gains a context column so MemorySearch finds
+			// entries by their situational context. FTS5 virtual tables can't
+			// ALTER ADD COLUMN, so drop and recreate; the indexer does a full
+			// rebuild pass on its next tick anyway (hash never matches a
+			// fresh table). Dropping drops any stale rows with it.
+			Version: 5,
+			Name:    "brain_ltm_fts_add_context",
+			SQL: `
+				DROP TABLE IF EXISTS brain_ltm_fts;
+				CREATE VIRTUAL TABLE IF NOT EXISTS brain_ltm_fts USING fts5(
+					key,
+					value,
+					source,
+					context,
+					tokenize='porter unicode61'
+				);
+			`,
+		},
 	}
 }
 

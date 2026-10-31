@@ -197,6 +197,49 @@ var migrations = []migration{
 			return err
 		},
 	},
+	// Migration 12 (bd-lfrd): situational context — one free-text column on
+	// brain_ltm ("why/what was happening" at encode time), mirrored into
+	// brain_history because a version's context is part of that version.
+	// Recall folds it into keyword matching (encoding specificity). Guarded
+	// like migration 11: test flows rewind brain_migrations and ADD COLUMN
+	// is not idempotent. No index — LIKE '%…%' can't use one.
+	{
+		Version: 12,
+		SQL:     `SELECT 1;`,
+		Fn: func(tx *sql.Tx, p migrationParams) error {
+			if err := addColumnIfMissing(tx, "brain_ltm", "context", `TEXT NOT NULL DEFAULT ''`); err != nil {
+				return err
+			}
+			return addColumnIfMissing(tx, "brain_history", "context", `TEXT NOT NULL DEFAULT ''`)
+		},
+	},
+}
+
+// addColumnIfMissing adds a column to a table only when it does not already
+// exist, via the PRAGMA table_info guard shared by guarded migrations.
+func addColumnIfMissing(tx *sql.Tx, table, column, decl string) error {
+	rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan %s column: %w", table, err)
+		}
+		if name == column {
+			return nil // column already present — migration already applied
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate %s columns: %w", table, err)
+	}
+	_, err = tx.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + decl)
+	return err
 }
 
 func runMigrations(db *sql.DB, p migrationParams) error {
