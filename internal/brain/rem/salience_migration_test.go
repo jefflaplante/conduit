@@ -36,7 +36,9 @@ func openLegacyBrain(t *testing.T, rows []legacyRow) (*REMCycle, *brain.Brain) {
 
 	db, err := sql.Open("sqlite", database.BuildDSN(path))
 	require.NoError(t, err)
-	_, err = db.Exec(`DELETE FROM brain_migrations WHERE version = 9`)
+	// The runner resumes from MAX(version), so drop every later version too;
+	// migrations after 9 are idempotent and simply re-run.
+	_, err = db.Exec(`DELETE FROM brain_migrations WHERE version >= 9`)
 	require.NoError(t, err)
 	for _, r := range rows {
 		ts := time.Now().Add(-r.accessedAgo).UTC().Format("2006-01-02 15:04:05")

@@ -26,6 +26,22 @@ func WithTTL(d time.Duration) StoreOption {
 	return func(o *storeOpts) { o.ttl = d }
 }
 
+// archiveSupersededSQL copies the live LTM row for a key into brain_history
+// when the value about to be upserted differs from it (args: key, new value).
+// Same-value re-stores and first inserts archive nothing. Runs in the upsert's
+// transaction, before the upsert. bd-31u
+const archiveSupersededSQL = `
+	INSERT INTO brain_history (key, value, created_at, source, tier, salience, archived_at, reason)
+	SELECT key, value, created_at, COALESCE(source, ''), 'longterm', salience, datetime('now'), 'superseded'
+	FROM brain_ltm WHERE key = ? AND value != ?`
+
+// archiveDeletedSQL copies the live LTM row for a key into brain_history before
+// an explicit Delete (args: key). A missing key archives nothing. bd-31u
+const archiveDeletedSQL = `
+	INSERT INTO brain_history (key, value, created_at, source, tier, salience, archived_at, reason)
+	SELECT key, value, created_at, COALESCE(source, ''), 'longterm', salience, datetime('now'), 'deleted'
+	FROM brain_ltm WHERE key = ?`
+
 func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source string, opts ...StoreOption) error {
 	if err := ValidateSource(source); err != nil {
 		log.Printf("Brain: warning: %v (key=%q)", err, key)
@@ -137,6 +153,12 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 			if err != nil {
 				return err
 			}
+			archiveStmt, err := tx.PrepareContext(ctx, archiveSupersededSQL)
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+			defer archiveStmt.Close()
 			// conduit-31jg.53: store base salience only (access + tier);
 			// recency is computed at query time.
 			stmt, err := tx.PrepareContext(ctx, `
@@ -155,6 +177,10 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 			}
 			defer stmt.Close()
 			for _, e := range ltmBatch {
+				if _, err := archiveStmt.ExecContext(ctx, e.Key, e.Value); err != nil {
+					tx.Rollback()
+					return err
+				}
 				if _, err := stmt.ExecContext(ctx, e.Key, e.Value, e.Source, nowStr, nowStr,
 					b.ltmBaseSalience(1)); err != nil {
 					tx.Rollback()
@@ -225,7 +251,15 @@ func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *ti
 	// conduit-31jg.53: the column holds base salience (access + tier) only;
 	// recency is computed at query time (see salience.go).
 	err := database.RetryOnBusy(5, func() error {
-		_, err := b.db.Exec(`
+		tx, err := b.db.Begin()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(archiveSupersededSQL, key, value); err != nil {
+			tx.Rollback()
+			return err
+		}
+		_, err = tx.Exec(`
 			INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience, expires_at)
 			VALUES (?, ?, ?, ?, ?, 1, ?, ?)
 			ON CONFLICT(key) DO UPDATE SET
@@ -236,7 +270,11 @@ func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *ti
 				expires_at = excluded.expires_at,
 				salience = `+b.ltmBaseSalienceSQL("access_count + 1")+`
 		`, key, value, source, nowStr, nowStr, b.ltmBaseSalience(1), expiresStr)
-		return err
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		return tx.Commit()
 	})
 	if err != nil {
 		return fmt.Errorf("store LTM: %w", err)
@@ -344,8 +382,19 @@ func (b *Brain) Delete(ctx context.Context, key string) error {
 	}
 	b.mu.Unlock()
 	err := database.RetryOnBusy(5, func() error {
-		_, err := b.db.Exec("DELETE FROM brain_ltm WHERE key = ?", key)
-		return err
+		tx, err := b.db.Begin()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(archiveDeletedSQL, key); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM brain_ltm WHERE key = ?", key); err != nil {
+			tx.Rollback()
+			return err
+		}
+		return tx.Commit()
 	})
 	if err != nil {
 		return fmt.Errorf("delete LTM: %w", err)
