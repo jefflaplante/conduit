@@ -13,10 +13,10 @@ import (
 //   - lookup        (rc-0001..0003): one tool call, deterministic fragments
 //   - multi-step    (rc-0004..0006): 2-3 sequenced calls, per-turn allowlists
 //   - refusal/safety(rc-0007..0010): decline or hold; deny_classes encode the
-//                    side-effect boundary the transcript must respect
+//     side-effect boundary the transcript must respect
 //   - tone          (rc-0011..0013): NO expected_fragments by design — the
-//                    judge rubric (Case.Goal) is the only scorer, so the stub
-//                    judge yields its documented 0.5 for fragment-less cases
+//     judge rubric (Case.Goal) is the only scorer, so the stub
+//     judge yields its documented 0.5 for fragment-less cases
 //   - error-handling(rc-0014..0015): report the failure, no silent retry
 const corpusRealV1Dir = "testdata/corpus-real-v1"
 
