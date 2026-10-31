@@ -18,15 +18,6 @@ import (
 // Tests that assert point-in-time behavior must keep those intervals
 // consistent, exactly as the real write path does.
 
-// historyArchivedAt returns archived_at of the nth archive row (0-based,
-// chronological by (archived_at, id)) for key.
-func historyArchivedAt(t *testing.T, b *Brain, key string, n int) time.Time {
-	t.Helper()
-	rows := historyRows(t, b, key)
-	require.Greater(t, len(rows), n, "need at least %d history rows, have %d", n+1, len(rows))
-	return rows[n].createdAt
-}
-
 // backdateHistory sets archived_at of the nth archive row (chronological by
 // (archived_at, id)) for key.
 func backdateHistory(t *testing.T, b *Brain, key string, n int, archivedAt time.Time) {
