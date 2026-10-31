@@ -146,15 +146,18 @@ func TestEffectiveSalienceSQL_WeightOneIsIdentity(t *testing.T) {
 	b := newTestBrain(t)
 	ctx := testCtx("u")
 	require.NoError(t, b.Store(ctx, "k", "v", TierLongTerm, "user"))
-	var eff float64
-	require.NoError(t, b.db.QueryRow(`SELECT `+b.EffectiveSalienceSQL()+` FROM brain_ltm WHERE key = 'k'`).Scan(&eff))
 	// Pre-weight expression (salience.go before bd-2xd), evaluated by SQLite.
 	plainSQL := "MIN(1.0, MAX(0.0, salience + " + sqlFloat(b.recencyWeight) +
 		" / (1.0 + MAX(0.0, (julianday('now') - julianday(accessed_at)) * 24.0) * " +
 		sqlFloat(b.recencyDecayRate) + ")))"
-	var plain float64
-	require.NoError(t, b.db.QueryRow(`SELECT `+plainSQL+` FROM brain_ltm WHERE key = 'k'`).Scan(&plain))
-	assert.InDelta(t, plain, eff, 1e-9, "weight 1.0 must reduce to the pre-weight expression")
+	// Single statement: julianday('now') is evaluated once for both
+	// expressions, so the comparison is not affected by clock drift between
+	// two separate queries (which flaked at the 1e-9 tolerance, bd-2xd).
+	var delta float64
+	require.NoError(t, b.db.QueryRow(
+		`SELECT ABS((`+b.EffectiveSalienceSQL()+`) - (`+plainSQL+`)) FROM brain_ltm WHERE key = 'k'`,
+	).Scan(&delta))
+	assert.LessOrEqual(t, delta, 1e-9, "weight 1.0 must reduce to the pre-weight expression")
 }
 
 // --- REM decay exemption ---

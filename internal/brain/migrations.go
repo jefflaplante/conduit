@@ -141,7 +141,7 @@ var migrations = []migration{
 			return err
 		},
 	},
-	// Migration 10 (bd-2xd): per-entry importance weighting. weight is a
+	// Migration 11 (bd-2xd): per-entry importance weighting. weight is a
 	// direct multiplier on effective salience (2.0 resists half-decay
 	// equivalent; 1.5 a modest boost) and entries with weight > 1.0 are
 	// exempt from REM batch decay. 1.0 is the identity: pre-existing rows
@@ -150,7 +150,7 @@ var migrations = []migration{
 	// brain_migrations to replay earlier versions (salience_migration_test),
 	// and ALTER TABLE ADD COLUMN is not, so guard on PRAGMA table_info.
 	{
-		Version: 10,
+		Version: 11,
 		SQL:     `SELECT 1;`,
 		Fn: func(tx *sql.Tx, p migrationParams) error {
 			rows, err := tx.Query(`PRAGMA table_info(brain_ltm)`)
