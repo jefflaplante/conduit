@@ -36,7 +36,9 @@ func openLegacyBrain(t *testing.T, rows []legacyRow) (*REMCycle, *brain.Brain) {
 
 	db, err := sql.Open("sqlite", database.BuildDSN(path))
 	require.NoError(t, err)
-	_, err = db.Exec(`DELETE FROM brain_migrations WHERE version = 9`)
+	// Rewind past both the base-salience conversion and the weight column so
+	// the reopen replays them; migration 10 is column-add and idempotent.
+	_, err = db.Exec(`DELETE FROM brain_migrations WHERE version IN (9, 10)`)
 	require.NoError(t, err)
 	for _, r := range rows {
 		ts := time.Now().Add(-r.accessedAgo).UTC().Format("2006-01-02 15:04:05")

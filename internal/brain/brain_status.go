@@ -70,7 +70,7 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 	}
 	b.mu.RUnlock()
 
-	query := `SELECT key, value, created_at, accessed_at, access_count, ` + b.EffectiveSalienceSQL() + `, source, stale, expires_at
+	query := `SELECT key, value, created_at, accessed_at, access_count, ` + b.EffectiveSalienceSQL() + `, source, stale, expires_at, weight
 		FROM brain_ltm WHERE key LIKE ? ESCAPE '\' AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))`
 	args := []interface{}{EscapeLike(prefix) + "%"}
 	if sourcePrefix != "" {
@@ -89,7 +89,7 @@ func (b *Brain) List(ctx context.Context, prefix string, sourcePrefix string) ([
 		var staleInt int
 		var expiresAtNT sql.NullTime
 		if err := rows.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAtNT); err != nil {
+			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAtNT, &entry.Weight); err != nil {
 			continue
 		}
 		entry.Stale = staleInt != 0

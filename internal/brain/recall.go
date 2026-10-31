@@ -109,7 +109,7 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	}
 
 	sqlQuery := fmt.Sprintf(
-		`SELECT key, value, created_at, accessed_at, access_count, %s AS eff_salience, source, stale, expires_at, warmth,
+		`SELECT key, value, created_at, accessed_at, access_count, %s AS eff_salience, source, stale, expires_at, warmth, weight,
 		(%s) AS match_count
 		FROM brain_ltm WHERE (%s) AND (expires_at IS NULL OR expires_at > strftime('%%Y-%%m-%%d %%H:%%M:%%f', 'now'))
 		ORDER BY match_count DESC, eff_salience + warmth DESC LIMIT ?`,
@@ -132,7 +132,7 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 		var staleInt int
 		var expiresAtNT sql.NullTime
 		if err := rows.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAtNT, &entry.Warmth, &matchCount); err != nil {
+			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAtNT, &entry.Warmth, &entry.Weight, &matchCount); err != nil {
 			continue
 		}
 		entry.Stale = staleInt != 0
@@ -272,7 +272,7 @@ func (b *Brain) injectWarmEntries(ctx context.Context, results []*Entry, seen ma
 	// there's headroom. With the default floor of 0.7 and per-flush decay of
 	// 0.85, few entries qualify — the overfetch covers rows lost to `seen`.
 	rows, err := b.db.QueryContext(ctx, `
-		SELECT key, value, created_at, accessed_at, access_count, `+b.EffectiveSalienceSQL()+`, source, stale, expires_at, warmth
+		SELECT key, value, created_at, accessed_at, access_count, `+b.EffectiveSalienceSQL()+`, source, stale, expires_at, warmth, weight
 		  FROM brain_ltm
 		 WHERE warmth >= ? AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f','now'))
 		 ORDER BY warmth DESC LIMIT ?`, b.warmthInjectFloor, b.warmthInjectLimit+len(results))
@@ -290,7 +290,7 @@ func (b *Brain) injectWarmEntries(ctx context.Context, results []*Entry, seen ma
 		var staleInt int
 		var exp sql.NullTime
 		if err := rows.Scan(&e.Key, &e.Value, &e.CreatedAt, &e.AccessedAt, &e.AccessCount,
-			&e.Salience, &e.Source, &staleInt, &exp, &e.Warmth); err != nil {
+			&e.Salience, &e.Source, &staleInt, &exp, &e.Warmth, &e.Weight); err != nil {
 			continue
 		}
 		e.Stale = staleInt != 0

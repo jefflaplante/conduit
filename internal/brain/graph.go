@@ -20,6 +20,7 @@ type GraphNode struct {
 	Source      string    `json:"source,omitempty"`
 	Salience    float64   `json:"salience"`
 	Warmth      float64   `json:"warmth,omitempty"`
+	Weight      float64   `json:"weight,omitempty"` // importance multiplier (bd-2xd); 1.0 = neutral
 	AccessCount int       `json:"access_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	Truncated   bool      `json:"truncated,omitempty"`
@@ -56,7 +57,7 @@ func (b *Brain) ListGraph(ctx context.Context, opts GraphOptions) (*Graph, error
 
 	// conduit-31jg.53: node salience is the query-time effective value.
 	eff := b.EffectiveSalienceSQL()
-	nodeQuery := `SELECT key, value, source, ` + eff + `, warmth, access_count, created_at
+	nodeQuery := `SELECT key, value, source, ` + eff + `, warmth, weight, access_count, created_at
 		FROM brain_ltm
 		WHERE (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))
 		  AND ` + eff + ` >= ?`
@@ -82,7 +83,7 @@ func (b *Brain) ListGraph(ctx context.Context, opts GraphOptions) (*Graph, error
 		ks := make(map[string]struct{}, 256)
 		for rows.Next() {
 			n := &GraphNode{}
-			if err := rows.Scan(&n.Key, &n.Value, &n.Source, &n.Salience, &n.Warmth, &n.AccessCount, &n.CreatedAt); err != nil {
+			if err := rows.Scan(&n.Key, &n.Value, &n.Source, &n.Salience, &n.Warmth, &n.Weight, &n.AccessCount, &n.CreatedAt); err != nil {
 				return fmt.Errorf("scan node: %w", err)
 			}
 			if opts.ValueTruncate > 0 && len(n.Value) > opts.ValueTruncate {

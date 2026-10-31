@@ -106,7 +106,7 @@ func (b *Brain) enforceWMCapLocked(userID string, protect map[string]bool, now t
 // without b.mu held. Best-effort: failures are logged.
 func (b *Brain) promoteEvicted(entries []Entry) {
 	for _, e := range entries {
-		if err := b.storeLTM(e.Key, e.Value, e.Source, time.Now(), e.ExpiresAt); err != nil {
+		if err := b.storeLTM(e.Key, e.Value, e.Source, time.Now(), e.ExpiresAt, 1.0, false); err != nil {
 			log.Printf("Brain: failed to promote cap-evicted WM key %q: %v", e.Key, err)
 		}
 	}
@@ -117,7 +117,7 @@ func (b *Brain) promoteEvicted(entries []Entry) {
 // it in WM). Must be called without b.mu held.
 func (b *Brain) promoteThenDrop(refs []wmRef) {
 	for _, r := range refs {
-		if err := b.storeLTM(r.entry.Key, r.entry.Value, r.entry.Source, time.Now(), r.entry.ExpiresAt); err != nil {
+		if err := b.storeLTM(r.entry.Key, r.entry.Value, r.entry.Source, time.Now(), r.entry.ExpiresAt, 1.0, false); err != nil {
 			log.Printf("Brain: failed to promote idle hot WM key %q (kept in WM): %v", r.entry.Key, err)
 			continue
 		}

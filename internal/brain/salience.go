@@ -53,11 +53,17 @@ func sqlFloat(f float64) string {
 }
 
 // EffectiveSalienceSQL returns a SQL expression (over brain_ltm columns
-// salience and accessed_at) for query-time effective salience.
+// salience and accessed_at) for query-time effective salience. The value is
+// multiplied by the row's importance weight (bd-2xd), clamped to
+// [0, weight]: weight 1.0 reduces to the pre-weight expression, weight 2.0
+// doubles the effective salience (resisting the recency term's decay),
+// weight 0.5 halves it. Rows written before migration 10 hold weight 1.0.
 func (b *Brain) EffectiveSalienceSQL() string {
-	return "MIN(1.0, MAX(0.0, salience + " + sqlFloat(b.recencyWeight) +
+	eff := "MIN(1.0, MAX(0.0, salience + " + sqlFloat(b.recencyWeight) +
 		" / (1.0 + MAX(0.0, (julianday('now') - julianday(accessed_at)) * 24.0) * " +
 		sqlFloat(b.recencyDecayRate) + ")))"
+	return "(CASE WHEN COALESCE(weight, 1.0) = 1.0 THEN " + eff +
+		" ELSE MIN(MAX(COALESCE(weight, 1.0), 0.0), " + eff + " * MAX(COALESCE(weight, 1.0), 0.0)) END)"
 }
 
 // PeakSalienceSQL returns a SQL expression for the salience a row has at the
