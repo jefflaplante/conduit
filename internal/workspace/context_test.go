@@ -264,3 +264,153 @@ func setupTestWorkspace(t *testing.T) string {
 func cleanup(workspace string) {
 	os.RemoveAll(workspace)
 }
+
+// bd-3ia: discoverFiles honors Options (core list, state file).
+
+func writeWS(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
+		p := filepath.Join(dir, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	}
+}
+
+func discoveredPaths(t *testing.T, wc *WorkspaceContext) map[string]bool {
+	t.Helper()
+	files, err := wc.discoverFiles()
+	require.NoError(t, err)
+	got := map[string]bool{}
+	for _, f := range files {
+		got[f.Path] = true
+	}
+	return got
+}
+
+func TestDiscoverFiles_StateFileWhenEnabled(t *testing.T) {
+	dir := t.TempDir()
+	writeWS(t, dir, map[string]string{
+		"SOUL.md":                 "soul",
+		"memory/jules-state.json": `{"working_on":"x"}`,
+		"memory/other.json":       `{}`,
+	})
+
+	opts := DefaultOptions()
+	wc := NewWorkspaceContextWithOptions(dir, opts)
+	got := discoveredPaths(t, wc)
+	assert.True(t, got["memory/jules-state.json"], "state file should be discovered by default")
+	assert.False(t, got["memory/other.json"], "unrelated json must not be discovered")
+	assert.Equal(t, "memory/jules-state.json", wc.StateFile())
+
+	for _, st := range []string{"main", "shared", "isolated"} {
+		bundle, err := wc.LoadContext(context.Background(), SecurityContext{SessionType: st})
+		require.NoError(t, err)
+		assert.Contains(t, bundle.Files, "memory/jules-state.json", "session type %s", st)
+		assert.NotContains(t, bundle.Files, "memory/other.json")
+	}
+
+	opts.StateInject = false
+	wc = NewWorkspaceContextWithOptions(dir, opts)
+	assert.False(t, discoveredPaths(t, wc)["memory/jules-state.json"], "state file should not be discovered when disabled")
+	assert.Equal(t, "", wc.StateFile())
+}
+
+func TestDiscoverFiles_CustomStateFile(t *testing.T) {
+	dir := t.TempDir()
+	writeWS(t, dir, map[string]string{"memory/state.json": `{}`})
+	opts := DefaultOptions()
+	opts.StateFile = "memory/state.json"
+	wc := NewWorkspaceContextWithOptions(dir, opts)
+	assert.True(t, discoveredPaths(t, wc)["memory/state.json"])
+	bundle, err := wc.LoadContext(context.Background(), SecurityContext{SessionType: "isolated"})
+	require.NoError(t, err)
+	assert.Contains(t, bundle.Files, "memory/state.json")
+}
+
+func TestDiscoverFiles_ConfigCoreListHonored(t *testing.T) {
+	dir := t.TempDir()
+	writeWS(t, dir, map[string]string{
+		"SOUL.md":   "soul",
+		"USER.md":   "user",
+		"AGENTS.md": "agents",
+		"MEMORY.md": "memory",
+	})
+	opts := DefaultOptions()
+	opts.CoreFiles = []string{"SOUL.md", "USER.md"}
+	wc := NewWorkspaceContextWithOptions(dir, opts)
+	got := discoveredPaths(t, wc)
+	assert.True(t, got["SOUL.md"])
+	assert.True(t, got["USER.md"])
+	assert.False(t, got["AGENTS.md"], "AGENTS.md is not in the configured core list")
+	assert.False(t, got["MEMORY.md"], "MEMORY.md is not in the configured core list")
+	assert.Equal(t, []string{"SOUL.md", "USER.md"}, wc.CoreFiles())
+}
+
+func TestDiscoverFiles_CoreListRejectsEscapes(t *testing.T) {
+	dir := t.TempDir()
+	writeWS(t, dir, map[string]string{"SOUL.md": "soul"})
+	outside := filepath.Join(t.TempDir(), "SECRET.md")
+	require.NoError(t, os.WriteFile(outside, []byte("secret"), 0o644))
+
+	opts := DefaultOptions()
+	opts.CoreFiles = []string{filepath.Join(dir, "SOUL.md"), outside, "../SECRET.md"}
+	wc := NewWorkspaceContextWithOptions(dir, opts)
+	got := discoveredPaths(t, wc)
+	assert.True(t, got["SOUL.md"], "absolute path inside the workspace maps to its relative name")
+	assert.Len(t, got, 1, "paths outside the workspace are ignored: %v", got)
+}
+
+func TestDiscoverFiles_FallbackCoreListWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	all := map[string]string{}
+	for _, name := range DefaultCoreFiles {
+		all[name] = name
+	}
+	writeWS(t, dir, all)
+	opts := DefaultOptions()
+	opts.CoreFiles = nil
+	wc := NewWorkspaceContextWithOptions(dir, opts)
+	got := discoveredPaths(t, wc)
+	for _, name := range []string{"SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md", "IDENTITY.md", "MEMORY.md", "HEARTBEAT.md", "BOOTSTRAP.md"} {
+		assert.True(t, got[name], "fallback core list should include %s", name)
+	}
+	assert.Equal(t, DefaultCoreFiles, wc.CoreFiles())
+}
+
+func TestLoadContext_HeartbeatBootstrapMainOnlyWithConfigCore(t *testing.T) {
+	dir := t.TempDir()
+	writeWS(t, dir, map[string]string{
+		"SOUL.md":      "soul",
+		"HEARTBEAT.md": "hb",
+		"BOOTSTRAP.md": "boot",
+	})
+	opts := DefaultOptions()
+	opts.CoreFiles = []string{"SOUL.md", "HEARTBEAT.md", "BOOTSTRAP.md"}
+	wc := NewWorkspaceContextWithOptions(dir, opts)
+
+	bundle, err := wc.LoadContext(context.Background(), SecurityContext{SessionType: "main"})
+	require.NoError(t, err)
+	assert.Contains(t, bundle.Files, "HEARTBEAT.md")
+	assert.Contains(t, bundle.Files, "BOOTSTRAP.md")
+
+	for _, st := range []string{"shared", "isolated"} {
+		bundle, err = wc.LoadContext(context.Background(), SecurityContext{SessionType: st})
+		require.NoError(t, err)
+		assert.Contains(t, bundle.Files, "SOUL.md")
+		assert.NotContains(t, bundle.Files, "HEARTBEAT.md", "session type %s", st)
+		assert.NotContains(t, bundle.Files, "BOOTSTRAP.md", "session type %s", st)
+	}
+}
+
+func TestLoadStateFile(t *testing.T) {
+	dir := t.TempDir()
+	writeWS(t, dir, map[string]string{"memory/jules-state.json": `{"a":1}`})
+	wc := NewWorkspaceContextWithOptions(dir, DefaultOptions())
+	content, ok := wc.LoadStateFile(SecurityContext{SessionType: "shared"})
+	assert.True(t, ok)
+	assert.Equal(t, `{"a":1}`, content)
+
+	empty := NewWorkspaceContextWithOptions(t.TempDir(), DefaultOptions())
+	_, ok = empty.LoadStateFile(SecurityContext{SessionType: "main"})
+	assert.False(t, ok, "missing state file reports not found")
+}

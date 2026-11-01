@@ -115,7 +115,9 @@ var reviewedNonSecretFields = map[string]bool{
 	".ai.subagent_default_model":                        true,
 	".workspace.context_dir":                            true,
 	".workspace.files.core[]":                           true,
-	".workspace.files.state_file":                       true, // bd-3ia: relative path, not a credential
+	".workspace.files.state_file":                       true,
+	".workspace.files.state_inject":                     true,
+	".workspace.files.memory_md_inject":                 true,
 	".workspace.security.default_policy":                true,
 	".workspace.summary.cache_dir":                      true,
 	".workspace.summary.file_configs{}.preserve_keys[]": true,

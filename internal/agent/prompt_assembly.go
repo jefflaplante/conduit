@@ -118,6 +118,8 @@ func (pb *PromptBuilder) buildSectionListWithParams(ctx context.Context, session
 		}},
 		{name: "Wake Context", priority: 1, dynamic: true, build: func() string { return buildWakeContextSection(wakeSource) }},
 		{name: "Topic", priority: 1, dynamic: true, build: func() string { return buildTopicSection(topicPrompt) }}, // conduit-43vk
+		// bd-3ia: static (byte-stable: age in whole days), never dropped.
+		{name: "Session State", priority: 1, build: func() string { return pb.buildSessionStateSection(session) }},
 
 		// P2 — Grounding data: project context, memory, tool availability (reference)
 		{name: "Project Context", priority: 2, build: func() string { return pb.buildWorkspaceContextSection(ctx, session) }},

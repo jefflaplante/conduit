@@ -516,9 +516,10 @@ Controls workspace context files — the agent's personality, memory, and knowle
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `context_dir` | string | `"./workspace"` | Root directory for all context files |
-| `files.core` | string array | see above | Filenames to look for in `context_dir` |
-| `files.state_file` | string | `"memory/jules-state.json"` | Session state file, relative to `context_dir`. Must be relative, stay inside the workspace (no `..`), and end in `.json`. |
-| `files.memory_md_inject` | bool | `true` | Inject MEMORY.md into the prompt. Set `false` to disable. |
+| `files.core` | string array | built-in list | Filenames to look for in `context_dir`, in render order. Empty = `SOUL.md`, `USER.md`, `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `MEMORY.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`. Paths outside `context_dir` are ignored |
+| `files.state_file` | string | `"memory/jules-state.json"` | Session state JSON rendered as the "Session State" prompt section. Must be relative to `context_dir`, stay inside the workspace (no `..`), and end in `.json` |
+| `files.state_inject` | bool | `true` | Inject the Session State section (readable from every session type) |
+| `files.memory_md_inject` | bool | `true` | Inject `MEMORY.md` into Project Context (main sessions only) |
 
 ### Context files and their roles
 
@@ -532,6 +533,7 @@ Controls workspace context files — the agent's personality, memory, and knowle
 | `MEMORY.md` | Main sessions only | Long-term memory (security-restricted) |
 | `HEARTBEAT.md` | Main sessions only | Recurring task instructions (security-restricted) |
 | `memory/*.md` | All sessions | Daily memory logs, format: `YYYY-MM-DD.md` |
+| `memory/jules-state.json` | All sessions | Session state (`files.state_file`): `written_at` (RFC 3339), `working_on`, `open_loops`, `resume_hint`, rendered compactly (max ~2000 chars) with a staleness warning past 72h. Missing or malformed = no section |
 
 All files are optional. Missing files are silently skipped. The gateway creates none of these automatically — the agent can create and update them at runtime via file tools if enabled.
 

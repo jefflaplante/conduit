@@ -39,25 +39,30 @@ type SummaryFileConfig struct {
 	PreserveKeys []string `json:"preserve_keys,omitempty"`
 }
 
-// DefaultWorkspaceStateFile is the default session state file (bd-3ia),
-// relative to workspace.context_dir.
+// DefaultWorkspaceStateFile is the session state file rendered into the
+// "Session State" prompt section, relative to the workspace context dir (bd-3ia).
 const DefaultWorkspaceStateFile = "memory/jules-state.json"
 
 // WorkspaceFilesConfig defines which files to load
 type WorkspaceFilesConfig struct {
+	// Core lists the core context files (empty = the built-in list).
 	Core   []string              `json:"core"`
 	Memory WorkspaceMemoryConfig `json:"memory"`
 
-	// StateFile is the session state file, relative to the workspace
-	// context dir (bd-3ia). Empty = DefaultWorkspaceStateFile.
+	// StateFile is the session state JSON rendered as the "Session State"
+	// section, relative to the context dir (default: memory/jules-state.json).
+	// Must be relative, stay inside the workspace, and end in .json.
 	StateFile string `json:"state_file,omitempty"`
 
-	// MemoryMDInject controls MEMORY.md injection into the prompt;
-	// nil = true (bd-3ia).
+	// StateInject controls the Session State section (default: true).
+	StateInject *bool `json:"state_inject,omitempty"`
+
+	// MemoryMDInject controls MEMORY.md injection into Project Context
+	// (default: true).
 	MemoryMDInject *bool `json:"memory_md_inject,omitempty"`
 }
 
-// StateFilePath returns the configured state file or the default (bd-3ia).
+// StateFilePath returns the configured state file or the default.
 func (f WorkspaceFilesConfig) StateFilePath() string {
 	if f.StateFile == "" {
 		return DefaultWorkspaceStateFile
@@ -65,7 +70,13 @@ func (f WorkspaceFilesConfig) StateFilePath() string {
 	return f.StateFile
 }
 
-// MemoryMDInjectEnabled reports whether MEMORY.md is injected; nil = true.
+// StateInjectEnabled reports whether the Session State section is injected
+// (nil = true).
+func (f WorkspaceFilesConfig) StateInjectEnabled() bool {
+	return f.StateInject == nil || *f.StateInject
+}
+
+// MemoryMDInjectEnabled reports whether MEMORY.md is injected (nil = true).
 func (f WorkspaceFilesConfig) MemoryMDInjectEnabled() bool {
 	return f.MemoryMDInject == nil || *f.MemoryMDInject
 }
