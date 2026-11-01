@@ -205,6 +205,89 @@ func TestSecurityManager_ValidationError(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestSecurityManager_JsonContextFilesBlocked pins the prompt-injection
+// contract: session-context JSON files under memory/ are NEVER accessible,
+// in any session type. No default allow rule covers .json paths, so they
+// fall through to IsAccessible's default-deny (bd-vp4v). Daily .md files
+// are the control case and must remain accessible everywhere.
+func TestSecurityManager_JsonContextFilesBlocked(t *testing.T) {
+	sm := NewSecurityManager()
+
+	sessionTypes := []string{"main", "shared", "isolated"}
+	jsonPaths := []string{
+		"memory/jules-state.json",
+		"memory/session-context.json",
+		filepath.Join("memory", "nested", "inner.json"),
+		"memory/queue.json",
+	}
+
+	for _, sessionType := range sessionTypes {
+		securityCtx := SecurityContext{SessionType: sessionType}
+
+		for _, path := range jsonPaths {
+			assert.False(t, sm.IsAccessible(path, securityCtx),
+				"session type %q: %s must be denied (no allow rule covers .json)", sessionType, path)
+		}
+
+		// Control: daily .md files stay accessible in all session types.
+		assert.True(t, sm.IsAccessible("memory/2026-11-01.md", securityCtx),
+			"session type %q: daily .md files must remain accessible", sessionType)
+	}
+}
+
+// TestWorkspaceContext_DiscoverySkipsJsonFiles pins the discovery-side
+// contract: discoverFiles only surfaces core .md files and dated daily
+// memory .md logs — a .json file in memory/ must never appear in the
+// loaded context bundle, regardless of the security context (bd-vp4v).
+func TestWorkspaceContext_DiscoverySkipsJsonFiles(t *testing.T) {
+	workspace := t.TempDir()
+
+	memoryDir := filepath.Join(workspace, "memory")
+	require.NoError(t, os.MkdirAll(memoryDir, 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(memoryDir, "nested"), 0755))
+
+	// Valid daily memory files (within the default lookback window).
+	today := time.Now().Format("2006-01-02")
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	require.NoError(t, os.WriteFile(filepath.Join(memoryDir, today+".md"), []byte("daily note"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(memoryDir, yesterday+".md"), []byte("older note"), 0644))
+
+	// Decoy session-context JSON files that must never be injected.
+	for _, name := range []string{
+		filepath.Join("jules-state.json"),
+		filepath.Join("session-context.json"),
+		filepath.Join("queue.json"),
+		filepath.Join("nested", "inner.json"),
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(memoryDir, name), []byte("{}"), 0644))
+	}
+
+	wsContext := NewWorkspaceContext(workspace)
+	bundle, err := wsContext.LoadContext(context.Background(), SecurityContext{
+		SessionType: "main",
+		SessionID:   "test",
+	})
+	require.NoError(t, err)
+
+	// At least one daily .md file must be discovered.
+	mdFound := false
+	for _, day := range []string{today, yesterday} {
+		if _, ok := bundle.Files[filepath.Join("memory", day+".md")]; ok {
+			mdFound = true
+		}
+	}
+	assert.True(t, mdFound, "daily .md file should be discovered and loaded")
+
+	// No .json file may appear in the bundle.
+	assert.NotContains(t, bundle.Files, filepath.Join("memory", "jules-state.json"))
+	assert.NotContains(t, bundle.Files, filepath.Join("memory", "session-context.json"))
+	assert.NotContains(t, bundle.Files, filepath.Join("memory", "queue.json"))
+	for key := range bundle.Files {
+		assert.NotEqual(t, ".json", filepath.Ext(key),
+			"JSON files must never be injected into context: %s", key)
+	}
+}
+
 func TestFileCache_TTLExpiration(t *testing.T) {
 	cache := NewFileCache(50*time.Millisecond, 1024*1024) // 50ms TTL
 
