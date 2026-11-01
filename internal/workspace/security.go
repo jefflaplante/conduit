@@ -26,6 +26,15 @@ func NewSecurityManager() *SecurityManager {
 }
 
 // initializeDefaultRules sets up the default file access rules
+//
+// Prompt-injection contract (bd-vp4v): rules cover only the core .md files
+// and memory/*.md daily logs. Any other path — notably memory/*.json
+// session-context files — matches no rule and falls through to
+// IsAccessible's default-deny, keeping it out of the prompt. If a future
+// allow rule for a state file lands (bd-3ia Phase 1), make it an
+// EXACT-path rule appended AFTER these defaults: a wildcard "memory/*.json"
+// rule would shadow later AddRule exact allows, since the FIRST matching
+// rule wins.
 func (sm *SecurityManager) initializeDefaultRules() {
 	sm.rules = []FileAccess{
 		{
