@@ -146,6 +146,31 @@ func validateWorkspacePaths(me *multiError, ws WorkspaceConfig) {
 		}
 		checkParentDir(me, "workspace.files.core", path)
 	}
+	// bd-3ia: the state file is read from inside the context dir.
+	validateWorkspaceStateFile(me, ws.Files)
+}
+
+// validateWorkspaceStateFile checks workspace.files.state_file (bd-3ia):
+// when set it must be non-empty, relative, stay inside the workspace (no
+// ".." traversal), and end in .json.
+func validateWorkspaceStateFile(me *multiError, files WorkspaceFilesConfig) {
+	sf := files.StateFile
+	if sf == "" {
+		return // default applies (DefaultWorkspaceStateFile)
+	}
+	if !filepath.IsLocal(sf) {
+		me.add("workspace.files.state_file must be a relative path inside the workspace context dir (got %q)", sf)
+		return
+	}
+	for _, elem := range strings.Split(sf, "/") {
+		if elem == ".." {
+			me.add("workspace.files.state_file must not contain \"..\" path elements (got %q)", sf)
+			return
+		}
+	}
+	if !strings.HasSuffix(sf, ".json") {
+		me.add("workspace.files.state_file must be a .json file (got %q)", sf)
+	}
 }
 
 // checkParentDir stats the parent directory of a file path and adds an error

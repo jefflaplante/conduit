@@ -517,6 +517,8 @@ Controls workspace context files — the agent's personality, memory, and knowle
 |-------|------|---------|-------------|
 | `context_dir` | string | `"./workspace"` | Root directory for all context files |
 | `files.core` | string array | see above | Filenames to look for in `context_dir` |
+| `files.state_file` | string | `"memory/jules-state.json"` | Session state file, relative to `context_dir`. Must be relative, stay inside the workspace (no `..`), and end in `.json`. |
+| `files.memory_md_inject` | bool | `true` | Inject MEMORY.md into the prompt. Set `false` to disable. |
 
 ### Context files and their roles
 

@@ -39,10 +39,35 @@ type SummaryFileConfig struct {
 	PreserveKeys []string `json:"preserve_keys,omitempty"`
 }
 
+// DefaultWorkspaceStateFile is the default session state file (bd-3ia),
+// relative to workspace.context_dir.
+const DefaultWorkspaceStateFile = "memory/jules-state.json"
+
 // WorkspaceFilesConfig defines which files to load
 type WorkspaceFilesConfig struct {
 	Core   []string              `json:"core"`
 	Memory WorkspaceMemoryConfig `json:"memory"`
+
+	// StateFile is the session state file, relative to the workspace
+	// context dir (bd-3ia). Empty = DefaultWorkspaceStateFile.
+	StateFile string `json:"state_file,omitempty"`
+
+	// MemoryMDInject controls MEMORY.md injection into the prompt;
+	// nil = true (bd-3ia).
+	MemoryMDInject *bool `json:"memory_md_inject,omitempty"`
+}
+
+// StateFilePath returns the configured state file or the default (bd-3ia).
+func (f WorkspaceFilesConfig) StateFilePath() string {
+	if f.StateFile == "" {
+		return DefaultWorkspaceStateFile
+	}
+	return f.StateFile
+}
+
+// MemoryMDInjectEnabled reports whether MEMORY.md is injected; nil = true.
+func (f WorkspaceFilesConfig) MemoryMDInjectEnabled() bool {
+	return f.MemoryMDInject == nil || *f.MemoryMDInject
 }
 
 // WorkspaceMemoryConfig defines memory file handling
