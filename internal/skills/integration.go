@@ -471,16 +471,19 @@ func (i *SkillIntegrator) BuildSkillsContext(skills []Skill) string {
 		actions := i.extractAvailableActions(skill)
 		// One compact line per skill. The full description already ships in
 		// the tool catalog (skill_* tools), so repeating it here doubled the
-		// token cost of every request. Keep name + emoji + trimmed gist +
-		// actions only. Doc-only skills (no honest actions) say so and point
-		// at the file to Read instead of listing dead verbs (conduit-7ny5).
-		actionInfo := formatActionsList(actions)
+		// token cost of every request. Skills with honest actions keep name +
+		// emoji + trimmed gist + the action list (the enums are load-bearing
+		// for dispatch). Doc-only skills (no honest actions, conduit-7ny5)
+		// drop the prose entirely: the Read pointer IS the message.
+		var skillInfo string
 		if len(actions) == 0 {
-			actionInfo = fmt.Sprintf("doc-only — Read skills/%s/SKILL.md", skill.Name)
+			skillInfo = fmt.Sprintf("- `skill_%s` %s — doc-only — Read skills/%s/SKILL.md\n",
+				skill.Name, emoji, skill.Name)
+		} else {
+			skillInfo = fmt.Sprintf("- `skill_%s` %s — %s (actions: %s)\n",
+				skill.Name, emoji, truncateDescription(skill.Description, 160),
+				formatActionsList(actions))
 		}
-		skillInfo := fmt.Sprintf("- `skill_%s` %s — %s (actions: %s)\n",
-			skill.Name, emoji, truncateDescription(skill.Description, 160),
-			actionInfo)
 
 		context = append(context, skillInfo)
 	}

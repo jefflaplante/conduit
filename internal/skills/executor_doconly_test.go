@@ -154,7 +154,7 @@ func TestDocOnlySkillSteering(t *testing.T) {
 
 	integrator := &SkillIntegrator{loader: NewSkillLoader(), config: nil}
 	ctxLine := integrator.BuildSkillsContext([]Skill{docOnly})
-	if !strings.Contains(ctxLine, "doc-only — Read skills/doconly/SKILL.md") {
+	if !strings.Contains(ctxLine, "doc-only — Read skills/doconly/SKILL.md") || strings.Contains(ctxLine, "(actions:") {
 		t.Errorf("skills context should carry a doc-only Read pointer; got %q", ctxLine)
 	}
 }
