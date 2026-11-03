@@ -236,9 +236,10 @@ func TestSecurityManager_JsonContextFilesBlocked(t *testing.T) {
 }
 
 // TestWorkspaceContext_DiscoverySkipsJsonFiles pins the discovery-side
-// contract: discoverFiles only surfaces core .md files and dated daily
-// memory .md logs — a .json file in memory/ must never appear in the
-// loaded context bundle, regardless of the security context (bd-vp4v).
+// contract: discoverFiles only surfaces core .md files, dated daily memory
+// .md logs, and the sanctioned state file (bd-3ia) — any other .json file
+// in memory/ must never appear in the loaded context bundle, regardless of
+// the security context (bd-vp4v).
 func TestWorkspaceContext_DiscoverySkipsJsonFiles(t *testing.T) {
 	workspace := t.TempDir()
 
@@ -254,7 +255,6 @@ func TestWorkspaceContext_DiscoverySkipsJsonFiles(t *testing.T) {
 
 	// Decoy session-context JSON files that must never be injected.
 	for _, name := range []string{
-		filepath.Join("jules-state.json"),
 		filepath.Join("session-context.json"),
 		filepath.Join("queue.json"),
 		filepath.Join("nested", "inner.json"),
@@ -276,13 +276,19 @@ func TestWorkspaceContext_DiscoverySkipsJsonFiles(t *testing.T) {
 			mdFound = true
 		}
 	}
-	assert.True(t, mdFound, "daily .md file should be discovered and loaded")
+	assert.True(t, mdFound, "daily .md file should be discovered and")
 
-	// No .json file may appear in the bundle.
-	assert.NotContains(t, bundle.Files, filepath.Join("memory", "jules-state.json"))
+	// No .json file may appear in the bundle except the sanctioned state
+	// file (bd-3ia: appended by discovery when state_inject is on, allowed
+	// for every session type via its exact-path security rule).
+	stateFile := filepath.Join("memory", "jules-state.json")
 	assert.NotContains(t, bundle.Files, filepath.Join("memory", "session-context.json"))
 	assert.NotContains(t, bundle.Files, filepath.Join("memory", "queue.json"))
+	assert.NotContains(t, bundle.Files, filepath.Join("memory", "nested", "inner.json"))
 	for key := range bundle.Files {
+		if key == stateFile {
+			continue // sanctioned exception (bd-3ia)
+		}
 		assert.NotEqual(t, ".json", filepath.Ext(key),
 			"JSON files must never be injected into context: %s", key)
 	}
