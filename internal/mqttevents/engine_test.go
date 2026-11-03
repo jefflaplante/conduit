@@ -713,3 +713,159 @@ func TestNilDeps_FallBackToLog(t *testing.T) {
 		t.Fatalf("nil spawner+queuer must end in log, got %+v", e.Stats())
 	}
 }
+
+// --- topic routing (trie) ------------------------------------------------
+
+func ruleOn(id, topic string) config.MQTTEventRule {
+	r := thresholdRule(id, "lt", 20, 0, "queue")
+	r.Topic = topic
+	return r
+}
+
+// fire sends a matching reading on topic and dispatches synchronously.
+func (h *harness) fire(topic string, offset time.Duration) {
+	h.e.HandleEvent(ev(topic, "10", t0.Add(offset)))
+	h.e.drain()
+}
+
+func (h *harness) noticeIDs() []string {
+	h.q.mu.Lock()
+	defer h.q.mu.Unlock()
+	ids := make([]string, 0, len(h.q.notices))
+	for _, n := range h.q.notices {
+		ids = append(ids, n.RuleID)
+	}
+	return ids
+}
+
+func TestRouting_ExactTopicsMatchOldMapSemantics(t *testing.T) {
+	// "z" before "a" in config: rules on one topic evaluate in config order,
+	// as the exact-topic map did, not in the trie's sorted-ID order.
+	h := newHarnessRules(t,
+		ruleOn("z", "sensors/kitchen/temp"),
+		ruleOn("a", "sensors/kitchen/temp"),
+		ruleOn("m", "sensors/garage/temp"),
+	)
+	h.fire("sensors/kitchen/temp", 0)
+	if got := strings.Join(h.noticeIDs(), ","); got != "z,a" {
+		t.Fatalf("kitchen notices = %s, want z,a", got)
+	}
+	h.fire("sensors/garage/temp", time.Second)
+	h.fire("sensors/kitchen", 2*time.Second)        // prefix of a rule topic
+	h.fire("sensors/kitchen/temp/x", 3*time.Second) // extension of a rule topic
+	if got := strings.Join(h.noticeIDs(), ","); got != "z,a,m" {
+		t.Fatalf("notices = %s, want z,a,m", got)
+	}
+}
+
+func TestRouting_PlusMatchesExactlyOneLevel(t *testing.T) {
+	h := newHarnessRules(t, ruleOn("temps", "sensors/+/temp"))
+	h.fire("sensors/kitchen/temp", 0)
+	h.fire("sensors//temp", time.Second) // "+" matches an empty level (MQTT 4.7.1.2)
+	h.fire("sensors/temp", 2*time.Second)
+	h.fire("sensors/kitchen/shelf/temp", 3*time.Second)
+	h.fire("other/kitchen/temp", 4*time.Second)
+	if n := h.q.count(); n != 2 {
+		t.Fatalf("want 2 fires (kitchen, empty level), got %d: %v", n, h.noticeIDs())
+	}
+	// The notice carries the concrete event topic, not the rule pattern.
+	if got := h.q.notices[0].Topic; got != "sensors/kitchen/temp" {
+		t.Fatalf("notice topic = %q, want the event topic", got)
+	}
+}
+
+func TestRouting_HashMatchesTerminalMultiLevel(t *testing.T) {
+	h := newHarnessRules(t, ruleOn("tree", "sensors/#"))
+	h.fire("sensors/kitchen/shelf/temp", 0)
+	h.fire("sensors/kitchen", time.Second)
+	h.fire("other/sensors/x", 2*time.Second)
+	if n := h.q.count(); n != 2 {
+		t.Fatalf("want 2 fires under sensors/, got %d", n)
+	}
+}
+
+func TestRouting_HashIncludesParentLevel(t *testing.T) {
+	h := newHarnessRules(t, ruleOn("tree", "sensors/#"))
+	h.fire("sensors", 0) // MQTT 4.7.1.2: "a/#" also matches "a"
+	if n := h.q.count(); n != 1 {
+		t.Fatalf(`"sensors/#" must fire on "sensors", got %d`, n)
+	}
+}
+
+func TestRouting_OverlappingPatternsEvaluateEachRuleOnce(t *testing.T) {
+	// Three patterns all match one event; each rule must evaluate exactly
+	// once, so with duration 0 each queues exactly one notice.
+	h := newHarnessRules(t,
+		ruleOn("exact", "sensors/kitchen/temp"),
+		ruleOn("plus", "sensors/+/temp"),
+		ruleOn("tree", "sensors/#"),
+		ruleOn("all", "#"),
+	)
+	h.fire("sensors/kitchen/temp", 0)
+	if got := strings.Join(h.noticeIDs(), ","); got != "exact,plus,tree,all" {
+		t.Fatalf("notices = %s, want each rule once in config order", got)
+	}
+	if s := h.e.Stats(); s.Queued != 4 || s.Logged != 0 || s.CooldownSwallowed != 0 {
+		t.Fatalf("stats = %+v, want 4 queued and nothing else", s)
+	}
+}
+
+func TestRouting_WildcardRuleSharesCooldownAcrossTopics(t *testing.T) {
+	// One rule is one subscription: its cooldown spans every topic it matches.
+	r := ruleOn("temps", "sensors/+/temp")
+	r.CooldownS = 600
+	h := newHarnessRules(t, r)
+	h.fire("sensors/kitchen/temp", 0)
+	h.fire("sensors/garage/temp", time.Second)
+	if n := h.q.count(); n != 1 {
+		t.Fatalf("want 1 fire, got %d", n)
+	}
+	if s := h.e.Stats(); s.CooldownSwallowed != 1 {
+		t.Fatalf("cooldown swallowed = %d, want 1", s.CooldownSwallowed)
+	}
+}
+
+func TestRouting_NoRulesIsNilSafe(t *testing.T) {
+	e, err := NewEngine(config.MQTTEventsConfig{Enabled: true}, Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Stop()
+	e.HandleEvent(ev(testTopic, "10", t0))
+	e.drain()
+	if s := e.Stats(); s != (Stats{}) {
+		t.Fatalf("stats = %+v, want zero", s)
+	}
+}
+
+func TestRouting_UnmatchedTopicSkipsEvalLock(t *testing.T) {
+	h := newHarnessRules(t, ruleOn("temps", "sensors/+/temp"))
+	h.e.evalMu.Lock()
+	defer h.e.evalMu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		h.e.HandleEvent(ev("other/topic", "10", t0))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("HandleEvent on an unmatched topic blocked on evalMu")
+	}
+}
+
+func TestNewEngine_RejectsInvalidTopicFilter(t *testing.T) {
+	_, err := NewEngine(config.MQTTEventsConfig{Enabled: true, Rules: []config.MQTTEventRule{ruleOn("r", "sensors/#/temp")}}, Deps{})
+	if err == nil {
+		t.Fatal("want topic filter error")
+	}
+	// Disabled rules are never routed, so their topic is not compiled.
+	off := false
+	r := ruleOn("r", "sensors/#/temp")
+	r.Enabled = &off
+	e, err := NewEngine(config.MQTTEventsConfig{Enabled: true, Rules: []config.MQTTEventRule{r}}, Deps{})
+	if err != nil {
+		t.Fatalf("disabled rule: %v", err)
+	}
+	e.Stop()
+}
