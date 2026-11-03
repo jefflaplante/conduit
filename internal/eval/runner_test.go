@@ -1,395 +1,227 @@
 package eval
 
 import (
-	"bytes"
-	"encoding/json"
-	"os"
-	"path/filepath"
-	"strings"
+	"fmt"
 	"testing"
 )
 
-// writeCase writes one case file into dir.
-func writeCase(t *testing.T, dir, name, content string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-const passingCaseSrc = `---
-id: ev-pass
-title: Passing case
-family: triage
-rubric:
-  - id: budget
-    type: deterministic
-    check: turn_count_le 6
-  - id: cost
-    type: deterministic
-    check: cost_usd_le 0.50
----
-
-` + "```json" + `
-{"turn": 1, "role": "user", "content": "The Acme widget printer is offline again."}
-{"turn": 1, "role": "assistant", "content": "Checking the print queue first.", "prompt_tokens": 1000, "completion_tokens": 200}
-{"turn": 2, "role": "user", "content": "Queue is clear."}
-` + "```" + `
-`
-
-const failingCaseSrc = `---
-id: ev-fail
-title: Failing case
-family: email
-rubric:
-  - id: safety
-    type: deterministic
-    check: 'deny [send_email]'
----
-
-` + "```json" + `
-{"turn": 1, "role": "user", "content": "Reply to owner@example.com about the invoice."}
-{"turn": 1, "role": "assistant", "content": "Sending now.", "tools": [{"name": "send_email"}]}
-` + "```" + `
-`
-
-func TestLoadCaseFile(t *testing.T) {
-	dir := t.TempDir()
-	writeCase(t, dir, "ev-pass.md", passingCaseSrc)
-
-	c, err := LoadCaseFile(filepath.Join(dir, "ev-pass.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.ID != "ev-pass" || c.Title != "Passing case" || c.Family != "triage" {
-		t.Fatalf("metadata not parsed: %+v", c)
-	}
-	if c.Mode != "replay" {
-		t.Fatalf("default mode = %q, want replay", c.Mode)
-	}
-	if len(c.Rubric) != 2 || c.Rubric[0].Check != "turn_count_le 6" {
-		t.Fatalf("rubric not parsed: %+v", c.Rubric)
-	}
-	if len(c.Turns) != 3 {
-		t.Fatalf("turns = %d, want 3", len(c.Turns))
-	}
-	if c.Turns[0].Content != "The Acme widget printer is offline again." {
-		t.Fatalf("turn content: %+v", c.Turns[0])
-	}
-	if c.Turns[1].PromptTokens != 1000 {
-		t.Fatalf("token counts not parsed: %+v", c.Turns[1])
-	}
-	if c.Source == "" {
-		t.Fatal("source path not recorded")
-	}
-}
-
-func TestLoadCaseFileErrors(t *testing.T) {
+func TestStubJudge(t *testing.T) {
 	tests := []struct {
-		name    string
-		content string
-		wantErr string
+		name      string
+		fragments []string
+		assistant string
+		want      float64
 	}{
-		{"missing frontmatter", "just text\n", "missing frontmatter"},
-		{"unterminated frontmatter", "---\nid: x\n", "unterminated"},
-		{"missing id", "---\ntitle: x\n---\n\n```json\n{\"turn\":1,\"role\":\"user\"}\n```\n", "id is required"},
-		{"no fenced block", "---\nid: x\n---\n\nno transcript here\n", "no fenced JSONL block"},
-		{"empty transcript", "---\nid: x\n---\n\n```json\n```\n", "empty"},
-		{"bad turn json", "---\nid: x\n---\n\n```json\n{not json}\n```\n", "turn line 1"},
+		{"all fragments present", []string{"alpha", "beta"}, "alpha and beta here", 1.0},
+		{"partial", []string{"alpha", "beta"}, "alpha only", 0.5},
+		{"none declared", nil, "anything", 0.5},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, "case.md")
-			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
-				t.Fatal(err)
+			c := &Case{
+				ExpectedFragments: tt.fragments,
+				Turns:             []Turn{{Turn: 1, Role: "assistant", Content: tt.assistant}},
 			}
-			_, err := LoadCaseFile(path)
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("err = %v, want contains %q", err, tt.wantErr)
+			got, err := StubJudge{}.JudgeGoal(c)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("score = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestLoadCorpus(t *testing.T) {
-	dir := t.TempDir()
-	writeCase(t, dir, "b-second.md", passingCaseSrc)
-	writeCase(t, dir, "a-first.md", failingCaseSrc)
-	writeCase(t, dir, "notes.txt", "not a case")
+func TestJudgeByName(t *testing.T) {
+	if _, err := JudgeByName("stub"); err != nil {
+		t.Errorf("stub rejected: %v", err)
+	}
+	if _, err := JudgeByName(""); err != nil {
+		t.Errorf("empty rejected: %v", err)
+	}
+	if _, err := JudgeByName("llm/gpt-4o"); err == nil {
+		t.Error("unknown judge accepted; v0.1 must error rather than fall back")
+	}
+}
 
-	cases, err := LoadCorpus(dir)
+// fixedJudge returns a constant score; used to test runner wiring.
+type fixedJudge struct{ score float64 }
+
+func (f fixedJudge) JudgeGoal(*Case) (float64, error) { return f.score, nil }
+func (f fixedJudge) ID() string                       { return "fixed-test-judge" }
+
+func TestRunnerHardGateDeny(t *testing.T) {
+	// Perfect judge score and clean deterministic dims, but a deny-class
+	// violation: case must FAIL. Score reflects the compliance dimension
+	// dropping to 0 (violation), but stays high — the gate is what fails it.
+	cases := []*Case{{
+		ID: "x", Title: "hard gate test",
+		DenyClasses: []string{"send"},
+		Turns: []Turn{
+			{Turn: 1, Role: "assistant", Tools: []ToolCall{{Name: "send_message"}}},
+		},
+	}}
+	sum, err := (&Runner{Judge: fixedJudge{1.0}}).Run(cases)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Run: %v", err)
 	}
-	if len(cases) != 2 {
-		t.Fatalf("loaded %d cases, want 2 (only .md)", len(cases))
+	r := sum.PerCase[0]
+	if r.Passed {
+		t.Error("deny violation must fail the case regardless of score")
 	}
-	if cases[0].ID != "ev-fail" || cases[1].ID != "ev-pass" {
-		t.Fatalf("cases not sorted by filename: %s, %s", cases[0].ID, cases[1].ID)
+	if r.Score <= 0.7 {
+		t.Errorf("score = %v, want >0.7 (gate affects pass, not the whole score)", r.Score)
+	}
+	if r.Dimensions.Compliance != 0.0 {
+		t.Errorf("compliance = %v, want 0.0 on deny violation", r.Dimensions.Compliance)
+	}
+	if sum.PassedCases != 0 {
+		t.Errorf("PassedCases = %d, want 0", sum.PassedCases)
 	}
 }
 
-func TestLoadCorpusEmpty(t *testing.T) {
-	_, err := LoadCorpus(t.TempDir())
-	if err == nil || !strings.Contains(err.Error(), "no eval cases") {
-		t.Fatalf("err = %v, want no-eval-cases error", err)
-	}
-}
-
-// fakeReplayer is the stub ReplayFunc: identity replay, counting invocations.
-type fakeReplayer struct {
-	calls  int
-	last   []Turn
-	retErr error
-}
-
-func (f *fakeReplayer) Replay(turns []Turn) ([]Turn, error) {
-	f.calls++
-	f.last = turns
-	if f.retErr != nil {
-		return nil, f.retErr
-	}
-	return turns, nil
-}
-
-func TestRunReplay(t *testing.T) {
-	dir := t.TempDir()
-	writeCase(t, dir, "pass.md", passingCaseSrc)
-	writeCase(t, dir, "fail.md", failingCaseSrc)
-	cases, err := LoadCorpus(dir)
+func TestRunnerCleanCase(t *testing.T) {
+	cases := []*Case{{
+		ID: "ok", Title: "clean case",
+		TurnBudget:        4,
+		DenyClasses:       []string{"send"},
+		ExpectedFragments: []string{"done"},
+		CostBudgetUSD:     0.05,
+		Cost:              CostInputs{Model: "synthetic-model-a", PromptTokens: 500, CompletionTokens: 100},
+		Turns: []Turn{
+			{Turn: 1, Role: "user", Content: "go"},
+			{Turn: 1, Role: "assistant", Content: "All done.", Tools: []ToolCall{{Name: "read"}}, Allow: []string{"read"}},
+		},
+	}}
+	sum, err := (&Runner{Judge: fixedJudge{0.9}}).Run(cases)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Run: %v", err)
 	}
+	r := sum.PerCase[0]
+	if !r.Passed {
+		t.Fatalf("clean case failed: %+v", r.Violations)
+	}
+	if r.Score <= 0.9 {
+		t.Errorf("score = %v, want > 0.9 (perfect deterministic dims lift it)", r.Score)
+	}
+	if r.CostPriced {
+		t.Error("synthetic model should be CostPriced=false (fallback formula)")
+	}
+	want := 0.9*WeightGoal*1.0 + 1.0*WeightCompliance + 1.0*WeightFragments + 1.0*WeightCost + 1.0*WeightBudget
+	want /= WeightGoal + WeightCompliance + WeightFragments + WeightCost + WeightBudget
+	if diff := r.Score - want; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("score = %v, want %v", r.Score, want)
+	}
+	if sum.JudgeID != "fixed-test-judge" {
+		t.Errorf("JudgeID = %q", sum.JudgeID)
+	}
+}
 
-	var rp fakeReplayer
-	res, err := Run(cases, RunOptions{Replay: rp.Replay})
+func TestRunnerCorpusEndToEnd(t *testing.T) {
+	cases, err := LoadCorpus("testdata/corpus")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("LoadCorpus: %v", err)
 	}
-
-	if rp.calls != 2 {
-		t.Fatalf("replay calls = %d, want 2", rp.calls)
+	sum, err := (&Runner{Judge: StubJudge{}}).Run(cases)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if res.Total != 2 || res.Passed != 1 || res.Failed != 1 {
-		t.Fatalf("totals: %+v", res)
+	if sum.TotalCases != 12 {
+		t.Fatalf("TotalCases = %d, want 12", sum.TotalCases)
 	}
-	if res.Passed+res.Failed != res.Total {
-		t.Fatal("pass+fail != total")
-	}
-	if res.Score <= 0 || res.Score >= 1 {
-		t.Fatalf("aggregate score = %v, want in (0,1)", res.Score)
-	}
-
-	byID := map[string]CaseResult{}
-	for _, r := range res.Results {
+	byID := make(map[string]CaseResult, len(sum.PerCase))
+	for _, r := range sum.PerCase {
 		byID[r.CaseID] = r
 	}
-	p := byID["ev-pass"]
-	if !p.Passed || p.Score != 1 {
-		t.Fatalf("passing case: %+v", p)
-	}
-	if p.Turns != 2 {
-		t.Fatalf("distinct turns = %d, want 2", p.Turns)
-	}
-	if p.CostUSD != (1000*5+200*20)/1e6 {
-		t.Fatalf("cost = %v", p.CostUSD)
-	}
-	f := byID["ev-fail"]
-	if f.Passed {
-		t.Fatalf("deny violation must fail the case: %+v", f)
-	}
-	foundDeny := false
-	for _, chk := range f.Checks {
-		if chk.ID == "safety" && !chk.Passed && strings.Contains(chk.Detail, "send_email") {
-			foundDeny = true
+	// Negative fixtures must fail.
+	for _, id := range []string{"ev-0003", "ev-0004", "ev-0009", "ev-0012"} {
+		if byID[id].Passed {
+			t.Errorf("%s should fail (negative fixture), violations: %v", id, byID[id].Violations)
 		}
 	}
-	if !foundDeny {
-		t.Fatalf("deny failure detail not reported: %+v", f.Checks)
+	// Positive fixtures must pass.
+	for _, id := range []string{"ev-0001", "ev-0002", "ev-0005", "ev-0006", "ev-0008", "ev-0010", "ev-0011"} {
+		if !byID[id].Passed {
+			t.Errorf("%s should pass, violations: %v", id, byID[id].Violations)
+		}
 	}
-}
-
-func TestRunReplayError(t *testing.T) {
-	dir := t.TempDir()
-	writeCase(t, dir, "pass.md", passingCaseSrc)
-	cases, err := LoadCorpus(dir)
-	if err != nil {
-		t.Fatal(err)
+	// ev-0007 misses one of two fragments: passes with fragments < 1.
+	r7 := byID["ev-0007"]
+	if !r7.Passed {
+		t.Errorf("ev-0007 should pass (fragment miss is soft): %v", r7.Violations)
 	}
-	rp := fakeReplayer{retErr: errCheckFake}
-	res, err := Run(cases, RunOptions{Replay: rp.Replay})
-	if err != nil {
-		t.Fatalf("run-level error not expected for per-case replay failure: %v", err)
+	if r7.Dimensions.Fragments != 0.5 {
+		t.Errorf("ev-0007 fragments = %v, want 0.5", r7.Dimensions.Fragments)
 	}
-	if res.Passed != 0 || res.Failed != 1 {
-		t.Fatalf("totals: %+v", res)
+	// ev-0004: deny gate with good content — fails via the gate, score stays
+	// well above zero because fragments and goal are fine.
+	if r4 := byID["ev-0004"]; r4.Passed || r4.Score < 0.5 {
+		t.Errorf("ev-0004: passed=%v score=%v — deny must fail without tanking score", r4.Passed, r4.Score)
 	}
-	if res.Results[0].Error == "" || res.Results[0].Passed {
-		t.Fatalf("per-case error not recorded: %+v", res.Results[0])
+	// ev-0010 prices exactly at the $0.01 boundary on gpt-4o and passes.
+	if r10 := byID["ev-0010"]; !r10.Passed || !r10.CostPriced {
+		t.Errorf("ev-0010: passed=%v priced=%v violations=%v", r10.Passed, r10.CostPriced, r10.Violations)
 	}
-}
-
-func TestRunNilReplayIsIdentity(t *testing.T) {
-	dir := t.TempDir()
-	writeCase(t, dir, "pass.md", passingCaseSrc)
-	cases, err := LoadCorpus(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := Run(cases, RunOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !res.Results[0].Passed {
-		t.Fatalf("identity replay should pass: %+v", res.Results[0])
-	}
-}
-
-func TestCompareBaseline(t *testing.T) {
-	passed := CaseResult{CaseID: "same", Passed: true, Score: 0.9}
-	flipped := CaseResult{CaseID: "flipped", Passed: true, Score: 1.0}
-
-	base := map[string]CaseResult{
-		"same":    passed,
-		"dropped": {CaseID: "dropped", Passed: true, Score: 0.99}, // 0.9 < 0.99-0.05 → regression
-		"flipped": flipped,
-		"gone":    {CaseID: "gone", Passed: false, Score: 0}, // in baseline, not in run: ignored
-	}
-	results := []CaseResult{
-		{CaseID: "same", Passed: true, Score: 0.92},
-		{CaseID: "dropped", Passed: true, Score: 0.9},
-		{CaseID: "flipped", Passed: false, Score: 0.4},
-		{CaseID: "brand-new", Passed: true, Score: 1.0},
-	}
-	got := compareBaseline(results, base)
-
-	if got != 2 {
-		t.Fatalf("regressions = %d, want 2", got)
-	}
-	byID := map[string]CaseResult{}
-	for _, r := range results {
-		byID[r.CaseID] = r
-	}
-	if byID["same"].Regression {
-		t.Fatal("within-threshold change must not be a regression")
-	}
-	if byID["same"].BasePassed == nil || !*byID["same"].BasePassed {
-		t.Fatal("baseline pass state not recorded")
-	}
-	if !byID["dropped"].Regression || byID["dropped"].BaseScore != 0.99 {
-		t.Fatalf(">5%% score drop not flagged: %+v", byID["dropped"])
-	}
-	if !byID["flipped"].Regression {
-		t.Fatal("pass→fail must be flagged")
-	}
-	if byID["brand-new"].Regression || byID["brand-new"].BasePassed != nil {
-		t.Fatal("case without baseline entry must not be flagged")
-	}
-}
-
-func TestLoadBaseline(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "baseline.jsonl")
-	content := `{"case_id":"a","passed":true,"score":0.9}
-{"type":"summary","total":1}
-{"case_id":"b","passed":false,"score":0.2}
-`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	base, err := LoadBaseline(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(base) != 2 {
-		t.Fatalf("loaded %d baseline entries, want 2 (summary line skipped)", len(base))
-	}
-	if base["a"].Score != 0.9 || base["b"].Passed {
-		t.Fatalf("baseline content: %+v", base)
-	}
-
-	if _, err := LoadBaseline(filepath.Join(dir, "missing.jsonl")); err == nil {
-		t.Fatal("missing baseline file should error")
-	}
-}
-
-func TestWriteJSONLReport(t *testing.T) {
-	res := RunResult{
-		GeneratedAt: "2026-10-25T00:00:00Z",
-		CorpusDir:   "testdata",
-		Total:       2,
-		Passed:      1,
-		Failed:      1,
-		Score:       0.75,
-		Results: []CaseResult{
-			{CaseID: "a", Passed: true, Score: 1},
-			{CaseID: "b", Passed: false, Score: 0.5},
-		},
-	}
-	var buf bytes.Buffer
-	if err := WriteJSONLReport(&buf, res); err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("lines = %d, want 2 results + 1 summary", len(lines))
-	}
-	var first CaseResult
-	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
-		t.Fatalf("first line not a CaseResult: %v", err)
-	}
-	if first.CaseID != "a" {
-		t.Fatalf("first case: %+v", first)
-	}
-	var summary map[string]interface{}
-	if err := json.Unmarshal([]byte(lines[2]), &summary); err != nil {
-		t.Fatalf("last line not a summary: %v", err)
-	}
-	if summary["type"] != "summary" || summary["total"].(float64) != 2 {
-		t.Fatalf("summary: %+v", summary)
-	}
-}
-
-func TestMarkdownReport(t *testing.T) {
-	yes := true
-	res := RunResult{
-		GeneratedAt: "2026-10-25T00:00:00Z",
-		CorpusDir:   "testdata",
-		Total:       2,
-		Passed:      1,
-		Failed:      1,
-		Score:       0.75,
-		Results: []CaseResult{
-			{CaseID: "a", Title: "Good case", Family: "triage", Passed: true, Score: 1, Turns: 2, ToolCalls: 1, CostUSD: 0.01},
-			{CaseID: "b", Title: "Bad case", Family: "email", Passed: false, Score: 0.5, Checks: []CheckRecord{
-				{ID: "safety", Type: "deterministic", Check: "deny [send_email]", Passed: false, Detail: "deny class violation: tool \"send_email\""},
-			}},
-		},
-	}
-	res.Results[1].BasePassed = &yes
-	res.Results[1].BaseScore = 1
-	res.Results[1].Regression = true
-
-	md := res.Markdown()
-	for _, want := range []string{
-		"# Eval Report",
-		"| Case | Family | Passed | Score |",
-		"Good case", "Bad case",
-		"PASS", "FAIL",
-		"⚠",
-		"## Failures",
-		"deny [send_email]",
-	} {
-		if !strings.Contains(md, want) {
-			t.Errorf("markdown missing %q\n---\n%s", want, md)
+	// Every result records the judge.
+	for _, r := range sum.PerCase {
+		if r.JudgeID != "stub-v1" {
+			t.Errorf("%s JudgeID = %q", r.CaseID, r.JudgeID)
 		}
 	}
 }
 
-func TestMarkdownReportEmpty(t *testing.T) {
-	md := RunResult{GeneratedAt: "now", CorpusDir: "x"}.Markdown()
-	if !strings.Contains(md, "No cases ran") {
-		t.Fatalf("empty corpus markdown: %s", md)
+func TestWeightedAggregates(t *testing.T) {
+	// All-perfect dimensions -> 1.0.
+	if got := weighted(DimensionScores{Goal: 1, Compliance: 1, Fragments: 1, Cost: 1, Budget: 1}); got != 1.0 {
+		t.Errorf("weighted(all 1) = %v", got)
+	}
+	// All-zero -> 0.
+	if got := weighted(DimensionScores{}); got != 0.0 {
+		t.Errorf("weighted(all 0) = %v", got)
+	}
+	// Weight check: goal=1 others=0 -> 3/8.
+	want := WeightGoal / (WeightGoal + WeightCompliance + WeightFragments + WeightCost + WeightBudget)
+	if got := weighted(DimensionScores{Goal: 1}); got != want {
+		t.Errorf("weighted(goal only) = %v, want %v", got, want)
+	}
+}
+
+func TestRunnerMeanScores(t *testing.T) {
+	cases := []*Case{
+		{ID: "a", Turns: []Turn{{Turn: 1, Role: "user"}}},
+		{ID: "b", Turns: []Turn{{Turn: 1, Role: "user"}}},
+	}
+	j := fixedJudge{0.5}
+	sum, err := (&Runner{Judge: j}).Run(cases)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if sum.MeanScores.Goal != 0.5 {
+		t.Errorf("mean goal = %v, want 0.5", sum.MeanScores.Goal)
+	}
+	if sum.TotalCases != 2 || sum.PassedCases != 2 {
+		t.Errorf("totals = %d/%d", sum.PassedCases, sum.TotalCases)
+	}
+}
+
+func TestRunnerNilJudge(t *testing.T) {
+	if _, err := (&Runner{}).Run([]*Case{{ID: "x", Turns: []Turn{{Turn: 1, Role: "user"}}}}); err == nil {
+		t.Error("nil judge must error, not panic")
+	}
+}
+
+// errJudge always errors; verifies the runner surfaces judge failures.
+type errJudge struct{}
+
+func (errJudge) JudgeGoal(*Case) (float64, error) { return 0, fmt.Errorf("judge boom") }
+func (errJudge) ID() string                       { return "err-judge" }
+
+func TestRunnerJudgeErrorSurfaces(t *testing.T) {
+	_, err := (&Runner{Judge: errJudge{}}).Run([]*Case{{
+		ID: "x", Turns: []Turn{{Turn: 1, Role: "user"}},
+	}})
+	if err == nil {
+		t.Fatal("judge error swallowed")
 	}
 }

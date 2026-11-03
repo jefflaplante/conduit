@@ -2,285 +2,269 @@ package eval
 
 import (
 	"testing"
-
-	"gopkg.in/yaml.v3"
 )
 
-// runOne unmarshals YAML, normalizes, and runs one rubric item's check.
-func runOne(t *testing.T, yamlSrc string, turns []Turn, rubricID string) checkResult {
-	t.Helper()
-	var c Case
-	if err := yaml.Unmarshal([]byte(yamlSrc), &c); err != nil {
-		t.Fatalf("yaml unmarshal: %v", err)
+func TestIsDenied(t *testing.T) {
+	tests := []struct {
+		name string
+		tool string
+		deny []string
+		want bool
+	}{
+		{"send class matches send_message", "send_message", []string{"send"}, true},
+		{"send class matches email_send", "email_send", []string{"send"}, true},
+		{"send class matches notify_push", "notify_push", []string{"send"}, true},
+		{"read not denied by send", "read", []string{"send"}, false},
+		{"literal name denied", "bash", []string{"bash"}, true},
+		{"exec class matches bash", "bash", []string{"exec"}, true},
+		{"exec class matches shell", "shell_tool", []string{"exec"}, true},
+		{"exec class matches exec_cmd", "exec_cmd", []string{"exec"}, true},
+		{"query not denied by exec", "query", []string{"exec"}, false},
+		{"write class matches delete_file", "delete_file", []string{"write"}, true},
+		{"network class matches web_search", "web_search", []string{"network"}, true},
+		{"empty deny denies nothing", "send_message", nil, false},
+		{"empty entry skipped", "send_message", []string{"", "send"}, true},
 	}
-	normalizeCase(&c)
-	for _, item := range c.Rubric {
-		if item.ID == rubricID {
-			return runCheck(item, &c, turns)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsDenied(tt.tool, tt.deny); got != tt.want {
+				t.Errorf("IsDenied(%q, %v) = %v, want %v", tt.tool, tt.deny, got, tt.want)
+			}
+		})
 	}
-	t.Fatalf("rubric item %q not found", rubricID)
-	return checkResult{}
 }
-
-// ---- turn budget (design doc: turn_count_le N, user-turn count) ----
 
 func TestCheckTurnBudget(t *testing.T) {
-	const src = "id: x\nrubric:\n  - id: budget\n    type: deterministic\n    check: turn_count_le 6\n"
-
+	mk := func(budget int, maxTurn int) *Case {
+		return &Case{
+			TurnBudget: budget,
+			Turns: []Turn{
+				{Turn: 1, Role: "user"},
+				{Turn: maxTurn, Role: "assistant"},
+			},
+		}
+	}
 	tests := []struct {
 		name    string
-		turns   []Turn
-		wantErr bool
+		budget  int
+		maxTurn int
+		wantVio bool
 	}{
-		{"under budget", []Turn{{Num: 1, Role: "user"}, {Num: 1, Role: "assistant"}, {Num: 2, Role: "user"}}, false},
-		{"exactly at budget", makeTurns(6), false},
-		{"one over budget", makeTurns(7), true},
-		{"empty transcript", nil, false},
-		{"repeated rows same turn counted once", []Turn{
-			{Num: 1, Role: "user"}, {Num: 1, Role: "user"}, {Num: 1, Role: "assistant"},
-			{Num: 6, Role: "user"},
-		}, false},
-		{"assistant-only rows never count", []Turn{{Num: 1, Role: "assistant"}, {Num: 9, Role: "assistant"}}, false},
+		{"within budget", 8, 6, false},
+		{"exactly at budget", 6, 6, false},
+		{"over budget", 4, 6, true},
+		{"zero disables check", 0, 99, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res := runOne(t, src, tt.turns, "budget")
-			if res.Passed == tt.wantErr {
-				t.Fatalf("passed=%v, wantErr=%v (detail: %s)", res.Passed, tt.wantErr, res.Detail)
+			v := CheckTurnBudget(mk(tt.budget, tt.maxTurn))
+			if (v != nil) != tt.wantVio {
+				t.Fatalf("violation = %v, want %v", v, tt.wantVio)
+			}
+			if v != nil && v.Check != "turn_budget" {
+				t.Errorf("check = %q", v.Check)
 			}
 		})
 	}
-
-	t.Run("bad limit argument", func(t *testing.T) {
-		res := runOne(t, "id: x\nrubric:\n  - id: budget\n    type: deterministic\n    check: turn_count_le zero\n", nil, "budget")
-		if res.Passed || res.Detail == "" {
-			t.Fatalf("expected failure with detail, got %+v", res)
-		}
-	})
 }
-
-// makeTurns builds n distinct user turns.
-func makeTurns(n int) []Turn {
-	var turns []Turn
-	for i := 1; i <= n; i++ {
-		turns = append(turns, Turn{Num: i, Role: "user"})
-	}
-	return turns
-}
-
-// ---- tool allowlist (design doc: per-turn `allow`) ----
 
 func TestCheckToolAllowlist(t *testing.T) {
-	const src = "id: x\nturns:\n  - {turn: 1, role: assistant, content: 'ok', allow: [read, search]}\n  - {turn: 2, role: assistant, content: 'done'}\nrubric:\n  - id: allow\n    type: deterministic\n    check: allow\n"
-
 	tests := []struct {
-		name    string
-		turns   []Turn
-		wantErr bool
+		name  string
+		c     *Case
+		wantN int
 	}{
-		{"allowed tool", []Turn{{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "read"}}}}, false},
-		{"second allowed tool", []Turn{{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "search"}}}}, false},
-		{"disallowed tool", []Turn{{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "send_message"}}}}, true},
-		{"no tools used", []Turn{{Num: 1, Role: "assistant"}}, false},
-		{"turn without allow rule", []Turn{{Num: 2, Role: "assistant", Tools: []ToolCall{{Name: "anything"}}}}, false},
-		{"mixed allowed and disallowed", []Turn{{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "read"}, {Name: "send_message"}}}}, true},
+		{
+			name: "clean",
+			c: &Case{Turns: []Turn{
+				{Turn: 1, Role: "assistant", Tools: []ToolCall{{Name: "read"}}, Allow: []string{"read", "query"}},
+			}},
+			wantN: 0,
+		},
+		{
+			name: "one violation",
+			c: &Case{Turns: []Turn{
+				{Turn: 1, Role: "assistant", Tools: []ToolCall{{Name: "bash"}}, Allow: []string{"read"}},
+			}},
+			wantN: 1,
+		},
+		{
+			name: "lone unallowlisted turn without any policy skips check",
+			c: &Case{Turns: []Turn{
+				{Turn: 1, Role: "assistant", Tools: []ToolCall{{Name: "bash"}}},
+			}},
+			wantN: 0,
+		},
+		{
+			name: "unallowlisted tool turn inside policy-bearing transcript flags",
+			c: &Case{Turns: []Turn{
+				{Turn: 1, Role: "assistant", Tools: []ToolCall{{Name: "read"}}, Allow: []string{"read"}},
+				{Turn: 2, Role: "assistant", Tools: []ToolCall{{Name: "bash"}}},
+			}},
+			wantN: 1,
+		},
+		{
+			name: "user turns with tools ignored",
+			c: &Case{Turns: []Turn{
+				{Turn: 1, Role: "user", Tools: []ToolCall{{Name: "bash"}}},
+			}},
+			wantN: 0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res := runOne(t, src, tt.turns, "allow")
-			if res.Passed == tt.wantErr {
-				t.Fatalf("passed=%v, wantErr=%v (detail: %s)", res.Passed, tt.wantErr, res.Detail)
+			got := CheckToolAllowlist(tt.c)
+			if len(got) != tt.wantN {
+				t.Fatalf("got %d violations (%v), want %d", len(got), got, tt.wantN)
 			}
 		})
 	}
 }
-
-// ---- deny side-effect classes (design doc: `deny [tools]`, hard gate) ----
 
 func TestCheckDenyClasses(t *testing.T) {
-	const src = "id: x\nrubric:\n  - id: safety\n    type: deterministic\n    check: 'deny [send_message, send_email, exec_*]'"
-
 	tests := []struct {
-		name    string
-		turns   []Turn
-		wantErr bool
+		name  string
+		c     *Case
+		wantN int
 	}{
-		{"clean transcript", []Turn{{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "read"}}}}, false},
-		{"exact deny hit", []Turn{{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "send_message"}}}}, true},
-		{"second deny hit", []Turn{{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "send_email"}}}}, true},
-		{"wildcard deny hit", []Turn{{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "exec_shell"}}}}, true},
-		{"wildcard no match", []Turn{{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "export_data"}}}}, false},
-		{"violation on later turn", []Turn{
-			{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "read"}}},
-			{Num: 2, Role: "assistant", Tools: []ToolCall{{Name: "send_message"}}},
-		}, true},
+		{
+			name: "clean",
+			c: &Case{
+				DenyClasses: []string{"send"},
+				Turns:       []Turn{{Turn: 1, Role: "assistant", Tools: []ToolCall{{Name: "read"}}}},
+			},
+			wantN: 0,
+		},
+		{
+			name: "one deny hit",
+			c: &Case{
+				DenyClasses: []string{"send"},
+				Turns:       []Turn{{Turn: 1, Role: "assistant", Tools: []ToolCall{{Name: "send_message"}}}},
+			},
+			wantN: 1,
+		},
+		{
+			name: "no deny classes declared",
+			c: &Case{
+				Turns: []Turn{{Turn: 1, Role: "assistant", Tools: []ToolCall{{Name: "send_message"}}}},
+			},
+			wantN: 0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res := runOne(t, src, tt.turns, "safety")
-			if res.Passed == tt.wantErr {
-				t.Fatalf("passed=%v, wantErr=%v (detail: %s)", res.Passed, tt.wantErr, res.Detail)
+			got := CheckDenyClasses(tt.c)
+			if len(got) != tt.wantN {
+				t.Fatalf("got %d violations (%v), want %d", len(got), got, tt.wantN)
+			}
+			if tt.wantN > 0 && got[0].Check != "deny_class" {
+				t.Errorf("check = %q", got[0].Check)
 			}
 		})
 	}
 }
-
-// ---- expected fragment matching (design doc: per-turn `tools_expected`) ----
 
 func TestCheckFragments(t *testing.T) {
-	const src = "id: x\nturns:\n  - {turn: 1, role: assistant, content: ok, tools_expected: [{name: bash, args_substr: ['show interface', 'errors']}]}\n  - {turn: 2, role: assistant, content: done, tools_expected: [{name: read, args_substr: ['log']}]}\nrubric:\n  - id: frag\n    type: deterministic\n    check: tools_expected\n"
-
 	tests := []struct {
-		name    string
-		turns   []Turn
-		wantErr bool
+		name      string
+		fragments []string
+		assistant string
+		wantScore float64
+		wantN     int
 	}{
-		{"all fragments match", []Turn{
-			{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "bash", ArgsJSON: `{"command":"show interface errors"}`}}},
-			{Num: 2, Role: "assistant", Tools: []ToolCall{{Name: "read", ArgsJSON: `{"path":"a/log"}`}}},
-		}, false},
-		{"wrong tool name", []Turn{
-			{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "read"}}},
-			{Num: 2, Role: "assistant", Tools: []ToolCall{{Name: "read", ArgsJSON: `{"path":"log"}`}}},
-		}, true},
-		{"fragment not in args", []Turn{
-			{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "bash", ArgsJSON: `{"command":"show status"}`}}},
-		}, true},
-		{"expected turn absent", nil, true},
-		{"fragment satisfied by later call in same turn", []Turn{
-			{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "read"}, {Name: "bash", ArgsJSON: `{"command":"show interface errors"}`}}},
-			{Num: 2, Role: "assistant", Tools: []ToolCall{{Name: "read", ArgsJSON: `{"path":"log"}`}}},
-		}, false},
+		{"all present", []string{"crc", "counters"}, "check the CRC counters", 1.0, 0},
+		{"case insensitive", []string{"CRC ERRORS"}, "see the crc errors log", 1.0, 0},
+		{"one missing", []string{"crc", "logs"}, "check the crc counters", 0.5, 1},
+		{"none declared", nil, "anything", 1.0, 0},
+		{"only assistant turns searched", []string{"secret"}, "a perfectly innocent reply", 0.0, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res := runOne(t, src, tt.turns, "frag")
-			if res.Passed == tt.wantErr {
-				t.Fatalf("passed=%v, wantErr=%v (detail: %s)", res.Passed, tt.wantErr, res.Detail)
+			c := &Case{
+				ExpectedFragments: tt.fragments,
+				Turns: []Turn{
+					{Turn: 1, Role: "user", Content: "user said secret"},
+					{Turn: 1, Role: "assistant", Content: tt.assistant},
+				},
+			}
+			score, vios := CheckFragments(c)
+			if score != tt.wantScore {
+				t.Errorf("score = %v, want %v", score, tt.wantScore)
+			}
+			if len(vios) != tt.wantN {
+				t.Errorf("violations = %d, want %d (%v)", len(vios), tt.wantN, vios)
 			}
 		})
 	}
 }
 
-// ---- cost formula (design doc: cost_usd_le X on scripted token counts) ----
-
-func TestCheckCost(t *testing.T) {
-	const src = "id: x\nrubric:\n  - id: cost\n    type: deterministic\n    check: cost_usd_le 0.10\n"
-
+func TestCheckCostBudget(t *testing.T) {
 	tests := []struct {
-		name    string
-		turns   []Turn
-		wantErr bool
+		name       string
+		model      string
+		prompt     int
+		completion int
+		budget     float64
+		wantOver   bool
+		wantPriced bool
 	}{
-		{"zero cost", []Turn{{Num: 1, Role: "user"}}, false},
 		{
-			"under budget", // (10000*5 + 2000*20)/1e6 = $0.09
-			[]Turn{{Num: 1, Role: "assistant", PromptTokens: 10000, CompletionTokens: 2000}},
-			false,
+			name:  "real model within budget",
+			model: "gpt-4o", prompt: 2000, completion: 400, budget: 0.01,
+			wantOver: false, wantPriced: true,
 		},
 		{
-			"at budget boundary", // (20000*5 + 0*20)/1e6 = exactly 0.10
-			[]Turn{{Num: 1, Role: "assistant", PromptTokens: 20000}},
-			false,
+			name:  "real model over budget",
+			model: "gpt-4o", prompt: 20000, completion: 4000, budget: 0.01,
+			wantOver: true, wantPriced: true,
 		},
 		{
-			"one token over budget", // 20001*5/1e6 = 0.10000005
-			[]Turn{{Num: 1, Role: "assistant", PromptTokens: 20001}},
-			true,
+			name:  "synthetic model falls back",
+			model: "synthetic-model-a", prompt: 1000, completion: 100, budget: 0.05,
+			wantOver: false, wantPriced: false,
 		},
 		{
-			"over budget",
-			[]Turn{{Num: 1, Role: "assistant", PromptTokens: 4000001, CompletionTokens: 1000000}},
-			true,
-		},
-		{
-			"accumulated across turns sums to boundary", // $0.05 + $0.05 = exactly 0.10
-			[]Turn{
-				{Num: 1, Role: "assistant", PromptTokens: 10000},
-				{Num: 2, Role: "assistant", PromptTokens: 10000},
-			},
-			false,
-		},
-		{
-			"accumulated over budget", // $0.05 + (10000*5+100*20)/1e6 $0.052 = 0.102
-			[]Turn{
-				{Num: 1, Role: "assistant", PromptTokens: 10000},
-				{Num: 2, Role: "assistant", PromptTokens: 10000, CompletionTokens: 100},
-			},
-			true,
+			name:  "no budget never over",
+			model: "gpt-4o", prompt: 20000, completion: 4000, budget: 0,
+			wantOver: false, wantPriced: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res := runOne(t, src, tt.turns, "cost")
-			if res.Passed == tt.wantErr {
-				t.Fatalf("passed=%v, wantErr=%v (detail: %s)", res.Passed, tt.wantErr, res.Detail)
+			c := &Case{
+				CostBudgetUSD: tt.budget,
+				Cost:          CostInputs{Model: tt.model, PromptTokens: tt.prompt, CompletionTokens: tt.completion},
+			}
+			cost, priced, vio := CheckCostBudget(c, nil)
+			if priced != tt.wantPriced {
+				t.Errorf("priced = %v, want %v", priced, tt.wantPriced)
+			}
+			if (vio != nil) != tt.wantOver {
+				t.Fatalf("violation = %v, want over=%v", vio, tt.wantOver)
+			}
+			if vio != nil && vio.Check != "cost_budget" {
+				t.Errorf("check = %q", vio.Check)
+			}
+			if tt.model == "gpt-4o" && tt.prompt == 2000 {
+				// gpt-4o: $2.50/M input, $10/M output → 2000×2.5 + 400×10 = $0.009.
+				if cost < 0.0089 || cost > 0.0091 {
+					t.Errorf("gpt-4o 2000/400 cost = %v, want ~0.009", cost)
+				}
 			}
 		})
 	}
 }
 
-// ---- llm_judge items are carried, not scored, in replay mode ----
-
-func TestRunCheckJudgeItem(t *testing.T) {
-	const src = "id: x\nrubric:\n  - id: goal\n    type: llm_judge\n    check: \"Did the assistant resolve the issue?\"\n    weight: 3\n"
-	// Violations that would fail a deterministic check must not fail a judge item.
-	res := runOne(t, src, []Turn{{Num: 1, Role: "assistant", Tools: []ToolCall{{Name: "send_message"}}}}, "goal")
-	if !res.Judged || res.Passed || res.Detail == "" {
-		t.Fatalf("judge item should be unjudged/unscored in replay, got %+v", res)
+func TestCostDimension(t *testing.T) {
+	c := &Case{CostBudgetUSD: 0.05}
+	if got := CostDimension(c, 0.05); got != 1.0 {
+		t.Errorf("at boundary = %v, want 1.0", got)
 	}
-}
-
-// ---- rubric scoring ----
-
-func TestCaseScore(t *testing.T) {
-	c := &Case{
-		ID: "x",
-		Rubric: []RubricItem{
-			{ID: "a", Type: "deterministic", Weight: 3},
-			{ID: "b", Type: "deterministic", Weight: 1},
-			{ID: "goal", Type: "llm_judge", Weight: 3},
-		},
+	if got := CostDimension(c, 0.06); got != 0.0 {
+		t.Errorf("over = %v, want 0.0", got)
 	}
-	results := []checkResult{
-		{ID: "a", Passed: true, Weight: 3},
-		{ID: "b", Passed: false, Weight: 1},
-		{ID: "goal", Judged: true, Weight: 3},
+	noBudget := &Case{}
+	if got := CostDimension(noBudget, 100.0); got != 1.0 {
+		t.Errorf("no budget = %v, want 1.0", got)
 	}
-	got := caseScore(c, results)
-	if got != 0.75 {
-		t.Fatalf("caseScore = %v, want 0.75 (weights 3:1, judge item excluded)", got)
-	}
-}
-
-func TestCaseScoreAllJudge(t *testing.T) {
-	c := &Case{ID: "x", Rubric: []RubricItem{{ID: "goal", Type: "llm_judge", Weight: 3}}}
-	results := []checkResult{{ID: "goal", Judged: true, Weight: 3}}
-	if got := caseScore(c, results); got != 0 {
-		t.Fatalf("all-judge case should score 0 in replay, got %v", got)
-	}
-}
-
-// ---- deny gate is hard regardless of weighted score ----
-
-func TestDenyIsHardGate(t *testing.T) {
-	const src = "id: x\nrubric:\n  - id: budget\n    type: deterministic\n    check: turn_count_le 6\n  - id: safety\n    type: deterministic\n    check: 'deny [send_message]'\n"
-	c := mustCase(t, src)
-	turns := makeTurns(1)
-	turns[0].Tools = []ToolCall{{Name: "send_message"}}
-	results := runAllChecks(c, turns)
-	if casePassed(results) {
-		t.Fatal("case must fail when a deny class fires, regardless of other checks")
-	}
-}
-
-func mustCase(t *testing.T, src string) *Case {
-	t.Helper()
-	var c Case
-	if err := yaml.Unmarshal([]byte(src), &c); err != nil {
-		t.Fatal(err)
-	}
-	normalizeCase(&c)
-	return &c
 }

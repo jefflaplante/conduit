@@ -1,145 +1,123 @@
 package eval
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"os"
+	"sort"
 	"time"
+
+	"conduit/internal/ai"
 )
 
-// ReplayFunc transforms a case's scripted transcript. In v0.1 replay mode the
-// identity function suffices (checks validate the scripted transcript); a
-// real implementation will drive a model under test and return the produced
-// transcript. Returning an error fails that case without aborting the run.
-type ReplayFunc func(turns []Turn) ([]Turn, error)
-
-// identityReplay is the default replay function: v0.1 replay mode.
-func identityReplay(turns []Turn) ([]Turn, error) {
-	return turns, nil
+// Runner replays a corpus through the checks and produces per-case results
+// plus an aggregate summary. Replay mode is side-effect-free: the runner
+// never executes tools, sends messages, or calls providers — it scores the
+// scripted transcripts.
+type Runner struct {
+	// Judge scores the goal dimension.
+	Judge Judge
+	// Pricing prices token counts; nil uses the ai package default resolver.
+	Pricing *ai.PricingResolver
+	// Runs is the median-of-N sample size for the judge (bd-18u v0.3):
+	// each case's goal score is the median of Runs judge scores, damping
+	// single-call judge variance. 0 or 1 means one call (prior behavior).
+	// Deterministic checks still run once — they have no variance to
+	// average away. Judge usage sums across all N calls.
+	Runs int
 }
 
-// RunOptions configures a Run.
-type RunOptions struct {
-	// Replay transforms each case transcript before checks run. Nil means
-	// identity (pure replay).
-	Replay ReplayFunc
-	// Baseline, when non-nil, enables regression comparison (design doc:
-	// >5% weighted-score drop, plus pass→fail flips, are flagged).
-	Baseline map[string]CaseResult
-	// CorpusDir labels the run in reports (diagnostics only).
-	CorpusDir string
-	// Now overrides the run timestamp (tests).
-	Now func() time.Time
-}
-
-// Run executes every case against replay and collects results, in the order
-// the cases were loaded.
-func Run(cases []*Case, opts RunOptions) (*RunResult, error) {
-	if opts.Replay == nil {
-		opts.Replay = identityReplay
+// Run executes every case in the corpus.
+func (r *Runner) Run(cases []*Case) (*Summary, error) {
+	if r.Judge == nil {
+		return nil, fmt.Errorf("runner: judge is required")
 	}
-	now := opts.Now
-	if now == nil {
-		now = time.Now
+	summary := &Summary{
+		GeneratedAt: time.Now().UTC(),
+		JudgeID:     r.Judge.ID(),
+		Runs:        r.Runs,
+		PerCase:     make([]CaseResult, 0, len(cases)),
 	}
-
-	res := &RunResult{GeneratedAt: now().UTC().Format(time.RFC3339), CorpusDir: opts.CorpusDir}
 	for _, c := range cases {
-		cr := runCase(c, opts.Replay)
-		res.Results = append(res.Results, cr)
-		if cr.Passed {
-			res.Passed++
-		} else {
-			res.Failed++
+		res, err := r.scoreCase(c)
+		if err != nil {
+			return nil, fmt.Errorf("case %s: %w", c.ID, err)
 		}
+		summary.PerCase = append(summary.PerCase, *res)
+		if res.Passed {
+			summary.PassedCases++
+		}
+		summary.TotalCostUSD += res.CostUSD
 	}
-	res.Total = len(res.Results)
-	res.Score = aggregateScore(res.Results)
-	if opts.Baseline != nil {
-		res.Regressions = compareBaseline(res.Results, opts.Baseline)
-	}
-	return res, nil
+	summary.TotalCases = len(summary.PerCase)
+	summary.MeanScores = meanScores(summary.PerCase)
+	summary.WeightedScore = weighted(summary.MeanScores)
+	summary.JudgeUsage = SumJudgeUsage(summary.PerCase)
+	return summary, nil
 }
 
-// runCase replays one case and applies all its rubric checks.
-func runCase(c *Case, replay ReplayFunc) CaseResult {
-	cr := CaseResult{
-		CaseID: c.ID,
-		Title:  c.Title,
-		Family: c.Family,
-		Mode:   c.Mode,
-	}
-	turns, err := replay(c.Turns)
-	if err != nil {
-		cr.Error = err.Error()
-		return cr
-	}
+// scoreCase applies every check to one case and assembles its result.
+// v0.4: the body moved to scoring.go as the package-level scoreCase shared
+// with LiveRunner — replay and live differ only in where the transcript
+// comes from.
+func (r *Runner) scoreCase(c *Case) (*CaseResult, error) {
+	return scoreCase(r.Judge, r.Pricing, r.Runs, c)
+}
 
-	results := runAllChecks(c, turns)
+// weighted computes the weighted aggregate 0..1 over dimension scores.
+func weighted(d DimensionScores) float64 {
+	total := WeightGoal + WeightCompliance + WeightFragments + WeightCost + WeightBudget
+	s := d.Goal*WeightGoal +
+		d.Compliance*WeightCompliance +
+		d.Fragments*WeightFragments +
+		d.Cost*WeightCost +
+		d.Budget*WeightBudget
+	return clamp01(s / total)
+}
+
+// meanScores averages each dimension across results.
+func meanScores(results []CaseResult) DimensionScores {
+	if len(results) == 0 {
+		return DimensionScores{}
+	}
+	var m DimensionScores
 	for _, r := range results {
-		cr.Checks = append(cr.Checks, CheckRecord{
-			ID:     r.ID,
-			Type:   r.Type,
-			Check:  r.Check,
-			Weight: r.Weight,
-			Passed: r.Passed,
-			Detail: r.Detail,
-			Judged: r.Judged,
-		})
+		m.Goal += r.Dimensions.Goal
+		m.Compliance += r.Dimensions.Compliance
+		m.Fragments += r.Dimensions.Fragments
+		m.Cost += r.Dimensions.Cost
+		m.Budget += r.Dimensions.Budget
 	}
-	cr.Passed = casePassed(results)
-	cr.Score = caseScore(c, results)
-	cr.Turns = distinctTurnCount(turns)
-	cr.ToolCalls = countToolCalls(turns)
-	cr.CostUSD = totalCost(turns)
-	return cr
+	n := float64(len(results))
+	return DimensionScores{
+		Goal:       m.Goal / n,
+		Compliance: m.Compliance / n,
+		Fragments:  m.Fragments / n,
+		Cost:       m.Cost / n,
+		Budget:     m.Budget / n,
+	}
 }
 
-// distinctTurnCount counts distinct turn numbers in a transcript.
-func distinctTurnCount(turns []Turn) int {
-	seen := make(map[int]bool)
-	for _, t := range turns {
-		seen[t.Num] = true
+// median returns the median of scores (mean of the two middles for even
+// counts; the lone element when odd). Scores are assumed pre-clamped.
+func median(scores []float64) float64 {
+	if len(scores) == 0 {
+		return 0
 	}
-	return len(seen)
+	s := append([]float64(nil), scores...)
+	sort.Float64s(s)
+	n := len(s)
+	if n%2 == 1 {
+		return s[n/2]
+	}
+	return (s[n/2-1] + s[n/2]) / 2
 }
 
-// countToolCalls counts all tool calls across a transcript.
-func countToolCalls(turns []Turn) int {
-	n := 0
-	for _, t := range turns {
-		n += len(t.Tools)
+// clamp01 clamps v to [0,1].
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
 	}
-	return n
-}
-
-// LoadBaseline loads a previous JSONL report as a baseline map keyed by case
-// id, skipping non-case lines (e.g. the summary line).
-func LoadBaseline(path string) (map[string]CaseResult, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open baseline: %w", err)
+	if v > 1 {
+		return 1
 	}
-	defer f.Close()
-
-	out := make(map[string]CaseResult)
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		var r CaseResult
-		if err := json.Unmarshal(line, &r); err != nil {
-			continue // not a case line (e.g. the summary line)
-		}
-		if r.CaseID == "" {
-			continue
-		}
-		out[r.CaseID] = r
-	}
-	return out, sc.Err()
+	return v
 }
