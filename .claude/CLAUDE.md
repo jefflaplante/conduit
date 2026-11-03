@@ -85,13 +85,14 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - `chain` — Manage and execute saved tool chains (list, show, create, run, delete, validate)
 - `cron` — Scheduler job maintenance for cron_jobs.json (migrate-tz)
 - `policy` — Tool action policy decisions (report)
+- `eval` — Run the eval corpus in replay mode (run: markdown/JSONL reports, --baseline regression check)
 - `loadtest` — Load test against the AI provider using a mock backend
 - `metrics` — Start the metrics dashboard HTTP server
 - `restart` / `stop` / `status` — Signal or check a running Conduit process (signals, not HTTP)
 
 ## Package Layout
 
-- cmd/gateway/ — Entry point and CLI command definitions (main.go, auth.go, backup.go, brain.go, briefing.go, chain.go, cron.go, loadtest.go, maintenance.go, metrics.go, pairing.go, process.go, signals.go, ssh.go, ssh_keys.go, tools.go, tui.go). Build-tagged optional_*.go files blank-import the optional tools (with_datadog, with_k8s, with_pagerduty, with_sre, with_mqtt, with_ssh, with_unifi).
+- cmd/gateway/ — Entry point and CLI command definitions (main.go, auth.go, backup.go, brain.go, briefing.go, chain.go, cron.go, eval.go, loadtest.go, maintenance.go, metrics.go, pairing.go, process.go, signals.go, ssh.go, ssh_keys.go, tools.go, tui.go). Build-tagged optional_*.go files blank-import the optional tools (with_datadog, with_k8s, with_pagerduty, with_sre, with_mqtt, with_ssh, with_unifi).
 - cmd/recall-events-converter/ — One-off converter for brain recall-events logs
 - internal/gateway/ — Core gateway orchestration, WebSocket handling, HTTP endpoints, context usage tracking, direct client for TUI, heartbeat integration. Includes ContextBudget (context_budget.go), FuelGauge (fuel_gauge.go), VisionAnalyzer adapter (vision_adapter.go). Mid-turn steering (turn_runner_steer.go, conduit-5uw3): a human message queued behind a running turn with the same `TurnRequest.SteerScope` (channel chat+user, one WS connection, one TUI client) is offered to it; the tool loop folds it in at the next round boundary (tools.SteeringSource) and stores it before the reply, else it runs as a normal turn. A folded WS/TUI request ends with a `steered` command_response (with request_id), never a StreamStart/StreamEnd
 - internal/ai/ — AI provider routing, conversation management, tool execution loops, streaming, pricing (PricingResolver in pricing.go)
@@ -161,6 +162,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/stt/ — Speech-to-text (Transcriber interface, Whisper backend)
 - internal/vecgo/ — Optional VecGo vector/semantic search service and indexer (module replaced from ./vecgo)
 - internal/workspace/ — Workspace context loading and caching (core files, daily memory, beads, security, summaries)
+- internal/eval/ — Eval harness behind the `eval` CLI (bd-18u): corpus loader (YAML frontmatter rubric + JSONL turns), replay runner, deterministic checks (turn budget, tool allowlist, deny classes, expected fragments, cost), markdown/JSONL reports. Replay only, no model calls; llm_judge items are reported as not judged. Corpus data is synthetic (testdata/, corpus-real-v1/)
 - internal/testing/loadtest/ — Load-test harness behind the `loadtest` CLI
 
 ## Config Files
