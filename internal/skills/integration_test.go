@@ -3,6 +3,7 @@ package skills
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -323,5 +324,106 @@ func TestSkillActionTool_ExecuteHoistsTopLevelParams(t *testing.T) {
 	}
 	if _, leaked := got["args"]; leaked {
 		t.Errorf("raw args container must not be forwarded as a key; got: %v", got)
+	}
+}
+
+// TestBuildSkillsContext_DocOnlyCompactLine pins the slim doc-only line: no
+// description prose at all (the full text lives in the skill_* tool catalog),
+// the "doc-only" marker and the SKILL.md Read pointer instead.
+func TestBuildSkillsContext_DocOnlyCompactLine(t *testing.T) {
+	integrator := &SkillIntegrator{loader: NewSkillLoader(), config: nil}
+	skill := Skill{
+		Name:        "notes",
+		Description: strings.Repeat("word ", 40), // 200 chars of prose
+	}
+
+	out := integrator.BuildSkillsContext([]Skill{skill})
+
+	want := "- `skill_notes` 🔧 — doc-only — Read skills/notes/SKILL.md\n"
+	if !strings.Contains(out, want) {
+		t.Errorf("doc-only line should be exactly %q; got: %s", want, out)
+	}
+	if strings.Contains(out, "(actions:") {
+		t.Errorf("doc-only line must not carry the actions wrapper; got: %s", out)
+	}
+	if strings.Contains(out, "word word") {
+		t.Errorf("doc-only line must drop description prose; got: %s", out)
+	}
+}
+
+// TestBuildSkillsContext_DocOnlyKeepsEmoji verifies a skill-declared emoji
+// survives on the slim doc-only line.
+func TestBuildSkillsContext_DocOnlyKeepsEmoji(t *testing.T) {
+	integrator := &SkillIntegrator{loader: NewSkillLoader(), config: nil}
+	skill := Skill{
+		Name:        "fancy",
+		Description: "Has an emoji and a long description that must not appear. " + strings.Repeat("prose ", 30),
+		Metadata:    SkillMetadata{Conduit: SkillConduitMeta{Emoji: "✨"}},
+	}
+
+	out := integrator.BuildSkillsContext([]Skill{skill})
+
+	want := "- `skill_fancy` ✨ — doc-only — Read skills/fancy/SKILL.md\n"
+	if !strings.Contains(out, want) {
+		t.Errorf("doc-only line should keep the declared emoji, exactly %q; got: %s", want, out)
+	}
+	if strings.Contains(out, "prose prose") {
+		t.Errorf("description prose must not leak into the doc-only line; got: %s", out)
+	}
+}
+
+// TestBuildSkillsContext_ActionSkillKeepsFormat verifies skills with honest
+// actions keep the existing "description (actions: ...)" line unchanged.
+func TestBuildSkillsContext_ActionSkillKeepsFormat(t *testing.T) {
+	integrator := &SkillIntegrator{loader: NewSkillLoader(), config: nil}
+	skill, err := NewSkillLoader().LoadSkillFromContent("---\nname: t\ndescription: Does things\nactions: [search, send]\n---\nbody")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	out := integrator.BuildSkillsContext([]Skill{*skill})
+
+	want := "- `skill_t` 🔧 — Does things (actions: [search send])\n"
+	if !strings.Contains(out, want) {
+		t.Errorf("want line %q; got: %s", want, out)
+	}
+	if strings.Contains(out, "doc-only") {
+		t.Errorf("action skill must not be marked doc-only; got: %s", out)
+	}
+}
+
+// TestBuildSkillsContext_MixedFixtureShrinks pins the bd-0d9d goal with a
+// mixed fixture: the slim renderer must produce a strictly smaller section
+// than the pre-slim renderer would for the same skills (doc-only lines lose
+// their prose; action lines are identical in both renderers, so the shrink
+// comes entirely from the doc-only savings), while still listing every skill.
+func TestBuildSkillsContext_MixedFixtureShrinks(t *testing.T) {
+	integrator := &SkillIntegrator{loader: NewSkillLoader(), config: nil}
+	actionSkill, err := NewSkillLoader().LoadSkillFromContent("---\nname: solar\ndescription: Daily solar reports with a fairly long description that used to be injected verbatim into every prompt request\nactions: [status, daily_report]\n---\nbody")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	docOnly := Skill{Name: "ghost", Description: strings.Repeat("Long legacy prose. ", 20)}
+
+	// The pre-slim renderer wrapped the doc-only Read pointer in the same
+	// "(actions: ...)" prose line as every other skill (conduit-7ny5 shape).
+	oldDocLine := fmt.Sprintf("- `skill_%s` 🔧 — %s (actions: %s)\n",
+		docOnly.Name, truncateDescription(docOnly.Description, 160),
+		fmt.Sprintf("doc-only — Read skills/%s/SKILL.md", docOnly.Name))
+	actionLine := fmt.Sprintf("- `skill_solar` 🔧 — %s (actions: %s)\n",
+		truncateDescription(actionSkill.Description, 160),
+		formatActionsList(actionSkill.Actions))
+	oldLen := len("## Available Skills\n\nThe following specialized skills are available:\n") + len(actionLine) + len(oldDocLine) + 1
+
+	out := integrator.BuildSkillsContext([]Skill{*actionSkill, docOnly})
+
+	if !strings.Contains(out, "(actions: [status daily_report])") {
+		t.Errorf("action skill must keep its action list; got: %s", out)
+	}
+	if !strings.Contains(out, "doc-only — Read skills/ghost/SKILL.md") {
+		t.Errorf("doc-only skill must render the slim line; got: %s", out)
+	}
+	if len(out) >= oldLen {
+		t.Errorf("slim section (%d chars) must shrink vs old renderer (%d chars) for the same mixed fixture", len(out), oldLen)
 	}
 }
