@@ -66,38 +66,32 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 		return ""
 	}
 
-	// Determine session type
-	sessionType := "main"
-	channelID := ""
-	userID := ""
-	sessionKey := ""
-
-	if session != nil {
-		channelID = session.ChannelID
-		userID = session.UserID
-		sessionKey = session.Key
-
-		if strings.Contains(channelID, "group") || strings.Contains(channelID, "-100") {
-			sessionType = "shared"
-		}
-	}
-
-	securityCtx := workspace.SecurityContext{
-		SessionType: sessionType,
-		ChannelID:   channelID,
-		UserID:      userID,
-		SessionID:   sessionKey,
-	}
+	securityCtx := workspaceSecurityContext(session)
+	sessionType := securityCtx.SessionType
+	sessionKey := securityCtx.SessionID
 
 	bundle, err := pb.workspaceContext.LoadContext(ctx, securityCtx)
 	if err != nil || len(bundle.Files) == 0 {
 		return ""
 	}
 
-	// Check if we should use summarized content for small-context models
+	// The state file renders in its own Session State section (bd-3ia);
+	// keep it out of Project Context and away from the summarizer.
 	files := bundle.Files
+	if stateFile := pb.workspaceContext.StateFile(); stateFile != "" {
+		if _, ok := files[stateFile]; ok {
+			files = make(map[string]string, len(bundle.Files))
+			for name, content := range bundle.Files {
+				if name != stateFile {
+					files[name] = content
+				}
+			}
+		}
+	}
+
+	// Check if we should use summarized content for small-context models
 	if pb.shouldUseSummaries(session) && pb.summaryManager != nil {
-		summarized, err := pb.summaryManager.GetSummarizedContext(ctx, bundle.Files)
+		summarized, err := pb.summaryManager.GetSummarizedContext(ctx, files)
 		if err == nil {
 			files = summarized
 		}
@@ -109,10 +103,16 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 	builder.WriteString("The following project context files have been loaded:\n")
 	builder.WriteString("If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.\n\n")
 
-	// Core files in specific order.
-	// HEARTBEAT.md is heartbeat/cron-session guidance: only inject for those
-	// session types. Regular chat sessions never need it.
-	coreFiles := []string{"SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md", "IDENTITY.md", "BOOTSTRAP.md"}
+	// Core files in configured order (workspace.files.core). MEMORY.md and
+	// daily memory files render last, below. HEARTBEAT.md is
+	// heartbeat/cron-session guidance: only inject for those session types.
+	// Regular chat sessions never need it.
+	var coreFiles []string
+	for _, filename := range pb.workspaceContext.CoreFiles() {
+		if filename != "MEMORY.md" && filename != "HEARTBEAT.md" && !strings.HasPrefix(filename, "memory/") {
+			coreFiles = append(coreFiles, filename)
+		}
+	}
 	isHeartbeatSession := strings.HasPrefix(sessionKey, "heartbeat_") || strings.HasPrefix(sessionKey, "cron_")
 	if isHeartbeatSession {
 		coreFiles = append([]string{"HEARTBEAT.md"}, coreFiles...)
@@ -152,14 +152,30 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 		}
 	}
 
-	// MEMORY.md only in main sessions
-	if sessionType == "main" && !skip["MEMORY.MD"] {
+	// MEMORY.md only in main sessions, and only while memory_md_inject is on
+	// (bd-3ia: default true; the state file is meant to replace it).
+	if sessionType == "main" && !skip["MEMORY.MD"] && pb.workspaceContext.MemoryMDInject() {
 		if content, exists := files["MEMORY.md"]; exists {
 			builder.WriteString(fmt.Sprintf("## MEMORY.md\n%s\n", content))
 		}
 	}
 
 	return builder.String()
+}
+
+// workspaceSecurityContext derives the workspace access context for a
+// session: group chats are "shared", everything else "main".
+func workspaceSecurityContext(session *sessions.Session) workspace.SecurityContext {
+	sc := workspace.SecurityContext{SessionType: "main"}
+	if session != nil {
+		sc.ChannelID = session.ChannelID
+		sc.UserID = session.UserID
+		sc.SessionID = session.Key
+		if strings.Contains(sc.ChannelID, "group") || strings.Contains(sc.ChannelID, "-100") {
+			sc.SessionType = "shared"
+		}
+	}
+	return sc
 }
 
 // contextSkipSet returns the upper-cased context files the session's

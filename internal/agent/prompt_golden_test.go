@@ -13,6 +13,7 @@ import (
 
 	"conduit/internal/config"
 	"conduit/internal/sessions"
+	"conduit/internal/workspace"
 )
 
 var updatePromptGolden = flag.Bool("update-prompt-golden", false, "rewrite testdata/prompt_golden.txt")
@@ -38,21 +39,39 @@ func TestPromptGolden(t *testing.T) {
 		return pb
 	}
 
+	// bd-3ia: a workspace with a state file pins the Session State section.
+	wsDir := t.TempDir()
+	for name, content := range map[string]string{
+		"SOUL.md": "Synthetic soul for the golden prompt.\n",
+		"memory/jules-state.json": `{"written_at":"2026-09-24T08:00:00Z","working_on":"Acme widget refactor",` +
+			`"open_loops":["Reply to Rex about Job A","Review projects.alpha"],"resume_hint":"Run the widget tests first"}`,
+	} {
+		p := filepath.Join(wsDir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	cases := []struct {
-		name    string
-		session *sessions.Session
-		isOAuth bool
+		name      string
+		session   *sessions.Session
+		isOAuth   bool
+		workspace bool
 	}{
-		{"large_context_api_key", sessionWithModel("claude-sonnet-4-6"), false},
-		{"large_context_oauth", sessionWithModel("claude-sonnet-4-6"), true},
-		{"small_context_mistral", sessionWithModel("mistral"), false},
-		{"tiny_context_gemma2", sessionWithModel("gemma2"), false},
+		{"large_context_api_key", sessionWithModel("claude-sonnet-4-6"), false, false},
+		{"large_context_oauth", sessionWithModel("claude-sonnet-4-6"), true, false},
+		{"small_context_mistral", sessionWithModel("mistral"), false, false},
+		{"tiny_context_gemma2", sessionWithModel("gemma2"), false, false},
 		{"cron_session", &sessions.Session{
 			Key:       CronSessionKeyPrefix + "job1",
 			ChannelID: "cron",
 			UserID:    "user1",
 			Context:   map[string]string{"model": "claude-sonnet-4-6"},
-		}, false},
+		}, false, false},
+		{"workspace_session_state", sessionWithModel("claude-sonnet-4-6"), false, true},
 	}
 
 	hostname, _ := os.Hostname()
@@ -62,12 +81,17 @@ func TestPromptGolden(t *testing.T) {
 		s = strings.ReplaceAll(s, "host="+hostname+" |", "host=<HOST> |")
 		s = strings.ReplaceAll(s, fmt.Sprintf("os=%s (%s) |", runtime.GOOS, runtime.GOARCH), "os=<OS> |")
 		s = strings.ReplaceAll(s, "node="+runtime.Version()+" |", "node=<GOVERSION> |")
+		s = strings.ReplaceAll(s, wsDir, "<WORKSPACE>")
 		return s
 	}
 
 	var b strings.Builder
 	for _, tc := range cases {
-		blocks, err := newPB().Build(context.Background(), tc.session, tc.isOAuth)
+		pb := newPB()
+		if tc.workspace {
+			pb.workspaceContext = workspace.NewWorkspaceContext(wsDir)
+		}
+		blocks, err := pb.Build(context.Background(), tc.session, tc.isOAuth)
 		if err != nil {
 			t.Fatalf("%s: Build: %v", tc.name, err)
 		}

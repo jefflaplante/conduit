@@ -143,3 +143,32 @@ func TestCopySystemBlocks_PreservesDynamic(t *testing.T) {
 		t.Fatalf("Dynamic flag lost in copy: %+v", out)
 	}
 }
+
+// bd-3ia: Session State renders in the static block and stays byte-stable
+// across builds within a session (minutes and hours apart, same day).
+func TestBuild_SessionStateStaticAndStable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "memory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := `{"written_at":"2026-09-25T08:00:00Z","working_on":"Job A","open_loops":["one","two"],"resume_hint":"next"}`
+	if err := os.WriteFile(filepath.Join(dir, "memory", "jules-state.json"), []byte(state), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pb := newTestPromptBuilder()
+	pb.workspaceContext = workspace.NewWorkspaceContext(dir)
+
+	t0 := time.Date(2026, 9, 26, 9, 0, 0, 0, time.UTC)
+	first := buildAt(t, pb, context.Background(), t0)
+	if !strings.Contains(first[0].Text, "## Session State") || !strings.Contains(first[0].Text, "Working on: Job A") {
+		t.Fatalf("Session State missing from static block:\n%s", first[0].Text)
+	}
+	if strings.Contains(first[1].Text, "## Session State") {
+		t.Errorf("Session State must not be in the dynamic block")
+	}
+	for _, d := range []time.Duration{0, time.Minute, 30 * time.Minute, 5 * time.Hour} {
+		if got := buildAt(t, pb, context.Background(), t0.Add(d))[0].Text; got != first[0].Text {
+			t.Fatalf("static block changed %v later", d)
+		}
+	}
+}

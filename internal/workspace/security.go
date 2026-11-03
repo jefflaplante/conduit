@@ -165,6 +165,21 @@ func (sm *SecurityManager) matchesPattern(filePath, pattern string) bool {
 	return false
 }
 
+// AllowStateFile makes the session state file readable from every session
+// type (bd-3ia). The gateway renders it read-only into the prompt; it is the
+// only .json file the rules allow. Empty paths are ignored.
+func (sm *SecurityManager) AllowStateFile(path string) {
+	if path == "" {
+		return
+	}
+	sm.AddRule(FileAccess{
+		Pattern:     filepath.Clean(path),
+		Condition:   func(SecurityContext) bool { return true },
+		Description: "Session state file accessible in all sessions (gateway-rendered, read-only)",
+		Enabled:     true,
+	})
+}
+
 // AddRule adds a custom access rule
 func (sm *SecurityManager) AddRule(rule FileAccess) {
 	sm.rules = append(sm.rules, rule)
