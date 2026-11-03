@@ -16,6 +16,7 @@ type storeOpts struct {
 	ttl       time.Duration
 	weight    float64
 	weightSet bool
+	context   string
 }
 
 // StoreOption configures an individual Store call.
@@ -32,17 +33,19 @@ func WithTTL(d time.Duration) StoreOption {
 // archiveSupersededSQL copies the live LTM row for a key into brain_history
 // when the value about to be upserted differs from it (args: key, new value).
 // Same-value re-stores and first inserts archive nothing. Runs in the upsert's
-// transaction, before the upsert. bd-31u
+// transaction, before the upsert. bd-31u. bd-lfrd: context rides along — a
+// version's context is part of that version.
 const archiveSupersededSQL = `
-	INSERT INTO brain_history (key, value, created_at, source, tier, salience, archived_at, reason)
-	SELECT key, value, created_at, COALESCE(source, ''), 'longterm', salience, datetime('now'), 'superseded'
+	INSERT INTO brain_history (key, value, created_at, source, tier, salience, context, archived_at, reason)
+	SELECT key, value, created_at, COALESCE(source, ''), 'longterm', salience, COALESCE(context, ''), datetime('now'), 'superseded'
 	FROM brain_ltm WHERE key = ? AND value != ?`
 
 // archiveDeletedSQL copies the live LTM row for a key into brain_history before
-// an explicit Delete (args: key). A missing key archives nothing. bd-31u
+// an explicit Delete (args: key). A missing key archives nothing. bd-31u.
+// bd-lfrd: context rides along.
 const archiveDeletedSQL = `
-	INSERT INTO brain_history (key, value, created_at, source, tier, salience, archived_at, reason)
-	SELECT key, value, created_at, COALESCE(source, ''), 'longterm', salience, datetime('now'), 'deleted'
+	INSERT INTO brain_history (key, value, created_at, source, tier, salience, context, archived_at, reason)
+	SELECT key, value, created_at, COALESCE(source, ''), 'longterm', salience, COALESCE(context, ''), datetime('now'), 'deleted'
 	FROM brain_ltm WHERE key = ?`
 
 // WithWeight sets the importance weight of the stored entry (bd-2xd). The
@@ -53,6 +56,16 @@ const archiveDeletedSQL = `
 // TierLongTerm entries; working-memory stores ignore it.
 func WithWeight(w float64) StoreOption {
 	return func(o *storeOpts) { o.weight = normalizeWeight(w); o.weightSet = true }
+}
+
+// WithContext sets the situational context of the stored entry (bd-lfrd):
+// free-text "why / what was happening" that recall folds into keyword matching
+// (encoding specificity) and MemorySearch indexes via FTS. Convention: terse
+// (≤ ~200 chars), don't restate the value. Omission is the zero-cost default.
+// Unlike weight, context is rewritten on every upsert: re-storing a key
+// without a context clears it, matching how source behaves.
+func WithContext(context string) StoreOption {
+	return func(o *storeOpts) { o.context = context }
 }
 
 // normalizeWeight coerces a caller-supplied weight into the stored range.
@@ -96,7 +109,7 @@ func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source 
 	}
 	switch tier {
 	case TierLongTerm:
-		return b.storeLTM(key, value, source, now, expiresAt, weight, weightSet)
+		return b.storeLTM(key, value, source, now, expiresAt, weight, weightSet, o.context)
 	case TierWorking:
 		userID := userIDFromCtx(ctx)
 		b.mu.Lock()
@@ -108,13 +121,14 @@ func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source 
 			existing.AccessedAt = now
 			existing.AccessCount++
 			existing.Source = source
+			existing.Context = o.context
 			existing.Salience = b.computeSalience(existing)
 			existing.ExpiresAt = expiresAt
 		} else {
 			b.working[userID][key] = &Entry{
 				Key: key, Value: value, Tier: TierWorking,
 				CreatedAt: now, AccessedAt: now,
-				AccessCount: 1, Salience: 0.5, Source: source,
+				AccessCount: 1, Salience: 0.5, Source: source, Context: o.context,
 				ExpiresAt: expiresAt,
 			}
 		}
@@ -132,13 +146,15 @@ func (b *Brain) Store(ctx context.Context, key, value string, tier Tier, source 
 // Weight defaults to 1.0 when zero; only TierLongTerm entries persist it.
 // Weight is written on insert and sticky on conflict: re-storing a key via
 // StoreBulk without a weight never strips an existing one — use Store with
-// WithWeight for an explicit overwrite.
+// WithWeight for an explicit overwrite. Context (bd-lfrd) is optional and
+// rewritten like source: omitted means cleared for both LTM and WM.
 type BulkEntry struct {
-	Key    string
-	Value  string
-	Tier   Tier
-	Source string
-	Weight float64
+	Key     string
+	Value   string
+	Tier    Tier
+	Source  string
+	Weight  float64
+	Context string
 }
 
 // StoreBulk stores many entries atomically. Long-term entries are written in
@@ -173,7 +189,7 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 			// Match Store(): warn but do not fail on weird sources.
 			log.Printf("Brain.StoreBulk: warning: %v (key=%q)", err, e.Key)
 		}
-		normalized[i] = BulkEntry{Key: e.Key, Value: e.Value, Tier: tier, Source: e.Source, Weight: normalizeWeight(e.Weight)}
+		normalized[i] = BulkEntry{Key: e.Key, Value: e.Value, Tier: tier, Source: e.Source, Weight: normalizeWeight(e.Weight), Context: e.Context}
 	}
 
 	now := time.Now()
@@ -205,13 +221,15 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 			// conduit-31jg.53: store base salience only (access + tier);
 			// recency is computed at query time. bd-2xd: weight rides along
 			// on insert and is sticky on conflict (only an explicit Store
-			// with WithWeight changes it).
+			// with WithWeight changes it). bd-lfrd: context is rewritten
+			// like source on every upsert.
 			stmt, err := tx.PrepareContext(ctx, `
-				INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience, weight)
-				VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+				INSERT INTO brain_ltm (key, value, source, context, created_at, accessed_at, access_count, salience, weight)
+				VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
 				ON CONFLICT(key) DO UPDATE SET
 					value = excluded.value,
 					source = excluded.source,
+					context = excluded.context,
 					accessed_at = excluded.accessed_at,
 					access_count = access_count + 1,
 					salience = `+b.ltmBaseSalienceSQL("access_count + 1")+`
@@ -241,7 +259,7 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 					tx.Rollback()
 					return err
 				}
-				if _, err := stmt.ExecContext(ctx, e.Key, e.Value, e.Source, nowStr, nowStr,
+				if _, err := stmt.ExecContext(ctx, e.Key, e.Value, e.Source, e.Context, nowStr, nowStr,
 					b.ltmBaseSalience(1), e.Weight); err != nil {
 					tx.Rollback()
 					return err
@@ -276,12 +294,13 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 				existing.AccessedAt = now
 				existing.AccessCount++
 				existing.Source = e.Source
+				existing.Context = e.Context
 				existing.Salience = b.computeSalience(existing)
 			} else {
 				b.working[userID][e.Key] = &Entry{
 					Key: e.Key, Value: e.Value, Tier: TierWorking,
 					CreatedAt: now, AccessedAt: now,
-					AccessCount: 1, Salience: 0.5, Source: e.Source,
+					AccessCount: 1, Salience: 0.5, Source: e.Source, Context: e.Context,
 				}
 			}
 		}
@@ -298,7 +317,7 @@ func (b *Brain) StoreBulk(ctx context.Context, entries []BulkEntry) error {
 	return nil
 }
 
-func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *time.Time, weight float64, weightSet bool) error {
+func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *time.Time, weight float64, weightSet bool, contextStr string) error {
 	nowStr := now.UTC().Format("2006-01-02 15:04:05")
 	var expiresStr interface{}
 	if expiresAt != nil {
@@ -312,7 +331,9 @@ func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *ti
 	// recency is computed at query time (see salience.go). bd-2xd: weight is
 	// written on insert; on conflict it is sticky — only an explicit Store
 	// with WithWeight overwrites it, so the WM promote/eviction paths (which
-	// pass weightSet=false) can never strip a scar's protection.
+	// pass weightSet=false) can never strip a scar's protection. bd-lfrd:
+	// context is rewritten on every write (like source), never sticky — the
+	// promote/eviction paths carry the entry's own context.
 	err := database.RetryOnBusy(5, func() error {
 		tx, err := b.db.Begin()
 		if err != nil {
@@ -323,17 +344,18 @@ func (b *Brain) storeLTM(key, value, source string, now time.Time, expiresAt *ti
 			return err
 		}
 		_, err = tx.Exec(`
-			INSERT INTO brain_ltm (key, value, source, created_at, accessed_at, access_count, salience, expires_at, weight)
-			VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+			INSERT INTO brain_ltm (key, value, source, context, created_at, accessed_at, access_count, salience, expires_at, weight)
+			VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
 			ON CONFLICT(key) DO UPDATE SET
 				value = excluded.value,
 				source = excluded.source,
+				context = excluded.context,
 				accessed_at = excluded.accessed_at,
 				access_count = access_count + 1,
 				expires_at = excluded.expires_at,
 				salience = `+b.ltmBaseSalienceSQL("access_count + 1")+
 			weightConflictClause(weightSet)+`
-		`, key, value, source, nowStr, nowStr, b.ltmBaseSalience(1), expiresStr, weight)
+		`, key, value, source, contextStr, nowStr, nowStr, b.ltmBaseSalience(1), expiresStr, weight)
 		if err != nil {
 			tx.Rollback()
 			return err
@@ -417,13 +439,13 @@ func (b *Brain) getLTM(key string) (*Entry, error) {
 			access_count = access_count + 1,
 			salience = `+b.ltmBaseSalienceSQL("access_count + 1")+`
 		WHERE key = ? AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now'))
-		RETURNING key, value, created_at, accessed_at, access_count, `+b.EffectiveSalienceSQL()+`, source, stale, expires_at, warmth, weight
+		RETURNING key, value, created_at, accessed_at, access_count, `+b.EffectiveSalienceSQL()+`, source, context, stale, expires_at, warmth, weight
 	`, key)
 	entry := &Entry{Tier: TierLongTerm}
 	var staleInt int
 	var expiresAt sql.NullTime
 	err := row.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-		&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAt, &entry.Warmth, &entry.Weight)
+		&entry.AccessCount, &entry.Salience, &entry.Source, &entry.Context, &staleInt, &expiresAt, &entry.Warmth, &entry.Weight)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

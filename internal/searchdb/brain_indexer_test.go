@@ -24,6 +24,7 @@ func createTestBrainDB(path string) (*sql.DB, error) {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL,
 			source TEXT DEFAULT '',
+			context TEXT NOT NULL DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			access_count INTEGER DEFAULT 1,

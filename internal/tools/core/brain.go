@@ -103,6 +103,10 @@ func (t *BrainTool) Parameters() map[string]interface{} {
 				"type":        "string",
 				"description": "Source label for store action (e.g. 'user', 'tool', 'observation')",
 			},
+			"entry_context": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional situational context for store action (bd-lfrd): terse 'why / what was happening' when this fact was learned (≤ ~200 chars, don't restate the value). Folded into recall matching and FTS search — a later query sharing a token with the context retrieves the fact even when the value doesn't match.",
+			},
 			"ttl": map[string]interface{}{
 				"type":        "string",
 				"description": "Optional TTL for store action. Accepts Go duration strings (\"24h\", \"90m\") plus \"Nd\" (days) and \"Nw\" (weeks). After expiry, the entry is hidden from get/recall and deleted during the next consolidate/prune sweep. Omit for no expiry (default).",
@@ -117,7 +121,7 @@ func (t *BrainTool) Parameters() map[string]interface{} {
 			},
 			"context": map[string]interface{}{
 				"type":        "string",
-				"description": "Optional context for recall action — entries whose key/value overlap with context tokens get a ranking boost (keyword overlap only, never filters results).",
+				"description": "Action-dependent. For recall: optional rerank bias — entries whose key/value overlap with context tokens get a ranking boost (keyword overlap only, never filters results). For store: optional situational context (bd-lfrd) — terse 'why / what was happening' when the fact was learned (≤ ~200 chars, don't restate the value); folded into recall matching and FTS search.",
 			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
@@ -146,10 +150,11 @@ func (t *BrainTool) Parameters() map[string]interface{} {
 				"items": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"key":    map[string]interface{}{"type": "string", "description": "Memory key"},
-						"value":  map[string]interface{}{"type": "string", "description": "Value to store"},
-						"tier":   map[string]interface{}{"type": "string", "enum": []string{"longterm", "working"}, "description": "Memory tier (default: working)"},
-						"source": map[string]interface{}{"type": "string", "description": "Source label (default: tool)"},
+						"key":     map[string]interface{}{"type": "string", "description": "Memory key"},
+						"value":   map[string]interface{}{"type": "string", "description": "Value to store"},
+						"tier":    map[string]interface{}{"type": "string", "enum": []string{"longterm", "working"}, "description": "Memory tier (default: working)"},
+						"source":  map[string]interface{}{"type": "string", "description": "Source label (default: tool)"},
+						"context": map[string]interface{}{"type": "string", "description": "Optional situational context (bd-lfrd): terse 'why / what was happening' (≤ ~200 chars)"},
 					},
 					"required": []string{"key", "value"},
 				},
@@ -230,16 +235,31 @@ func (t *BrainTool) handleStore(ctx context.Context, args map[string]interface{}
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("invalid ttl: %v", err)}, nil
 	}
+	// bd-lfrd: optional situational context, forwarded through the service
+	// seam as a store option. Omission is the zero-cost default.
+	var opts []types.BrainStoreOption
+	if c, ok := args["context"].(string); ok && c != "" {
+		opts = append(opts, types.BrainStoreWithContext(c))
+	}
 	if ttl > 0 {
-		if err := brain.StoreWithTTL(ctx, key, value, tier, source, ttl); err != nil {
-			return &types.ToolResult{Success: false, Error: fmt.Sprintf("store failed: %v", err)}, nil
+		if len(opts) == 0 {
+			if err := brain.StoreWithTTL(ctx, key, value, tier, source, ttl); err != nil {
+				return &types.ToolResult{Success: false, Error: fmt.Sprintf("store failed: %v", err)}, nil
+			}
+		} else {
+			// Context + ttl together: StoreWithTTL can't carry options, so
+			// route through Store with both options.
+			opts = append(opts, types.BrainStoreWithTTL(ttl))
+			if err := brain.Store(ctx, key, value, tier, source, opts...); err != nil {
+				return &types.ToolResult{Success: false, Error: fmt.Sprintf("store failed: %v", err)}, nil
+			}
 		}
 		return &types.ToolResult{
 			Success: true,
 			Content: fmt.Sprintf("Stored key=%q in %s memory (source=%s, ttl=%s)", key, tier, source, ttl),
 		}, nil
 	}
-	if err := brain.Store(ctx, key, value, tier, source); err != nil {
+	if err := brain.Store(ctx, key, value, tier, source, opts...); err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("store failed: %v", err)}, nil
 	}
 	return &types.ToolResult{
@@ -279,11 +299,13 @@ func (t *BrainTool) handleStoreBulk(ctx context.Context, args map[string]interfa
 		if source == "" {
 			source = "tool"
 		}
+		context, _ := m["context"].(string)
 		entries = append(entries, types.BrainBulkEntry{
-			Key:    key,
-			Value:  value,
-			Tier:   tier,
-			Source: source,
+			Key:     key,
+			Value:   value,
+			Tier:    tier,
+			Source:  source,
+			Context: context,
 		})
 	}
 	if err := brain.StoreBulk(ctx, entries); err != nil {

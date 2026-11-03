@@ -25,6 +25,7 @@ type BrainEntry struct {
 	Salience    float64    `json:"salience"`
 	Warmth      float64    `json:"warmth,omitempty"`
 	Source      string     `json:"source,omitempty"`
+	Context     string     `json:"context,omitempty"` // situational context (bd-lfrd)
 	Stale       bool       `json:"stale,omitempty"`
 	ClusterHit  bool       `json:"cluster_hit,omitempty"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
@@ -67,10 +68,32 @@ type BrainClusterResult struct {
 // BrainBulkEntry is a single entry passed to BrainService.StoreBulk. Tier
 // defaults to BrainTierWorking when empty; BrainTierScratch is rejected.
 type BrainBulkEntry struct {
-	Key    string    `json:"key"`
-	Value  string    `json:"value"`
-	Tier   BrainTier `json:"tier,omitempty"`
-	Source string    `json:"source,omitempty"`
+	Key     string    `json:"key"`
+	Value   string    `json:"value"`
+	Tier    BrainTier `json:"tier,omitempty"`
+	Source  string    `json:"source,omitempty"`
+	Context string    `json:"context,omitempty"` // situational context (bd-lfrd)
+}
+
+// BrainStoreOptions accumulates per-store settings for BrainService.Store,
+// populated by BrainStoreOption funcs (bd-lfrd). Zero-value options are the
+// defaults: no expiry, no context.
+type BrainStoreOptions struct {
+	TTL     time.Duration
+	Context string
+}
+
+// BrainStoreOption configures an individual BrainService.Store call.
+type BrainStoreOption func(*BrainStoreOptions)
+
+// BrainStoreWithTTL sets a time-to-live on the stored entry.
+func BrainStoreWithTTL(d time.Duration) BrainStoreOption {
+	return func(o *BrainStoreOptions) { o.TTL = d }
+}
+
+// BrainStoreWithContext sets the entry's situational context (bd-lfrd).
+func BrainStoreWithContext(context string) BrainStoreOption {
+	return func(o *BrainStoreOptions) { o.Context = context }
 }
 
 // BrainGraphNode is a single node in the brain graph payload.
@@ -111,7 +134,9 @@ type BrainGraphOptions struct {
 
 // BrainService provides tiered memory (LTM + working + scratchpad) to tools.
 type BrainService interface {
-	Store(ctx context.Context, key, value string, tier BrainTier, source string) error
+	// Store saves a fact. Options are optional (bd-lfrd): ttl via
+	// BrainStoreWithTTL, situational context via BrainStoreWithContext.
+	Store(ctx context.Context, key, value string, tier BrainTier, source string, opts ...BrainStoreOption) error
 	// StoreWithTTL stores an entry that expires after the given duration.
 	// A zero ttl means no expiry (equivalent to Store).
 	StoreWithTTL(ctx context.Context, key, value string, tier BrainTier, source string, ttl time.Duration) error

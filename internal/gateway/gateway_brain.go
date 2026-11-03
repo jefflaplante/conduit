@@ -54,8 +54,19 @@ func withSubAgentBrainScope(ctx context.Context, parentBrainUID, sessionKey stri
 	return ctx
 }
 
-func (a *brainAdapter) Store(ctx context.Context, key, value string, tier types.BrainTier, source string) error {
-	return a.b.Store(brainScope(ctx), key, value, brain.Tier(tier), source)
+func (a *brainAdapter) Store(ctx context.Context, key, value string, tier types.BrainTier, source string, opts ...types.BrainStoreOption) error {
+	var brainOpts []brain.StoreOption
+	converted := &types.BrainStoreOptions{}
+	for _, opt := range opts {
+		opt(converted)
+	}
+	if converted.TTL > 0 {
+		brainOpts = append(brainOpts, brain.WithTTL(converted.TTL))
+	}
+	if converted.Context != "" {
+		brainOpts = append(brainOpts, brain.WithContext(converted.Context))
+	}
+	return a.b.Store(brainScope(ctx), key, value, brain.Tier(tier), source, brainOpts...)
 }
 
 func (a *brainAdapter) StoreWithTTL(ctx context.Context, key, value string, tier types.BrainTier, source string, ttl time.Duration) error {
@@ -69,10 +80,11 @@ func (a *brainAdapter) StoreBulk(ctx context.Context, entries []types.BrainBulkE
 	converted := make([]brain.BulkEntry, len(entries))
 	for i, e := range entries {
 		converted[i] = brain.BulkEntry{
-			Key:    e.Key,
-			Value:  e.Value,
-			Tier:   brain.Tier(e.Tier),
-			Source: e.Source,
+			Key:     e.Key,
+			Value:   e.Value,
+			Tier:    brain.Tier(e.Tier),
+			Source:  e.Source,
+			Context: e.Context,
 		}
 	}
 	return a.b.StoreBulk(brainScope(ctx), converted)
@@ -197,7 +209,7 @@ func convertEntry(e *brain.Entry) *types.BrainEntry {
 		Key: e.Key, Value: e.Value, Tier: types.BrainTier(e.Tier),
 		CreatedAt: e.CreatedAt, AccessedAt: e.AccessedAt,
 		AccessCount: e.AccessCount, Salience: e.Salience, Warmth: e.Warmth,
-		Source: e.Source, Stale: e.Stale, ClusterHit: e.ClusterHit,
+		Source: e.Source, Context: e.Context, Stale: e.Stale, ClusterHit: e.ClusterHit,
 		ExpiresAt: e.ExpiresAt,
 	}
 }

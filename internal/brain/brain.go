@@ -52,6 +52,7 @@ type Entry struct {
 	Weight      float64    `json:"weight,omitempty"` // importance multiplier (bd-2xd); 1.0 = neutral, omitted from JSON when unset
 	Warmth      float64    `json:"warmth,omitempty"`
 	Source      string     `json:"source,omitempty"`
+	Context     string     `json:"context,omitempty"` // situational context (bd-lfrd): why/what was happening when this was stored
 	Stale       bool       `json:"stale,omitempty"`
 	ClusterHit  bool       `json:"cluster_hit,omitempty"`
 	WarmthHit   bool       `json:"warmth_hit,omitempty"` // injected by warmth-floor, not a keyword/cluster match

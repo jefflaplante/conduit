@@ -99,17 +99,20 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	var whereArgs []interface{}
 	var matchArgs []interface{}
 	// conduit-31jg.31: terms are LIKE-escaped (%, _ and \ literal) so a
-	// query like "100%" doesn't become a wildcard pattern.
+	// query like "100%" doesn't become a wildcard pattern. bd-lfrd: the
+	// entry's context participates in matching — a query token that overlaps
+	// the encoding context retrieves the fact even when the value shares no
+	// vocabulary (encoding specificity).
 	for _, term := range terms {
 		pat := likeContains(term)
-		whereClauses = append(whereClauses, `(LOWER(key) LIKE ? ESCAPE '\' OR LOWER(value) LIKE ? ESCAPE '\')`)
-		whereArgs = append(whereArgs, pat, pat)
-		matchExprs = append(matchExprs, `(CASE WHEN LOWER(key) LIKE ? ESCAPE '\' OR LOWER(value) LIKE ? ESCAPE '\' THEN 1 ELSE 0 END)`)
-		matchArgs = append(matchArgs, pat, pat)
+		whereClauses = append(whereClauses, `(LOWER(key) LIKE ? ESCAPE '\' OR LOWER(value) LIKE ? ESCAPE '\' OR LOWER(context) LIKE ? ESCAPE '\')`)
+		whereArgs = append(whereArgs, pat, pat, pat)
+		matchExprs = append(matchExprs, `(CASE WHEN LOWER(key) LIKE ? ESCAPE '\' OR LOWER(value) LIKE ? ESCAPE '\' OR LOWER(context) LIKE ? ESCAPE '\' THEN 1 ELSE 0 END)`)
+		matchArgs = append(matchArgs, pat, pat, pat)
 	}
 
 	sqlQuery := fmt.Sprintf(
-		`SELECT key, value, created_at, accessed_at, access_count, %s AS eff_salience, source, stale, expires_at, warmth, weight,
+		`SELECT key, value, created_at, accessed_at, access_count, %s AS eff_salience, source, context, stale, expires_at, warmth, weight,
 		(%s) AS match_count
 		FROM brain_ltm WHERE (%s) AND (expires_at IS NULL OR expires_at > strftime('%%Y-%%m-%%d %%H:%%M:%%f', 'now'))
 		ORDER BY match_count DESC, eff_salience + warmth DESC LIMIT ?`,
@@ -132,7 +135,7 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 		var staleInt int
 		var expiresAtNT sql.NullTime
 		if err := rows.Scan(&entry.Key, &entry.Value, &entry.CreatedAt, &entry.AccessedAt,
-			&entry.AccessCount, &entry.Salience, &entry.Source, &staleInt, &expiresAtNT, &entry.Warmth, &entry.Weight, &matchCount); err != nil {
+			&entry.AccessCount, &entry.Salience, &entry.Source, &entry.Context, &staleInt, &expiresAtNT, &entry.Warmth, &entry.Weight, &matchCount); err != nil {
 			continue
 		}
 		entry.Stale = staleInt != 0
@@ -272,7 +275,7 @@ func (b *Brain) injectWarmEntries(ctx context.Context, results []*Entry, seen ma
 	// there's headroom. With the default floor of 0.7 and per-flush decay of
 	// 0.85, few entries qualify — the overfetch covers rows lost to `seen`.
 	rows, err := b.db.QueryContext(ctx, `
-		SELECT key, value, created_at, accessed_at, access_count, `+b.EffectiveSalienceSQL()+`, source, stale, expires_at, warmth, weight
+		SELECT key, value, created_at, accessed_at, access_count, `+b.EffectiveSalienceSQL()+`, source, context, stale, expires_at, warmth, weight
 		  FROM brain_ltm
 		 WHERE warmth >= ? AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%f','now'))
 		 ORDER BY warmth DESC LIMIT ?`, b.warmthInjectFloor, b.warmthInjectLimit+len(results))
@@ -290,7 +293,7 @@ func (b *Brain) injectWarmEntries(ctx context.Context, results []*Entry, seen ma
 		var staleInt int
 		var exp sql.NullTime
 		if err := rows.Scan(&e.Key, &e.Value, &e.CreatedAt, &e.AccessedAt, &e.AccessCount,
-			&e.Salience, &e.Source, &staleInt, &exp, &e.Warmth, &e.Weight); err != nil {
+			&e.Salience, &e.Source, &e.Context, &staleInt, &exp, &e.Warmth, &e.Weight); err != nil {
 			continue
 		}
 		e.Stale = staleInt != 0
@@ -359,16 +362,17 @@ func (b *Brain) computeAccessBonus(e *Entry) float64 {
 }
 
 // entryMatchesAnyTerm reports whether any of the given tokens appears in the
-// entry's key or value (case-insensitive substring match). Used to decide
-// whether to apply the context-overlap rerank boost.
+// entry's key, value or context (case-insensitive substring match). Used to
+// decide whether to apply the context-overlap rerank boost.
 func entryMatchesAnyTerm(e *Entry, terms []string) bool {
 	if len(terms) == 0 {
 		return false
 	}
 	keyLower := strings.ToLower(e.Key)
 	valueLower := strings.ToLower(e.Value)
+	contextLower := strings.ToLower(e.Context)
 	for _, term := range terms {
-		if strings.Contains(keyLower, term) || strings.Contains(valueLower, term) {
+		if strings.Contains(keyLower, term) || strings.Contains(valueLower, term) || strings.Contains(contextLower, term) {
 			return true
 		}
 	}
@@ -404,17 +408,18 @@ func containsString(list []string, s string) bool {
 	return false
 }
 
-// queryMatchScore returns the fraction of query terms found in the entry's key or value.
-// Returns 0.0 if no terms match, up to 1.0 if all terms match.
+// queryMatchScore returns the fraction of query terms found in the entry's key,
+// value or context. Returns 0.0 if no terms match, up to 1.0 if all terms match.
 func queryMatchScore(e *Entry, terms []string) float64 {
 	if len(terms) == 0 {
 		return 0
 	}
 	keyLower := strings.ToLower(e.Key)
 	valueLower := strings.ToLower(e.Value)
+	contextLower := strings.ToLower(e.Context)
 	matched := 0
 	for _, term := range terms {
-		if strings.Contains(keyLower, term) || strings.Contains(valueLower, term) {
+		if strings.Contains(keyLower, term) || strings.Contains(valueLower, term) || strings.Contains(contextLower, term) {
 			matched++
 		}
 	}

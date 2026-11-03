@@ -35,29 +35,30 @@ func (idx *BrainIndexer) IndexBrain(ctx context.Context) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	// Query all LTM entries from brain.db
+	// Query all LTM entries from brain.db. bd-lfrd: context rides along.
 	rows, err := idx.brainDB.QueryContext(ctx,
-		`SELECT key, value, COALESCE(source,'') FROM brain_ltm ORDER BY key`)
+		`SELECT key, value, COALESCE(source,''), COALESCE(context,'') FROM brain_ltm ORDER BY key`)
 	if err != nil {
 		return fmt.Errorf("failed to query brain_ltm: %w", err)
 	}
 	defer rows.Close()
 
 	type entry struct {
-		key, value, source string
+		key, value, source, context string
 	}
 	var entries []entry
 	var hashBuilder strings.Builder
 
 	for rows.Next() {
 		var e entry
-		if err := rows.Scan(&e.key, &e.value, &e.source); err != nil {
+		if err := rows.Scan(&e.key, &e.value, &e.source, &e.context); err != nil {
 			return fmt.Errorf("failed to scan brain_ltm row: %w", err)
 		}
 		entries = append(entries, e)
 		hashBuilder.WriteString(e.key)
 		hashBuilder.WriteString(e.value)
 		hashBuilder.WriteString(e.source)
+		hashBuilder.WriteString(e.context)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("brain_ltm row iteration error: %w", err)
@@ -81,14 +82,14 @@ func (idx *BrainIndexer) IndexBrain(ctx context.Context) error {
 	}
 
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO brain_ltm_fts(key, value, source) VALUES (?, ?, ?)`)
+		`INSERT INTO brain_ltm_fts(key, value, source, context) VALUES (?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare insert: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, e := range entries {
-		if _, err := stmt.ExecContext(ctx, e.key, e.value, e.source); err != nil {
+		if _, err := stmt.ExecContext(ctx, e.key, e.value, e.source, e.context); err != nil {
 			log.Printf("Warning: failed to index brain entry %q: %v", e.key, err)
 			continue
 		}
