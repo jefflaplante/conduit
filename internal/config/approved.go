@@ -7,16 +7,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // Approved-config check (fail closed). Every config file written by an
 // approved update_config, or accepted by the owner with `conduit config
-// accept`, is copied to ApprovedSnapshotPath (0600, next to the config),
-// and its SHA-256 is recorded in the data directory (ApprovedRecordPath).
+// accept`, is copied to ApprovedSnapshotPath (0600, next to the config;
+// ApprovedStateSnapshotPath in stateDir when the config's directory is not
+// writable, as in a container), and its SHA-256 is recorded in the data
+// directory (ApprovedRecordPath).
 // The server refuses to start when the config file differs from the
 // snapshot, so a change that got past the tool guards (or a hand edit) only
 // takes effect once the owner has looked at it and accepted it.
@@ -41,12 +45,24 @@ func ApprovedSnapshotPath(path string) string {
 // ApprovedRecordPath is the file in stateDir that records the snapshot's
 // hash for config path. stateDir is the data directory's config dir.
 func ApprovedRecordPath(path, stateDir string) string {
+	return filepath.Join(stateDir, "approved-config-"+approvedID(path)+".sha256")
+}
+
+// ApprovedStateSnapshotPath is the fallback snapshot location for configs
+// that live in a directory the gateway cannot write to (a container's
+// read-only /etc): the same stateDir as the hash record, under the same id,
+// so the pair moves together.
+func ApprovedStateSnapshotPath(path, stateDir string) string {
+	return filepath.Join(stateDir, "approved-config-"+approvedID(path)+".json")
+}
+
+func approvedID(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		abs = path
 	}
 	sum := sha256.Sum256([]byte(abs))
-	return filepath.Join(stateDir, "approved-config-"+hex.EncodeToString(sum[:6])+".sha256")
+	return hex.EncodeToString(sum[:6])
 }
 
 // UnapprovedConfigError says why a config file is not the approved one.
@@ -104,9 +120,10 @@ func VerifyApproved(path, stateDir string) (ApprovedState, error) {
 		return 0, fmt.Errorf("read config: %w", err)
 	}
 	snap := ApprovedSnapshotPath(path)
-	approved, recorded, err := readApproved(path, stateDir)
+	stateSnap := ApprovedStateSnapshotPath(path, stateDir)
+	approved, recorded, loc, err := readApproved(path, stateDir)
 	refuse := func(reason string) (ApprovedState, error) {
-		return 0, &UnapprovedConfigError{Path: path, Snapshot: snap, Reason: reason}
+		return 0, &UnapprovedConfigError{Path: path, Snapshot: loc, Reason: reason}
 	}
 	switch {
 	case errors.Is(err, errNoSnapshot) && recorded == "":
@@ -115,7 +132,8 @@ func VerifyApproved(path, stateDir string) (ApprovedState, error) {
 		}
 		return ApprovedBootstrapped, nil
 	case errors.Is(err, errNoSnapshot):
-		return refuse("the approved snapshot " + snap + " is missing (it existed before)")
+		return refuse("the approved snapshot is missing (it existed before): not at " +
+			snap + " nor at " + stateSnap)
 	case err != nil:
 		return refuse(err.Error())
 	case bytes.Equal(approved, data):
@@ -128,7 +146,7 @@ func VerifyApproved(path, stateDir string) (ApprovedState, error) {
 	}
 	keys, sensitive, weakenings := DescribeConfigChange(approved, data)
 	return 0, &UnapprovedConfigError{
-		Path: path, Snapshot: snap, Reason: "it was changed outside update_config",
+		Path: path, Snapshot: loc, Reason: "it was changed outside update_config",
 		Keys: keys, Sensitive: sensitive, Weakenings: weakenings,
 	}
 }
@@ -136,36 +154,46 @@ func VerifyApproved(path, stateDir string) (ApprovedState, error) {
 var errNoSnapshot = errors.New("no approved snapshot")
 
 // readApproved returns the snapshot and the recorded hash ("" if none).
-// The error is errNoSnapshot, or describes an unreadable, corrupt or
-// edited snapshot.
-func readApproved(path, stateDir string) (snapshot []byte, recorded string, err error) {
+// The snapshot is looked for next to the config first (the writable-config
+// layout), then in stateDir (the read-only-config layout); loc is where it
+// was found. The error is errNoSnapshot, or describes an unreadable,
+// corrupt or edited snapshot.
+func readApproved(path, stateDir string) (snapshot []byte, recorded, loc string, err error) {
 	if b, rerr := os.ReadFile(ApprovedRecordPath(path, stateDir)); rerr == nil {
 		recorded = strings.TrimSpace(string(b))
 	} else if !os.IsNotExist(rerr) {
-		return nil, "", fmt.Errorf("cannot read the approved-config record: %v", rerr)
+		return nil, "", "", fmt.Errorf("cannot read the approved-config record: %v", rerr)
 	}
-	snap := ApprovedSnapshotPath(path)
-	snapshot, err = os.ReadFile(snap)
-	switch {
-	case os.IsNotExist(err):
-		return nil, recorded, errNoSnapshot
-	case err != nil:
-		return nil, recorded, fmt.Errorf("cannot read the approved snapshot %s: %v", snap, err)
+	loc = ApprovedSnapshotPath(path)
+	for _, snap := range []string{ApprovedSnapshotPath(path), ApprovedStateSnapshotPath(path, stateDir)} {
+		snapshot, err = os.ReadFile(snap)
+		switch {
+		case os.IsNotExist(err):
+			loc = snap
+			continue
+		case err != nil:
+			return nil, recorded, snap, fmt.Errorf("cannot read the approved snapshot %s: %v", snap, err)
+		}
+		loc = snap
+		break
+	}
+	if os.IsNotExist(err) {
+		return nil, recorded, loc, errNoSnapshot
 	}
 	var obj map[string]interface{}
 	if jerr := json.Unmarshal(snapshot, &obj); jerr != nil || obj == nil {
-		return nil, recorded, fmt.Errorf("the approved snapshot %s is corrupt (not a JSON object)", snap)
+		return nil, recorded, loc, fmt.Errorf("the approved snapshot %s is corrupt (not a JSON object)", loc)
 	}
 	if recorded != "" && recorded != hashHex(snapshot) {
-		return nil, recorded, fmt.Errorf("the approved snapshot %s does not match its recorded hash (edited or corrupt)", snap)
+		return nil, recorded, loc, fmt.Errorf("the approved snapshot %s does not match its recorded hash (edited or corrupt)", loc)
 	}
-	return snapshot, recorded, nil
+	return snapshot, recorded, loc, nil
 }
 
 // ReadApprovedSnapshot returns the approved snapshot of path, or a reason
 // it cannot be used ("" with a nil snapshot means there is none yet).
 func ReadApprovedSnapshot(path, stateDir string) (snapshot []byte, problem string) {
-	s, _, err := readApproved(path, stateDir)
+	s, _, _, err := readApproved(path, stateDir)
 	switch {
 	case errors.Is(err, errNoSnapshot):
 		return nil, ""
@@ -175,19 +203,66 @@ func ReadApprovedSnapshot(path, stateDir string) (snapshot []byte, problem strin
 	return s, ""
 }
 
-// RecordApproved stores data as the approved config for path: the
-// snapshot next to it and the hash record in stateDir, both 0600.
+// RecordApproved stores data as the approved config for path: the snapshot
+// next to it when that directory is writable (the long-standing layout),
+// otherwise in stateDir (a container's read-only /etc; the record moves
+// with it), plus the hash record in stateDir. Both files are 0600. When
+// neither location is writable it fails closed, naming both paths.
 func RecordApproved(path, stateDir string, data []byte) error {
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+	// Try the long-standing layout first: the snapshot next to the config.
+	// A directory-permission error (a container's read-only /etc) falls
+	// back to stateDir; anything else is a real failure.
+	if err := writePrivate(ApprovedSnapshotPath(path), data); err != nil {
+		if !isDirUnwritable(err, filepath.Dir(path)) {
+			return fmt.Errorf("approved config: %w", err)
+		}
+		if err := os.MkdirAll(stateDir, 0o700); err != nil {
+			return fmt.Errorf("approved config: %w (config dir and state dir %s both unwritable)", err, stateDir)
+		}
+		if err := writePrivate(ApprovedStateSnapshotPath(path, stateDir), data); err != nil {
+			return fmt.Errorf("approved config: %w (tried %s and %s)", err, ApprovedSnapshotPath(path), ApprovedStateSnapshotPath(path, stateDir))
+		}
+	} else if err := syncDir(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("approved config: %w", err)
 	}
-	if err := writePrivate(ApprovedSnapshotPath(path), data); err != nil {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("approved config: %w", err)
 	}
 	if err := writePrivate(ApprovedRecordPath(path, stateDir), []byte(hashHex(data)+"\n")); err != nil {
 		return fmt.Errorf("approved config: %w", err)
 	}
 	return nil
+}
+
+// isDirUnwritable reports whether err only means that dir cannot be
+// written (it does not exist, or refuses writes): a permission error whose
+// path is dir or a temporary file created inside it.
+func isDirUnwritable(err error, dir string) bool {
+	var perr *fs.PathError
+	if !errors.As(err, &perr) {
+		return false
+	}
+	switch perr.Err {
+	case syscall.ENOENT, syscall.EACCES, syscall.EPERM, syscall.EROFS:
+	default:
+		return false
+	}
+	p := perr.Path
+	if p == dir {
+		return true
+	}
+	return filepath.Dir(p) == dir
+}
+
+// syncDir flushes a directory entry so a crash right after the rename does
+// not lose the just-written snapshot.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 func hashHex(b []byte) string {

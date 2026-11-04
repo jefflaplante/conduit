@@ -39,6 +39,7 @@ func protectConfigFiles(path, stateDir string) {
 	sandbox.Protect(target + config.BackupSuffix)
 	sandbox.Protect(config.ApprovedSnapshotPath(path))
 	sandbox.Protect(config.ApprovedRecordPath(path, stateDir))
+	sandbox.Protect(config.ApprovedStateSnapshotPath(path, stateDir))
 }
 
 // recordApprovedConfig stores data as the last approved config.

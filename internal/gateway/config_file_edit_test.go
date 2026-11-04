@@ -83,7 +83,13 @@ func TestSetConfigPath_ProtectsApprovalFiles(t *testing.T) {
 	t.Setenv("CONDUIT_DATA_DIR", "")
 	f := newReloadFixture(t)
 	state := approvedStateDir(f.gw.currentConfig().DataDir)
-	for _, p := range []string{f.path, f.path + ".bak", config.ApprovedSnapshotPath(f.path), config.ApprovedRecordPath(f.path, state)} {
+	paths := []string{
+		f.path, f.path + ".bak",
+		config.ApprovedSnapshotPath(f.path),
+		config.ApprovedRecordPath(f.path, state),
+		config.ApprovedStateSnapshotPath(f.path, state),
+	}
+	for _, p := range paths {
 		if err := sandbox.CheckWrite(p); !errors.Is(err, sandbox.ErrProtected) {
 			t.Errorf("%s not protected: %v", p, err)
 		}
