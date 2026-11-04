@@ -20,7 +20,10 @@ const defaultStatusPort = 18789
 // resolveStatusPort returns the port for the /health check. Precedence:
 //  1. --port flag if explicitly set by the user
 //  2. port from the loaded config file (--config / cfgFile)
-//  3. defaultStatusPort
+//  3. <pidfile>.port sidecar written by the running gateway (bd-j17v: lets
+//     `conduit status` from any CWD find the gateway's real port when the
+//     config file is not reachable from the current directory)
+//  4. defaultStatusPort
 func resolveStatusPort(cmd *cobra.Command) int {
 	if cmd.Flags().Changed("port") {
 		p, _ := cmd.Flags().GetInt("port")
@@ -30,6 +33,15 @@ func resolveStatusPort(cmd *cobra.Command) int {
 	// into the working directory when --config does not exist.
 	if cfg := loadConfigIfPresent(cfgFile); cfg != nil && cfg.Port > 0 {
 		return cfg.Port
+	}
+	// bd-j17v: fall back to the <pidfile>.port sidecar published by the
+	// running gateway. This rescues `conduit status` from a CWD where the
+	// relative config.json default cannot be resolved to the gateway's
+	// actual config (e.g. run from $HOME).
+	if pidPath := findPidfile(); pidPath != "" {
+		if port, err := readPortSidecar(pidPath + portSidecarSuffix); err == nil {
+			return port
+		}
 	}
 	return defaultStatusPort
 }

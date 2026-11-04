@@ -223,3 +223,31 @@ func TestWritePidfileMode(t *testing.T) {
 		t.Errorf("readPidfile = %d, %v", pid, err)
 	}
 }
+
+func TestPortSidecarRoundTrip(t *testing.T) {
+	pf := filepath.Join(t.TempDir(), pidfileName)
+	if err := writePortSidecar(pf, 24890); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readPortSidecar(pf + ".port"); err != nil || got != 24890 {
+		t.Errorf("readPortSidecar = %d, %v; want 24890, nil", got, err)
+	}
+}
+
+func TestPortSidecarInvalid(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, pidfileName+".port")
+	if err := os.WriteFile(bad, []byte("not-a-port\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPortSidecar(bad); err == nil {
+		t.Error("expected error for non-numeric sidecar content")
+	}
+	if err := writePortSidecar(pfName(dir), 0); err == nil {
+		t.Error("expected error writing port 0 (writePortSidecar should reject <=0)")
+	}
+}
+
+// pfName is a tiny helper so the invalid-port case exercises writePortSidecar
+// with a real path without repeating t.TempDir boilerplate.
+func pfName(dir string) string { return filepath.Join(dir, pidfileName) }

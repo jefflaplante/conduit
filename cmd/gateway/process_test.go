@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"conduit/internal/config"
+	"conduit/internal/datadir"
 
 	"github.com/spf13/cobra"
 )
@@ -162,4 +163,44 @@ func TestResolveStatusPort(t *testing.T) {
 			t.Errorf("resolveStatusPort() = %d, want 9999 (flag over config)", got)
 		}
 	})
+}
+
+// TestResolveStatusPortSidecarFallback covers the bd-j17v tier: when no
+// --port flag is set and config.json is unreachable from the CWD,
+// resolveStatusPort reads the <pidfile>.port sidecar published by the
+// running gateway instead of probing the compile-time default.
+func TestResolveStatusPortSidecarFallback(t *testing.T) {
+	withPidfileLocations(t)
+	t.Setenv("RUNTIME_DIRECTORY", "")
+	t.Setenv(datadir.EnvVar, t.TempDir())
+	origCfg := cfgFile
+	cfgFile = ""
+	t.Cleanup(func() { cfgFile = origCfg })
+
+	run, _ := withPidfileLocations(t) //nolint:dogsled // legacy path unused
+	pf := run
+	if err := writePortSidecar(pf, 24890); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Int("port", defaultStatusPort, "")
+	if got := resolveStatusPort(cmd); got != 24890 {
+		t.Errorf("resolveStatusPort() = %d, want 24890 (from sidecar)", got)
+	}
+
+	// Precedence: a loadable config still beats the sidecar.
+	cfgFile = writeTestConfig(t, 17777)
+	if got := resolveStatusPort(cmd); got != 17777 {
+		t.Errorf("resolveStatusPort() = %d, want 17777 (config beats sidecar)", got)
+	}
+	cfgFile = ""
+
+	// Garbage sidecar must not poison resolution: falls through to default.
+	if err := os.WriteFile(pf+".port", []byte("bogus"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveStatusPort(cmd); got != defaultStatusPort {
+		t.Errorf("resolveStatusPort() = %d, want default %d (bad sidecar)", got, defaultStatusPort)
+	}
 }
