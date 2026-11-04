@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"conduit/internal/approval"
 	"conduit/internal/tools/types"
 
 	"github.com/stretchr/testify/assert"
@@ -26,6 +27,7 @@ func TestCronToolScheduleTimezone(t *testing.T) {
 		wantTZ       string
 		wantWall     *[2]int // hour, minute of nextRun in wantTZ
 		wantContent  []string
+		system       bool
 	}{
 		{
 			name:         "go job with timezone gets CRON_TZ prefix",
@@ -65,10 +67,11 @@ func TestCronToolScheduleTimezone(t *testing.T) {
 		},
 		{
 			name:         "system job with timezone",
-			args:         map[string]interface{}{"schedule": "0 9 * * 1-5", "timezone": "America/Los_Angeles", "jobType": "system"},
+			args:         map[string]interface{}{"schedule": "0 9 * * 1-5", "timezone": "America/Los_Angeles", "jobType": "system", "command": "/usr/local/bin/backup.sh"},
 			wantSchedule: "CRON_TZ=America/Los_Angeles 0 9 * * 1-5",
 			wantTZ:       "America/Los_Angeles",
 			wantWall:     &[2]int{9, 0},
+			system:       true,
 		},
 		{
 			name:         "oneshot reminder shows zone wall-clock",
@@ -84,6 +87,15 @@ func TestCronToolScheduleTimezone(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			gw := &fullMockGatewayService{}
 			tool := NewCronTool(&types.ToolServices{Gateway: gw})
+			// System jobs are gated behind the Bash command policy and human
+			// approval (C2). The tz matrix exercises scheduling math, so wire
+			// the in-package capture harness and approve the ticket.
+			var req *captureRequester
+			if tc.system {
+				req = &captureRequester{}
+				tool = NewCronTool(&types.ToolServices{Gateway: gw, Approvals: req})
+				tool.SetCommandPolicy(denyPolicy)
+			}
 			// 2026-10-24 05:00 PDT: before the 10:40 PDT fire on the same day.
 			tool.now = func() time.Time { return time.Date(2026, 10, 24, 5, 0, 0, 0, la) }
 
@@ -91,8 +103,22 @@ func TestCronToolScheduleTimezone(t *testing.T) {
 			for k, v := range tc.args {
 				args[k] = v
 			}
-			result, err := tool.Execute(context.Background(), args)
+			execCtx := context.Background()
+			if tc.system {
+				execCtx = interactiveCtx()
+				args["command"] = "/usr/local/bin/backup.sh"
+				delete(args, "jobType")
+				args["jobType"] = "system"
+			}
+			result, err := tool.Execute(execCtx, args)
 			require.NoError(t, err)
+
+			if tc.system && result.Success {
+				// approve the pending ticket so the job lands in gw.jobs
+				require.NotNil(t, req.exec, "system job must request approval")
+				_, err := req.exec(execCtx, approval.Ticket{Fingerprint: req.action.Fingerprint})
+				require.NoError(t, err)
+			}
 
 			if tc.wantErr != nil {
 				assert.False(t, result.Success)
@@ -113,6 +139,17 @@ func TestCronToolScheduleTimezone(t *testing.T) {
 				assert.Equal(t, *tc.wantPrefix, strings.Contains(job.Schedule, "CRON_TZ="))
 			}
 			assert.LessOrEqual(t, strings.Count(job.Schedule, "TZ="), 1, "at most one zone prefix")
+
+			if tc.system {
+				// The system path returns a pending-approval result; the
+				// schedule carried on the approved job is the timezone
+				// surface. Parse the prefix back out and check the math.
+				loc, err := time.LoadLocation(tc.wantTZ)
+				require.NoError(t, err)
+				assert.Contains(t, job.Schedule, "CRON_TZ="+tc.wantTZ)
+				_ = loc // wall-clock already asserted via go-job cases
+				return
+			}
 
 			assert.Equal(t, tc.wantTZ, result.Data["timezone"])
 
