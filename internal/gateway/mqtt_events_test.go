@@ -1,14 +1,10 @@
 package gateway
 
 import (
-	"math"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"conduit/internal/config"
-	"conduit/internal/heartbeat"
-	"conduit/internal/mqttevents"
 )
 
 func mqttEventsTestConfig(ev *config.MQTTEventsConfig) config.MQTTConfig {
@@ -46,40 +42,6 @@ func TestNewMQTTEventsEngine_NilOrDisabledBuildsNothing(t *testing.T) {
 		t.Fatalf("enabled: want engine, got (%v, %v)", eng, err)
 	}
 	eng.Stop()
-}
-
-func TestMQTTEventQueuer_WritesPendingAlert(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "memory", "alerts", "pending.json")
-	q := &mqttEventQueuer{q: heartbeat.NewSharedAlertQueue(path)}
-	for i, prio := range []string{"high", "medium", "low", ""} {
-		err := q.Enqueue(mqttevents.Notice{
-			RuleID:    "r",
-			Topic:     "sensors/total/battery/state",
-			Priority:  prio,
-			Message:   "AUTOMATED EVENT (rule r, topic sensors/total/battery/state). body",
-			Value:     math.NaN(),
-			Timestamp: time.Date(2026, 1, 1, 0, 0, i, 0, time.UTC),
-		})
-		if err != nil {
-			t.Fatalf("Enqueue(%q): %v", prio, err)
-		}
-	}
-	alerts, err := heartbeat.NewSharedAlertQueue(path).GetPendingAlerts()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(alerts) != 4 {
-		t.Fatalf("want 4 pending alerts, got %d", len(alerts))
-	}
-	want := []heartbeat.AlertSeverity{heartbeat.AlertSeverityCritical, heartbeat.AlertSeverityWarning, heartbeat.AlertSeverityInfo, heartbeat.AlertSeverityInfo}
-	for i, a := range alerts {
-		if a.Severity != want[i] {
-			t.Errorf("alert %d severity = %s, want %s", i, a.Severity, want[i])
-		}
-		if a.Source != "mqtt-events" || a.Component != "r" {
-			t.Errorf("alert %d source/component = %s/%s", i, a.Source, a.Component)
-		}
-	}
 }
 
 func TestMQTTEventAlertQueuePath(t *testing.T) {

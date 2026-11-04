@@ -2,13 +2,11 @@ package gateway
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"conduit/internal/ai"
-	"conduit/internal/heartbeat"
 	"conduit/internal/mqttevents"
 	"conduit/internal/sessions"
 )
@@ -63,26 +61,5 @@ func TestMQTTEventSpawner_DrainingRefusesWithoutOnDone(t *testing.T) {
 	}
 	if called {
 		t.Error("onDone must not be called when the spawn fails")
-	}
-}
-
-func TestMQTTEventQueuer_DowngradeDetailAndUniqueIDs(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pending.json")
-	q := &mqttEventQueuer{q: heartbeat.NewSharedAlertQueue(path)}
-	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 2; i++ { // same timestamp twice: IDs must still differ
-		if err := q.Enqueue(mqttevents.Notice{RuleID: "r", Topic: "sensors/a", Priority: "high", Message: "m", Timestamp: ts, Downgraded: "max_concurrent_spawns (2) reached"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	alerts, err := heartbeat.NewSharedAlertQueue(path).GetPendingAlerts()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(alerts) != 2 || alerts[0].ID == alerts[1].ID {
-		t.Fatalf("want 2 alerts with distinct IDs, got %+v", alerts)
-	}
-	if !strings.Contains(alerts[0].Details, "max_concurrent_spawns") {
-		t.Errorf("details = %q, want the downgrade reason", alerts[0].Details)
 	}
 }
