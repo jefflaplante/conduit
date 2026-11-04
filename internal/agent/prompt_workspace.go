@@ -80,6 +80,8 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 	}
 
 	securityCtx := workspaceSecurityContext(session)
+	sessionType := securityCtx.SessionType
+	sessionKey := securityCtx.SessionID
 
 	bundle, err := pb.workspaceContext.LoadContext(ctx, securityCtx)
 	if err != nil || len(bundle.Files) == 0 {
