@@ -296,14 +296,20 @@ func runEvalRunner(cmd *cobra.Command) (*eval.Summary, error) {
 		if strings.TrimSpace(evalLiveModel) == "" {
 			return nil, fmt.Errorf("--mode live requires --live-model (e.g. --live-model provider/model)")
 		}
-		cfg, err := loadExistingConfig(cfgFile)
+		var cfg *config.Config
+		cfg, err = loadExistingConfig(cfgFile)
 		if err != nil {
 			return nil, err
 		}
 		// Same provider wiring as the judge (evalProviderFromConfig) and the
 		// same constructors the router uses: live eval traffic rides the
 		// identical client code path as production traffic.
-		provider, err := evalProviderFromConfig(cfg, evalLiveProvider, evalLiveModel)
+		// Both cfg and provider are declared separately so err stays the
+		// function-scoped one — a `x, err := ...` here shadows it, and the
+		// shared post-switch check below would swallow live-run failures
+		// (staticcheck SA4006, CI run 41723213863).
+		var provider ai.Provider
+		provider, err = evalProviderFromConfig(cfg, evalLiveProvider, evalLiveModel)
 		if err != nil {
 			return nil, err
 		}
