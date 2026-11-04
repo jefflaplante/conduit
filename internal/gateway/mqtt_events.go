@@ -5,16 +5,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
-	"time"
 
 	"conduit/internal/config"
 	"conduit/internal/heartbeat"
 	"conduit/internal/mqttevents"
 )
 
-// mqttEventAlertSource is the Source of every alert the MQTT event engine
-// queues; the rule ID is the Component.
+// mqttEventAlertSource is the source of every alert the MQTT event engine
+// queues; the rule ID is carried as rule_id.
 const mqttEventAlertSource = "mqtt-events"
 
 // newMQTTEventsEngine builds the MQTT event rule engine (bd-39mx) from the
@@ -73,36 +71,6 @@ func (s *mqttEventSpawner) Spawn(ctx context.Context, req mqttevents.SpawnReques
 	return s.g.spawnSubAgent(ctx, req.Task, "", req.Model, req.Label, req.TimeoutS, ch, user, announce, req.Skills, onDone)
 }
 
-// mqttEventQueuer writes notices to the heartbeat's shared alert queue.
-type mqttEventQueuer struct {
-	q   *heartbeat.SharedAlertQueue
-	seq atomic.Uint64
-}
-
-func (m *mqttEventQueuer) Enqueue(n mqttevents.Notice) error {
-	ts := n.Timestamp
-	if ts.IsZero() {
-		ts = time.Now()
-	}
-	alert := heartbeat.Alert{
-		ID:        fmt.Sprintf("mqtt-%s-%d-%d", n.RuleID, ts.UnixNano(), m.seq.Add(1)),
-		Source:    mqttEventAlertSource,
-		Component: n.RuleID,
-		Type:      "mqtt_event",
-		Title:     fmt.Sprintf("MQTT event: rule %s on %s", n.RuleID, n.Topic),
-		Message:   n.Message,
-		Severity:  mqttEventSeverity(n.Priority),
-		Category:  "home",
-		Tags:      []string{"mqtt", n.Topic},
-		CreatedAt: ts,
-		Status:    heartbeat.AlertStatusPending,
-	}
-	if n.Downgraded != "" {
-		alert.Details = "downgraded from spawn: " + n.Downgraded
-	}
-	return m.q.AddAlert(alert)
-}
-
 // mqttEventSeverity maps rule priority to alert severity (design §5):
 // high → critical, medium → warning, anything else → info.
 func mqttEventSeverity(priority string) heartbeat.AlertSeverity {
@@ -124,7 +92,7 @@ func (g *Gateway) initMQTTEvents(cfg *config.Config, workspaceDir string) {
 	queuePath := mqttEventAlertQueuePath(workspaceDir, cfg.AgentHeartbeat)
 	eng, err := newMQTTEventsEngine(cfg.MQTT,
 		&mqttEventSpawner{g: g, ownerTarget: ownerAlertTarget(cfg.AgentHeartbeat)},
-		&mqttEventQueuer{q: heartbeat.NewSharedAlertQueue(queuePath)},
+		newMQTTEventQueuer(queuePath),
 		g.mqttService)
 	if err != nil {
 		g.logger.Error("MQTT event rules disabled", "error", err)
