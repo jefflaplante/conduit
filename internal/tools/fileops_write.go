@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"conduit/internal/sandbox"
 	"conduit/internal/tools/schema"
 	"conduit/internal/tools/types"
 )
@@ -89,6 +90,14 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 	}
 
 	resolvedPath = realPath
+
+	if err := sandbox.CheckWrite(resolvedPath); err != nil {
+		return types.NewErrorResult("path_protected", err.Error()).
+			WithParameter("path", path).
+			WithSuggestions([]string{
+				"Use the Gateway tool's update_config (config or config_file); the owner approves the diff",
+			}), nil
+	}
 
 	// Ensure directory exists
 	dir := filepath.Dir(resolvedPath)

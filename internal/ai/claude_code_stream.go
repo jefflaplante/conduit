@@ -42,6 +42,15 @@ type streamEvent struct {
 	Result    *string `json:"result,omitempty"`
 	IsError   bool    `json:"is_error,omitempty"`
 	SessionID string  `json:"session_id,omitempty"`
+
+	// ParentToolUseID is set on events from a sub-agent (Task tool) run
+	// inside the main agent's turn; null/absent for the main agent.
+	ParentToolUseID *string `json:"parent_tool_use_id,omitempty"`
+}
+
+// fromSubagent reports whether the event belongs to a sub-agent run.
+func (e *streamEvent) fromSubagent() bool {
+	return e.ParentToolUseID != nil && *e.ParentToolUseID != ""
 }
 
 // streamDelta represents the inner delta object within a stream_event.
@@ -112,6 +121,7 @@ func (u *claudeCodeUsage) toUsage() Usage {
 
 // assistantMessage represents the nested message inside an "assistant" event.
 type assistantMessage struct {
+	ID        string          `json:"id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
 	UsageRaw  json.RawMessage `json:"usage,omitempty"`
 	SessionID string          `json:"session_id,omitempty"`
@@ -146,6 +156,15 @@ type modelUsageEntry struct {
 //   - "result" — final result with text, session_id, and usage
 //   - "system/api_retry" — retry notification
 //
+// The returned Content is the run's final answer (H7): a multi-step run
+// emits interim assistant text ("Let me check the files.") before each tool
+// call, and only the last turn's text is the reply. It is, in order of
+// preference: the "result" event's text; the text of the assistant
+// message(s) after the last tool result; the text deltas streamed after the
+// last tool result. Every main-agent text delta is passed to onDelta once
+// (the complete assistant events that repeat it are not re-streamed);
+// sub-agent events (parent_tool_use_id set) are ignored.
+//
 // If the reader closes unexpectedly, the result has Partial set to true with
 // whatever content was accumulated up to that point.
 func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStreamResult, error) {
@@ -153,7 +172,19 @@ func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStre
 	// Allow lines up to 1 MB (tool_use input can be large).
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	var content strings.Builder
+	// The current segment is everything since the last tool result: the
+	// final segment holds the answer.
+	var segText strings.Builder   // assistant/message text blocks
+	var segDeltas strings.Builder // text_delta chunks
+	segSeen := map[string]bool{}  // message id + text already in segText
+	addSegText := func(msgID, text string) {
+		if text == "" || segSeen[msgID+"\x00"+text] {
+			return // cumulative re-emission of the same block
+		}
+		segSeen[msgID+"\x00"+text] = true
+		segText.WriteString(text)
+	}
+	var resultText string
 	var sessionID string
 	var usage Usage
 	var scanErr error
@@ -168,6 +199,10 @@ func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStre
 		if err := json.Unmarshal([]byte(line), &env); err != nil {
 			log.Printf("[ClaudeCodeStream] Skipping unparseable line: %v", err)
 			continue
+		}
+
+		if env.fromSubagent() {
+			continue // a sub-agent's turn is not the reply
 		}
 
 		switch env.Type {
@@ -193,13 +228,9 @@ func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStre
 							for _, b := range blocks {
 								switch b.Type {
 								case "text":
-									if b.Text != "" {
-										// In verbose mode, assistant events may arrive
-										// after stream_event deltas; only set if empty.
-										if content.Len() == 0 {
-											content.WriteString(b.Text)
-										}
-									}
+									// Repeats any deltas already streamed for
+									// this message; recorded, not re-streamed.
+									addSegText(msg.ID, b.Text)
 								case "tool_use":
 									log.Printf("[ClaudeCodeStream] Tool use: %s", b.Name)
 								}
@@ -220,9 +251,9 @@ func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStre
 			// Verbose mode: final result event with accumulated text, usage, session_id
 			var vr verboseResult
 			if err := json.Unmarshal([]byte(line), &vr); err == nil {
-				// Use result text if we haven't accumulated content from stream deltas
-				if content.Len() == 0 && vr.Result != "" {
-					content.WriteString(vr.Result)
+				// The result text is the run's final answer.
+				if vr.Result != "" {
+					resultText = vr.Result
 				}
 				if vr.SessionID != "" {
 					sessionID = vr.SessionID
@@ -257,7 +288,7 @@ func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStre
 			if env.Event != nil {
 				var sd streamDelta
 				if err := json.Unmarshal(env.Event, &sd); err == nil && sd.Delta.Type == "text_delta" {
-					content.WriteString(sd.Delta.Text)
+					segDeltas.WriteString(sd.Delta.Text)
 					if onDelta != nil {
 						onDelta(sd.Delta.Text, false)
 					}
@@ -272,12 +303,8 @@ func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStre
 					for _, b := range blocks {
 						switch b.Type {
 						case "text":
-							// Final assistant message text replaces accumulated stream content
-							// only if we haven't been streaming (i.e., content is still empty).
-							// When streaming, the text_delta events already built the content.
-							if content.Len() == 0 && b.Text != "" {
-								content.WriteString(b.Text)
-							}
+							// Complete message text; repeats any streamed deltas.
+							addSegText("", b.Text)
 						case "tool_use":
 							log.Printf("[ClaudeCodeStream] Tool use: %s", b.Name)
 						}
@@ -306,7 +333,12 @@ func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStre
 			// Rate limit status notification — informational, skip
 
 		case "user":
-			// Claude Code echoes user/tool inputs as "user" events — skip
+			// Claude Code echoes tool results as "user" events: the next
+			// assistant turn starts a new segment, so interim text before a
+			// tool call is never returned as the answer.
+			segText.Reset()
+			segDeltas.Reset()
+			clear(segSeen)
 
 		default:
 			// Check for JSON output mode result object (no "type" field, has "result")
@@ -322,8 +354,16 @@ func ParseClaudeCodeStream(r io.Reader, onDelta StreamCallback) (*ClaudeCodeStre
 
 	scanErr = scanner.Err()
 
+	content := resultText
+	if content == "" {
+		content = segText.String()
+	}
+	if content == "" {
+		content = segDeltas.String()
+	}
+
 	result := &ClaudeCodeStreamResult{
-		Content:   content.String(),
+		Content:   content,
 		SessionID: sessionID,
 		Usage:     usage,
 	}

@@ -202,8 +202,10 @@ func (p *ClaudeCodeProvider) buildCommand(ctx context.Context, userMessage strin
 	}
 
 	// Claude CLI requires --verbose when using --output-format=stream-json in print mode.
+	// --include-partial-messages adds stream_event text deltas, so the reply
+	// streams as it is generated instead of arriving whole at the end.
 	if streaming {
-		args = append(args, "--verbose")
+		args = append(args, "--verbose", "--include-partial-messages")
 	}
 
 	// Model override.

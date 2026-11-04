@@ -30,6 +30,11 @@ type MQTTConfig struct {
 	PublishAllowed  bool           `json:"publish_allowed,omitempty"`        // default false (safety)
 	TLS             *MQTTTLSConfig `json:"tls,omitempty"`
 
+	// Approval: a publish asks the owner for "YES <code>" first unless
+	// approval.required is false or an approval.exempt topic filter
+	// matches (approval.go).
+	Approval ToolApproval `json:"approval,omitempty"`
+
 	// Events is the optional event rule engine (bd-39mx). nil or
 	// enabled=false: nothing is constructed.
 	Events *MQTTEventsConfig `json:"events,omitempty"`
@@ -69,6 +74,12 @@ func (m *MQTTConfig) Validate() error {
 
 	if m.QoS < 0 || m.QoS > 2 {
 		return fmt.Errorf("mqtt: qos must be 0, 1, or 2 (got %d)", m.QoS)
+	}
+
+	for _, f := range m.Approval.Exempt {
+		if err := validateMQTTFilter(f); err != nil {
+			return fmt.Errorf("mqtt.approval.exempt: %w", err)
+		}
 	}
 
 	// Apply defaults for zero-valued fields that weren't set

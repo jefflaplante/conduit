@@ -178,12 +178,14 @@ func (r *Registry) initializeSchemaBuilder() {
 func (r *Registry) registerAllTools() {
 	var allTools []types.Tool
 
+	execTool := &ExecTool{registry: r}
+
 	// Core system tools (enhanced file operations + new memory/session tools)
 	allTools = append(allTools, []types.Tool{
 		&ReadFileTool{registry: r},
 		&WriteFileTool{registry: r},
 		core.NewEditTool(r.services),
-		&ExecTool{registry: r},
+		execTool,
 		&ListFilesTool{registry: r},
 		// Memory tools (MemorySearch only - use Read for direct file access)
 		core.NewMemorySearchTool(r.services, r.sandboxCfg),
@@ -221,10 +223,10 @@ func (r *Registry) registerAllTools() {
 		communication.NewTTSTool(r.services),
 	}...)
 
-	// Scheduling tools
-	allTools = append(allTools, []types.Tool{
-		scheduling.NewCronTool(r.services),
-	}...)
+	// Scheduling tools. System cron commands get the Bash denylist (C2).
+	cronTool := scheduling.NewCronTool(r.services)
+	cronTool.SetCommandPolicy(execTool.scheduledCommandDenial)
+	allTools = append(allTools, cronTool)
 
 	// Vision tools
 	allTools = append(allTools, []types.Tool{

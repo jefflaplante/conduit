@@ -141,7 +141,7 @@ Conversation:
 	// 4. Call router with cheap model for summarization
 	model := ce.config.Model
 	if model == "" {
-		model = "claude-haiku-4-5-20251001"
+		model = ce.defaultSummaryModel()
 	}
 
 	// Create a temporary session for summarization to avoid polluting the original
@@ -153,11 +153,19 @@ Conversation:
 	}
 	tempSession.Context["model"] = model
 
-	resp, err := ce.router.GenerateResponse(ctx, tempSession, summarizePrompt, "")
+	// A side call: no tool definitions, so the model can only answer in text.
+	resp, err := ce.router.generateResponse(ctx, tempSession, summarizePrompt, "", false)
 	if err != nil {
 		return nil, fmt.Errorf("summarization failed: %w", err)
 	}
 
+	// ApplyCompaction hard-deletes the summarized messages, so only a
+	// complete text summary may replace them (H5). An empty reply (or a
+	// silent NO_REPLY), tool calls, or a max_tokens cutoff leave history
+	// untouched.
+	if err := usableSummary(resp); err != nil {
+		return nil, fmt.Errorf("summarization unusable, history left unchanged: %w", err)
+	}
 	summary := resp.Content
 
 	// 5. conduit-31jg.21: atomically delete ONLY the summarized message IDs and
@@ -192,4 +200,33 @@ Conversation:
 		KeptCount:       len(recentMessages),
 		SummaryTokens:   len(summary) / 4, // rough estimate: 4 chars per token
 	}, nil
+}
+
+// defaultCompactionModel is the summary model when compaction.model is unset.
+const defaultCompactionModel = "claude-haiku-4-5-20251001"
+
+// defaultSummaryModel returns defaultCompactionModel when a routable
+// provider can serve it, else "" (the default provider's default model), so
+// a deployment without a routable Anthropic provider still compacts.
+func (ce *CompactionEngine) defaultSummaryModel() string {
+	if p := ce.router.ResolveProviderForModel(defaultCompactionModel); p != "" && ce.router.IsRoutable(p) {
+		return defaultCompactionModel
+	}
+	return ""
+}
+
+// usableSummary reports why resp cannot be applied as a compaction summary,
+// or nil when it can.
+func usableSummary(resp *GenerateResponse) error {
+	switch {
+	case resp == nil:
+		return errors.New("no response")
+	case len(resp.ToolCalls) > 0:
+		return fmt.Errorf("response contains %d tool call(s)", len(resp.ToolCalls))
+	case resp.FinishReason == "length" || resp.FinishReason == "max_tokens":
+		return fmt.Errorf("response truncated (finish_reason=%s)", resp.FinishReason)
+	case strings.TrimSpace(resp.Content) == "":
+		return errors.New("empty summary")
+	}
+	return nil
 }

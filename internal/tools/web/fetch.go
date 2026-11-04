@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -107,6 +108,9 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 
 	extractMode := toolargs.GetString(args, "extractMode", "markdown")
 	maxChars := toolargs.GetInt(args, "maxChars", 50000)
+	if maxChars < 0 {
+		maxChars = 0 // H8: a negative limit panicked in the truncation slice
+	}
 
 	// Validate URL
 	parsedURL, err := url.Parse(urlStr)
@@ -190,9 +194,14 @@ func (t *WebFetchTool) fetchAndExtract(ctx context.Context, urlStr, extractMode 
 	// Extract content based on content type
 	contentType := resp.Header.Get("Content-Type")
 
+	if maxChars < 0 {
+		maxChars = 0
+	}
+
 	var content string
+	var extractCapped bool
 	if strings.Contains(contentType, "text/html") {
-		content, err = t.extractFromHTML(string(body), extractMode)
+		content, extractCapped, err = t.extractFromHTMLCapped(string(body), extractMode, maxChars)
 		if err != nil {
 			return "", false, fmt.Errorf("failed to extract from HTML: %w", err)
 		}
@@ -205,8 +214,11 @@ func (t *WebFetchTool) fetchAndExtract(ctx context.Context, urlStr, extractMode 
 
 	// Truncate if needed
 	truncated := bodyTruncated
-	if len(content) > maxChars {
-		content = content[:maxChars] + "\n\n[Content truncated...]"
+	if len(content) > maxChars || extractCapped {
+		if len(content) > maxChars {
+			content = content[:maxChars]
+		}
+		content += "\n\n[Content truncated...]"
 		truncated = true
 	} else if bodyTruncated {
 		content += "\n\n[Content truncated: response exceeded size limit]"
@@ -215,12 +227,30 @@ func (t *WebFetchTool) fetchAndExtract(ctx context.Context, urlStr, extractMode 
 	return content, truncated, nil
 }
 
-// extractFromHTML extracts readable content from HTML
+// extractFromHTML extracts readable content from HTML, with no output cap.
 func (t *WebFetchTool) extractFromHTML(html, extractMode string) (string, error) {
+	content, _, err := t.extractFromHTMLCapped(html, extractMode, -1)
+	return content, err
+}
+
+// extractionCap is the raw markdown the extractor may build for a maxChars
+// limit (H8): room for cleanContent's whitespace collapse, still O(maxChars).
+func extractionCap(maxChars int) int {
+	const slack = 4096
+	if maxChars > (math.MaxInt-slack)/2 {
+		return math.MaxInt
+	}
+	return 2*maxChars + slack
+}
+
+// extractFromHTMLCapped is extractFromHTML with markdown extraction stopped
+// once it has built extractionCap(maxChars) bytes (maxChars < 0: no cap).
+// capped reports that extraction stopped early.
+func (t *WebFetchTool) extractFromHTMLCapped(html, extractMode string, maxChars int) (string, bool, error) {
 	// Parse HTML
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
-		return "", fmt.Errorf("failed to parse HTML: %w", err)
+		return "", false, fmt.Errorf("failed to parse HTML: %w", err)
 	}
 
 	// Remove unwanted elements
@@ -240,8 +270,15 @@ func (t *WebFetchTool) extractFromHTML(html, extractMode string) (string, error)
 	}
 
 	// Extract main content
+	capped := false
 	if extractMode == "markdown" {
-		content.WriteString(t.extractMarkdown(doc))
+		limit := -1
+		if maxChars >= 0 {
+			limit = extractionCap(maxChars)
+		}
+		var md string
+		md, capped = t.extractMarkdown(doc, limit)
+		content.WriteString(md)
 	} else {
 		content.WriteString(t.extractText(doc))
 	}
@@ -250,13 +287,18 @@ func (t *WebFetchTool) extractFromHTML(html, extractMode string) (string, error)
 	result := content.String()
 	result = t.cleanContent(result)
 
-	return result, nil
+	return result, capped, nil
 }
 
-// extractMarkdown converts HTML to markdown-like format
-func (t *WebFetchTool) extractMarkdown(doc *goquery.Document) string {
-	var content strings.Builder
-
+// extractMarkdown converts HTML to markdown-like format. limit < 0 means
+// no cap; otherwise extraction stops after limit bytes and capped is true.
+//
+// H8: every text node is emitted exactly once. A block element (heading,
+// p, li, blockquote) is rendered once with its whole subtree inline, and an
+// inline formatting element (a, strong/b, em/i, code) is formatted only at
+// its outermost occurrence. Previously each element re-emitted its full
+// subtree text, multiplying output by nesting depth.
+func (t *WebFetchTool) extractMarkdown(doc *goquery.Document, limit int) (string, bool) {
 	// Look for main content areas first
 	mainSelectors := []string{
 		"main", "article", ".content", ".post", ".entry", "#content", "#main",
@@ -275,49 +317,163 @@ func (t *WebFetchTool) extractMarkdown(doc *goquery.Document) string {
 		mainContent = doc.Find("body")
 	}
 
-	// Process elements
-	mainContent.Find("*").Each(func(i int, s *goquery.Selection) {
-		tag := goquery.NodeName(s)
-		text := strings.TrimSpace(s.Text())
+	out := &cappedBuilder{limit: limit}
+	mainContent.Contents().Each(func(_ int, s *goquery.Selection) {
+		mdBlock(s, out)
+	})
+	return out.String(), out.full
+}
 
+// cappedBuilder is a strings.Builder that stops growing at limit bytes
+// (limit < 0: unlimited) and records that it did.
+type cappedBuilder struct {
+	b     strings.Builder
+	limit int
+	full  bool
+}
+
+func (c *cappedBuilder) WriteString(s string) {
+	if c.full {
+		return
+	}
+	if c.limit >= 0 && c.b.Len()+len(s) > c.limit {
+		s = s[:c.limit-c.b.Len()]
+		c.full = true
+	}
+	c.b.WriteString(s)
+}
+
+func (c *cappedBuilder) String() string { return c.b.String() }
+
+// remaining is the byte budget left (-1: unlimited).
+func (c *cappedBuilder) remaining() int {
+	if c.limit < 0 {
+		return -1
+	}
+	return c.limit - c.b.Len()
+}
+
+// mdBlock renders one node at block level. Text directly inside an
+// unformatted container (div, section, ...) is not emitted, as before.
+func mdBlock(s *goquery.Selection, out *cappedBuilder) {
+	if out.full {
+		return
+	}
+	tag := goquery.NodeName(s)
+	switch tag {
+	case "#text", "#comment":
+		return
+	case "h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "blockquote":
+		inner := &cappedBuilder{limit: out.remaining()}
+		mdInlineChildren(s, inner)
+		if inner.full {
+			out.full = true // the formatted write below is cut at the cap
+		}
+		text := strings.TrimSpace(inner.String())
 		if text == "" {
 			return
 		}
-
 		switch tag {
 		case "h1":
-			content.WriteString(fmt.Sprintf("# %s\n\n", text))
+			out.WriteString("# " + text + "\n\n")
 		case "h2":
-			content.WriteString(fmt.Sprintf("## %s\n\n", text))
+			out.WriteString("## " + text + "\n\n")
 		case "h3":
-			content.WriteString(fmt.Sprintf("### %s\n\n", text))
+			out.WriteString("### " + text + "\n\n")
 		case "h4", "h5", "h6":
-			content.WriteString(fmt.Sprintf("#### %s\n\n", text))
+			out.WriteString("#### " + text + "\n\n")
 		case "p":
-			content.WriteString(fmt.Sprintf("%s\n\n", text))
-		case "a":
-			href, exists := s.Attr("href")
-			if exists && href != "" {
-				content.WriteString(fmt.Sprintf("[%s](%s) ", text, href))
-			} else {
-				content.WriteString(text + " ")
-			}
+			out.WriteString(text + "\n\n")
 		case "li":
-			content.WriteString(fmt.Sprintf("- %s\n", text))
-		case "strong", "b":
-			content.WriteString(fmt.Sprintf("**%s** ", text))
-		case "em", "i":
-			content.WriteString(fmt.Sprintf("*%s* ", text))
-		case "code":
-			content.WriteString(fmt.Sprintf("`%s` ", text))
+			out.WriteString("- " + text + "\n")
 		case "blockquote":
-			content.WriteString(fmt.Sprintf("> %s\n\n", text))
-		case "br":
-			content.WriteString("\n")
+			out.WriteString("> " + text + "\n\n")
+		}
+	case "a", "strong", "b", "em", "i", "code":
+		f, full := mdInlineFormat(s, tag, out.remaining())
+		if f != "" {
+			out.WriteString(f + " ")
+		}
+		if full {
+			out.full = true
+		}
+	case "br":
+		out.WriteString("\n")
+	default:
+		s.Contents().Each(func(_ int, c *goquery.Selection) {
+			mdBlock(c, out)
+		})
+	}
+}
+
+// mdInlineChildren renders s's children inline into out: text nodes as-is,
+// inline formatting at its outermost occurrence, nested blocks flattened.
+func mdInlineChildren(s *goquery.Selection, out *cappedBuilder) {
+	s.Contents().Each(func(_ int, c *goquery.Selection) {
+		if out.full {
+			return
+		}
+		tag := goquery.NodeName(c)
+		switch tag {
+		case "#text":
+			out.WriteString(c.Text())
+		case "#comment":
+		case "a", "strong", "b", "em", "i", "code":
+			f, full := mdInlineFormat(c, tag, out.remaining())
+			out.WriteString(f)
+			if full {
+				out.full = true
+			}
+		case "br", "p", "div", "li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6":
+			out.WriteString(" ")
+			mdInlineChildren(c, out)
+			out.WriteString(" ")
+		default:
+			mdInlineChildren(c, out)
 		}
 	})
+}
 
-	return content.String()
+// mdInlineFormat formats an inline element from its subtree's plain text
+// (read once, capped at limit bytes); nested formatting is not repeated.
+// It returns "" when the element has no text, and full when the text was
+// cut at the cap.
+func mdInlineFormat(s *goquery.Selection, tag string, limit int) (string, bool) {
+	tb := &cappedBuilder{limit: limit}
+	plainText(s, tb)
+	text := strings.TrimSpace(tb.String())
+	if text == "" {
+		return "", tb.full
+	}
+	switch tag {
+	case "a":
+		if href, ok := s.Attr("href"); ok && href != "" {
+			return "[" + text + "](" + href + ")", tb.full
+		}
+		return text, tb.full
+	case "strong", "b":
+		return "**" + text + "**", tb.full
+	case "em", "i":
+		return "*" + text + "*", tb.full
+	default: // code
+		return "`" + text + "`", tb.full
+	}
+}
+
+// plainText appends the text of s's subtree to out, stopping at its cap.
+func plainText(s *goquery.Selection, out *cappedBuilder) {
+	s.Contents().Each(func(_ int, c *goquery.Selection) {
+		if out.full {
+			return
+		}
+		switch goquery.NodeName(c) {
+		case "#text":
+			out.WriteString(c.Text())
+		case "#comment":
+		default:
+			plainText(c, out)
+		}
+	})
 }
 
 // extractText extracts plain text from HTML

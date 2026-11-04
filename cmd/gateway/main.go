@@ -128,6 +128,7 @@ func init() {
 	rootCmd.AddCommand(BrainRootCmd())
 	rootCmd.AddCommand(CronRootCmd())   // conduit-31jg.60
 	rootCmd.AddCommand(PolicyRootCmd()) // conduit-25lt.2
+	rootCmd.AddCommand(ConfigRootCmd())
 
 	// If no command is specified, default to server
 	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {
@@ -198,6 +199,13 @@ func runServer() error {
 	// cobra wrapping it in an extra "Error: ..." prefix.
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		os.Exit(1)
+	}
+
+	// The config must be the one the owner last approved (update_config or
+	// `conduit config accept`); anything else refuses to start.
+	if err := verifyApprovedConfig(cfgFile, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		os.Exit(1)
 	}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"conduit/internal/approval"
 	"conduit/internal/tools/types"
 )
 
@@ -180,7 +181,12 @@ func (t *FindTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 				searchErrors = append(searchErrors, err.Error())
 				mu.Unlock()
 			})
-			msgs, err := t.services.Searcher.SearchMessages(ctx, query, limit)
+			canRead := t.sessionReadFilter(ctx)
+			fetch := limit
+			if canRead != nil {
+				fetch = min(limit*3, 150) // over-fetch: other users' rows are dropped
+			}
+			msgs, err := t.services.Searcher.SearchMessages(ctx, query, fetch)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -188,6 +194,9 @@ func (t *FindTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 				return
 			}
 			for _, msg := range msgs {
+				if canRead != nil && !canRead(msg.SessionKey) {
+					continue
+				}
 				results = append(results, FindResult{
 					Source:      "message",
 					Score:       normalizeRank(msg.Rank),
@@ -284,6 +293,34 @@ func (t *FindTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 			"errors":       searchErrors,
 		},
 	}, nil
+}
+
+// SessionAccessChecker is implemented by the gateway: whether the turn in ctx
+// may read session sessionKey (same user, sub-agent lineage or owner; H4).
+type SessionAccessChecker interface {
+	CanAccessSession(ctx context.Context, sessionKey string) bool
+}
+
+// sessionReadFilter returns nil when the turn may search every session's
+// messages (a live human turn, the owner), else a per-session predicate. It
+// fails closed: without a checker no other session is readable (H4).
+func (t *FindTool) sessionReadFilter(ctx context.Context) func(sessionKey string) bool {
+	if o, ok := approval.OriginFrom(ctx); ok && o.Interactive {
+		return nil
+	}
+	checker, _ := t.services.Gateway.(SessionAccessChecker)
+	seen := map[string]bool{}
+	return func(key string) bool {
+		if checker == nil {
+			return false
+		}
+		ok, cached := seen[key]
+		if !cached {
+			ok = checker.CanAccessSession(ctx, key)
+			seen[key] = ok
+		}
+		return ok
+	}
 }
 
 // fallbackSearch provides basic search when FTS is unavailable.

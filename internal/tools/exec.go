@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"conduit/internal/config"
 	"conduit/internal/procutil"
 	"conduit/internal/tools/approvalgate"
 	toolargs "conduit/internal/tools/args"
@@ -180,6 +182,19 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 			}), nil
 	}
 
+	// The gateway's config file changes only through update_config, which
+	// shows the owner the diff and needs approval.
+	if why := protectedPathDenial(command, cwd); why != "" {
+		log.Printf("[Exec] DENIED command=%q reason=%q cwd=%q", logged, why, cwd)
+		return types.NewErrorResult("path_protected",
+			"Command refused: "+why+". The gateway config can only be changed through the Gateway tool's update_config action, which needs the owner's approval.").
+			WithParameter("command", command).
+			WithSuggestions([]string{
+				"Use Gateway action=update_config with config (a patch) or config_file (the whole proposed file)",
+				"Read the current config with Gateway action=config raw=true",
+			}), nil
+	}
+
 	// Audit log: command execution start
 	startTime := time.Now()
 	log.Printf("[Exec] START command=%q cwd=%q", logged, cwd)
@@ -198,6 +213,8 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (*t
 	// wait, and capped output so timeouts return and `yes` cannot OOM us.
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = cwd
+	// Marks the agent's shell: `conduit config accept` refuses to run here.
+	cmd.Env = append(os.Environ(), config.ToolShellEnv+"=1")
 	procutil.ConfigureGroupKill(cmd, 0, 0)
 	buf := procutil.NewCappedBuffer(MaxBashOutputBytes)
 	cmd.Stdout = buf

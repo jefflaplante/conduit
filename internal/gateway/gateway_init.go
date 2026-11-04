@@ -118,7 +118,8 @@ func (g *Gateway) buildToolServices(
 		visionAnalyzer = newVisionAdapter(aiRouter, cfg.AI.Vision) // no-anthropic-routing: ai.vision
 	}
 
-	// conduit-c8ct/w3l7: approval gate for K8s/SSH. Assigned only when set
+	// conduit-c8ct/w3l7: approval gate for K8s, SSH, PagerDuty,
+	// Datadog, MQTT, system cron and gateway restart. Assigned only when set
 	// so a nil *Manager never becomes a non-nil interface.
 	var approvals approval.Requester
 	if g.approvals != nil {

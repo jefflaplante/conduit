@@ -60,6 +60,19 @@ func (pb *PromptBuilder) buildSkillsSection(ctx context.Context, session *sessio
 	return fmt.Sprintf("## Skills (mandatory)\n%s", skillsContext)
 }
 
+// isSharedChat reports whether a session belongs to a chat other people can
+// read, which must not see main-only files such as MEMORY.md (H3).
+// Telegram sessions carry the chat id in UserID (ChannelID is the adapter
+// id, e.g. "telegram"): private chats are positive, groups, supergroups
+// (-100...) and channels negative. Any UserID with a leading '-' is treated
+// as such a chat, whatever the adapter is called.
+func isSharedChat(channelID, userID string) bool {
+	if strings.Contains(channelID, "group") || strings.Contains(channelID, "-100") {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(userID), "-")
+}
+
 // buildWorkspaceContextSection loads and formats workspace files
 func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, session *sessions.Session) string {
 	if pb.workspaceContext == nil {
@@ -67,8 +80,6 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 	}
 
 	securityCtx := workspaceSecurityContext(session)
-	sessionType := securityCtx.SessionType
-	sessionKey := securityCtx.SessionID
 
 	bundle, err := pb.workspaceContext.LoadContext(ctx, securityCtx)
 	if err != nil || len(bundle.Files) == 0 {
@@ -171,7 +182,7 @@ func workspaceSecurityContext(session *sessions.Session) workspace.SecurityConte
 		sc.ChannelID = session.ChannelID
 		sc.UserID = session.UserID
 		sc.SessionID = session.Key
-		if strings.Contains(sc.ChannelID, "group") || strings.Contains(sc.ChannelID, "-100") {
+		if isSharedChat(sc.ChannelID, sc.UserID) {
 			sc.SessionType = "shared"
 		}
 	}

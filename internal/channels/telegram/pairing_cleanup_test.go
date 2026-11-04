@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/go-telegram/bot"
+
+	"conduit/internal/database"
 )
 
 // conduit-3kgo: Start removes pairing codes that expired while the adapter
@@ -16,16 +18,16 @@ func TestAdapterStart_CleansUpExpiredPairingCodes(t *testing.T) {
 	pm, db := setupTestPairingManager(t)
 
 	now := time.Now()
-	insert := func(code, user string, expires time.Time, active bool) {
+	insert := func(code, user string, expires time.Time, active bool, status string) {
 		t.Helper()
-		if _, err := db.Exec(`INSERT INTO telegram_pairings (code, user_id, created_at, expires_at, is_active, metadata) VALUES (?, ?, ?, ?, ?, '{}')`,
-			code, user, now.Add(-2*time.Hour), expires, active); err != nil {
+		if _, err := db.Exec(`INSERT INTO telegram_pairings (code, user_id, created_at, expires_at, is_active, status, metadata) VALUES (?, ?, ?, ?, ?, ?, '{}')`,
+			code, user, database.FormatStoredTime(now.Add(-2*time.Hour)), database.FormatStoredTime(expires), active, status); err != nil {
 			t.Fatal(err)
 		}
 	}
-	insert("expired", "u1", now.Add(-time.Hour), true)
-	insert("pending", "u2", now.Add(time.Hour), true)
-	insert("paired", "u3", now.Add(-time.Hour), false)
+	insert("expired", "u1", now.Add(-time.Hour), true, PairingStatusPending)
+	insert("pending", "u2", now.Add(time.Hour), true, PairingStatusPending)
+	insert("paired", "u3", now.Add(-time.Hour), false, PairingStatusApproved)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

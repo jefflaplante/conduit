@@ -7,8 +7,19 @@ import (
 	"unicode/utf8"
 )
 
-// formatToolResultForAI formats tool results for AI consumption
+// formatToolResultForAI formats tool results for AI consumption. Results of
+// tools that return third-party content go in an untrusted-content envelope
+// (H14, execution_untrusted.go).
 func (e *ExecutionEngine) formatToolResultForAI(result *ExecutionResult) string {
+	out := e.formatToolResultBody(result)
+	if result.Result == nil && result.Error == nil {
+		return out // nothing came back from the tool
+	}
+	return wrapUntrusted(result.ToolCall.Name, out)
+}
+
+// formatToolResultBody renders the result, its error and output.
+func (e *ExecutionEngine) formatToolResultBody(result *ExecutionResult) string {
 	if result.Error != nil {
 		msg := fmt.Sprintf("Tool '%s' failed: %s", result.ToolCall.Name, result.Error.Error())
 		// conduit-31jg.47: surface output a tool returned alongside its error.

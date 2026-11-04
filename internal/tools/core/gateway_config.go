@@ -33,16 +33,37 @@ import (
 const maxShownChanges = 20
 
 func (t *GatewayTool) updateConfig(ctx context.Context, args map[string]interface{}) (*types.ToolResult, error) {
-	patch, ok := args["config"].(map[string]interface{})
-	if !ok || len(patch) == 0 {
-		return &types.ToolResult{
-			Success: false,
-			Error:   "config parameter is required for update_config action and must be a non-empty object",
-		}, nil
-	}
 	updater, ok := t.services.Gateway.(types.ConfigUpdater)
 	if !ok {
 		return &types.ToolResult{Success: false, Error: "this gateway does not support update_config"}, nil
+	}
+	patch, ok := args["config"].(map[string]interface{})
+	if file, isFile := args["config_file"].(string); isFile {
+		if ok {
+			return &types.ToolResult{Success: false, Error: "pass either config or config_file, not both"}, nil
+		}
+		editor, can := t.services.Gateway.(types.ConfigFileEditor)
+		if !can {
+			return &types.ToolResult{Success: false, Error: "this gateway does not support config_file"}, nil
+		}
+		p, err := editor.ConfigPatchFromFile(ctx, file)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: fmt.Sprintf("configuration update rejected (nothing changed): %v", err)}, nil
+		}
+		if len(p) == 0 {
+			return &types.ToolResult{
+				Success: true,
+				Content: "No change: the proposed file matches the config file on disk.",
+				Data:    map[string]interface{}{"action": "update_config"},
+			}, nil
+		}
+		patch, ok = p, true
+	}
+	if !ok || len(patch) == 0 {
+		return &types.ToolResult{
+			Success: false,
+			Error:   "config (a non-empty object) or config_file (the whole proposed file) is required for update_config",
+		}, nil
 	}
 
 	// Freeze the patch: the approval is bound to these exact bytes, and the
@@ -91,6 +112,25 @@ func (t *GatewayTool) updateConfig(ctx context.Context, args map[string]interfac
 	return approvalgate.Request(ctx, t.approver(), configOperation(plan, string(frozen)), run), nil
 }
 
+// getConfigFile returns the config file itself, secrets redacted, for the
+// agent to edit and propose back as config_file.
+func (t *GatewayTool) getConfigFile(ctx context.Context) (*types.ToolResult, error) {
+	editor, ok := t.services.Gateway.(types.ConfigFileEditor)
+	if !ok {
+		return &types.ToolResult{Success: false, Error: "this gateway does not support raw config"}, nil
+	}
+	file, err := editor.RedactedConfigFile(ctx)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("failed to read config file: %v", err)}, nil
+	}
+	return &types.ToolResult{
+		Success: true,
+		Content: file + "\n\nTo change it, edit this JSON and pass it as config_file to update_config. " +
+			"Leave \"[redacted]\" values unchanged to keep the current secrets.",
+		Data: map[string]interface{}{"action": "config", "raw": true},
+	}, nil
+}
+
 func (t *GatewayTool) approver() approval.Requester {
 	if t.services == nil {
 		return nil
@@ -101,7 +141,13 @@ func (t *GatewayTool) approver() approval.Requester {
 // configOperation describes a planned update for the approval prompt.
 func configOperation(plan *types.ConfigUpdateResult, frozen string) approvalgate.Operation {
 	keys := make([]string, 0, len(plan.Changes))
-	fields := make([]approval.Field, 0, len(plan.Changes)+1)
+	fields := make([]approval.Field, 0, len(plan.Changes)+2)
+	if len(plan.Warnings) > 0 {
+		fields = append(fields, approval.Field{
+			Name:  "WARNING",
+			Value: "LOWERS HUMAN APPROVAL: " + approvalgate.Clip(strings.Join(plan.Warnings, "; "), 600),
+		})
+	}
 	for i, c := range plan.Changes {
 		keys = append(keys, c.Path)
 		if i >= maxShownChanges {
@@ -113,10 +159,17 @@ func configOperation(plan *types.ConfigUpdateResult, frozen string) approvalgate
 		}
 		if c.SecuritySensitive {
 			note += ", SECURITY-SENSITIVE"
+			if c.Risk != "" {
+				note += ": " + c.Risk
+			}
+		}
+		value := approvalgate.Clip(c.Value, 300)
+		if c.OldValue != "" {
+			value = approvalgate.Clip(c.OldValue, 150) + " -> " + value
 		}
 		fields = append(fields, approval.Field{
 			Name:  c.Path,
-			Value: approvalgate.Clip(c.Value, 300) + " (" + note + ")",
+			Value: value + " (" + note + ")",
 		})
 	}
 	if len(plan.Changes) > maxShownChanges {
@@ -127,9 +180,15 @@ func configOperation(plan *types.ConfigUpdateResult, frozen string) approvalgate
 	}
 	sort.Strings(keys)
 	summary := "the configuration change to " + approvalgate.Clip(strings.Join(keys, ", "), 200)
+	title := fmt.Sprintf("Change gateway configuration (%d key(s))", len(plan.Changes))
+	if len(plan.Warnings) > 0 {
+		title += ", LOWERS HUMAN APPROVAL"
+	} else if len(plan.SecurityKeys()) > 0 {
+		title += ", SECURITY-SENSITIVE"
+	}
 	return approvalgate.Operation{
 		Kind:   types.ConfigUpdateApprovalKind,
-		Title:  fmt.Sprintf("Change gateway configuration (%d key(s))", len(plan.Changes)),
+		Title:  title,
 		Fields: fields,
 		Params: map[string]string{"patch": frozen},
 		Audit: map[string]string{
@@ -137,6 +196,7 @@ func configOperation(plan *types.ConfigUpdateResult, frozen string) approvalgate
 			"live_keys":      approvalgate.Clip(strings.Join(plan.LiveKeys(), ","), 500),
 			"restart_keys":   approvalgate.Clip(strings.Join(plan.RestartKeys(), ","), 500),
 			"security_keys":  approvalgate.Clip(strings.Join(plan.SecurityKeys(), ","), 500),
+			"warnings":       approvalgate.Clip(strings.Join(plan.Warnings, "; "), 500),
 			"requested_via":  "Gateway.update_config",
 			"approval_scope": "all update_config changes",
 		},
@@ -147,6 +207,7 @@ func configOperation(plan *types.ConfigUpdateResult, frozen string) approvalgate
 			"live":               plan.LiveKeys(),
 			"requires_restart":   plan.RestartKeys(),
 			"security_sensitive": plan.SecurityKeys(),
+			"approval_warnings":  plan.Warnings,
 			"unchanged":          plan.Unchanged,
 		},
 	}

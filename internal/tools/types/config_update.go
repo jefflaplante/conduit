@@ -40,9 +40,14 @@ type ConfigChange struct {
 	Value string `json:"value"`
 	// Mode is ConfigChangeLive or ConfigChangeRestart.
 	Mode string `json:"mode"`
+	// OldValue is the display rendering of the value before the change;
+	// "(absent)" for a new key.
+	OldValue string `json:"old_value,omitempty"`
 	// SecuritySensitive marks keys that affect sandboxing, credentials,
-	// provider endpoints, authentication, approvals or remote access.
-	SecuritySensitive bool `json:"security_sensitive,omitempty"`
+	// provider endpoints, authentication, approvals or remote access
+	// (config.KeyRisk); Risk says why.
+	SecuritySensitive bool   `json:"security_sensitive,omitempty"`
+	Risk              string `json:"risk,omitempty"`
 }
 
 // ConfigUpdateResult describes a planned or applied config update.
@@ -57,6 +62,10 @@ type ConfigUpdateResult struct {
 	BackupPath string `json:"backup_path,omitempty"`
 	// Readback maps each changed key to its redacted value as saved.
 	Readback map[string]interface{} `json:"readback,omitempty"`
+	// Warnings lists, in plain words, how the update makes tools ask a
+	// human less often (config.ApprovalWeakenings). The approval prompt
+	// shows them first.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // LiveKeys returns the paths of changes applied (or to be applied) live.
@@ -90,4 +99,18 @@ func (r *ConfigUpdateResult) keys(mode string) []string {
 		}
 	}
 	return out
+}
+
+// ConfigFileEditor is the optional extension behind update_config's
+// full-file mode: the agent reads the redacted config file, edits it, and
+// proposes the whole file back. The proposal is turned into a patch and
+// goes through PlanConfigUpdate, approval and ApplyConfigUpdate like any
+// other update; nothing is written here.
+type ConfigFileEditor interface {
+	// RedactedConfigFile returns the config file as JSON with secrets
+	// replaced by the redaction marker.
+	RedactedConfigFile(ctx context.Context) (string, error)
+	// ConfigPatchFromFile diffs a proposed full config file against the
+	// file on disk and returns the equivalent patch (empty: no change).
+	ConfigPatchFromFile(ctx context.Context, proposed string) (map[string]interface{}, error)
 }

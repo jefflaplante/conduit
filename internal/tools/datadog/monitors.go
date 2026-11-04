@@ -140,6 +140,10 @@ func (t *MonitorTool) Description() string {
 - mute_monitor: Mute a monitor (requires confirmation) — parameters: monitor_id, scope (optional), end (optional timestamp)
 - unmute_monitor: Unmute a monitor (requires confirmation)
 
+mute_monitor and unmute_monitor do not run immediately: the owner gets an
+approval prompt in chat and the change is made only if they approve. They
+are refused in non-interactive turns (cron, heartbeat, sub-agents).
+
 Monitors in Alert or Warn state are highlighted in output. Useful for heartbeat checks ("any DD monitors firing?").`
 }
 
@@ -181,7 +185,7 @@ func (t *MonitorTool) Parameters() map[string]interface{} {
 			},
 			"confirmed": map[string]interface{}{
 				"type":        "boolean",
-				"description": "Confirmation for modify operations (mute/unmute). Set to true to proceed.",
+				"description": "Confirmation for modify operations (mute/unmute). Required for them, but the owner must still approve the change.",
 			},
 		},
 		"required": []string{"action"},
@@ -241,10 +245,9 @@ func (t *MonitorTool) Execute(ctx context.Context, args map[string]interface{}) 
 		return t.executeGetMonitor(ctx, args)
 	case "get_monitor_status":
 		return t.executeGetMonitorStatus(ctx, args)
-	case "mute_monitor":
-		return t.executeMuteMonitor(ctx, args)
-	case "unmute_monitor":
-		return t.executeUnmuteMonitor(ctx, args)
+	case "mute_monitor", "unmute_monitor":
+		// H11: human approval gates these (monitors_approval.go).
+		return t.gateMonitorWrite(ctx, action, args)
 	default:
 		return &types.ToolResult{
 			Success: false,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"conduit/internal/protocol"
@@ -50,23 +51,16 @@ func (g *Gateway) GetAvailableTargets() []string {
 // with source:inter_session metadata. No session wakeup — the message is
 // queued and processed on the target session's next activation.
 // Use SendToSessionWake to also trigger immediate processing.
+//
+// H4: the requesting turn must be allowed to reach the target
+// (authorizeSessionAccess: same user, sub-agent lineage, or the owner).
 func (g *Gateway) SendToSession(ctx context.Context, sessionKey, label, message string) error {
-	// Resolve target session
-	var targetSession *sessions.Session
-	var err error
-
-	if sessionKey != "" {
-		targetSession, err = g.sessions.GetSession(sessionKey)
-		if err != nil {
-			return fmt.Errorf("session not found by key %q: %w", sessionKey, err)
-		}
-	} else if label != "" {
-		targetSession, err = g.sessions.GetSessionByLabel(label)
-		if err != nil {
-			return fmt.Errorf("session not found by label %q: %w", label, err)
-		}
-	} else {
-		return fmt.Errorf("either sessionKey or label must be provided")
+	targetSession, err := g.resolveTargetSession(sessionKey, label)
+	if err != nil {
+		return err
+	}
+	if err := g.authorizeSessionAccess(ctx, targetSession); err != nil {
+		return err
 	}
 
 	// Build metadata for inter-session message
@@ -97,38 +91,68 @@ func (g *Gateway) SendToSession(ctx context.Context, sessionKey, label, message 
 // to wake up and process it immediately. This is equivalent to SendToSession followed
 // by an immediate re-activation of the target session's AI processing loop.
 //
-// A recursion guard (wake_depth in session context) limits nesting to 3 levels deep
-// to prevent infinite wakeup loops when sessions message each other.
+// The same authorization as SendToSession applies (H4). The wake carries the
+// sending turn's wake depth + 1; a wake deeper than maxWakeDepth is refused,
+// so sessions waking each other stop after maxWakeDepth hops.
 func (g *Gateway) SendToSessionWake(ctx context.Context, sessionKey, label, message string) error {
-	return g.sendToSessionWakeWithSource(ctx, sessionKey, label, message, "")
+	targetSession, err := g.resolveTargetSession(sessionKey, label)
+	if err != nil {
+		return err
+	}
+	if err := g.authorizeSessionAccess(ctx, targetSession); err != nil {
+		return err
+	}
+	return g.deliverWake(ctx, targetSession, message, "")
 }
 
 // sendToSessionWakeWithSource is the internal variant that lets the caller tag the
 // wake with a specific source (e.g. "sub_agent_callback") so the target session's
 // prompt/processing path can tell it apart from a plain inter-session send.
-// When wakeSource is empty the tag defaults to "inter_session".
+// When wakeSource is empty the tag defaults to "inter_session". Internal
+// callers (sub-agent results) wake the parent that spawned them, so no
+// authorization check applies here.
 func (g *Gateway) sendToSessionWakeWithSource(ctx context.Context, sessionKey, label, message, wakeSource string) error {
-	// Resolve target session
-	var targetSession *sessions.Session
-	var err error
+	targetSession, err := g.resolveTargetSession(sessionKey, label)
+	if err != nil {
+		return err
+	}
+	return g.deliverWake(ctx, targetSession, message, wakeSource)
+}
 
-	if sessionKey != "" {
-		targetSession, err = g.sessions.GetSession(sessionKey)
+// resolveTargetSession looks a session up by key, else by label.
+func (g *Gateway) resolveTargetSession(sessionKey, label string) (*sessions.Session, error) {
+	switch {
+	case sessionKey != "":
+		s, err := g.sessions.GetSession(sessionKey)
 		if err != nil {
-			return fmt.Errorf("session not found by key %q: %w", sessionKey, err)
+			return nil, fmt.Errorf("session not found by key %q: %w", sessionKey, err)
 		}
-	} else if label != "" {
-		targetSession, err = g.sessions.GetSessionByLabel(label)
+		return s, nil
+	case label != "":
+		s, err := g.sessions.GetSessionByLabel(label)
 		if err != nil {
-			return fmt.Errorf("session not found by label %q: %w", label, err)
+			return nil, fmt.Errorf("session not found by label %q: %w", label, err)
 		}
-	} else {
-		return fmt.Errorf("either sessionKey or label must be provided")
+		return s, nil
+	default:
+		return nil, fmt.Errorf("either sessionKey or label must be provided")
+	}
+}
+
+// deliverWake stores message in targetSession tagged with the next wake
+// depth and signals the wake listener.
+func (g *Gateway) deliverWake(ctx context.Context, targetSession *sessions.Session, message, wakeSource string) error {
+	depth := wakeDepthFrom(ctx) + 1
+	if depth > maxWakeDepth {
+		log.Printf("[SendToSessionWake] Refused wake of session %s: wake depth %d exceeds %d", targetSession.Key, depth, maxWakeDepth)
+		return fmt.Errorf("wake refused: this turn is already %d wakes deep (max %d), so sessions waking each other stop here; "+
+			"send without wake=true to leave a message for the session's next activation", depth-1, maxWakeDepth)
 	}
 
 	// Build metadata for inter-session message
 	metadata := map[string]string{
-		"source": "inter_session",
+		"source":      "inter_session",
+		metaWakeDepth: strconv.Itoa(depth),
 	}
 	if wakeSource != "" {
 		metadata["wake_source"] = wakeSource
@@ -141,12 +165,11 @@ func (g *Gateway) sendToSessionWakeWithSource(ctx context.Context, sessionKey, l
 	}
 
 	// Add message to target session as "user" role
-	_, err = g.sessions.AddMessage(targetSession.Key, "user", message, metadata)
-	if err != nil {
+	if _, err := g.sessions.AddMessage(targetSession.Key, "user", message, metadata); err != nil {
 		return fmt.Errorf("failed to add message to session %q: %w", targetSession.Key, err)
 	}
 
-	log.Printf("[SendToSessionWake] Message delivered to session %s, signalling wake (source=%q)", targetSession.Key, wakeSource)
+	log.Printf("[SendToSessionWake] Message delivered to session %s, signalling wake (source=%q, depth=%d)", targetSession.Key, wakeSource, depth)
 
 	g.enqueueSessionWake(targetSession.Key)
 

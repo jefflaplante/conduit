@@ -442,13 +442,17 @@ func newAcceptNewCallback(knownHostsFile string) (ssh.HostKeyCallback, error) {
 		known:          make(map[string]ssh.PublicKey),
 	}
 
-	// Try to load existing known hosts
+	// Load existing known hosts. A file that exists but cannot be loaded
+	// fails closed like the strict callback (H9): falling back to accepting
+	// any key would trust a MITM key for a host the file pins.
 	if _, err := os.Stat(knownHostsFile); err == nil {
-		// File exists, try to use strict callback for existing keys
-		if strictCb, err := knownhosts.New(knownHostsFile); err == nil {
-			// Wrap the strict callback
-			return cb.withExistingKnownHosts(strictCb), nil
+		strictCb, err := knownhosts.New(knownHostsFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load known_hosts %s: %w (accept-new needs the existing host keys; fix or remove the bad line)", knownHostsFile, err)
 		}
+		return cb.withExistingKnownHosts(strictCb), nil
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to read known_hosts %s: %w", knownHostsFile, err)
 	}
 
 	return cb.callback, nil
@@ -501,15 +505,14 @@ func (c *acceptNewCallback) acceptAndSave(hostname string, remote net.Addr, key 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Save to known_hosts first: a key that cannot be recorded is not
+	// trusted, or every later connection would accept a new key again (H9).
+	if err := c.appendToKnownHosts(hostname, key); err != nil {
+		return fmt.Errorf("refusing new host key for %s: %w", hostname, err)
+	}
+
 	// Remember this key for this session
 	c.known[hostname] = key
-
-	// Try to save to known_hosts file
-	if err := c.appendToKnownHosts(hostname, key); err != nil {
-		// Log but don't fail - we still accept the key
-		// In production, you'd want proper logging here
-		_ = err
-	}
 
 	return nil
 }

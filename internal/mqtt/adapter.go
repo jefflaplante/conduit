@@ -26,6 +26,9 @@ func (a *ServiceAdapter) Status() types.MQTTServiceStatus {
 		ActiveTopics:     s.ActiveTopics,
 		TotalEvents:      s.TotalEvents,
 		PublishAllowed:   s.PublishAllowed,
+
+		ApprovalDisabled:     s.ApprovalDisabled,
+		ApprovalExemptTopics: s.ApprovalExemptTopics,
 	}
 }
 

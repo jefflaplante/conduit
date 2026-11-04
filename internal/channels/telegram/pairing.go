@@ -11,6 +11,7 @@ import (
 	"github.com/go-telegram/bot/models"
 	"github.com/google/uuid"
 
+	"conduit/internal/database"
 	"conduit/internal/ratelimit"
 )
 
@@ -63,6 +64,15 @@ Please wait before requesting another pairing code. Try again in a moment.`
 	PairingRateCleanupInterval = 5 * time.Minute
 )
 
+// Pairing statuses (telegram_pairings.status, gateway DB migration 13).
+// Only an approved row pairs a user; is_active mirrors pending (1) vs the
+// two finished states (0) for older readers.
+const (
+	PairingStatusPending    = "pending"
+	PairingStatusApproved   = "approved"
+	PairingStatusSuperseded = "superseded"
+)
+
 // PairingRecord represents a pairing code record in the database
 type PairingRecord struct {
 	Code      string    `json:"code"`
@@ -106,11 +116,12 @@ func (p *PairingManager) GeneratePairingCode(userID string) (string, error) {
 	now := time.Now()
 	expiresAt := now.Add(PairingCodeExpiration)
 
-	// Insert new pairing record
+	// Insert new pairing record. Times are bound in the canonical UTC
+	// layout so SQL comparisons with "now" are chronological (L13).
 	_, err := p.db.Exec(`
-		INSERT INTO telegram_pairings (code, user_id, created_at, expires_at, is_active, metadata)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, code, userID, now, expiresAt, true, "{}")
+		INSERT INTO telegram_pairings (code, user_id, created_at, expires_at, is_active, status, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, code, userID, database.FormatStoredTime(now), database.FormatStoredTime(expiresAt), true, PairingStatusPending, "{}")
 
 	if err != nil {
 		return "", fmt.Errorf("failed to create pairing code: %w", err)
@@ -127,7 +138,7 @@ func (p *PairingManager) ValidatePairingCode(code string) (*PairingRecord, error
 	row := p.db.QueryRow(`
 		SELECT code, user_id, created_at, expires_at, is_active
 		FROM telegram_pairings
-		WHERE code = ? AND is_active = 1
+		WHERE code = ? AND is_active = 1 AND status = 'pending'
 	`, code)
 
 	err := row.Scan(
@@ -161,11 +172,12 @@ func (p *PairingManager) ApprovePairing(code string) error {
 		return fmt.Errorf("cannot approve pairing: %w", err)
 	}
 
-	// Deactivate the pairing code (mark as used)
+	// Record the approval; the pending guard loses to a concurrent
+	// supersede instead of approving a replaced code.
 	result, err := p.db.Exec(`
-		UPDATE telegram_pairings 
-		SET is_active = 0 
-		WHERE code = ? AND is_active = 1
+		UPDATE telegram_pairings
+		SET is_active = 0, status = 'approved'
+		WHERE code = ? AND is_active = 1 AND status = 'pending'
 	`, code)
 
 	if err != nil {
@@ -185,14 +197,15 @@ func (p *PairingManager) ApprovePairing(code string) error {
 	return nil
 }
 
-// IsUserPaired checks if a user ID has any approved (used) pairing codes
+// IsUserPaired checks if a user ID has an admin-approved pairing code.
+// Superseded and expired codes never count (C1).
 func (p *PairingManager) IsUserPaired(userID string) (bool, error) {
 	var count int
 
 	err := p.db.QueryRow(`
 		SELECT COUNT(*)
 		FROM telegram_pairings
-		WHERE user_id = ? AND is_active = 0
+		WHERE user_id = ? AND status = 'approved'
 	`, userID).Scan(&count)
 
 	if err != nil {
@@ -209,10 +222,10 @@ func (p *PairingManager) GetActivePairingCode(userID string) (*PairingRecord, er
 	row := p.db.QueryRow(`
 		SELECT code, user_id, created_at, expires_at, is_active
 		FROM telegram_pairings
-		WHERE user_id = ? AND is_active = 1 AND expires_at > ?
+		WHERE user_id = ? AND is_active = 1 AND status = 'pending' AND expires_at > ?
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, userID, time.Now())
+	`, userID, database.FormatStoredTime(time.Now()))
 
 	err := row.Scan(
 		&record.Code,
@@ -305,7 +318,7 @@ func (p *PairingManager) CleanupExpiredCodes() error {
 	result, err := p.db.Exec(`
 		DELETE FROM telegram_pairings 
 		WHERE expires_at < ? AND is_active = 1
-	`, time.Now())
+	`, database.FormatStoredTime(time.Now()))
 
 	if err != nil {
 		return fmt.Errorf("failed to cleanup expired codes: %w", err)
@@ -412,11 +425,11 @@ func (p *PairingManager) HandlePairingForUser(ctx context.Context, telegramBot *
 	return false, nil
 }
 
-// deactivateUserCodes deactivates all active pairing codes for a user
+// deactivateUserCodes marks all pending pairing codes for a user superseded
 func (p *PairingManager) deactivateUserCodes(userID string) error {
 	_, err := p.db.Exec(`
-		UPDATE telegram_pairings 
-		SET is_active = 0 
+		UPDATE telegram_pairings
+		SET is_active = 0, status = 'superseded'
 		WHERE user_id = ? AND is_active = 1
 	`, userID)
 
@@ -432,7 +445,7 @@ func (p *PairingManager) GetPairingStats() (map[string]interface{}, error) {
 	err := p.db.QueryRow(`
 		SELECT COUNT(*) FROM telegram_pairings 
 		WHERE is_active = 1 AND expires_at > ?
-	`, time.Now()).Scan(&activeCodes)
+	`, database.FormatStoredTime(time.Now())).Scan(&activeCodes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count active codes: %w", err)
 	}
@@ -443,7 +456,7 @@ func (p *PairingManager) GetPairingStats() (map[string]interface{}, error) {
 	err = p.db.QueryRow(`
 		SELECT COUNT(*) FROM telegram_pairings 
 		WHERE is_active = 1 AND expires_at <= ?
-	`, time.Now()).Scan(&expiredCodes)
+	`, database.FormatStoredTime(time.Now())).Scan(&expiredCodes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count expired codes: %w", err)
 	}
@@ -453,8 +466,8 @@ func (p *PairingManager) GetPairingStats() (map[string]interface{}, error) {
 	var approvedPairings int
 	err = p.db.QueryRow(`
 		SELECT COUNT(*) FROM telegram_pairings 
-		WHERE is_active = 0
-	`, time.Now()).Scan(&approvedPairings)
+		WHERE status = 'approved'
+	`).Scan(&approvedPairings)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count approved pairings: %w", err)
 	}
@@ -464,7 +477,7 @@ func (p *PairingManager) GetPairingStats() (map[string]interface{}, error) {
 	var pairedUsers int
 	err = p.db.QueryRow(`
 		SELECT COUNT(DISTINCT user_id) FROM telegram_pairings 
-		WHERE is_active = 0
+		WHERE status = 'approved'
 	`).Scan(&pairedUsers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count paired users: %w", err)

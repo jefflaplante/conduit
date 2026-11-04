@@ -22,6 +22,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 			created_at TEXT NOT NULL,
 			expires_at TEXT NOT NULL,
 			is_active INTEGER NOT NULL DEFAULT 1,
+			status TEXT NOT NULL DEFAULT 'pending',
 			metadata TEXT DEFAULT '{}'
 		)
 	`)
@@ -33,15 +34,17 @@ func setupTestDB(t *testing.T) *sql.DB {
 // Helper to insert a pairing with specific times using UTC
 // SQLite datetime('now') returns UTC so we must use UTC times
 func insertPairing(t *testing.T, db *sql.DB, code, userID string, createdAt, expiresAt time.Time, isActive bool) {
-	activeInt := 0
+	// Inactive rows are approved ones; superseded rows are covered in
+	// pairing_status_test.go.
+	activeInt, status := 0, PairingStatusApproved
 	if isActive {
-		activeInt = 1
+		activeInt, status = 1, PairingStatusPending
 	}
 	// Convert to UTC for SQLite compatibility
 	_, err := db.Exec(`
-		INSERT INTO telegram_pairings (code, user_id, created_at, expires_at, is_active, metadata)
-		VALUES (?, ?, ?, ?, ?, '{}')
-	`, code, userID, createdAt.UTC().Format("2006-01-02 15:04:05"), expiresAt.UTC().Format("2006-01-02 15:04:05"), activeInt)
+		INSERT INTO telegram_pairings (code, user_id, created_at, expires_at, is_active, status, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, '{}')
+	`, code, userID, createdAt.UTC().Format("2006-01-02 15:04:05"), expiresAt.UTC().Format("2006-01-02 15:04:05"), activeInt, status)
 	require.NoError(t, err)
 }
 
@@ -105,6 +108,7 @@ func TestPairingStorage_ApprovePairing(t *testing.T) {
 	retrieved, err := storage.GetPairingByCode("test-code-approve")
 	require.NoError(t, err)
 	assert.False(t, retrieved.IsActive)
+	assert.Equal(t, PairingStatusApproved, retrieved.Status)
 }
 
 func TestPairingStorage_ApprovePairing_NotFound(t *testing.T) {

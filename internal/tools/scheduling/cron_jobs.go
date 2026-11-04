@@ -123,6 +123,15 @@ func (t *CronTool) scheduleJob(ctx context.Context, args map[string]interface{})
 		}
 	}
 
+	if err := validateJobFields(job); err != nil {
+		return &types.ToolResult{Success: false, Error: err.Error()}, nil
+	}
+
+	// System jobs land in the user's crontab: Bash policy + human approval (C2).
+	if job.Type == "system" {
+		return t.scheduleSystemJob(ctx, job), nil
+	}
+
 	// Compute the next fire time before creating the job so a bad schedule
 	// fails fast without leaving an orphan behind.
 	next, err := nextRunTime(job.Schedule, job.Type, t.clock())

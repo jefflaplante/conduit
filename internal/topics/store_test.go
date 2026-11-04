@@ -64,6 +64,45 @@ func TestNormalizeSlug(t *testing.T) {
 	}
 }
 
+// H1: CreateOwned records the owning chat; every read path returns it, and
+// Create makes an unscoped owner topic.
+func TestStore_CreateOwned(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.CreateOwned("alpha", "Alpha", "topic_a", "tui_bot", "bot"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create("beta", "Beta", "topic_b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPointer("tui_bot:bot", "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	get, _ := s.Get("alpha")
+	bySess, _ := s.GetBySession("topic_a")
+	active, _ := s.Active("tui_bot:bot")
+	list, _ := s.List()
+	var listed *Topic
+	for _, tp := range list {
+		if tp.Slug == "alpha" {
+			listed = tp
+		}
+	}
+	for name, tp := range map[string]*Topic{"Get": get, "GetBySession": bySess, "Active": active, "List": listed} {
+		if tp == nil || tp.OwnerChannel != "tui_bot" || tp.OwnerUser != "bot" || !tp.Scoped() {
+			t.Errorf("%s = %+v, want owner tui_bot/bot", name, tp)
+		}
+	}
+	if b, _ := s.Get("beta"); b == nil || b.Scoped() || b.OwnerChannel != "" || b.OwnerUser != "" {
+		t.Errorf("owner topic = %+v, want unscoped", b)
+	}
+	if err := s.Rename("alpha", "gamma", "Gamma"); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := s.Get("gamma"); g == nil || g.OwnerChannel != "tui_bot" || g.OwnerUser != "bot" {
+		t.Errorf("rename dropped the owner: %+v", g)
+	}
+}
+
 func TestStore_CreateGetList(t *testing.T) {
 	s := newTestStore(t)
 

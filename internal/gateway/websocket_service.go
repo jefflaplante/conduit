@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"conduit/internal/middleware"
 )
 
 // WebSocketService owns the per-connection state for WebSocket clients:
@@ -66,6 +68,15 @@ type WebSocketService struct {
 	PongWait     time.Duration // read deadline, extended by each pong/message
 	WriteWait    time.Duration // per-write deadline
 
+	// TokenCheck re-validates a live client's token (H2): revocation, role
+	// changes and expiry happen in token storage, often from the
+	// `conduit token` CLI in another process, so the in-process OnRevoke
+	// hook alone never sees them. When set, the pump calls it every
+	// TokenRecheckInterval (default defaultWSTokenRecheck) and closes the
+	// connection with 4403 on an error. Set once before Start.
+	TokenCheck           func(*Client) error
+	TokenRecheckInterval time.Duration
+
 	// ctx is the gateway lifecycle context, bound by Start(). Used by
 	// handleClientWrite to exit on gateway shutdown and by handleClientRead's
 	// reflection deferred-cleanup. nil before Start. Guarded by ctxMu
@@ -87,7 +98,15 @@ const (
 	defaultWSPingInterval = 30 * time.Second
 	defaultWSPongWait     = 75 * time.Second
 	defaultWSWriteWait    = 10 * time.Second
+	defaultWSTokenRecheck = 30 * time.Second
 )
+
+func (s *WebSocketService) tokenRecheckInterval() time.Duration {
+	if s.TokenRecheckInterval > 0 {
+		return s.TokenRecheckInterval
+	}
+	return defaultWSTokenRecheck
+}
 
 func (s *WebSocketService) pingInterval() time.Duration {
 	if s.PingInterval > 0 {
@@ -266,6 +285,12 @@ func (s *WebSocketService) HandleClientWrite(client *Client) {
 	ticker := time.NewTicker(s.pingInterval())
 	defer ticker.Stop()
 	done := client.Done()
+	var recheck <-chan time.Time
+	if s.TokenCheck != nil {
+		rt := time.NewTicker(s.tokenRecheckInterval())
+		defer rt.Stop()
+		recheck = rt.C
+	}
 
 	for {
 		select {
@@ -304,6 +329,19 @@ func (s *WebSocketService) HandleClientWrite(client *Client) {
 			// deadline in the read loop; a peer that stops reading is caught
 			// here by the write deadline.
 			if err := client.Conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(s.writeWait())); err != nil {
+				return
+			}
+		case <-recheck:
+			// H2: the token may have been revoked, demoted or expired since
+			// the upgrade. One indexed lookup per connection per interval.
+			if err := s.TokenCheck(client); err != nil {
+				if s.logger != nil {
+					s.logger.Info("closing WebSocket connection: token no longer valid",
+						"client_id", client.ID, "token_id", client.TokenID, "reason", err)
+				}
+				_ = client.Conn.SetWriteDeadline(time.Now().Add(time.Second))
+				_ = client.Conn.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(middleware.CloseForbidden, err.Error()))
 				return
 			}
 		case <-done:

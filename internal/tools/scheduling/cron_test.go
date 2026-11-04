@@ -282,9 +282,11 @@ func TestCronToolScheduleJob(t *testing.T) {
 	})
 
 	t.Run("system job type", func(t *testing.T) {
+		// System jobs are approval-gated (C2): pending until the human approves.
 		mockGw := &fullMockGatewayService{}
-		tool := NewCronTool(&types.ToolServices{Gateway: mockGw})
-		ctx := context.Background()
+		req := &captureRequester{}
+		tool := newSystemCronTool(mockGw, req)
+		ctx := interactiveCtx()
 
 		result, err := tool.Execute(ctx, map[string]interface{}{
 			"action":   "schedule",
@@ -297,6 +299,11 @@ func TestCronToolScheduleJob(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, result.Success)
 		assert.Equal(t, "system", result.Data["type"])
+		assert.Equal(t, "pending", result.Data["approval_status"])
+		assert.Empty(t, mockGw.jobs)
+		req.approve(t)
+		require.Len(t, mockGw.jobs, 1)
+		assert.Equal(t, "system", mockGw.jobs[0].Type)
 	})
 
 	t.Run("schedule job with context user ID", func(t *testing.T) {

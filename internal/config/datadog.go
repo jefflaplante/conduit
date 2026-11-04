@@ -9,6 +9,11 @@ type DatadogConfig struct {
 	AppKey       string  `json:"app_key,omitempty" cfg:"env"`
 	Site         string  `json:"site,omitempty"`
 	RateLimitRPS float64 `json:"rate_limit_rps,omitempty"`
+
+	// Approval: mute_monitor and unmute_monitor ask the owner for
+	// "YES <code>" first unless approval.required is false or the action
+	// is in approval.exempt.
+	Approval ToolApproval `json:"approval,omitempty"`
 }
 
 // DefaultDatadogConfig returns sensible defaults for Datadog configuration.
@@ -32,6 +37,10 @@ func (d *DatadogConfig) Validate() error {
 
 	if d.AppKey == "" {
 		return fmt.Errorf("datadog: app_key is required when enabled")
+	}
+
+	if err := validateExemptActions("datadog", d.Approval.Exempt, DatadogApprovalActions); err != nil {
+		return err
 	}
 
 	return nil

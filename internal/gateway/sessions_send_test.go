@@ -32,7 +32,8 @@ func TestSendToSession_ByKey(t *testing.T) {
 	}
 
 	// Send a message by key
-	ctx := types.WithRequestContext(context.Background(), "ch-sender", "sender-user", "sender-session")
+	// H4: a sender of the same user on the same channel may deliver.
+	ctx := types.WithRequestContext(context.Background(), "ch1", "user1", "sender-session")
 	err = gw.SendToSession(ctx, target.Key, "", "Hello from another session")
 	if err != nil {
 		t.Fatalf("SendToSession failed: %v", err)
@@ -87,8 +88,8 @@ func TestSendToSession_ByLabel(t *testing.T) {
 		sessions: store,
 	}
 
-	// Send by label
-	ctx := context.Background()
+	// Send by label (as the owner: H4 authorizes the resolved target)
+	ctx := ownerTestCtx()
 	err = gw.SendToSession(ctx, "", "research-agent", "Task update")
 	if err != nil {
 		t.Fatalf("SendToSession by label failed: %v", err)
@@ -163,7 +164,7 @@ func TestSendToSessionWake_MessageDelivered(t *testing.T) {
 		sessionWake: make(chan string, 8),
 	}
 
-	ctx := types.WithRequestContext(context.Background(), "ch-sender", "sender-user", "sender-key")
+	ctx := types.WithRequestContext(context.Background(), "ch1", "user1", "sender-key")
 	err = gw.SendToSessionWake(ctx, target.Key, "", "Wake up!")
 	if err != nil {
 		t.Fatalf("SendToSessionWake failed: %v", err)
@@ -221,7 +222,7 @@ func TestSendToSessionWake_ByLabel(t *testing.T) {
 		sessionWake: make(chan string, 8),
 	}
 
-	err = gw.SendToSessionWake(context.Background(), "", "worker-agent", "Task result")
+	err = gw.SendToSessionWake(ownerTestCtx(), "", "worker-agent", "Task result")
 	if err != nil {
 		t.Fatalf("SendToSessionWake by label failed: %v", err)
 	}
@@ -286,12 +287,11 @@ func TestWakeSession_RecursionGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create target session: %v", err)
 	}
-	// Pre-set wake_depth to the max
-	if err := store.SetSessionContext(target.Key, "wake_depth", "3"); err != nil {
-		t.Fatalf("Failed to set wake_depth: %v", err)
-	}
-	// Add a user message so wakeSession has something to process
-	if _, err := store.AddMessage(target.Key, "user", "hello", nil); err != nil {
+	// A wake message beyond the max depth (H4: depth travels in metadata;
+	// TestWakeSession_RefusesMessageBeyondMaxDepth covers it with a model).
+	if _, err := store.AddMessage(target.Key, "user", "hello", map[string]string{
+		"source": "inter_session", metaWakeDepth: "4",
+	}); err != nil {
 		t.Fatalf("Failed to add message: %v", err)
 	}
 
@@ -305,13 +305,9 @@ func TestWakeSession_RecursionGuard(t *testing.T) {
 	// Should return immediately without calling AI (ai == nil would panic if reached)
 	gw.wakeSession(target.Key)
 
-	// wake_depth should NOT have been reset (session was skipped, not processed)
-	refreshed, err := store.GetSession(target.Key)
-	if err != nil {
-		t.Fatalf("Failed to get session: %v", err)
-	}
-	if refreshed.Context["wake_depth"] != "3" {
-		t.Errorf("Expected wake_depth to remain 3, got %q", refreshed.Context["wake_depth"])
+	// The message stays queued for the next activation.
+	if n := messageCount(t, store, target.Key); n != 1 {
+		t.Errorf("Expected the queued message to remain, got %d message(s)", n)
 	}
 }
 
@@ -362,7 +358,7 @@ func TestSendToSessionWake_WakeChannelFull(t *testing.T) {
 	}
 
 	// Should succeed (message delivered) even though wake signal is dropped
-	err = gw.SendToSessionWake(context.Background(), target.Key, "", "queued message")
+	err = gw.SendToSessionWake(ownerTestCtx(), target.Key, "", "queued message")
 	if err != nil {
 		t.Fatalf("SendToSessionWake should succeed even with full wake channel: %v", err)
 	}

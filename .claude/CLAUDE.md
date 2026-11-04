@@ -86,6 +86,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - `cron` — Scheduler job maintenance for cron_jobs.json (migrate-tz)
 - `policy` — Tool action policy decisions (report)
 - `eval` — Run the eval corpus in replay mode (run: markdown/JSONL reports, --baseline regression check)
+- `config` — `config accept`: approve the config file after a hand edit (key diff, type yes or --yes); the server refuses to start on an unapproved config (config.VerifyApproved)
 - `loadtest` — Load test against the AI provider using a mock backend
 - `metrics` — Start the metrics dashboard HTTP server
 - `restart` / `stop` / `status` — Signal or check a running Conduit process (signals, not HTTP)
@@ -128,7 +129,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/brain/ — Tiered cognitive memory: LTM (SQLite-persisted brain.db), working memory (in-process per-user), scratchpad (LIFO stack). Salience-scored entries with configurable weights: brain_ltm stores base salience and recency is computed at query time (salience.go). Recall-events log with rotation (recall_events.go). Own migration system (migrations.go, brain_migrations table, 9 migrations; runs in brain.New after options are applied). rem/ implements the nightly REM cycle (triage, consolidate, integrate, prune, reflect). Sub-agent WM sharing via parent context.
 - internal/reflection/ — SPAR Reflect subsystem: per-tool outcome capture (ReflectionMiddleware), session metrics (SessionReflector), farewell detection (FarewellDetector), ReflectionStore (brain_reflections table). See reference/spar.md.
 - internal/config/ — JSON config loading with ${ENV_VAR} expansion. Config struct includes: port, database, AI, agent, workspace, skills, tools, channels, debug, rate limiting, heartbeat, agent heartbeat, SSH, MQTT, brain. `Config.Validate()` (validate.go) is called by `config.Load()` and checks port range, AI credentials, channels, workspace, rate-limit sanity, and tool constraints; credential checks are intentionally soft (warn, not fatal) to allow partial configs.
-- internal/database/ — Gateway DB (gateway.db) SQLite migration system (12 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search, messages_fts sync triggers, token hash versioning, ingest DLQ, alert history, indexed messages_fts delete/update triggers, canonical timestamps, topics, topic prompt profiles). Canonical timestamp text layout, formatter and tolerant parser in timestamps.go (StoredTimeLayout, FormatStoredTime, ParseStoredTime). The brain DB has its own separate migrations in internal/brain.
+- internal/database/ — Gateway DB (gateway.db) SQLite migration system (14 migrations: sessions/messages, auth tokens, telegram pairings, FTS5 search, messages_fts sync triggers, token hash versioning, ingest DLQ, alert history, indexed messages_fts delete/update triggers, canonical timestamps, topics, topic prompt profiles, telegram pairing status, topic owner). Canonical timestamp text layout, formatter and tolerant parser in timestamps.go (StoredTimeLayout, FormatStoredTime, ParseStoredTime). The brain DB has its own separate migrations in internal/brain.
 - internal/fts/ — FTS5 full-text search: document chunking, indexing, and search queries (Porter stemming, unicode61 tokenizer)
 - internal/ftsquery/ — Turns free-text user queries into safe FTS5 MATCH expressions
 - internal/searchdb/ — Dedicated search.db with FTS5 indexes (document chunks, beads, messages, brain LTM). Includes BeadsIndexer, BrainIndexer, MessageSyncer. Migration 4 adds `document_metadata` (bd-3o6h): per-file YAML frontmatter (date, tags, people, projects, category, summary) parsed by `fts.ParseFrontmatter` and written by `fts.Indexer` in the same transaction as the body-only chunks (the gateway.db fallback has no such table and skips it). MemorySearch's `tags`/`people`/`projects`/`category`/`date_after`/`date_before` args pre-filter candidate files through it (`types.DocumentMetadataSearcher`), and `summary_only` lists frontmatter summaries without searching; no filter args = unchanged behavior
@@ -158,7 +159,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
 - internal/mcp/ — MCP server exposing Conduit's tools to external MCP clients (bearer auth, calls via the ExecutionEngine)
 - internal/procutil/ — Process-execution helpers shared by the Bash tool and others (process groups, platform splits)
 - internal/redact/ — Scrubs credentials (e.g. Telegram bot tokens) from strings, errors and log output; NewWriter wraps stderr
-- internal/sandbox/ — Single file-path containment check shared by file tools
+- internal/sandbox/ — Single file-path containment check shared by file tools, plus the protected-file set (protected.go: the gateway's config.json, its .bak and approved snapshot, registered by Gateway.SetConfigPath). Write/Edit/scp_download call `sandbox.CheckWrite`; Bash runs the best-effort `protectedPathDenial` (tools/bash_protect.go). The config changes only via update_config (classifier `config.KeyRisk`, approval-weakening warnings, `config_file` full-file mode); startup refuses a config that differs from `.<config>.approved` (hash recorded in <data_dir>/config) until `conduit config accept` (config/approved.go, cmd/gateway/config_accept.go); Bash commands carry CONDUIT_TOOL_SHELL=1 and accept refuses to run there
 - internal/stt/ — Speech-to-text (Transcriber interface, Whisper backend)
 - internal/vecgo/ — Optional VecGo vector/semantic search service and indexer (module replaced from ./vecgo)
 - internal/workspace/ — Workspace context loading and caching (core files, daily memory, beads, security, summaries)
@@ -182,7 +183,7 @@ Config struct covers: port, database path, AI providers (Anthropic with OAuth or
 
 SQLite with WAL mode, 5s busy timeout, NORMAL synchronous, foreign keys enabled, 10000 page cache. Connection pool: max 4 open, 2 idle, no lifetime expiry. There are two independent migration systems.
 
-Gateway DB (internal/database, `schema_migrations`), twelve migrations (a `Migration` has `SQL` and/or a Go `Func(tx)`, both run in the migration transaction):
+Gateway DB (internal/database, `schema_migrations`), fourteen migrations (a `Migration` has `SQL` and/or a Go `Func(tx)`, both run in the migration transaction):
 
 1. Sessions and messages tables
 2. Auth tokens table (+ schema_migrations table)
@@ -196,6 +197,8 @@ Gateway DB (internal/database, `schema_migrations`), twelve migrations (a `Migra
 10. Data migration (Go func, migration_timestamps.go): rewrites messages.timestamp and sessions.created_at from legacy text (Go `time.String()` with zone + `m=+…`, RFC 3339, CURRENT_TIMESTAMP) into the canonical UTC `2006-01-02 15:04:05.000000000` layout that sessions.updated_at uses (conduit-a636). Idempotent; unparseable/non-text values are left untouched and logged; the messages UPDATE triggers are dropped and restored verbatim around the rewrite so messages_fts is not touched. The sessions store binds `FormatStoredTime` strings for these columns (never a raw time.Time, which the driver stores as `t.String()`).
 11. Topic switcher tables `topics` (slug UNIQUE, status active/parked/archived, persona, summary, session_key) and `topic_pointers` (chat_id → topic_slug) (conduit-43vk).
 12. Nullable `topics.prompt_profile` JSON column (Go func; skips the ALTER when the column exists, so replays are no-ops) (conduit-331g).
+13. `telegram_pairings.status` (pending/approved/superseded; Go func). `IsUserPaired` counts only `approved`; legacy `is_active=0` rows become `superseded` because nothing proves they were approved, so previously paired users re-pair once. Also rewrites pairing timestamps to the canonical layout.
+14. Nullable `topics.owner_channel`/`owner_user` (Go func, replay-safe). Set only for topics created by a restricted caller (non-owner WS token, non-interactive turn); such callers see and change only their own topics. NULL = owner topic.
 
 messages_fts is a standalone FTS5 table (own content, `message_id` column), so FTS5 'rebuild' cannot resync it with messages; `conduit maintenance run-task fts_rebuild [--dry-run]` (internal/maintenance/fts.go) deletes stale/outdated/duplicate index rows and indexes missing messages in one transaction, and `maintenance status` reports the drift.
 

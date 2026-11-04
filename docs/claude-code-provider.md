@@ -8,7 +8,7 @@ Conduit can route LLM calls through the Claude Code CLI instead of directly call
 User → Channel (WebSocket/TUI/Telegram)
   → Conduit Gateway
     → claude-code Provider
-      → claude -p --output-format stream-json "message"
+      → claude -p --output-format stream-json --verbose --include-partial-messages "message"
         → Claude Code agent loop
           ├── Native tools: Read, Edit, Bash, Glob, Grep, Write
           └── MCP tools → Conduit MCP Server (localhost:18790)
@@ -18,7 +18,7 @@ User → Channel (WebSocket/TUI/Telegram)
       → streamed back to user
 ```
 
-The claude-code provider spawns `claude -p` (print/non-interactive mode) for each user message, parses the structured JSON output, and delivers the response through Conduit's normal channel pipeline. Streaming is supported end-to-end via `--output-format stream-json`.
+The claude-code provider spawns `claude -p` (print/non-interactive mode) for each user message, parses the structured JSON output, and delivers the response through Conduit's normal channel pipeline. Streaming is supported end-to-end via `--output-format stream-json --verbose --include-partial-messages`: text deltas (`stream_event`) are streamed as they arrive. In a multi-step run (text + tool call, tool result, ...) the reply is the final answer only: the `result` event's text, else the last assistant message after the final tool result. Interim text such as "Let me check the files." is streamed but never returned as the answer, and sub-agent events (`parent_tool_use_id` set) are ignored.
 
 A companion MCP server runs on localhost, exposing Conduit's unique tools (Brain, MQTT, scheduling, web search, etc.) to Claude Code. Claude Code discovers these tools via a `.mcp.json` file written to the configured working directory. Tool calls from Claude Code run through Conduit's ExecutionEngine single-call pipeline (per-call timeout, panic recovery, result truncation, reflection capture), exactly like the agent's own tool calls. The endpoint requires a bearer token (see [Authentication](#authentication)).
 

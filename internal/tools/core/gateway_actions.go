@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"conduit/internal/approval"
+	"conduit/internal/tools/approvalgate"
 	toolargs "conduit/internal/tools/args"
 	"conduit/internal/tools/types"
 )
@@ -27,23 +29,40 @@ func (t *GatewayTool) getStatus(ctx context.Context) (*types.ToolResult, error) 
 	}, nil
 }
 
+// restart asks the owner before restarting the gateway (H14): a restart
+// interrupts every live turn, so it runs only after a "YES <code>" reply on
+// the originating channel. Non-interactive turns (cron, heartbeat,
+// sub-agents, wakes, MCP) and a gateway without an approval channel fail
+// closed.
 func (t *GatewayTool) restart(ctx context.Context) (*types.ToolResult, error) {
-	err := t.services.Gateway.RestartGateway(ctx)
-	if err != nil {
-		return &types.ToolResult{
-			Success: false,
-			Error:   fmt.Sprintf("failed to restart gateway: %v", err),
-		}, nil
-	}
-
-	return &types.ToolResult{
-		Success: true,
-		Content: "Gateway restart initiated. Drain timeout: 30s. Active sessions preserved in breadcrumb for resumption after restart.",
-		Data: map[string]interface{}{
-			"action":    "restart",
-			"timestamp": time.Now(),
+	gw := t.services.Gateway
+	op := approvalgate.Operation{
+		Kind:  "gateway.restart",
+		Title: "Restart the Conduit gateway",
+		Fields: []approval.Field{
+			{Name: "Effect", Value: "drains for up to 30s, then restarts; live turns resume after the restart"},
 		},
-	}, nil
+		Params:  map[string]string{"action": "restart"},
+		Audit:   map[string]string{"requested_via": "Gateway.restart"},
+		Summary: "the gateway restart",
+		Data:    map[string]interface{}{"action": "restart", "requires_approval": true},
+	}
+	return approvalgate.Request(ctx, t.approver(), op, func(execCtx context.Context) (*types.ToolResult, error) {
+		if err := gw.RestartGateway(execCtx); err != nil {
+			return &types.ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("failed to restart gateway: %v", err),
+			}, nil
+		}
+		return &types.ToolResult{
+			Success: true,
+			Content: "Gateway restart initiated. Drain timeout: 30s. Active sessions preserved in breadcrumb for resumption after restart.",
+			Data: map[string]interface{}{
+				"action":    "restart",
+				"timestamp": time.Now(),
+			},
+		}, nil
+	}), nil
 }
 
 func (t *GatewayTool) getChannels(ctx context.Context) (*types.ToolResult, error) {

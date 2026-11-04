@@ -172,11 +172,9 @@ func TestMQTTTool_History(t *testing.T) {
 func TestMQTTTool_Publish_Success(t *testing.T) {
 	svc := &mockMQTTService{}
 	tool := NewMQTTTool(&types.ToolServices{MQTTService: svc})
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
-		"action":  "publish",
-		"topic":   "zigbee2mqtt/Light/set",
-		"payload": `{"state":"ON"}`,
-	})
+	// Execute only asks for approval (H11, approval_test.go); this
+	// exercises the approved run.
+	result, err := tool.runPublish(context.Background(), "zigbee2mqtt/Light/set", `{"state":"ON"}`, 0, false)
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Contains(t, result.Content, "broker ACK confirmed")

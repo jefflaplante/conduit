@@ -759,7 +759,12 @@ func TestSharedAlertQueue_IsHealthy(t *testing.T) {
 		t.Errorf("IsHealthy should pass for valid queue: %v", err)
 	}
 
-	// Test with invalid directory permissions
+	// Test with invalid directory permissions. Root bypasses directory
+	// permission bits, so the restricted-directory case cannot fail as root.
+	if os.Geteuid() == 0 {
+		t.Log("running as root: skipping restricted-directory check")
+		return
+	}
 	restrictedDir := filepath.Join(tempDir, "restricted")
 	if err := os.Mkdir(restrictedDir, 0000); err != nil {
 		t.Fatalf("Failed to create restricted directory: %v", err)

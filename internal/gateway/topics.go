@@ -66,7 +66,8 @@ func topicChatKey(channelID, userID string) string {
 // message to its session. With no pointer (or a home pointer) it is exactly
 // GetOrCreateSession. A pointer to an active topic returns that topic's
 // session, created lazily under the topic's key. A pointer to a topic that
-// is missing, parked or archived is reset to home and notice says so once.
+// is missing, parked, archived or scoped to another chat (H1) is reset to
+// home and notice says so once.
 func (g *Gateway) resolveSessionForChat(channelID, userID string) (*sessions.Session, string, error) {
 	var notice string
 	if store := g.topicStore(); store != nil {
@@ -75,7 +76,8 @@ func (g *Gateway) resolveSessionForChat(channelID, userID string) (*sessions.Ses
 		switch {
 		case err == nil && tp == nil:
 			// home
-		case err == nil && tp.Status == topics.StatusActive:
+		case err == nil && tp.Status == topics.StatusActive &&
+			(!tp.Scoped() || (tp.OwnerChannel == channelID && tp.OwnerUser == userID)):
 			s, err := g.sessions.GetOrCreateSessionByKey(tp.SessionKey, userID, channelID)
 			if err != nil {
 				return nil, "", fmt.Errorf("topic %s session: %w", tp.Slug, err)

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"conduit/internal/sandbox"
 )
 
 // maxSCPDownloadBytes caps the size a remote SCP header may announce. The
@@ -214,6 +216,11 @@ func (s *SCPClient) Download(remotePath, localPath string) error {
 	// Send final acknowledgment
 	if _, err := stdin.Write([]byte{0}); err != nil {
 		return fmt.Errorf("failed to send final ack: %w", err)
+	}
+
+	// The gateway's own config is changed only through update_config.
+	if err := sandbox.CheckWrite(localPath); err != nil {
+		return err
 	}
 
 	// Ensure the local directory exists

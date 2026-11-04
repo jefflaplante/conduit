@@ -13,6 +13,9 @@ import (
 type CronTool struct {
 	services *types.ToolServices
 	now      func() time.Time // clock for nextRun; nil = time.Now (tests inject)
+	// commandPolicy vets system-job shell commands (the Bash denylist,
+	// wired by the registry). Nil refuses every system job (C2).
+	commandPolicy CommandPolicy
 }
 
 func NewCronTool(services *types.ToolServices) *CronTool {
@@ -28,7 +31,7 @@ func (t *CronTool) Description() string {
 
 Job Types:
 - "go" (default): In-process scheduling, can run AI prompts and spawn sub-agents
-- "system": System crontab, runs shell commands without LLM involvement
+- "system": System crontab, runs shell commands without LLM involvement. Needs the owner's approval in chat (not available from cron, heartbeat or sub-agent turns); commands blocked for Bash are refused
 
 Skill Scoping (important for small-context models):
 - Set skills=["solar"] to load ONLY the "solar" skill into the prompt and tools for that job

@@ -37,9 +37,11 @@ type Indexer struct {
 	embedTimeout time.Duration
 	embedPacing  time.Duration
 	stopCh       chan struct{}
+	stopOnce     sync.Once
 	stopped      chan struct{}
 
-	// Embed worker queue
+	// Embed worker queue. workCh is never closed (H12): submitters may still
+	// select on a send to it during Stop, so stopCh alone ends the worker.
 	workCh     chan indexJob
 	workerDone chan struct{}
 
@@ -333,16 +335,22 @@ func (idx *Indexer) Start(ctx context.Context) error {
 }
 
 // Stop terminates the background polling goroutine and embed worker.
+// It is safe to call more than once. Submits after (or racing) Stop fail
+// with "indexer stopped"; an embedding already running finishes first.
 func (idx *Indexer) Stop() {
-	close(idx.stopCh)
-	close(idx.workCh)
-	<-idx.workerDone
-	if idx.pollInterval > 0 {
-		<-idx.stopped
-	}
-	if idx.hashDB != nil {
-		idx.hashDB.Close()
-	}
+	idx.stopOnce.Do(func() {
+		// H12: signal via stopCh only. Closing workCh while a submitter
+		// could still select on a send to it panicked ("send on closed
+		// channel").
+		close(idx.stopCh)
+		<-idx.workerDone
+		if idx.pollInterval > 0 {
+			<-idx.stopped
+		}
+		if idx.hashDB != nil {
+			idx.hashDB.Close()
+		}
+	})
 }
 
 // Status returns the current state of the indexer.
@@ -358,12 +366,29 @@ func (idx *Indexer) Status() IndexerStatus {
 }
 
 // embedWorker processes embedding jobs sequentially with pacing.
-// It runs until workCh is closed or the context is cancelled.
+// It runs until Stop closes stopCh; jobs still queued then are abandoned
+// (their submitters return "indexer stopped").
+//
+// The worker never touches idx.hashes (M3): the submitter, which holds
+// idx.mu, records the hash on success. A submitter that gave up (ctx done)
+// has released idx.mu, so the worker writing the map would race.
 func (idx *Indexer) embedWorker(ctx context.Context) {
 	defer close(idx.workerDone)
 
 	first := true
-	for job := range idx.workCh {
+	for {
+		var job indexJob
+		select {
+		case <-idx.stopCh:
+			return
+		default:
+		}
+		select {
+		case <-idx.stopCh:
+			return
+		case job = <-idx.workCh:
+		}
+
 		// Pace between embedding calls (skip before the first one)
 		if !first && idx.embedPacing > 0 {
 			select {
@@ -402,16 +427,20 @@ func (idx *Indexer) embedWorker(ctx context.Context) {
 				job.resultCh <- indexJobResult{err: fmt.Errorf("save after index %s: %w", job.relPath, saveErr)}
 				continue
 			}
-			idx.hashes[job.relPath] = job.hash
-			// Persist hash to SQLite
-			if idx.hashDB != nil {
-				if persistErr := idx.persistHash(job.ctx, job.relPath, job.hash); persistErr != nil {
-					log.Printf("vecgo indexer: failed to persist hash for %s: %v", job.relPath, persistErr)
-				} else {
-					log.Printf("vecgo indexer: hash persisted: %s", job.relPath)
-				}
-			}
 			job.resultCh <- indexJobResult{}
+		}
+	}
+}
+
+// recordHash records a successfully indexed file's hash in memory and in
+// the hash DB. Caller holds idx.mu.
+func (idx *Indexer) recordHash(ctx context.Context, relPath, hash string) {
+	idx.hashes[relPath] = hash
+	if idx.hashDB != nil {
+		if persistErr := idx.persistHash(ctx, relPath, hash); persistErr != nil {
+			log.Printf("vecgo indexer: failed to persist hash for %s: %v", relPath, persistErr)
+		} else {
+			log.Printf("vecgo indexer: hash persisted: %s", relPath)
 		}
 	}
 }
@@ -575,8 +604,17 @@ func (idx *Indexer) buildMeta(relPath string) map[string]string {
 }
 
 // submitAndWait sends an embedding job to the worker and blocks until
-// the result is available. Returns the embedding error, if any.
+// the result is available. Returns the embedding error, if any. On success
+// it records the file's hash; the caller must hold idx.mu (M3). When the
+// wait is abandoned (ctx done, indexer stopped) no hash is recorded, so
+// the file is re-indexed by a later scan.
 func (idx *Indexer) submitAndWait(ctx context.Context, relPath string, data []byte, hash string, meta map[string]string) error {
+	select {
+	case <-idx.stopCh:
+		return fmt.Errorf("indexer stopped")
+	default:
+	}
+
 	resultCh := make(chan indexJobResult, 1)
 	job := indexJob{
 		ctx:      ctx,
@@ -597,6 +635,9 @@ func (idx *Indexer) submitAndWait(ctx context.Context, relPath string, data []by
 
 	select {
 	case res := <-resultCh:
+		if res.err == nil {
+			idx.recordHash(ctx, relPath, hash)
+		}
 		return res.err
 	case <-ctx.Done():
 		return ctx.Err()

@@ -44,7 +44,7 @@ func startTestIndexer(t *testing.T, svc *Service, cfg IndexerConfig) *Indexer {
 	go idx.embedWorker(ctx)
 	t.Cleanup(func() {
 		cancel()
-		close(idx.workCh)
+		idx.stopOnce.Do(func() { close(idx.stopCh) }) // workCh is never closed (H12)
 		<-idx.workerDone
 		if idx.hashDB != nil {
 			idx.hashDB.Close()

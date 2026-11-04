@@ -1,9 +1,12 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -128,4 +131,128 @@ func pathHasPrefix(p, prefix []string) bool {
 		}
 	}
 	return true
+}
+
+// PatchFromFiles returns the merge patch that turns the config document
+// current into proposed (both JSON objects): nested objects are diffed key
+// by key, keys missing from proposed are deleted (null), and any other
+// changed value (arrays included) is replaced whole. update_config's
+// full-file mode uses it so a whole proposed file goes through the same
+// per-key validation, classification and approval as a patch.
+//
+// proposed is usually an edited copy of the redacted file (RedactedFile).
+// A value equal to the redacted rendering of the current one means "keep
+// the current value"; RedactedValue anywhere else (a new key, or inside a
+// changed value) is refused, since writing it would destroy the secret.
+func PatchFromFiles(current, proposed []byte) (map[string]interface{}, error) {
+	var cur, next map[string]interface{}
+	if err := json.Unmarshal(current, &cur); err != nil {
+		return nil, fmt.Errorf("current config: %w", err)
+	}
+	if err := json.Unmarshal(proposed, &next); err != nil {
+		return nil, fmt.Errorf("proposed config is not a JSON object: %w", err)
+	}
+	if next == nil {
+		return nil, fmt.Errorf("proposed config is not a JSON object")
+	}
+	return diffObjects(cur, next, nil)
+}
+
+func diffObjects(cur, next map[string]interface{}, path []string) (map[string]interface{}, error) {
+	patch := map[string]interface{}{}
+	keys := make([]string, 0, len(next))
+	for k := range next {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		nv := next[k]
+		at := append(append([]string(nil), path...), k)
+		ov, had := cur[k]
+		if had && !reflect.DeepEqual(ov, nv) && reflect.DeepEqual(redactedAs(k, ov), nv) {
+			continue // the redacted view, unedited: keep the current value
+		}
+		om, oIsObj := ov.(map[string]interface{})
+		nm, nIsObj := nv.(map[string]interface{})
+		switch {
+		case had && oIsObj && nIsObj && len(nm) > 0:
+			sub, err := diffObjects(om, nm, at)
+			if err != nil {
+				return nil, err
+			}
+			if len(sub) > 0 {
+				patch[k] = sub
+			}
+		case had && reflect.DeepEqual(ov, nv):
+		case !had && nv == nil:
+		default:
+			if p := redactedPlaceholder(nv, at); p != "" {
+				return nil, fmt.Errorf("proposed config has %q at %s, inside a changed value; give the real value or a ${VAR} reference", RedactedValue, p)
+			}
+			patch[k] = nv // nil deletes
+		}
+	}
+	for k := range cur {
+		if _, ok := next[k]; !ok {
+			patch[k] = nil
+		}
+	}
+	return patch, nil
+}
+
+// RedactedFile renders a raw config document with every secret replaced by
+// RedactedValue (Redacted), indented, for the agent to read and edit.
+func RedactedFile(data []byte) (string, error) {
+	var raw interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return "", fmt.Errorf("parse config: %w", err)
+	}
+	red, err := Redacted(raw)
+	if err != nil {
+		return "", err
+	}
+	b, err := json.MarshalIndent(red, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// redactedAs is v as Redacted renders it under key.
+func redactedAs(key string, v interface{}) interface{} {
+	r, err := Redacted(map[string]interface{}{key: v})
+	if err != nil {
+		return nil
+	}
+	m, _ := r.(map[string]interface{})
+	return m[key]
+}
+
+// redactedPlaceholder returns the path of the first string containing
+// RedactedValue in v, or "".
+func redactedPlaceholder(v interface{}, path []string) string {
+	switch t := v.(type) {
+	case string:
+		if strings.Contains(t, RedactedValue) {
+			return JoinPath(path)
+		}
+	case map[string]interface{}:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if p := redactedPlaceholder(t[k], append(append([]string(nil), path...), k)); p != "" {
+				return p
+			}
+		}
+	case []interface{}:
+		for i, e := range t {
+			if p := redactedPlaceholder(e, append(append([]string(nil), path...), strconv.Itoa(i))); p != "" {
+				return p
+			}
+		}
+	}
+	return ""
 }

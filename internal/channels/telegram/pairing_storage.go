@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"conduit/internal/database"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -18,6 +20,11 @@ func parseTimestamp(timeStr string) (time.Time, error) {
 
 	// Fallback to simple format
 	if t, err := time.Parse("2006-01-02 15:04:05", timeStr); err == nil {
+		return t, nil
+	}
+
+	// Any other gateway.db form, e.g. a legacy time.Time.String() value
+	if t, ok := database.ParseStoredTime(timeStr); ok {
 		return t, nil
 	}
 
@@ -36,6 +43,7 @@ type PairingInfo struct {
 	CreatedAt time.Time         `json:"created_at"`
 	ExpiresAt time.Time         `json:"expires_at"`
 	IsActive  bool              `json:"is_active"`
+	Status    string            `json:"status"` // PairingStatusPending, Approved or Superseded
 	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
@@ -47,13 +55,13 @@ func NewPairingStorage(db *sql.DB) *PairingStorage {
 // ListPendingPairings returns all active (non-expired) pairing codes
 func (ps *PairingStorage) ListPendingPairings() ([]PairingInfo, error) {
 	query := `
-		SELECT code, user_id, created_at, expires_at, is_active, metadata
+		SELECT code, user_id, created_at, expires_at, is_active, status, metadata
 		FROM telegram_pairings
-		WHERE is_active = 1 AND expires_at > datetime('now')
+		WHERE is_active = 1 AND status = 'pending' AND expires_at > ?
 		ORDER BY created_at DESC
 	`
 
-	rows, err := ps.db.Query(query)
+	rows, err := ps.db.Query(query, database.FormatStoredTime(time.Now()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query pending pairings: %w", err)
 	}
@@ -65,7 +73,7 @@ func (ps *PairingStorage) ListPendingPairings() ([]PairingInfo, error) {
 		var metadataJSON string
 		var createdAtStr, expiresAtStr string
 
-		err := rows.Scan(&p.Code, &p.UserID, &createdAtStr, &expiresAtStr, &p.IsActive, &metadataJSON)
+		err := rows.Scan(&p.Code, &p.UserID, &createdAtStr, &expiresAtStr, &p.IsActive, &p.Status, &metadataJSON)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan pairing row: %w", err)
 		}
@@ -100,7 +108,7 @@ func (ps *PairingStorage) ListPendingPairings() ([]PairingInfo, error) {
 // GetPairingByCode retrieves a pairing by its code
 func (ps *PairingStorage) GetPairingByCode(code string) (*PairingInfo, error) {
 	query := `
-		SELECT code, user_id, created_at, expires_at, is_active, metadata
+		SELECT code, user_id, created_at, expires_at, is_active, status, metadata
 		FROM telegram_pairings
 		WHERE code = ?
 	`
@@ -110,7 +118,7 @@ func (ps *PairingStorage) GetPairingByCode(code string) (*PairingInfo, error) {
 	var createdAtStr, expiresAtStr string
 
 	err := ps.db.QueryRow(query, code).Scan(
-		&p.Code, &p.UserID, &createdAtStr, &expiresAtStr, &p.IsActive, &metadataJSON,
+		&p.Code, &p.UserID, &createdAtStr, &expiresAtStr, &p.IsActive, &p.Status, &metadataJSON,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -139,7 +147,7 @@ func (ps *PairingStorage) GetPairingByCode(code string) (*PairingInfo, error) {
 	return &p, nil
 }
 
-// ApprovePairing marks a pairing as inactive (consumed/approved)
+// ApprovePairing marks a pending pairing approved, which pairs its user
 func (ps *PairingStorage) ApprovePairing(code string) error {
 	// First check if pairing exists and is active
 	pairing, err := ps.GetPairingByCode(code)
@@ -147,7 +155,7 @@ func (ps *PairingStorage) ApprovePairing(code string) error {
 		return err
 	}
 
-	if !pairing.IsActive {
+	if !pairing.IsActive || pairing.Status != PairingStatusPending {
 		return fmt.Errorf("pairing code is already used or inactive: %s", code)
 	}
 
@@ -155,11 +163,12 @@ func (ps *PairingStorage) ApprovePairing(code string) error {
 		return fmt.Errorf("pairing code has expired: %s", code)
 	}
 
-	// Mark as inactive
+	// Record the approval; the pending guard loses to a concurrent
+	// supersede (a newer code) instead of approving a replaced code.
 	query := `
 		UPDATE telegram_pairings
-		SET is_active = 0
-		WHERE code = ?
+		SET is_active = 0, status = 'approved'
+		WHERE code = ? AND is_active = 1 AND status = 'pending'
 	`
 
 	result, err := ps.db.Exec(query, code)
@@ -183,13 +192,13 @@ func (ps *PairingStorage) ApprovePairing(code string) error {
 func (ps *PairingStorage) findPairingByCodePrefix(prefix string) ([]PairingInfo, error) {
 	// Only search active, non-expired pairings
 	query := `
-		SELECT code, user_id, created_at, expires_at, is_active, metadata
+		SELECT code, user_id, created_at, expires_at, is_active, status, metadata
 		FROM telegram_pairings
-		WHERE code LIKE ? AND is_active = 1 AND expires_at > datetime('now')
+		WHERE code LIKE ? AND is_active = 1 AND status = 'pending' AND expires_at > ?
 		ORDER BY created_at DESC
 	`
 
-	rows, err := ps.db.Query(query, prefix+"%")
+	rows, err := ps.db.Query(query, prefix+"%", database.FormatStoredTime(time.Now()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query pairings by prefix: %w", err)
 	}
@@ -201,7 +210,7 @@ func (ps *PairingStorage) findPairingByCodePrefix(prefix string) ([]PairingInfo,
 		var metadataJSON string
 		var createdAtStr, expiresAtStr string
 
-		err := rows.Scan(&p.Code, &p.UserID, &createdAtStr, &expiresAtStr, &p.IsActive, &metadataJSON)
+		err := rows.Scan(&p.Code, &p.UserID, &createdAtStr, &expiresAtStr, &p.IsActive, &p.Status, &metadataJSON)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan pairing row: %w", err)
 		}
