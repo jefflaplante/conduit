@@ -66,7 +66,10 @@ func (g *Gateway) sessionStateFilePath() string {
 		base = g.config.Workspace.ContextDir
 	}
 	if base == "" {
-		return rel // no workspace dir: CWD-relative
+		// No workspace dir known (ContextDir unset): disarm rather than
+		// write CWD-relative — the gateway's working directory is not a
+		// state home and must never receive stray writes.
+		return ""
 	}
 	return filepath.Join(base, rel)
 }
