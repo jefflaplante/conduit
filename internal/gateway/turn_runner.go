@@ -108,6 +108,14 @@ type turnHooks interface {
 	ReflectionEnabled() bool
 	// AfterReflection writes session metrics after the model reflected.
 	AfterReflection(ctx context.Context, session *sessions.Session)
+	// StateDistillAddendum returns the bd-8sib Path A state-distillation
+	// instruction to append to the farewell/reflection prompt ("" when the
+	// session-state hook is disabled).
+	StateDistillAddendum() string
+	// AfterStateDistill extracts and writes the session state from the
+	// final farewell reply (bd-8sib Path A post-turn step). Best-effort:
+	// implementations log and swallow failures.
+	AfterStateDistill(ctx context.Context, sessionKey, reply, model string)
 }
 
 // activeTurnRegistry points at the sessionKey → cancel map consulted by

@@ -89,6 +89,14 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 			isFarewell = true
 			if p := r.hooks.ReflectionPrompt(); p != "" {
 				messageForAI = req.Text + "\n\n[System: " + p + "]"
+				// bd-8sib Path A: the state-distillation instruction rides
+				// the farewell turn the model already answers — zero
+				// marginal LLM calls.
+				if addendum := r.hooks.StateDistillAddendum(); addendum != "" {
+					messageForAI += "\n\n[System: " + addendum + "]"
+					r.logger.Info("session state hook: state distillation riding farewell turn",
+						"session_key", key, "channel_id", req.ChannelID)
+				}
 				r.logger.Info("SPAR reflection: farewell detected, injecting reflection prompt",
 					"session_key", key, "channel_id", req.ChannelID)
 			}
@@ -96,6 +104,9 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 			if p := r.hooks.ReflectionPrompt(); p != "" {
 				messageForAI = req.Text + "\n\n[System: " + p + "]"
 				isBudgetReflect = true
+				if addendum := r.hooks.StateDistillAddendum(); addendum != "" {
+					messageForAI += "\n\n[System: " + addendum + "]"
+				}
 				_ = r.sessions.SetSessionContextBatch(key, map[string]string{
 					"reflection_context_budget_triggered": "",
 				})
@@ -248,10 +259,16 @@ func (r *TurnRunner) runLocked(ctx, parentCtx context.Context, req TurnRequest, 
 	sink.Finish(parentCtx, res)
 
 	if (isFarewell || isBudgetReflect) && res.Delivered() && r.hooks != nil {
+		rawCopy := raw
+		modelUsed := modelOverride
 		return func() {
 			if updated, sErr := r.sessions.GetSession(key); sErr == nil {
 				r.hooks.AfterReflection(parentCtx, updated)
 			}
+			// bd-8sib Path A: extract the state JSON from the final reply
+			// (appended alongside the reflection prompt) and write it.
+			// Best-effort, after delivery — a failed write never surfaces.
+			r.hooks.AfterStateDistill(parentCtx, key, rawCopy, modelUsed)
 		}
 	}
 	return nil
