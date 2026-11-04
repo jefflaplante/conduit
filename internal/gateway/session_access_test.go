@@ -161,7 +161,6 @@ type pingPongProvider struct {
 	mu      sync.Mutex
 	calls   int
 	refused int
-	depths  []string // wake_depth metadata of each delivered ping
 }
 
 func (p *pingPongProvider) Name() string { return "pingpong" }
