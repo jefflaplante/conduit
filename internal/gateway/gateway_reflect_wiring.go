@@ -45,6 +45,11 @@ func (g *Gateway) reflectOnIdleSessions(ctx context.Context, idleTimeout time.Du
 				cancel()
 				reflected[key] = struct{}{}
 			}
+			// bd-8sib Path B: the state-hook net for sessions that ended
+			// without a farewell (async inside; never blocks this loop).
+			if err := g.distillIdleSessionStates(ctx, 5, idleTimeout); err != nil {
+				g.logger.Debug("session state hook: idle distillation pass failed", "error", err)
+			}
 		}
 	}
 }

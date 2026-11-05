@@ -63,3 +63,11 @@ func (h gatewayTurnHooks) ReflectionEnabled() bool { return h.g.cognition.Reflec
 func (h gatewayTurnHooks) AfterReflection(ctx context.Context, s *sessions.Session) {
 	h.g.reflectHighConfidencePost(ctx, s)
 }
+
+func (h gatewayTurnHooks) StateDistillAddendum() string {
+	return h.g.sessionStateFarewellAddendum()
+}
+
+func (h gatewayTurnHooks) AfterStateDistill(ctx context.Context, sessionKey, reply, model string) {
+	h.g.maybeWriteSessionState(ctx, sessionKey, reply, model)
+}

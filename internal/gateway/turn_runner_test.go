@@ -385,10 +385,12 @@ type stubHooks struct {
 	prompt   string
 }
 
-func (s stubHooks) IsFarewell(string) bool                             { return s.farewell }
-func (s stubHooks) ReflectionPrompt() string                           { return s.prompt }
-func (s stubHooks) ReflectionEnabled() bool                            { return true }
-func (s stubHooks) AfterReflection(context.Context, *sessions.Session) {}
+func (s stubHooks) IsFarewell(string) bool                                    { return s.farewell }
+func (s stubHooks) ReflectionPrompt() string                                  { return s.prompt }
+func (s stubHooks) ReflectionEnabled() bool                                   { return true }
+func (s stubHooks) AfterReflection(context.Context, *sessions.Session)        {}
+func (s stubHooks) StateDistillAddendum() string                              { return "" }
+func (s stubHooks) AfterStateDistill(context.Context, string, string, string) {}
 
 // conduit-31jg.22: a woken session's inter-session message is already in the
 // transcript and may not be the last row; it must be sent exactly once.

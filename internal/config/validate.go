@@ -173,6 +173,34 @@ func validateWorkspaceStateFile(me *multiError, files WorkspaceFilesConfig) {
 	}
 }
 
+// validateSessionStateConfig checks brain.session_state (bd-8sib): the soft
+// cap bounds (when set) and — mirroring validateWorkspaceStateFile exactly —
+// a file override that must be relative, stay inside the workspace (no ".."
+// traversal) and end in .json.
+func validateSessionStateConfig(me *multiError, sc SessionStateConfig) {
+	if sc.SoftCapTokens != 0 &&
+		(sc.SoftCapTokens < MinSessionStateSoftCapTokens || sc.SoftCapTokens > MaxSessionStateSoftCapTokens) {
+		me.add("brain.session_state.soft_cap_tokens must be between %d and %d (got %d)",
+			MinSessionStateSoftCapTokens, MaxSessionStateSoftCapTokens, sc.SoftCapTokens)
+	}
+	if sc.File == "" {
+		return // workspace default applies
+	}
+	if !filepath.IsLocal(sc.File) {
+		me.add("brain.session_state.file must be a relative path inside the workspace context dir (got %q)", sc.File)
+		return
+	}
+	for _, elem := range strings.Split(sc.File, "/") {
+		if elem == ".." {
+			me.add("brain.session_state.file must not contain \"..\" path elements (got %q)", sc.File)
+			return
+		}
+	}
+	if !strings.HasSuffix(sc.File, ".json") {
+		me.add("brain.session_state.file must be a .json file (got %q)", sc.File)
+	}
+}
+
 // checkParentDir stats the parent directory of a file path and adds an error
 // if it is absent or inaccessible.
 func checkParentDir(me *multiError, fieldName, filePath string) {
@@ -236,8 +264,9 @@ func (c *Config) ValidateSemantic() error {
 	validateToolsList(&me, c.Tools)
 	validateRestartResume(&me, c.RestartResume)
 	validateCallLog(&me, c.AI.CallLog)
-	validateMaintenance(&me, c.Maintenance) // conduit-2cxu
-	validateToolPolicy(&me, c.ToolPolicy)   // conduit-25lt.2
+	validateMaintenance(&me, c.Maintenance)               // conduit-2cxu
+	validateToolPolicy(&me, c.ToolPolicy)                 // conduit-25lt.2
+	validateSessionStateConfig(&me, c.Brain.SessionState) // bd-8sib
 
 	return me.toError()
 }

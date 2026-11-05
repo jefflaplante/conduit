@@ -65,6 +65,74 @@ type BrainConfig struct {
 	// DashboardEnabled toggles the /dashboard/brain memory-graph dashboard
 	// and its backing /api/brain/graph endpoint. Off by default.
 	DashboardEnabled bool `json:"dashboard_enabled,omitempty"`
+
+	// SessionState configures the session-end auto-write of the Jules state
+	// file (bd-8sib). Default OFF; parsed, defaulted and validated but
+	// otherwise unused until the flag flips (the bd-3ia Phase-0 pattern).
+	SessionState SessionStateConfig `json:"session_state,omitempty"`
+}
+
+// DefaultSessionStateSoftCapTokens is the default soft cap, in ~tokens
+// (cpt=4 basis), for a hook-written state file.
+const DefaultSessionStateSoftCapTokens = 500
+
+// MinSessionStateSoftCapTokens and MaxSessionStateSoftCapTokens bound
+// brain.session_state.soft_cap_tokens.
+const (
+	MinSessionStateSoftCapTokens = 100
+	MaxSessionStateSoftCapTokens = 2000
+)
+
+// SessionStateConfig is the brain.session_state block (bd-8sib): the
+// session-end hook that auto-writes the workspace state file
+// (memory/jules-state.json by default — DefaultWorkspaceStateFile).
+type SessionStateConfig struct {
+	// Enabled is the master switch. Default false.
+	Enabled bool `json:"enabled,omitempty"`
+
+	// IdleDistill gates Path B (idle-sweeper distillation of sessions that
+	// ended without a farewell). Path A rides the farewell reflection turn
+	// whenever Enabled is on. Default false.
+	IdleDistill bool `json:"idle_distill,omitempty"`
+
+	// SoftCapTokens is the write-time soft cap (~tokens, cpt=4). The writer
+	// drops optional fields in priority order before ever touching required
+	// ones. 0 = DefaultSessionStateSoftCapTokens; validated 100..2000.
+	SoftCapTokens int `json:"soft_cap_tokens,omitempty"`
+
+	// File optionally overrides the state-file path (relative to the
+	// workspace context dir). Empty = workspace.files.state_file, else
+	// DefaultWorkspaceStateFile — one source of truth for the path.
+	// When set: relative, no "..", must end in .json.
+	File string `json:"file,omitempty"`
+}
+
+// SoftCapTokensEffective returns the configured cap or the default.
+func (s SessionStateConfig) SoftCapTokensEffective() int {
+	if s.SoftCapTokens == 0 {
+		return DefaultSessionStateSoftCapTokens
+	}
+	return s.SoftCapTokens
+}
+
+// FileEffective returns the hook's state-file path: session_state.file,
+// else the workspace default. Same validation rules as
+// workspace.files.state_file.
+func (s SessionStateConfig) FileEffective() string {
+	if s.File != "" {
+		return s.File
+	}
+	return DefaultWorkspaceStateFile
+}
+
+// FileEffectiveFor returns session_state.file, else the workspace
+// files config's state file (which itself defaults to
+// DefaultWorkspaceStateFile).
+func (s SessionStateConfig) FileEffectiveFor(files WorkspaceFilesConfig) string {
+	if s.File != "" {
+		return s.File
+	}
+	return files.StateFilePath()
 }
 
 // DefaultBrainConfig returns sensible defaults for the brain subsystem.
