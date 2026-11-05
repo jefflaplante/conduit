@@ -1317,7 +1317,10 @@ environment gets past it. The startup check catches what it misses.
 The gateway only starts with the config file the owner last approved. Each
 approved `update_config` write is copied to `.<config name>.approved` (0600,
 next to the config) and its SHA-256 is recorded in the data directory
-(`<data_dir>/config/approved-config-<id>.sha256`). At startup:
+(`<data_dir>/config/approved-config-<id>.sha256`). When the config's
+directory is not writable (a container's read-only `/etc`), the snapshot
+lives in the data directory too, as `<data_dir>/config/approved-config-<id>.json`,
+and is looked for in both places. At startup:
 
 | State | Result |
 |-------|--------|
