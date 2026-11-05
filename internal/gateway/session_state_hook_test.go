@@ -52,10 +52,6 @@ func newHookGateway(t *testing.T) (*Gateway, *sessions.Store, string) {
 	return gw, store, statePath
 }
 
-func hookStatePath(g *Gateway) string {
-	return g.sessionStateFilePath()
-}
-
 // --- stateHookFor ---
 
 func TestStateHookFor_Disabled(t *testing.T) {
@@ -155,12 +151,6 @@ func TestMaybeWriteSessionState_GuardRefusesClobber(t *testing.T) {
 }
 
 // --- Path B: idle distillation ---
-
-// distillTestProvider records side-call requests.
-type distillTestProvider struct {
-	turnProvider
-	calls []string
-}
 
 func TestDistillIdleSessionStates(t *testing.T) {
 	gw, store, statePath := newHookGateway(t)
