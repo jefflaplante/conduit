@@ -1,0 +1,30 @@
+# pipeline noise floor (bd-e9o8 / bd-39mx phase 2 pre-build)
+#
+# Everything on conduit/events/pipeline that neither rule above claimed is
+# dropped silently, but counted per hour; once per hour a heartbeat event on
+# conduit/health/pipeline-noise reports the count so total silence (breakage)
+# is distinguishable from healthy silence (all noise absorbed).
+consts:
+  health_root: &health_root conduit/health
+  heartbeat_s: &heartbeat_s 3600   # one noise heartbeat per hour
+  window_s: &window_s 60           # window size reported in attrs (mirrors dedupe)
+
+id: pipeline-noise-floor
+topic: conduit/events/pipeline
+trigger: pipeline_event
+condition:
+  type: catch_all
+action:
+  type: drop_and_count
+  counter:
+    key: hour_bucket
+    window_s: *heartbeat_s
+  heartbeat:
+    topic: *health_root
+    subtopic_template: pipeline-noise
+    payload_template: pipeline-noise-heartbeat
+    payload_consts:
+      window_s: *window_s
+    interval_s: *heartbeat_s
+    retained: true
+    qos: 1

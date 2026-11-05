@@ -1,0 +1,34 @@
+# pipeline anomaly escalation (bd-e9o8 / bd-39mx phase 2 pre-build)
+#
+# Any pipeline run or merged pipeline summary whose attrs show a failure
+# (attrs.error non-empty) or a hang (attrs.duration_ms > slow_ms) goes to the
+# alert path immediately instead of waiting in the noise floor. Repeat fires
+# for the same source entity inside the suppression window are dropped (the
+# first alert already carries the samples).
+consts:
+  slow_ms: &slow_ms 30000           # SLOW RUN threshold
+  suppress_s: &suppress_s 600       # per-entity suppression window (10 min)
+  anomaly_sample: &anomaly_sample 3 # max samples attached per summary (mirrors dedupe)
+
+id: pipeline-anomaly-escalate
+topic: conduit/events/pipeline#
+trigger: pipeline_event
+condition:
+  type: attrs_any
+  any:
+    - type: attrs_nonempty
+      field: error
+    - type: attrs_threshold
+      field: duration_ms
+      op: gt
+      value: *slow_ms
+  anomaly_sample: *anomaly_sample
+action:
+  type: alert
+  topic_template: alerts/pipeline
+  severity: warn
+  attach:
+    - anomaly_samples
+  suppression:
+    key: source_entity
+    window_s: *suppress_s

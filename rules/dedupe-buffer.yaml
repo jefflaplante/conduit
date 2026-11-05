@@ -1,0 +1,41 @@
+# pipeline-run consolidation window (bd-e9o8 / bd-39mx phase 2 pre-build)
+#
+# Bridge automations publish one pipeline-run event per automation hop; a
+# single logical action (doorbell -> camera -> notify) is 3-6 noisy events.
+# This rule buffers pipeline-run events per source entity and, on flush,
+# emits ONE merged summary to conduit/events/pipeline instead of N events.
+#
+# All tunables are consts declared once here and referenced by alias below —
+# edit values, never logic. See docs/pipeline-consolidation.md.
+consts:
+  window_s: &window_s 60            # CONSOLIDATION WINDOW: buffer stays open this long
+  window_timeout_ms: &window_timeout_ms 5000  # max time the HA automation may take to add runs
+  entity_limit: &entity_limit 20    # REDUCED_ENTITY_LIMIT: attrs truncated above this
+  anomaly_sample: &anomaly_sample 3 # ANOMALY_SAMPLE: error/slow runs quoted per summary
+  root: &root conduit/events        # CONDUIT ROOT: publish namespace
+
+id: pipeline-dedupe-buffer
+topic: conduit/events/pipeline-run/#
+trigger: pipeline_run
+condition:
+  type: window_buffer
+  key: source_entity
+  window_s: *window_s
+  window_timeout_ms: *window_timeout_ms
+  max_entities_full: *entity_limit
+  anomaly_sample: *anomaly_sample
+action:
+  type: publish
+  topic: *root
+  subtopic_template: pipeline
+  payload_template: pipeline-summary
+  payload_consts:
+    entity_limit: *entity_limit
+    anomaly_sample: *anomaly_sample
+  # single run in the window: pass through as a normal event (no summary envelope)
+  single_passthrough: true
+  # deterministic UUIDv5 id so re-publishing the same window is idempotent
+  # (BB8 style: unsolicited publisher, never expects or reads replies)
+  id_strategy: uuid_v5
+  retained: false
+  qos: 1
