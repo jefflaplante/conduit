@@ -219,3 +219,40 @@ func writePidfile(path string) error {
 	}
 	return os.Chmod(path, 0o644)
 }
+
+// portSidecarSuffix marks the <pidfile>.port sidecar where the running
+// gateway publishes the port its /health endpoint listens on (bd-j17v).
+const portSidecarSuffix = ".port"
+
+// writePortSidecar publishes port next to the pidfile as <pidfile>.port so
+// the CLI can health-check the gateway even when it cannot load config.json
+// (e.g. `conduit status` run from a directory with no config). Port <= 0 is
+// rejected: the sidecar must never advertise a useless port. 0644 like the
+// pidfile — a port is not secret and the CLI may run as another user.
+func writePortSidecar(pidfilePath string, port int) error {
+	if port <= 0 {
+		return fmt.Errorf("invalid port %d for port sidecar", port)
+	}
+	sidecar := pidfilePath + portSidecarSuffix
+	if err := os.MkdirAll(filepath.Dir(sidecar), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(sidecar, []byte(strconv.Itoa(port)), 0o644); err != nil {
+		return err
+	}
+	return os.Chmod(sidecar, 0o644)
+}
+
+// readPortSidecar parses a <pidfile>.port sidecar. Missing file or garbage
+// content is an error; callers fall back to the next resolution source.
+func readPortSidecar(sidecar string) (int, error) {
+	data, err := os.ReadFile(sidecar)
+	if err != nil {
+		return 0, err
+	}
+	port, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || port <= 0 {
+		return 0, fmt.Errorf("invalid port in %s", sidecar)
+	}
+	return port, nil
+}

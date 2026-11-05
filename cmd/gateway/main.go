@@ -239,8 +239,15 @@ func runServer() error {
 	if err := writePidfile(pidPath); err != nil {
 		log.Printf("Warning: failed to write pidfile %s: %v", pidPath, err)
 	} else {
+		// bd-j17v: publish the health-check port next to the pidfile so
+		// `conduit status` can find the gateway's real port regardless of
+		// which directory the CLI runs from.
+		if err := writePortSidecar(pidPath, cfg.Port); err != nil {
+			log.Printf("Warning: failed to write port sidecar %s: %v", pidPath+portSidecarSuffix, err)
+		}
 		defer os.Remove(pidPath)
-		log.Printf("PID %d written to %s", os.Getpid(), pidPath)
+		defer os.Remove(pidPath + portSidecarSuffix)
+		log.Printf("PID %d written to %s (port sidecar %s)", os.Getpid(), pidPath, pidPath+portSidecarSuffix)
 	}
 
 	// Setup graceful shutdown
