@@ -219,6 +219,36 @@ func (m *Manager) RemoveAdapter(id string) error {
 	return nil
 }
 
+// SendMessageSync sends a message through the specified channel
+// synchronously: it performs the adapter send inline and returns the real
+// send error. It mirrors the async path's preprocessing (reply tags, text
+// sanitization) so both paths deliver identical bytes.
+//
+// conduit-wfai: the async SendMessage only reports enqueue outcome — the
+// router goroutine logs and drops adapter failures — so callers who must
+// audit delivery truthfully (heartbeat alert dispatch) use this path.
+// Tool sends stay on the async queue.
+func (m *Manager) SendMessageSync(msg *protocol.OutgoingMessage) error {
+	processReplyTags(msg)
+	msg.Text = SanitizeOutgoingText(msg.Text)
+
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+
+	if m.ctx == nil {
+		return fmt.Errorf("channel manager is not running")
+	}
+	if m.stopped || m.ctx.Err() != nil {
+		return fmt.Errorf("channel manager is shutting down")
+	}
+
+	adapter, exists := m.adapters[msg.ChannelID]
+	if !exists {
+		return fmt.Errorf("no adapter found for channel %s", msg.ChannelID)
+	}
+	return adapter.SendMessage(msg)
+}
+
 // SendMessage sends a message through the specified channel
 func (m *Manager) SendMessage(msg *protocol.OutgoingMessage) error {
 	// The read lock is held across the (non-blocking) enqueue so a message

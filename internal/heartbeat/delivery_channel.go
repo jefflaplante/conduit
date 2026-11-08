@@ -34,6 +34,16 @@ type ChannelSenderDeliverer struct {
 	sender ChannelSender
 }
 
+// conduit-wfai: senders that can confirm the adapter send synchronously
+// implement SyncSender so the deliverer can audit the real delivery
+// outcome. The async ChannelSender.SendMessage reports enqueue success
+// only — the channel manager's router goroutine performs the actual
+// adapter send later and drops failures into a log line — which made
+// alert_history record action_result=success for dead targets.
+type SyncSender interface {
+	SendMessageSync(ctx context.Context, channelID, userID, content string, metadata map[string]string) error
+}
+
 // NewChannelSenderDeliverer wraps sender as a Deliverer.
 func NewChannelSenderDeliverer(sender ChannelSender) *ChannelSenderDeliverer {
 	return &ChannelSenderDeliverer{sender: sender}
@@ -55,6 +65,12 @@ func (d *ChannelSenderDeliverer) Deliver(ctx context.Context, alert Alert, targe
 	if d.sender == nil {
 		log.Printf("[HeartbeatIntegration] No channel sender configured, would send: %s", message)
 		return nil
+	}
+	// conduit-wfai: prefer the sync path when the sender can report the
+	// real adapter outcome (Gateway implements SendMessageSync); fall back
+	// to the async queue for senders that only enqueue.
+	if sync, ok := d.sender.(SyncSender); ok {
+		return sync.SendMessageSync(ctx, channelID, userID, message, nil)
 	}
 	return d.sender.SendMessage(ctx, channelID, userID, message, nil)
 }
