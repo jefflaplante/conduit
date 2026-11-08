@@ -106,6 +106,16 @@ type job struct {
 	value  float64
 	action string
 	reason string // set when evaluation already downgraded (budget)
+	pub    *consPublish
+}
+
+// consPublish is one consolidation output (summary, passthrough, alert or
+// noise heartbeat) handed to the worker for publication (bd-e9o8 phase 2).
+type consPublish struct {
+	topic    string
+	payload  []byte
+	qos      byte
+	retained bool
 }
 
 func downgrade(action string) string {
@@ -121,15 +131,22 @@ func downgrade(action string) string {
 // dispatch runs on the worker goroutine: builds the prompt and executes the
 // (possibly downgraded) action.
 func (e *Engine) dispatch(j job) {
-	data := e.templateData(j)
-	var b strings.Builder
-	b.WriteString(Preamble(j.rule.ID(), j.ev.Topic))
-	b.WriteString("\n\n")
-	if err := j.rule.tmpl.Execute(&b, data.vars()); err != nil {
-		e.doLog(j, data, joinReason(j.reason, "template render failed: "+err.Error()))
+	if j.pub != nil {
+		e.publishCons(j.pub)
 		return
 	}
-	task := b.String()
+	data := e.templateData(j)
+	task := ""
+	if j.rule.tmpl != nil {
+		var b strings.Builder
+		b.WriteString(Preamble(j.rule.ID(), j.ev.Topic))
+		b.WriteString("\n\n")
+		if err := j.rule.tmpl.Execute(&b, data.vars()); err != nil {
+			e.doLog(j, data, joinReason(j.reason, "template render failed: "+err.Error()))
+			return
+		}
+		task = b.String()
+	}
 
 	switch j.action {
 	case actSpawn:

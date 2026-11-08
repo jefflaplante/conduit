@@ -11,7 +11,7 @@ consts:
   anomaly_sample: &anomaly_sample 3 # max samples attached per summary (mirrors dedupe)
 
 id: pipeline-anomaly-escalate
-topic: conduit/events/pipeline#
+topic: conduit/events/#
 trigger: pipeline_event
 condition:
   type: attrs_any

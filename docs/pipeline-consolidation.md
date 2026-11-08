@@ -62,7 +62,7 @@ Behavior:
 
 | | |
 |---|---|
-| Trigger | `conduit/events/pipeline#` (runs and summaries) |
+| Trigger | `conduit/events/#` (runs and summaries) |
 | Condition | `attrs_any`: `attrs.error` non-empty **or** `attrs.duration_ms > 30000` |
 | Action | `alert` on `alerts/pipeline`, `severity=warn`, anomaly samples attached (max 3) |
 
