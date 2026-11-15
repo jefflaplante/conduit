@@ -165,7 +165,7 @@ func TestMQTTEvents_ConditionEnums(t *testing.T) {
 		{"missing op", func(r *MQTTEventRule) { r.Condition.Op = "" }, "condition.op"},
 		{"negative duration", func(r *MQTTEventRule) { r.Condition.DurationS = -1 }, "duration_s"},
 		{"negative cooldown", func(r *MQTTEventRule) { r.CooldownS = -1 }, "cooldown_s"},
-		{"bad action", func(r *MQTTEventRule) { r.Action.Type = "publish" }, "action.type"},
+		{"bad action", func(r *MQTTEventRule) { r.Action.Type = "reboot" }, "action.type"},
 		{"bad priority", func(r *MQTTEventRule) { r.Action.Priority = "urgent" }, "priority"},
 		{"priority without spawn", func(r *MQTTEventRule) { r.Action.Type = "queue" }, "priority"},
 		{"empty id", func(r *MQTTEventRule) { r.ID = "" }, "id"},

@@ -169,6 +169,10 @@ type MQTTEventBudget struct {
 // baseline, per-rule budget) is shared across every topic it matches, so a
 // fire on one topic can cool down or reset the rule for its siblings. Write
 // one rule per topic where per-topic state matters.
+//
+// Consolidation rules (bd-e9o8 phase 2) add window_buffer/attrs_any/catch_all
+// conditions and publish/alert/drop_and_count actions; their semantics live in
+// docs/pipeline-consolidation.md and their constants in rules/*.yaml.
 type MQTTEventRule struct {
 	ID             string             `json:"id"`
 	Topic          string             `json:"topic"` // MQTT topic filter; "+" and "#" allowed
@@ -183,24 +187,98 @@ type MQTTEventRule struct {
 func (r MQTTEventRule) IsEnabled() bool { return r.Enabled == nil || *r.Enabled }
 
 // MQTTEventCondition is evaluated in code on every event for the rule topic.
+//
+// window_buffer (bd-e9o8): per-key tumbling window. Events buffer under Key
+// (read from the payload per KeySource) for WindowS seconds measured on the
+// event clock (ClockField inside the payload, falling back to broker receive
+// time); the window flushes on expiry, on MaxBufferedRuns, or when appends
+// stall past WindowTimeoutMs. Key state is bounded by MaxBufferedKeys.
 type MQTTEventCondition struct {
-	Type      string  `json:"type"`            // state_change | threshold
-	Field     string  `json:"field,omitempty"` // JSON key for object payloads
+	Type      string  `json:"type"`            // state_change | threshold | window_buffer | attrs_any | catch_all
+	Field     string  `json:"field,omitempty"` // JSON key for object payloads (threshold/state_change)
 	Op        string  `json:"op,omitempty"`    // lt | lte | gt | gte | eq (threshold)
 	Value     float64 `json:"value,omitempty"`
 	DurationS int     `json:"duration_s,omitempty"` // threshold: must hold this long
+
+	// window_buffer:
+	Key             string `json:"key,omitempty"`               // grouping field (e.g. source_entity)
+	KeySource       string `json:"key_source,omitempty"`        // top_level | attrs | auto (default)
+	WindowS         int    `json:"window_s,omitempty"`          // tumbling window length (default 60)
+	WindowTimeoutMs int    `json:"window_timeout_ms,omitempty"` // append-stall flush bound (default 5000)
+	MaxEntitiesFull int    `json:"max_entities_full,omitempty"` // entities listed before reduced form (default 20)
+	AnomalySample   int    `json:"anomaly_sample,omitempty"`    // error/slow runs quoted per summary (default 3)
+	ClockField      string `json:"clock_field,omitempty"`       // payload epoch-ms field used as the event clock
+	MaxBufferedRuns int    `json:"max_buffered_runs,omitempty"` // per-key buffer cap (default 100)
+	MaxBufferedKeys int    `json:"max_buffered_keys,omitempty"` // per-rule key cap (default 100)
+
+	// attrs_any: any of these checks matches (error non-empty OR slow run).
+	Any []MQTTEventAttrCheck `json:"any,omitempty"`
 }
 
-// MQTTEventAction is what a fired rule does. Only spawn, queue and log
-// exist; the engine's dispatch switch enforces that independently of this
-// validation.
+// MQTTEventAttrCheck is one leaf check inside attrs_any.
+type MQTTEventAttrCheck struct {
+	Type  string  `json:"type"`            // attrs_nonempty | attrs_threshold
+	Field string  `json:"field"`           // attrs field name
+	Op    string  `json:"op,omitempty"`    // attrs_threshold: lt | lte | gt | gte | eq
+	Value float64 `json:"value,omitempty"` // attrs_threshold comparand
+}
+
+// MQTTEventSuppression is the per-key alert suppression window (bd-e9o8):
+// repeat fires for the same Key inside WindowS are counted, not published.
+type MQTTEventSuppression struct {
+	Key     string `json:"key"`      // e.g. source_entity
+	WindowS int    `json:"window_s"` // e.g. 600
+}
+
+// MQTTEventHeartbeat is the periodic health publication of a drop_and_count
+// rule: once per IntervalS it publishes dropped_count/dropped_total to its
+// topic so silence stays distinguishable from breakage.
+type MQTTEventHeartbeat struct {
+	Topic            string         `json:"topic"`                       // root (e.g. conduit/health)
+	SubtopicTemplate string         `json:"subtopic_template,omitempty"` // appended after "/"
+	PayloadTemplate  string         `json:"payload_template,omitempty"`  // payload "type" field
+	PayloadConsts    map[string]any `json:"payload_consts,omitempty"`    // merged into every beat
+	IntervalS        int            `json:"interval_s"`                  // beat cadence
+	Retained         bool           `json:"retained,omitempty"`
+	QoS              int            `json:"qos,omitempty"`
+}
+
+// MQTTEventAction is what a fired rule does. v1 verbs are spawn, queue and
+// log; bd-e9o8 phase 2 adds publish (consolidation summary/passthrough),
+// alert (suppressed escalation) and drop_and_count (noise floor). The
+// engine's dispatch switch enforces that independently of this validation.
 type MQTTEventAction struct {
-	Type           string   `json:"type"`               // spawn | queue | log
-	Priority       string   `json:"priority,omitempty"` // spawn only: high | medium | low
+	Type           string   `json:"type"`               // spawn | queue | log | publish | alert | drop_and_count
+	Priority       string   `json:"priority,omitempty"` // spawn/alert: high | medium | low
 	Skills         []string `json:"skills,omitempty"`
 	Model          string   `json:"model,omitempty"`
 	TimeoutS       int      `json:"timeout_s,omitempty"` // spawn, default 600
-	PromptTemplate string   `json:"prompt_template"`
+	PromptTemplate string   `json:"prompt_template,omitempty"`
+
+	// publish (bd-e9o8):
+	Topic             string `json:"topic,omitempty"`              // namespace root (e.g. conduit/events)
+	SubtopicTemplate  string `json:"subtopic_template,omitempty"`  // appended after "/"
+	PayloadTemplate   string `json:"payload_template,omitempty"`   // summary "type" field
+	SinglePassthrough *bool  `json:"single_passthrough,omitempty"` // default true: 1-run window = normal event
+	IDStrategy        string `json:"id_strategy,omitempty"`        // uuid_v5 (default) | plain
+	Retained          bool   `json:"retained,omitempty"`
+	QoS               int    `json:"qos,omitempty"`
+
+	// alert (bd-e9o8):
+	Severity      string                `json:"severity,omitempty"`       // required
+	TopicTemplate string                `json:"topic_template,omitempty"` // full topic override for the alert publication
+	Attach        []string              `json:"attach,omitempty"`         // e.g. anomaly_samples
+	Suppression   *MQTTEventSuppression `json:"suppression,omitempty"`    // per-key suppression window
+
+	// drop_and_count (bd-e9o8):
+	Counter   *MQTTEventCounter   `json:"counter,omitempty"`
+	Heartbeat *MQTTEventHeartbeat `json:"heartbeat,omitempty"`
+}
+
+// MQTTEventCounter names the drop counter of a drop_and_count rule.
+type MQTTEventCounter struct {
+	Key     string `json:"key,omitempty"`      // e.g. hour_bucket (informational label)
+	WindowS int    `json:"window_s,omitempty"` // beat cadence mirror
 }
 
 const (
@@ -212,6 +290,19 @@ const (
 	defaultEventPayloadMaxBytes     = 2048
 	defaultEventSpawnTimeoutS       = 600
 	defaultEventSpawnPriority       = "medium"
+
+	// Consolidation defaults (bd-e9o8): the values single-sourced in the
+	// rules/*.yaml consts blocks. The YAML files remain the documented
+	// contract; these mirror them for configs built in code.
+	eventDefaultWindowS         = 60
+	eventDefaultWindowTimeoutMs = 5000
+	eventDefaultEntityLimit     = 20
+	eventDefaultAnomalySample   = 3
+	eventDefaultSuppressS       = 600
+	eventDefaultHeartbeatS      = 3600
+	eventDefaultMaxBufferedRuns = 100
+	eventDefaultMaxBufferedKeys = 100
+	eventDefaultIDStrategy      = "uuid_v5"
 
 	// MinEventTemplateSubstance is the minimum length of a prompt template's
 	// own text (rendered with blank event data): a template that gives the
@@ -234,14 +325,54 @@ func (e *MQTTEventsConfig) ApplyDefaults() {
 	}
 	for i := range e.Rules {
 		a := &e.Rules[i].Action
-		if a.Type == "spawn" {
+		switch a.Type {
+		case "spawn":
 			if a.TimeoutS <= 0 {
 				a.TimeoutS = defaultEventSpawnTimeoutS
 			}
 			if a.Priority == "" {
 				a.Priority = defaultEventSpawnPriority
 			}
+		case "alert":
+			if a.Priority == "" {
+				a.Priority = defaultEventSpawnPriority
+			}
+		case "publish":
+			if a.IDStrategy == "" {
+				a.IDStrategy = eventDefaultIDStrategy
+			}
 		}
+		c := &e.Rules[i].Condition
+		switch c.Type {
+		case "window_buffer":
+			// window_s is structural, not defaultable: a window rule without
+			// a window length is a config error (docs/YAML always set it).
+			if c.WindowTimeoutMs == 0 {
+				c.WindowTimeoutMs = eventDefaultWindowTimeoutMs
+			}
+			if c.MaxEntitiesFull == 0 {
+				c.MaxEntitiesFull = eventDefaultEntityLimit
+			}
+			if c.AnomalySample == 0 {
+				c.AnomalySample = eventDefaultAnomalySample
+			}
+			if c.MaxBufferedRuns == 0 {
+				c.MaxBufferedRuns = eventDefaultMaxBufferedRuns
+			}
+			if c.MaxBufferedKeys == 0 {
+				c.MaxBufferedKeys = eventDefaultMaxBufferedKeys
+			}
+			if c.KeySource == "" {
+				c.KeySource = "auto"
+			}
+		case "attrs_any":
+			if c.AnomalySample == 0 {
+				c.AnomalySample = eventDefaultAnomalySample
+			}
+		}
+		// NOTE: heartbeat.interval_s is intentionally NOT defaulted here —
+		// Heartbeat.validate() rejects 0, and a silent default would mask a
+		// malformed rule (the beat cadence is a breakage-detection contract).
 	}
 }
 
@@ -299,8 +430,56 @@ func (r *MQTTEventRule) validate() error {
 		default:
 			return fmt.Errorf("condition.op %q: must be one of lt, lte, gt, gte, eq", c.Op)
 		}
+	case "window_buffer":
+		if c.Key == "" {
+			return fmt.Errorf("condition.key is required for window_buffer")
+		}
+		switch c.KeySource {
+		case "", "top_level", "attrs", "auto":
+		default:
+			return fmt.Errorf("condition.key_source %q: must be top_level, attrs or auto", c.KeySource)
+		}
+		if c.WindowS <= 0 {
+			return fmt.Errorf("condition.window_s must be positive, got %d", c.WindowS)
+		}
+		if c.WindowTimeoutMs <= 0 {
+			return fmt.Errorf("condition.window_timeout_ms must be positive, got %d", c.WindowTimeoutMs)
+		}
+		if c.MaxEntitiesFull <= 0 {
+			return fmt.Errorf("condition.max_entities_full must be positive, got %d", c.MaxEntitiesFull)
+		}
+		if c.AnomalySample <= 0 {
+			return fmt.Errorf("condition.anomaly_sample must be positive, got %d", c.AnomalySample)
+		}
+		if c.MaxBufferedRuns <= 0 {
+			return fmt.Errorf("condition.max_buffered_runs must be positive, got %d", c.MaxBufferedRuns)
+		}
+		if c.MaxBufferedKeys <= 0 {
+			return fmt.Errorf("condition.max_buffered_keys must be positive, got %d", c.MaxBufferedKeys)
+		}
+	case "attrs_any":
+		if len(c.Any) == 0 {
+			return fmt.Errorf("condition.any must list at least one check")
+		}
+		for i, chk := range c.Any {
+			if chk.Field == "" {
+				return fmt.Errorf("condition.any[%d].field is required", i)
+			}
+			switch chk.Type {
+			case "attrs_nonempty":
+			case "attrs_threshold":
+				switch chk.Op {
+				case "lt", "lte", "gt", "gte", "eq":
+				default:
+					return fmt.Errorf("condition.any[%d].op %q: must be one of lt, lte, gt, gte, eq", i, chk.Op)
+				}
+			default:
+				return fmt.Errorf("condition.any[%d].type %q: must be attrs_nonempty or attrs_threshold", i, chk.Type)
+			}
+		}
+	case "catch_all":
 	default:
-		return fmt.Errorf("condition.type %q: must be state_change or threshold", c.Type)
+		return fmt.Errorf("condition.type %q: must be state_change, threshold, window_buffer, attrs_any or catch_all", c.Type)
 	}
 	if c.DurationS < 0 {
 		return fmt.Errorf("condition.duration_s cannot be negative")
@@ -317,14 +496,67 @@ func (r *MQTTEventRule) validate() error {
 		if a.Priority != "" {
 			return fmt.Errorf("action.priority is only valid with action.type spawn")
 		}
+	case "publish":
+		if a.Topic == "" {
+			return fmt.Errorf("action.topic is required for publish")
+		}
+		switch a.IDStrategy {
+		case "", "uuid_v5", "plain":
+		default:
+			return fmt.Errorf("action.id_strategy %q: must be uuid_v5 or plain", a.IDStrategy)
+		}
+		if a.QoS < 0 || a.QoS > 2 {
+			return fmt.Errorf("action.qos must be 0, 1 or 2")
+		}
+	case "alert":
+		if a.Severity == "" {
+			return fmt.Errorf("action.severity is required for alert")
+		}
+		switch a.Priority {
+		case "high", "medium", "low":
+		default:
+			return fmt.Errorf("action.priority %q: must be high, medium or low", a.Priority)
+		}
+		if s := a.Suppression; s != nil {
+			if s.Key == "" {
+				return fmt.Errorf("action.suppression.key is required")
+			}
+			if s.WindowS <= 0 {
+				return fmt.Errorf("action.suppression.window_s must be positive, got %d", s.WindowS)
+			}
+		}
+	case "drop_and_count":
+		if a.Heartbeat == nil {
+			return fmt.Errorf("action.heartbeat is required for drop_and_count")
+		}
+		if err := a.Heartbeat.validate(); err != nil {
+			return err
+		}
 	default:
-		return fmt.Errorf("action.type %q: must be spawn, queue or log", a.Type)
+		return fmt.Errorf("action.type %q: must be spawn, queue, log, publish, alert or drop_and_count", a.Type)
 	}
 	if a.TimeoutS < 0 {
 		return fmt.Errorf("action.timeout_s cannot be negative")
 	}
-	_, err := ParseMQTTEventTemplate(r.ID, a.PromptTemplate)
-	return err
+	if a.Type == "spawn" || a.Type == "queue" || a.Type == "log" {
+		_, err := ParseMQTTEventTemplate(r.ID, a.PromptTemplate)
+		return err
+	}
+	return nil
+}
+
+// validate checks a heartbeat block (drop_and_count rules).
+func (h *MQTTEventHeartbeat) validate() error {
+	if h.Topic == "" {
+		return fmt.Errorf("action.heartbeat.topic is required")
+	}
+	if h.IntervalS <= 0 {
+		return fmt.Errorf("action.heartbeat.interval_s must be positive, got %d", h.IntervalS)
+	}
+	if h.QoS < 0 || h.QoS > 2 {
+		return fmt.Errorf("action.heartbeat.qos must be 0, 1 or 2")
+	}
+	return nil
 }
 
 // ParseMQTTEventTemplate compiles a rule prompt template (text/template, no

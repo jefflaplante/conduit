@@ -24,6 +24,15 @@ condition:
   window_timeout_ms: *window_timeout_ms
   max_entities_full: *entity_limit
   anomaly_sample: *anomaly_sample
+  # error/slow runs get quoted in anomaly_samples (same criteria as the
+  # escalate rule) — buildSummary scans buffered runs with these checks.
+  any:
+    - type: attrs_nonempty
+      field: error
+    - type: attrs_threshold
+      field: duration_ms
+      op: gt
+      value: 30000
 action:
   type: publish
   topic: *root
