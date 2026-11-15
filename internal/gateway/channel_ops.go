@@ -30,6 +30,30 @@ func (g *Gateway) SendMessage(ctx context.Context, channelID, userID, content st
 	return g.channelManager.SendMessage(outgoingMsg)
 }
 
+// SendMessageSync delivers synchronously: the adapter send happens inline
+// and the real send error is returned. conduit-wfai: used by the heartbeat
+// alert deliverer (SyncSender capability) so alert_history audits the
+// actual delivery result instead of enqueue success. Tool sends keep the
+// async queue (SendMessage).
+func (g *Gateway) SendMessageSync(ctx context.Context, channelID, userID, content string, metadata map[string]string) error {
+	if g.channelManager == nil {
+		return fmt.Errorf("channel manager is not available")
+	}
+	outgoingMsg := &protocol.OutgoingMessage{
+		BaseMessage: protocol.BaseMessage{
+			Type:      protocol.TypeOutgoingMessage,
+			ID:        fmt.Sprintf("tool_msg_%d", time.Now().UnixNano()),
+			Timestamp: time.Now(),
+		},
+		ChannelID: channelID,
+		UserID:    userID,
+		Text:      g.topicTag(types.RequestSessionKey(ctx), channelID, userID, content),
+		Metadata:  metadata,
+	}
+
+	return g.channelManager.SendMessageSync(outgoingMsg)
+}
+
 // GetChannelStatusMap implements the ChannelSender interface for rich error messages
 func (g *Gateway) GetChannelStatusMap() map[string]string {
 	if g.channelManager == nil {

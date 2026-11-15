@@ -97,6 +97,82 @@ func TestDelivery_SuccessWritesAlertHistory(t *testing.T) {
 	}
 }
 
+// syncSender is a ChannelSender that also implements the optional
+// SendMessageSync capability (bd-wfai). SyncSenderDeliverer must prefer the
+// sync path: one SendMessageSync call, zero SendMessage calls, so the audit
+// row reflects the real adapter outcome instead of enqueue success.
+type syncSender struct {
+	mu       sync.Mutex
+	syncErr  error
+	syncCalls int
+	asyncCalls int
+	msgs     []string
+}
+
+func (s *syncSender) SendMessageSync(ctx context.Context, channelID, userID, content string, md map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncCalls++
+	if s.syncErr != nil {
+		return s.syncErr
+	}
+	s.msgs = append(s.msgs, channelID+":"+userID+"|"+content)
+	return nil
+}
+
+func (s *syncSender) SendMessage(ctx context.Context, channelID, userID, content string, md map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.asyncCalls++
+	return nil
+}
+
+func (s *syncSender) snapshot() (syncCalls, asyncCalls int, msgs []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.syncCalls, s.asyncCalls, append([]string(nil), s.msgs...)
+}
+
+func TestDelivery_SyncSenderPreferredAndAuditsFailure(t *testing.T) {
+	sender := &syncSender{syncErr: errors.New("chat not found")}
+	g, _, auditor := newAuditedIntegration(t, sender, fastPolicy(3))
+	job := &scheduler.Job{ID: "agent_heartbeat_main", Target: "telegram:42"}
+
+	action := HeartbeatAction{Type: ActionTypeAlert, Content: "disk 95%", Priority: TaskPriorityCritical}
+	err := g.executeAction(context.Background(), action, job, deliverWithRetry)
+	if err == nil {
+		t.Fatal("expected sync send failure to propagate")
+	}
+	g.retries.wg.Wait()
+
+	syncCalls, asyncCalls, msgs := sender.snapshot()
+	// Breaker threshold is 3 (see TestDelivery_FailingSenderRetriesThenTripsBreaker):
+	// first attempt + 2 retries fail, the third retry is short-circuited.
+	// All attempts must go through SendMessageSync — never the async queue.
+	if syncCalls != 3 || asyncCalls != 0 || len(msgs) != 0 {
+		t.Fatalf("sync=%d async=%d msgs=%v, want 3 sync-only calls", syncCalls, asyncCalls, msgs)
+	}
+
+	rows, err := auditor.ListRecent(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListRecent: %v", err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("want 4 audit rows (3 failures + 1 breaker skip), got %d", len(rows))
+	}
+	var breakerRows int
+	for _, r := range rows {
+		if strings.HasPrefix(r.ActionTaken, "circuit_breaker_open:") {
+			breakerRows++
+		} else if !strings.HasPrefix(r.ActionResult, "error:") || !strings.Contains(r.ActionResult, "chat not found") {
+			t.Errorf("audit row must record the real failure, got action=%q result=%q", r.ActionTaken, r.ActionResult)
+		}
+	}
+	if breakerRows != 1 {
+		t.Errorf("breaker rows = %d, want 1", breakerRows)
+	}
+}
+
 func TestDelivery_FailingSenderRetriesThenTripsBreaker(t *testing.T) {
 	sender := &flakySender{failN: -1}
 	g, reg, auditor := newAuditedIntegration(t, sender, fastPolicy(5))
