@@ -173,45 +173,28 @@ func mkBloatSkill(name, desc string) Skill {
 }
 
 // TestBuildSkillsContext_CompactFormat pins the one-line-per-skill format:
-// no full-description duplication (the catalog already carries it) and no
-// Location lines.
+// no description at all for action skills (the skill_* tool catalog is the
+// sole carrier of descriptions, conduit-3c1m) and no Location lines.
 func TestBuildSkillsContext_CompactFormat(t *testing.T) {
 	integrator := &SkillIntegrator{loader: NewSkillLoader(), config: nil}
 	longDesc := strings.Repeat("Trigger words. ", 40) // ~560 chars of bloat
-	skills := []Skill{mkBloatSkill("spot", longDesc)}
+	skill := mkBloatSkill("spot", longDesc)
+	skill.Actions = []string{"status", "report"}
 
-	out := integrator.BuildSkillsContext(skills)
+	out := integrator.BuildSkillsContext([]Skill{skill})
 
-	if !strings.Contains(out, "skill_spot") {
-		t.Errorf("section should name the tool, got: %s", out)
+	want := "- `skill_spot` 🔧 (actions: [status report])\n"
+	if !strings.Contains(out, want) {
+		t.Errorf("want exact line %q; got: %s", want, out)
 	}
-	if strings.Count(out, "Trigger words.") > 2 {
-		t.Errorf("full description must not be repeated in prompt section; got: %s", out)
+	if strings.Contains(out, "Trigger words") {
+		t.Errorf("description gist must not appear in prompt section (catalog carries it); got: %s", out)
 	}
 	if strings.Contains(out, "Location:") || strings.Contains(out, "**Tool:**") {
 		t.Errorf("legacy verbose format still present; got: %s", out)
 	}
 	if len(out) > 2000 {
 		t.Errorf("section for one skill should be compact; got %d chars: %s", len(out), out)
-	}
-}
-
-// TestTruncateDescription word-boundary and sentence-preference behavior.
-func TestTruncateDescription(t *testing.T) {
-	short := "Short description."
-	if got := truncateDescription(short, 160); got != short {
-		t.Errorf("short desc should pass through, got %q", got)
-	}
-
-	long := strings.Repeat("word ", 60) // 300 chars, no sentence break
-	got := truncateDescription(long, 100)
-	if len(got) > 105 || !strings.HasSuffix(got, "…") {
-		t.Errorf("expected word-boundary truncation with ellipsis, got %q (len %d)", got, len(got))
-	}
-
-	sentency := "First sentence is here. Then a long tail " + strings.Repeat("x", 200)
-	if got := truncateDescription(sentency, 160); got != "First sentence is here." {
-		t.Errorf("expected first-sentence truncation, got %q", got)
 	}
 }
 
@@ -464,7 +447,7 @@ func TestBuildSkillsContext_DocOnlyKeepsEmoji(t *testing.T) {
 }
 
 // TestBuildSkillsContext_ActionSkillKeepsFormat verifies skills with honest
-// actions keep the existing "description (actions: ...)" line unchanged.
+// actions render name + emoji + action list, with no description gist.
 func TestBuildSkillsContext_ActionSkillKeepsFormat(t *testing.T) {
 	integrator := &SkillIntegrator{loader: NewSkillLoader(), config: nil}
 	skill, err := NewSkillLoader().LoadSkillFromContent("---\nname: t\ndescription: Does things\nactions: [search, send]\n---\nbody")
@@ -474,20 +457,23 @@ func TestBuildSkillsContext_ActionSkillKeepsFormat(t *testing.T) {
 
 	out := integrator.BuildSkillsContext([]Skill{*skill})
 
-	want := "- `skill_t` 🔧 — Does things (actions: [search send])\n"
+	want := "- `skill_t` 🔧 (actions: [search send])\n"
 	if !strings.Contains(out, want) {
 		t.Errorf("want line %q; got: %s", want, out)
 	}
 	if strings.Contains(out, "doc-only") {
 		t.Errorf("action skill must not be marked doc-only; got: %s", out)
 	}
+	if strings.Contains(out, "Does things") {
+		t.Errorf("description gist must not appear in prompt section; got: %s", out)
+	}
 }
 
 // TestBuildSkillsContext_MixedFixtureShrinks pins the bd-0d9d goal with a
 // mixed fixture: the slim renderer must produce a strictly smaller section
 // than the pre-slim renderer would for the same skills (doc-only lines lose
-// their prose; action lines are identical in both renderers, so the shrink
-// comes entirely from the doc-only savings), while still listing every skill.
+// their prose; action lines lose their description gist), while still
+// listing every skill.
 func TestBuildSkillsContext_MixedFixtureShrinks(t *testing.T) {
 	integrator := &SkillIntegrator{loader: NewSkillLoader(), config: nil}
 	actionSkill, err := NewSkillLoader().LoadSkillFromContent("---\nname: solar\ndescription: Daily solar reports with a fairly long description that used to be injected verbatim into every prompt request\nactions: [status, daily_report]\n---\nbody")
@@ -497,13 +483,14 @@ func TestBuildSkillsContext_MixedFixtureShrinks(t *testing.T) {
 	docOnly := Skill{Name: "ghost", Description: strings.Repeat("Long legacy prose. ", 20)}
 
 	// The pre-slim renderer wrapped the doc-only Read pointer in the same
-	// "(actions: ...)" prose line as every other skill (conduit-7ny5 shape).
+	// "(actions: ...)" prose line as every other skill (conduit-7ny5 shape),
+	// and every line carried a description gist (first sentence or 160
+	// chars; dropped in conduit-3c1m).
 	oldDocLine := fmt.Sprintf("- `skill_%s` 🔧 — %s (actions: %s)\n",
-		docOnly.Name, truncateDescription(docOnly.Description, 160),
+		docOnly.Name, "Long legacy prose.",
 		fmt.Sprintf("doc-only — Read skills/%s/SKILL.md", docOnly.Name))
 	actionLine := fmt.Sprintf("- `skill_solar` 🔧 — %s (actions: %s)\n",
-		truncateDescription(actionSkill.Description, 160),
-		formatActionsList(actionSkill.Actions))
+		actionSkill.Description, formatActionsList(actionSkill.Actions))
 	oldLen := len("## Available Skills\n\nThe following specialized skills are available:\n") + len(actionLine) + len(oldDocLine) + 1
 
 	out := integrator.BuildSkillsContext([]Skill{*actionSkill, docOnly})

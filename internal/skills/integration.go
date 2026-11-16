@@ -430,28 +430,6 @@ func GenerateToolAdapters(ctx context.Context, manager *Manager) ([]*SkillToolAd
 	return adapters, nil
 }
 
-// truncateDescription shortens a skill description for prompt use. Applies a
-// word-boundary-safe cutoff at maxChars (sentence break preferred), and marks
-// truncation with "…". Skills like `spot` carry 500+ char trigger lists in
-// their description; in the prompt section those belong in the skill file
-// (read on demand), not in every request.
-func truncateDescription(desc string, maxChars int) string {
-	desc = strings.TrimSpace(desc)
-	if len(desc) <= maxChars {
-		return desc
-	}
-	// Prefer the first sentence when it fits reasonably
-	if idx := strings.Index(desc, ". "); idx > 0 && idx < maxChars {
-		return desc[:idx+1]
-	}
-	cut := desc[:maxChars]
-	// Back off to the last space to avoid splitting a word
-	if i := strings.LastIndex(cut, " "); i > maxChars/2 {
-		cut = cut[:i]
-	}
-	return strings.TrimRight(cut, " ,;:") + "…"
-}
-
 // BuildSkillsContext creates contextual information about skills for agent prompts
 func (i *SkillIntegrator) BuildSkillsContext(skills []Skill) string {
 	if len(skills) == 0 {
@@ -469,20 +447,20 @@ func (i *SkillIntegrator) BuildSkillsContext(skills []Skill) string {
 		}
 
 		actions := i.extractAvailableActions(skill)
-		// One compact line per skill. The full description already ships in
-		// the tool catalog (skill_* tools), so repeating it here doubled the
-		// token cost of every request. Skills with honest actions keep name +
-		// emoji + trimmed gist + the action list (the enums are load-bearing
-		// for dispatch). Doc-only skills (no honest actions, conduit-7ny5)
-		// drop the prose entirely: the Read pointer IS the message.
+		// One compact line per skill: an index, not a disclosure layer. The
+		// description lives solely in the tool catalog (skill_* tools), which
+		// ships on every request, so any copy here (even a trimmed gist,
+		// conduit-3c1m) is duplicated token cost. Skills with honest actions
+		// keep name + emoji + the action list (the enums are load-bearing for
+		// dispatch). Doc-only skills (no honest actions, conduit-7ny5) get the
+		// Read pointer instead: it IS the message.
 		var skillInfo string
 		if len(actions) == 0 {
 			skillInfo = fmt.Sprintf("- `skill_%s` %s — doc-only — Read skills/%s/SKILL.md\n",
 				skill.Name, emoji, skill.Name)
 		} else {
-			skillInfo = fmt.Sprintf("- `skill_%s` %s — %s (actions: %s)\n",
-				skill.Name, emoji, truncateDescription(skill.Description, 160),
-				formatActionsList(actions))
+			skillInfo = fmt.Sprintf("- `skill_%s` %s (actions: %s)\n",
+				skill.Name, emoji, formatActionsList(actions))
 		}
 
 		context = append(context, skillInfo)
