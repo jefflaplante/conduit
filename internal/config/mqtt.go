@@ -10,10 +10,15 @@ import (
 	"strings"
 	"text/template"
 	"text/template/parse"
+	"time"
 	"unicode/utf8"
 
 	"conduit/internal/trie"
 )
+
+// ArmedHoursLayout is the "HH:MM" format accepted by MQTTEventRule.ArmedFrom
+// and ArmedTo (bd-q0ez).
+const ArmedHoursLayout = "15:04"
 
 // MQTTConfig holds configuration for the optional MQTT event ingest service.
 type MQTTConfig struct {
@@ -181,6 +186,13 @@ type MQTTEventRule struct {
 	CooldownS      int                `json:"cooldown_s,omitempty"`
 	FireOnRetained bool               `json:"fire_on_retained,omitempty"`
 	Enabled        *bool              `json:"enabled,omitempty"` // nil = enabled
+
+	// Armed-hours window (bd-q0ez), both fields optional but mutually
+	// required: when set, the rule only evaluates inside [from, to) on each
+	// local day, "HH:MM" in SERVER-LOCAL time. from == to is rejected as a
+	// zero-length window; use e.g. 20:00→08:00 to span midnight.
+	ArmedFrom string `json:"armed_from,omitempty"`
+	ArmedTo   string `json:"armed_to,omitempty"`
 }
 
 // IsEnabled reports whether the rule is active (unset means enabled).
@@ -420,6 +432,22 @@ func (r *MQTTEventRule) validate() error {
 	}
 	if r.CooldownS < 0 {
 		return fmt.Errorf("cooldown_s cannot be negative")
+	}
+	if (r.ArmedFrom == "") != (r.ArmedTo == "") {
+		return fmt.Errorf("armed_from and armed_to must be set together")
+	}
+	if r.ArmedFrom != "" {
+		from, err := time.Parse(ArmedHoursLayout, r.ArmedFrom)
+		if err != nil {
+			return fmt.Errorf("armed_from %q must be HH:MM (24h)", r.ArmedFrom)
+		}
+		to, err := time.Parse(ArmedHoursLayout, r.ArmedTo)
+		if err != nil {
+			return fmt.Errorf("armed_to %q must be HH:MM (24h)", r.ArmedTo)
+		}
+		if from.Equal(to) {
+			return fmt.Errorf("armed window is zero length (%s = %s)", r.ArmedFrom, r.ArmedTo)
+		}
 	}
 	c := r.Condition
 	switch c.Type {

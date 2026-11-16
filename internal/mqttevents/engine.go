@@ -59,6 +59,7 @@ type Stats struct {
 	CapDowngrades     uint64
 	SpawnErrors       uint64
 	InFlight          int
+	DisarmedEvents    uint64 // skipped by an armed-hours window (bd-q0ez)
 
 	// Consolidation counters (bd-e9o8 phase 2), observable per docs rule 3.
 	ConsolidationPublished  uint64 // summaries + passthroughs + heartbeats
@@ -71,6 +72,7 @@ type counters struct {
 	spawned, queued, logged, refused, dropped       atomic.Uint64
 	cooldown, budgetDowngrades, capDowngrades       atomic.Uint64
 	spawnErrors                                     atomic.Uint64
+	disarmed                                        atomic.Uint64
 	consPub, consAlert, consSuppressed, consDropped atomic.Uint64
 }
 
@@ -321,8 +323,20 @@ func (e *Engine) HandleEvent(ev mqtt.Event) {
 			// flushes are publish-at-close semantics, not per-event fires,
 			// so the v1 budget/cooldown path does not apply (its counters
 			// live in Stats.Consolidation*).
+			if !r.armed(ev.Timestamp) {
+				e.stats.disarmed.Add(1)
+				continue
+			}
 			r.evaluateConsolidation(ev, r.twin)
 			e.drainPending(r)
+			continue
+		}
+		// Armed-hours gate (bd-q0ez): a disarmed rule is skipped entirely —
+		// no condition evaluation, no duration accumulation, no cooldown or
+		// budget spend. Uses the event timestamp so gating follows the same
+		// clock as evaluation.
+		if !r.armed(ev.Timestamp) {
+			e.stats.disarmed.Add(1)
 			continue
 		}
 		out, value := r.evaluate(ev)
@@ -420,6 +434,7 @@ func (e *Engine) Stats() Stats {
 		BudgetDowngrades:        e.stats.budgetDowngrades.Load(),
 		CapDowngrades:           e.stats.capDowngrades.Load(),
 		SpawnErrors:             e.stats.spawnErrors.Load(),
+		DisarmedEvents:          e.stats.disarmed.Load(),
 		InFlight:                inFlight,
 		ConsolidationPublished:  e.stats.consPub.Load(),
 		ConsolidationAlerts:     e.stats.consAlert.Load(),
