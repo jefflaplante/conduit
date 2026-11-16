@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -150,6 +151,23 @@ func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 
 	// conduit-31jg.35: shared TurnRunner (user + reply persisted inside the
 	// turn lock, conduit-31jg.22). Test endpoint turns are non-interactive.
+	// bd-tgy6: the turn runs for minutes, but the server's WriteTimeout is
+	// 60s — extend the write deadline for the duration of the turn so the
+	// server does not close the connection mid-flight. Without this, both a
+	// provider error and a successful-but-slow turn end up writing to a
+	// connection the server already gave up on, and the client sees an
+	// empty reply (curl 52) instead of the JSON response. The 20-minute
+	// budget is deliberately longer than the script clients' curl timeouts
+	// (-m 900/300): a hung turn ends with a clean client-side timeout.
+	writeDeadline := time.Now().Add(testMessageTurnBudget())
+	if rc := http.NewResponseController(w); rc != nil {
+		if err := rc.SetWriteDeadline(writeDeadline); err != nil {
+			// Non-fatal: the JSON error mapping below still applies; only
+			// very long turns risk hitting the original 60s deadline.
+			g.logger.Warn("test message: cannot extend write deadline", "error", err)
+		}
+	}
+
 	res := g.turns().Run(r.Context(), TurnRequest{
 		Session:              session,
 		ChannelID:            session.ChannelID,
@@ -159,7 +177,21 @@ func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 	}, discardTurnSink{})
 	if res.Err != nil {
 		g.logger.Error("test message: error generating AI response", "error", res.Err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		// bd-tgy6: return a structured JSON error so POST clients can
+		// distinguish a failed turn from other failures. Turns that never
+		// ran (client disconnect, /stop, shutdown drain) are not the
+		// caller's fault and are not provider errors.
+		if res.Cancelled || res.Dropped || errors.Is(res.Err, context.Canceled) || errors.Is(res.Err, context.DeadlineExceeded) {
+			code := "turn_cancelled"
+			if res.Dropped {
+				code = "turn_dropped"
+			}
+			writeJSONErrorWithDetails(w, http.StatusServiceUnavailable, code,
+				"agent turn did not complete", res.Err.Error())
+			return
+		}
+		writeJSONErrorWithDetails(w, http.StatusBadGateway, "provider_error",
+			"agent turn failed mid-flight", res.Err.Error())
 		return
 	}
 
@@ -185,3 +217,24 @@ func (discardTurnSink) Begin(context.Context) ai.StreamCallback        { return 
 func (discardTurnSink) Progress(string)                                {}
 func (discardTurnSink) ToolEvent(context.Context, tools.ToolEventInfo) {}
 func (discardTurnSink) Finish(context.Context, *TurnResult)            {}
+
+// testMessageTurnBudget is the write deadline handleTestMessage grants a
+// synchronous agent turn (bd-tgy6). It exceeds the longest legitimate turn
+// (LLM chain + tools) and is deliberately LONGER than the script clients'
+// own curl timeouts (-m 900 / -m 300): a hung turn ends with the client
+// timing out on its own — with a clear, client-side error — rather than
+// the server cutting the connection mid-flight (the curl-52 failure mode).
+func testMessageTurnBudget() time.Duration {
+	// 20 minutes: above any observed turn duration.
+	return 20 * time.Minute
+}
+
+// writeJSONErrorWithDetails writes a JSON error body with a machine-readable
+// code and a free-form detail string (bd-tgy6).
+func writeJSONErrorWithDetails(w http.ResponseWriter, status int, code, message, details string) {
+	writeJSON(w, status, map[string]string{
+		"error":   message,
+		"code":    code,
+		"details": details,
+	})
+}
