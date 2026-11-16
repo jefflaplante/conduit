@@ -7,15 +7,26 @@ flood `conduit/events/#` and every rule subscribed to it. This rule set
 consolidates the noise, escalates the failures, and keeps a heartbeat so
 silence stays distinguishable from breakage.
 
-**Status: specification + reference semantics + regression harness.** The
-Conduit event-rule engine (`internal/mqttevents`, bd-39mx v1) today supports
+**Status: engine support merged (bd-39mx phase 2, 6bc9f4d); not yet live.**
+The event-rule engine (`internal/mqttevents`) natively supports the
+`window_buffer` / `attrs_any` / `catch_all` conditions and the `publish` /
+`alert` / `drop_and_count` actions described here, alongside the v1
 `state_change` / `threshold` conditions and `spawn` / `queue` / `log` actions.
-The three rule files under `rules/` declare the window-buffer / publish /
-alert / drop-and-count semantics phase 2 needs; they are **not yet loadable by
-the engine**. `scripts/test-event-rules.py` implements the same semantics as a
-reference actor whose constants are loaded **from the rule YAML files**, so
-the consolidation contract is executable today and the Go wiring has a
-regression target to converge on.
+Rules are configured as `mqtt.events.rules` entries in the gateway config
+(`internal/config/mqtt.go`, whose defaults mirror the `consts:` below); the
+YAML files under `rules/` are the documented contract and the harness input,
+not something the gateway loads. `scripts/test-event-rules.py` implements the
+same semantics as a reference actor whose constants are loaded **from the
+rule YAML files**, and remains the regression target for the Go engine.
+
+Not done yet (tracked in **conduit-1v8i**):
+
+- The gateway builds the engine without an MQTT publisher
+  (`internal/gateway/mqtt_events.go`), so `publish`, `alert` and the
+  noise-floor heartbeat are **disabled** in a running gateway: rules evaluate
+  and count, but nothing is published.
+- The three rules are not in the live config, and the Tier-1 HA bridge
+  automations do not publish `pipeline-run` events yet.
 
 ## Topic layout
 
@@ -129,8 +140,8 @@ python3 scripts/test-event-rules.py --case suppression-10min
   (`MQTT_BROKER_URL`, `MQTT_USERNAME`, `MQTT_PASSWORD`) passed through a
   mode-0600 temp config file so they never hit a process list. Skipped with
   an explicit `SKIP` line (never a failure) when env or binaries are absent.
-  Until the phase-2 engine wiring lands, live mode asserts connectivity
-  only — no consolidation reply is expected yet.
+  Live mode asserts connectivity only: the gateway publishes no
+  consolidation output until its publisher is wired (conduit-1v8i).
 
 Cases (10): single-run passthrough; 7-run/3-entity burst summary; window
 boundary straddle; error-attrs escalation; slow-run (45 s) escalation; 25-
@@ -172,11 +183,10 @@ green, 1 = any failure, 2 = harness misuse.
   directory or YAML rule convention to mirror. Deviation: rule files are
   standalone YAML under `rules/` with a `consts:` block (constants by anchor,
   referenced by name) so the values are single-sourced and harness-checkable.
-  When phase 2 wires these into the engine, either (a) the engine grows
-  native support for these condition/action types and the YAML translates
-  into `mqtt.events.rules` JSON entries, or (b) the YAML becomes the source
-  of truth loaded by a config generator. Choice is phase 2's; the harness
-  follows whichever lands.
+  Phase 2 chose to give the engine native support for these
+  condition/action types: each YAML rule translates by hand into an
+  `mqtt.events.rules` JSON entry, and the config defaults mirror the
+  `consts:` values. The YAML stays the source of truth for the harness.
 - Harness is plain `python3` stdlib (task requirement); the repo has no
   existing Python MQTT/event-rule test pattern to follow (checked
   `scripts/`, `test/` — Go and shell only). PyYAML is used when importable
