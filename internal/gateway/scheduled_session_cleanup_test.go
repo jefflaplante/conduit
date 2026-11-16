@@ -149,14 +149,12 @@ func TestCronJob_PanickingRunCleansUp(t *testing.T) {
 	gw, store, p := newTurnTestGateway(t)
 	p.content = func(int) string { panic("provider exploded") }
 
-	func() {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Fatal("panic did not propagate")
-			}
-		}()
-		_ = gw.executeScheduledJob(context.Background(), cronJob("boom", "explode"))
-	}()
+	// bd-ufx7: Run no longer propagates the panic — it converts it into a
+	// TurnResult error wrapping errTurnPanicked. The run must still fail and
+	// clean up: no cron session may survive a panicking turn.
+	if err := gw.executeScheduledJob(context.Background(), cronJob("boom", "explode")); err == nil {
+		t.Fatal("panicking run reported success")
+	}
 	if keys := sessionKeysLike(t, store, "cron_boom_%"); len(keys) != 0 {
 		t.Fatalf("panicking cron run left sessions %v", keys)
 	}
