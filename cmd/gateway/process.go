@@ -46,11 +46,13 @@ func resolveStatusPort(cmd *cobra.Command) int {
 	return defaultStatusPort
 }
 
-// isAncestorPID reports whether candidate is pid or any ancestor of pid by
-// walking /proc/<pid>/status PPid fields. Guards against the footgun where
-// the gateway (or one of its tool-subprocess descendants) invokes
-// `conduit restart|stop` and ends up signalling its own parent tree — which
-// kills every descendant including the signaller.
+// isAncestorPID reports whether candidate is this process or one of its
+// ancestors, walking parent PIDs via parentPID (/proc on Linux, sysctl on
+// macOS). Guards against the footgun where the gateway (or one of its
+// tool-subprocess descendants) invokes `conduit restart|stop` and ends up
+// signalling its own parent tree, which kills every descendant including
+// the signaller. On platforms without a parentPID lookup only the process
+// itself matches.
 func isAncestorPID(candidate int) bool {
 	if candidate <= 1 {
 		return false
@@ -60,18 +62,8 @@ func isAncestorPID(candidate int) bool {
 		if pid == candidate {
 			return true
 		}
-		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
-		if err != nil {
-			return false
-		}
-		var next int
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(line, "PPid:") {
-				fmt.Sscanf(strings.TrimSpace(strings.TrimPrefix(line, "PPid:")), "%d", &next)
-				break
-			}
-		}
-		if next == 0 || next == pid {
+		next := parentPID(pid)
+		if next <= 0 || next == pid {
 			return false
 		}
 		pid = next

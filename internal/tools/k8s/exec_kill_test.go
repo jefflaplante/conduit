@@ -126,6 +126,12 @@ func TestRemoteExecWrapper_LocalShell(t *testing.T) {
 	}
 
 	t.Run("kills at deadline", func(t *testing.T) {
+		// The pipeline's grandchildren die only when the wrapper can put the
+		// command in its own process group (setsid, present in pod images
+		// but not on macOS); without it they outlive the kill by design.
+		if _, err := exec.LookPath("setsid"); err != nil {
+			t.Skip("no setsid: wrapper cannot kill the whole process group here")
+		}
 		argv := buildRemoteCommand("echo started; sleep 30 | cat", time.Second)
 		start := time.Now()
 		out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()

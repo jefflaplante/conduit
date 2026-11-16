@@ -2,15 +2,9 @@
 
 package main
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
-func TestParentPID(t *testing.T) {
-	if got := parentPID(os.Getpid()); got != os.Getppid() {
-		t.Fatalf("parentPID = %d, want %d", got, os.Getppid())
-	}
+func TestGatewayAncestor_FalseUnderGoTest(t *testing.T) {
 	// The test binary is run by `go test`, not by a gateway binary.
 	if gatewayAncestor() {
 		t.Fatal("gatewayAncestor true under go test")

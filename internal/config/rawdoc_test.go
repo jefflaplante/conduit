@@ -203,7 +203,12 @@ func TestCheckPatchSecrets(t *testing.T) {
 }
 
 func TestReplaceFile_AtomicBackupModeAndGuard(t *testing.T) {
-	dir := t.TempDir()
+	// ReplaceFile resolves symlinks, so resolve the temp dir too (on macOS
+	// it is under /var, a symlink to /private/var).
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)

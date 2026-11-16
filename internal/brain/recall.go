@@ -46,6 +46,7 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	type scoredEntry struct {
 		entry      *Entry
 		matchScore float64
+		score      float64 // blended ranking score, set before the sort
 	}
 
 	var scored []scoredEntry
@@ -70,7 +71,7 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 				entry.AccessCount++
 				entry.Salience = b.computeSalience(entry)
 				copied := *entry
-				scored = append(scored, scoredEntry{&copied, ms})
+				scored = append(scored, scoredEntry{entry: &copied, matchScore: ms})
 				seen[entry.Key] = true
 			}
 		}
@@ -85,7 +86,7 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 			if !seen[entry.Key] {
 				if ms := queryMatchScore(entry, terms); ms > 0 {
 					copied := *entry
-					scored = append(scored, scoredEntry{&copied, ms})
+					scored = append(scored, scoredEntry{entry: &copied, matchScore: ms})
 					seen[entry.Key] = true
 				}
 			}
@@ -145,7 +146,7 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 		}
 		if !seen[entry.Key] {
 			ms := float64(matchCount) / float64(len(terms))
-			scored = append(scored, scoredEntry{entry, ms})
+			scored = append(scored, scoredEntry{entry: entry, matchScore: ms})
 			seen[entry.Key] = true
 			ltmHitKeys = append(ltmHitKeys, entry.Key)
 		}
@@ -209,19 +210,23 @@ func (b *Brain) RecallWithContext(ctx context.Context, query string, limit int, 
 	// An optional context-overlap boost of (1 + defaultContextWeight) applies last.
 	// The access bonus (accessBonusWeight) rewards frequently-accessed entries
 	// with exponential time decay, computed dynamically at recall time.
+	// Scores are computed once per entry (the access bonus reads the clock)
+	// and ties break on key, so equal-score entries rank the same on every
+	// call and every platform.
 	mw, sw, ww, abw := b.matchWeight, b.salienceWeight, b.warmthWeight, b.accessBonusWeight
-	sort.Slice(scored, func(i, j int) bool {
-		si := (scored[i].matchScore * mw) + (scored[i].entry.Salience * sw) + (scored[i].entry.Warmth * ww) + (b.computeAccessBonus(scored[i].entry) * abw)
-		sj := (scored[j].matchScore * mw) + (scored[j].entry.Salience * sw) + (scored[j].entry.Warmth * ww) + (b.computeAccessBonus(scored[j].entry) * abw)
-		if len(contextTerms) > 0 {
-			if entryMatchesAnyTerm(scored[i].entry, contextTerms) {
-				si *= 1 + defaultContextWeight
-			}
-			if entryMatchesAnyTerm(scored[j].entry, contextTerms) {
-				sj *= 1 + defaultContextWeight
-			}
+	for i := range scored {
+		se := &scored[i]
+		sc := (se.matchScore * mw) + (se.entry.Salience * sw) + (se.entry.Warmth * ww) + (b.computeAccessBonusAt(se.entry, now) * abw)
+		if len(contextTerms) > 0 && entryMatchesAnyTerm(se.entry, contextTerms) {
+			sc *= 1 + defaultContextWeight
 		}
-		return si > sj
+		se.score = sc
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		return scored[i].entry.Key < scored[j].entry.Key
 	})
 
 	if len(scored) > limit {
@@ -350,10 +355,16 @@ func (b *Brain) computeSalience(e *Entry) float64 {
 //   - 3 accesses, 1 day ago: min(0.3, 0.285) = 0.285
 //   - 1 access, 30 days ago: min(0.3, 0.022) = 0.022
 func (b *Brain) computeAccessBonus(e *Entry) float64 {
+	return b.computeAccessBonusAt(e, time.Now())
+}
+
+// computeAccessBonusAt is computeAccessBonus evaluated at now. Recall ranks
+// every entry against one now so equal entries get bit-identical scores.
+func (b *Brain) computeAccessBonusAt(e *Entry, now time.Time) float64 {
 	if e.AccessCount <= 0 {
 		return 0.0
 	}
-	daysSince := time.Since(e.AccessedAt).Hours() / 24.0
+	daysSince := now.Sub(e.AccessedAt).Hours() / 24.0
 	if daysSince < 0 {
 		daysSince = 0
 	}
