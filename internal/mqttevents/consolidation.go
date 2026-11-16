@@ -179,20 +179,6 @@ func newConsTwin(rc *config.MQTTEventRule) *consTwin {
 	return t
 }
 
-// isConsolidationRule reports whether a rule config uses the bd-e9o8 phase 2
-// condition or action types.
-func isConsolidationRule(c, a string) bool {
-	switch c {
-	case "window_buffer", "attrs_any", "catch_all":
-		return true
-	}
-	switch a {
-	case "publish", "alert", "drop_and_count":
-		return true
-	}
-	return false
-}
-
 // --- payload parsing ---------------------------------------------------------
 
 // parseConsPayload resolves the consolidation view of one event payload in a

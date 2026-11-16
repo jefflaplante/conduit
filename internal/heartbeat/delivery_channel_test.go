@@ -102,11 +102,11 @@ func TestDelivery_SuccessWritesAlertHistory(t *testing.T) {
 // sync path: one SendMessageSync call, zero SendMessage calls, so the audit
 // row reflects the real adapter outcome instead of enqueue success.
 type syncSender struct {
-	mu       sync.Mutex
-	syncErr  error
-	syncCalls int
+	mu         sync.Mutex
+	syncErr    error
+	syncCalls  int
 	asyncCalls int
-	msgs     []string
+	msgs       []string
 }
 
 func (s *syncSender) SendMessageSync(ctx context.Context, channelID, userID, content string, md map[string]string) error {
