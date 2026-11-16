@@ -177,6 +177,17 @@ func (g *Gateway) handleTestMessage(w http.ResponseWriter, r *http.Request) {
 	}, discardTurnSink{})
 	if res.Err != nil {
 		g.logger.Error("test message: error generating AI response", "error", res.Err)
+		// bd-ufx7: a panic recovered from the turn body (TurnRunner.Run no
+		// longer lets it escape) is a server fault, not a provider or
+		// cancellation — report 500 {code: turn_panic}. The connection was
+		// never written to at this point in the common case (the provider
+		// call dies mid-turn before any bytes are written), so the JSON
+		// response reaches the client instead of curl 52.
+		if errors.Is(res.Err, errTurnPanicked) {
+			writeJSONErrorWithDetails(w, http.StatusInternalServerError, "turn_panic",
+				"agent turn panicked", res.Err.Error())
+			return
+		}
 		// bd-tgy6: return a structured JSON error so POST clients can
 		// distinguish a failed turn from other failures. Turns that never
 		// ran (client disconnect, /stop, shutdown drain) are not the

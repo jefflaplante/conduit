@@ -3,7 +3,9 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -128,6 +130,11 @@ type activeTurnRegistry struct {
 
 var (
 	errTurnDraining = errors.New("gateway is shutting down")
+	// errTurnPanicked wraps a panic recovered from the turn body (bd-ufx7).
+	// Run converts the panic into a TurnResult error wrapping this sentinel,
+	// so callers can distinguish a turn crash from a normal failure without
+	// the panic escaping Run (which killed goroutine entry points or, on the
+	// HTTP test endpoint, closed the connection with no response).
 	errTurnPanicked = errors.New("turn panicked")
 )
 
@@ -342,6 +349,10 @@ func (r *TurnRunner) updateActiveMetric(n int) {
 
 // Run executes one turn. It blocks until the turn finished (or was dropped)
 // and returns the same result the sink's Finish received.
+//
+// bd-ufx7: a panic inside the turn body is recovered and returned as a
+// TurnResult whose Err wraps errTurnPanicked — it does not propagate to the
+// caller. Sinks still see exactly one Finish with that result.
 func (r *TurnRunner) Run(ctx context.Context, req TurnRequest, sink TurnSink) *TurnResult {
 	rec := &resultRecorder{TurnSink: sink}
 	key := req.Session.Key
@@ -440,6 +451,33 @@ func (r *TurnRunner) Run(ctx context.Context, req TurnRequest, sink TurnSink) *T
 	var afterUnlock func()
 	func() {
 		completed := false
+		// bd-ufx7: capture a panic in the turn body instead of letting it
+		// unwind. Run's callers include goroutine entry points (channel
+		// ingress, session wakes, sub-agents, scheduler jobs) where an
+		// escaping panic killed the whole gateway process, and the HTTP test
+		// endpoint where it hit net/http's per-connection recover — closing
+		// the connection with no bytes written (curl 52). The deferred
+		// cleanup below already handled the panic path for bookkeeping
+		// (session state, turn registry, lock release); recovering here adds
+		// the missing step: the panic becomes a TurnResult error wrapping
+		// errTurnPanicked, which callers map to user-visible errors (the
+		// HTTP handler answers 500 {code: turn_panic}). This is scoped to
+		// the turn body — NOT a global middleware — so panics anywhere
+		// else (HTTP handlers, goroutines outside Run) still crash loudly.
+		//
+		// Deferred AFTER the bookkeeping defer (below), so it runs FIRST:
+		// Finish records the result, then the bookkeeping defer sees a
+		// non-nil rec.res and reports Error state through the normal path.
+		defer func() {
+			if p := recover(); p != nil {
+				r.logger.Error("turn: PANIC recovered in turn body",
+					"session_key", key, "panic", p, "stack", string(debug.Stack()))
+				rec.Finish(ctx, &TurnResult{
+					Err:           fmt.Errorf("%w: %v", errTurnPanicked, p),
+					UserMessageID: ts.snap.UserMessageID,
+				})
+			}
+		}()
 		defer func() {
 			// Runs on panic too: never leave the session in Processing.
 			r.endTurnState(key, rec.res, completed)

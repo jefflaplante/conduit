@@ -82,6 +82,55 @@ func newTestGatewayWithFailingProvider(t *testing.T, delay time.Duration) (*Gate
 	return gw, store, provider
 }
 
+// panickingProvider is a test provider whose GenerateResponse panics,
+// simulating a panic inside the turn's LLM chain (bd-ufx7).
+type panickingProvider struct {
+	name string
+}
+
+func (p *panickingProvider) Name() string { return p.name }
+
+func (p *panickingProvider) GenerateResponse(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
+	panic("simulated turn panic (bd-ufx7)")
+}
+
+// newTestGatewayWithPanickingProvider builds a gateway whose turn runner is
+// wired to a router with a provider that always panics mid-turn (bd-ufx7).
+func newTestGatewayWithPanickingProvider(t *testing.T) (*Gateway, *sessions.Store, *panickingProvider) {
+	t.Helper()
+	dbPath := t.TempDir() + "/test.db"
+	store, err := sessions.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	cfg := config.AIConfig{
+		DefaultProvider: "panicking",
+		Providers: []config.ProviderConfig{
+			{Name: "panicking", Type: "ollama", Model: "mock-model", ContextWindow: 8000},
+		},
+	}
+	router, err := ai.NewRouter(cfg, nil)
+	if err != nil {
+		t.Fatalf("ai.NewRouter: %v", err)
+	}
+	provider := &panickingProvider{name: "panicking"}
+	router.RegisterProvider("panicking", provider)
+
+	m := newTestChannelManager(t)
+	testLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	gw := &Gateway{
+		sessions:       store,
+		channelManager: m,
+		ai:             router,
+		logger:         testLogger,
+		ws:             NewWebSocketService(testLogger, websocket.Upgrader{}, 16),
+		config:         &config.Config{AI: cfg},
+	}
+	return gw, store, provider
+}
+
 // newLocalListener binds 127.0.0.1:0 for httptest servers built from an
 // existing *http.Server (so its timeouts are preserved).
 func newLocalListener() net.Listener {
@@ -252,5 +301,107 @@ func TestHandleTestMessage_LongTurnSurvivesWriteTimeout(t *testing.T) {
 	}
 	if !strings.Contains(respBody.String(), "provider_error") {
 		t.Errorf("expected code=provider_error in body, got %q", respBody.String())
+	}
+}
+
+// bd-ufx7: a PANIC inside the turn (here: the provider explodes) must not
+// unwind past the HTTP handler into net/http's per-connection recover — that
+// closes the connection with no bytes written and the client sees curl 52 /
+// EOF. The handler must recover the turn panic and answer with a structured
+// JSON 500 {code: turn_panic}.
+func TestHandleTestMessage_TurnPanicReturnsJSONError(t *testing.T) {
+	gw, _, _ := newTestGatewayWithPanickingProvider(t)
+	w := postTestMessage(t, gw, "wake the agent")
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 Internal Server Error for turn panic, got %d (body=%q)", w.Code, w.Body.String())
+	}
+
+	ct := w.Header().Get("Content-Type")
+	if !strings.Contains(ct, "application/json") {
+		t.Errorf("expected application/json Content-Type, got %q", ct)
+	}
+
+	var parsed struct {
+		Error   string `json:"error"`
+		Code    string `json:"code"`
+		Details string `json:"details"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &parsed); err != nil {
+		t.Fatalf("response body is not valid JSON: %v (body=%q)", err, w.Body.String())
+	}
+	if parsed.Code != "turn_panic" {
+		t.Errorf("expected code=turn_panic, got %q (body=%q)", parsed.Code, w.Body.String())
+	}
+	if parsed.Error == "" {
+		t.Error("expected non-empty 'error' field in JSON body")
+	}
+	if parsed.Details == "" || !strings.Contains(parsed.Details, "simulated turn panic") {
+		t.Errorf("expected details to carry the panic value, got %q", parsed.Details)
+	}
+}
+
+// bd-ufx7: the turn panic must ALSO produce the JSON 500 through the full
+// HTTP stack. Before the fix, net/http's per-connection recover closed the
+// connection without a response (curl 52 "Empty reply from server").
+func TestHandleTestMessage_TurnPanicSurvivesFullStack(t *testing.T) {
+	gw, _, _ := newTestGatewayWithPanickingProvider(t)
+
+	// Full-stack wiring: auth + rate limiter, as in production.
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatalf("open auth db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := database.ConfigureDatabase(db); err != nil {
+		t.Fatalf("configure auth db: %v", err)
+	}
+	if err := database.RunMigrations(db); err != nil {
+		t.Fatalf("migrate auth db: %v", err)
+	}
+	authSvc, err := NewAuthService(&config.Config{}, gw.logger, db)
+	if err != nil {
+		t.Fatalf("NewAuthService: %v", err)
+	}
+	gw.auth = authSvc
+	gw.rateLimitMiddleware = middleware.NewRateLimitMiddleware(middleware.RateLimitMiddlewareConfig{})
+	gw.search = &SearchService{}
+
+	// Mint a token so the request passes the auth middleware.
+	tokenResp, err := authSvc.AuthStorage.CreateToken(auth.CreateTokenRequest{ClientName: "wake-script"})
+	if err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	server := gw.buildHTTPServer()
+	ts := &httptest.Server{
+		Listener: newLocalListener(),
+		Config:   server,
+	}
+	ts.Start()
+	defer ts.Close()
+
+	body := `{"message":"wake the agent","user_id":"u1"}`
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/test/message", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokenResp.Token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed (panic killed the connection instead of a JSON 500?): %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody := new(bytes.Buffer)
+	_, _ = respBody.ReadFrom(resp.Body)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%q", resp.StatusCode, respBody.String())
+	}
+	if !strings.Contains(respBody.String(), "turn_panic") {
+		t.Errorf("expected code=turn_panic in body, got %q", respBody.String())
 	}
 }

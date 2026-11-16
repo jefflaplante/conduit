@@ -114,14 +114,13 @@ func TestTurnRunner_StateNotStuckAfterPanic(t *testing.T) {
 	gw, store, _ := newTurnTestGateway(t)
 	sess, _ := store.GetOrCreateSession("42", "telegram")
 
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("expected the panic to propagate")
-			}
-		}()
-		gw.turns().Run(context.Background(), TurnRequest{Session: sess, ChannelID: "telegram", UserID: "42", Text: "hi"}, &panicSink{})
-	}()
+	res := gw.turns().Run(context.Background(), TurnRequest{Session: sess, ChannelID: "telegram", UserID: "42", Text: "hi"}, &panicSink{})
+	if res.Err == nil {
+		t.Fatal("expected the sink panic to surface as a TurnResult error (bd-ufx7)")
+	}
+	if !errors.Is(res.Err, errTurnPanicked) {
+		t.Fatalf("error = %v, want it to wrap errTurnPanicked (bd-ufx7)", res.Err)
+	}
 
 	if st := sessionState(t, store, sess.Key); st != sessions.SessionStateError {
 		t.Fatalf("state after panic = %q, want error", st)
