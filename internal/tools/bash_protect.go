@@ -189,6 +189,11 @@ func (c *protectCheck) analyze(cmdline string, depth int) {
 		}
 		for _, a := range args {
 			if a.dynamic {
+				// $HOME/${HOME}/$PWD prefixes are known: when nothing else
+				// is expanded, check the word like a literal path.
+				if e := c.expand(a.text); !strings.ContainsAny(e, "$`") && c.refers(a.text, false) {
+					c.deny(name + " could write " + a.text)
+				}
 				c.checkText(a.text, true)
 				continue
 			}
@@ -261,10 +266,7 @@ func (c *protectCheck) refers(s string, fileOnly bool) bool {
 		for _, dir := range c.dirs {
 			p := c.resolve(s, dir)
 			if strings.ContainsAny(s, "*?[") {
-				if ok, _ := filepath.Match(p, t.file); ok {
-					return true
-				}
-				if ok, _ := filepath.Match(p, t.dir); ok && !fileOnly {
+				if globRefers(p, t, fileOnly) {
 					return true
 				}
 				continue
@@ -281,6 +283,45 @@ func (c *protectCheck) refers(s string, fileOnly bool) bool {
 		// The bare file name, e.g. "find / -name config.json -delete" or a
 		// script string: refuse unless it plainly is another existing file.
 		if strings.Contains(s, t.base) && !c.otherExistingFile(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// maxGlobMatches bounds how many existing matches globRefers canonicalizes.
+const maxGlobMatches = 4096
+
+// globRefers reports whether the glob pattern p may name t's file or, unless
+// fileOnly, its directory. Targets are canonical while p is spelled from the
+// command, so p is matched as written, with its existing prefix resolved
+// (HOME or cwd under a symlink, e.g. /var -> /private/var on macOS), and by
+// expanding it and resolving each match (a wildcard hitting a symlink to
+// the target). An oversized expansion is refused rather than half-checked.
+func globRefers(p string, t protectedTarget, fileOnly bool) bool {
+	hit := func(pattern, name string) bool {
+		ok, _ := filepath.Match(pattern, name)
+		return ok
+	}
+	patterns := []string{p}
+	if real, err := sandbox.Canonicalize(p); err == nil && real != p {
+		patterns = append(patterns, real)
+	}
+	for _, pat := range patterns {
+		if hit(pat, t.file) || (!fileOnly && hit(pat, t.dir)) {
+			return true
+		}
+	}
+	matches, _ := filepath.Glob(p)
+	if len(matches) > maxGlobMatches {
+		return true
+	}
+	for _, m := range matches {
+		real, err := sandbox.Canonicalize(m)
+		if err != nil {
+			continue
+		}
+		if real == t.file || (!fileOnly && real == t.dir) {
 			return true
 		}
 	}

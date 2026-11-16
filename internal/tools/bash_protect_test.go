@@ -51,6 +51,8 @@ func TestProtectedPathDenial_Bypasses(t *testing.T) {
 		"mv /tmp/x " + cfg,
 		"mv ~/app ~/app2",
 		"rm -rf ~/app",
+		"rm -rf $HOME/app",
+		"mv ${HOME}/app /tmp/gone",
 		"sed -i 's/19999/1/' ~/app/config.json",
 		"perl -pi -e 's/a/b/' ~/app/config.json",
 		"dd if=/dev/zero of=~/app/config.json count=1",
@@ -77,6 +79,34 @@ func TestProtectedPathDenial_Bypasses(t *testing.T) {
 	} {
 		if why := protectedPathDenial(cmd, cwd); why == "" {
 			t.Errorf("not refused: %s", cmd)
+		}
+	}
+}
+
+// Globs are matched against canonical targets: a HOME reached through a
+// symlink (macOS /var -> /private/var, a symlinked home dir) and a wildcard
+// that hits a symlink to the protected file must still be refused.
+func TestProtectedPathDenial_GlobsThroughSymlinks(t *testing.T) {
+	cfg, cwd := protectFixture(t)
+	realHome := filepath.Dir(filepath.Dir(cfg))
+	linkHome := filepath.Join(t.TempDir(), "homelink")
+	if err := os.Symlink(realHome, linkHome); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", linkHome)
+	for _, cmd := range []string{
+		"cp /tmp/x ~/app/conf*.json",
+		"rm ~/ap?/*",
+		"rm -rf $HOME/a*",
+		"echo x > cfgl*",
+	} {
+		if why := protectedPathDenial(cmd, cwd); why == "" {
+			t.Errorf("not refused: %s", cmd)
+		}
+	}
+	for _, cmd := range []string{"rm other/conf*.json", "cat ~/app/conf*.json"} {
+		if why := protectedPathDenial(cmd, cwd); why != "" {
+			t.Errorf("refused %q: %s", cmd, why)
 		}
 	}
 }
