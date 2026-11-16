@@ -110,3 +110,61 @@ func TestExecutor_SubprocessNoStdinWithoutArgs(t *testing.T) {
 		t.Errorf("probe did not run (no command resolved?); got: %q", result.Output)
 	}
 }
+
+// nestedProbeScript echoes OK only when the stdin envelope carries the
+// recovered action plus its args intact.
+const nestedProbeScript = `#!/bin/bash
+line=$(cat)
+echo "$line" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['action'] == 'ff', d
+assert d['target'] == 'nested-ok', d
+print('OK')
+"
+`
+
+// TestExecutor_NestedEnvelopeActionRecovered verifies recovery from the
+// schema-clobber shape (bd-f0g9): a provider nests the payload under the
+// tool-name key and fills the schema-required action with that key as a
+// placeholder. The executor must unwrap the nested map, prefer its inner
+// action/args, and dispatch on the recovered action — not fail with
+// "no script found for action: <tool-name>".
+func TestExecutor_NestedEnvelopeActionRecovered(t *testing.T) {
+	dir := t.TempDir()
+	skill := writeScript(t, dir, "dispatch.sh", nestedProbeScript)
+
+	nested := map[string]interface{}{"action": "ff", "target": "nested-ok"}
+	e := NewExecutor(ExecutionConfig{TimeoutSeconds: 10})
+	result, err := e.ExecuteSkill(context.Background(), skill, "test-skill-dispatch",
+		map[string]interface{}{"test-skill-dispatch": nested})
+	if err != nil {
+		t.Fatalf("ExecuteSkill error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("nested envelope not recovered: %s (output: %s)", result.Error, result.Output)
+	}
+	if !strings.Contains(result.Output, "OK") {
+		t.Errorf("recovered envelope assertion failed; output: %q", result.Output)
+	}
+}
+
+// TestExecutor_FlatEnvelopeUnchanged is the regression guard (bd-f0g9):
+// well-formed flat payloads must behave exactly as before recovery existed.
+func TestExecutor_FlatEnvelopeUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	skill := writeScript(t, dir, "dispatch.sh", nestedProbeScript)
+
+	e := NewExecutor(ExecutionConfig{TimeoutSeconds: 10})
+	result, err := e.ExecuteSkill(context.Background(), skill, "ff",
+		map[string]interface{}{"target": "nested-ok"})
+	if err != nil {
+		t.Fatalf("ExecuteSkill error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("flat payload failed: %s (output: %s)", result.Error, result.Output)
+	}
+	if !strings.Contains(result.Output, "OK") {
+		t.Errorf("flat envelope assertion failed; output: %q", result.Output)
+	}
+}

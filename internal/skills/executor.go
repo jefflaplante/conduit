@@ -163,10 +163,39 @@ func NewExecutor(cfg ExecutionConfig) *Executor {
 // Owner-account email sends are diverted to the human approval gate and run
 // only after the originating human approves (conduit-31jg.43).
 func (e *Executor) ExecuteSkill(ctx context.Context, skill Skill, action string, args map[string]interface{}) (*ExecutionResult, error) {
+	action, args = recoverNestedEnvelope(skill.Name, action, args)
 	if res, gated := e.gateOwnerSend(ctx, skill, action, args); gated {
 		return res, nil
 	}
 	return e.execute(ctx, skill, action, args)
+}
+
+// recoverNestedEnvelope unwinds the schema-clobber shape (bd-f0g9): some
+// providers nest the payload under the tool-name key and fill the
+// schema-required action with that key as a placeholder. When args carry a
+// map under the tool-name key whose value has its own non-empty "action",
+// that nested action and its remaining keys are the real dispatch payload —
+// recover them instead of letting the placeholder clobber dispatch
+// (envelope["action"] and findScript both consume the outer action).
+func recoverNestedEnvelope(toolName, action string, args map[string]interface{}) (string, map[string]interface{}) {
+	if args == nil {
+		return action, args
+	}
+	nested, ok := args[toolName].(map[string]interface{})
+	if !ok {
+		return action, args
+	}
+	innerAction, ok := nested["action"].(string)
+	if !ok || innerAction == "" {
+		return action, args
+	}
+	innerArgs := make(map[string]interface{}, len(nested))
+	for k, v := range nested {
+		if k != "action" {
+			innerArgs[k] = v
+		}
+	}
+	return innerAction, innerArgs
 }
 
 // execute runs a skill with no approval gating. Only ExecuteSkill (after the

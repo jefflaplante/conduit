@@ -188,7 +188,8 @@ func (st *SkillTool) Parameters() map[string]interface{} {
 	// misleads the model more than an open string field guides it. Empty
 	// action lists previously advertised prose-scraped garbage (conduit-1jd9).
 	if len(actions) > 0 {
-		actionProp["description"] = fmt.Sprintf("Action to perform. Supported: %s",
+		actionProp["description"] = fmt.Sprintf("Action to perform. Supported: %s. "+
+			"Send the payload flat (top-level action + args) — do NOT nest it under the tool name.",
 			formatActionsList(actions))
 		actionProp["enum"] = actions
 	} else {
