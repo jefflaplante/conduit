@@ -869,3 +869,134 @@ func TestNewEngine_RejectsInvalidTopicFilter(t *testing.T) {
 	}
 	e.Stop()
 }
+
+// --- armed-hours window (bd-q0ez) ------------------------------------------
+//
+// Armed windows are LOCAL machine times (documented choice on the config
+// fields): tests build them with time.Date(..., time.Local) relative to t0 so
+// they pass in any TZ. t0 is noon UTC, i.e. 04:00 PST — never near midnight —
+// so the plain-window cases below stay daylight-local on the prod host.
+
+// offsetTo converts a local wall-clock time on t0's date into a feed offset
+// from t0 (which is fixed at noon UTC).
+func offsetFromT0(t *testing.T, h, m int) time.Duration {
+	t.Helper()
+	day := t0.In(time.Local)
+	local := time.Date(day.Year(), day.Month(), day.Day(), h, m, 0, 0, time.Local)
+	return local.Sub(t0)
+}
+
+func TestArmedHours_InWindowFires(t *testing.T) {
+	h := newHarnessRules(t, func() config.MQTTEventRule {
+		r := thresholdRule("armed-day", "gt", 100, 300, "queue") // 5-min sustained
+		r.ArmedFrom, r.ArmedTo = "11:00", "13:00"                // local; t0 is noon local-side
+		return r
+	}())
+	// Two warmup events then a qualifying one, all inside the window. The
+	// rule has a 5-minute duration: 11:56 arms the run, 12:03 sustains it
+	// past the window and fires exactly once.
+	h.feed("50", offsetFromT0(t, 11, 52))
+	h.feed("200", offsetFromT0(t, 11, 56))
+	h.feed("200", offsetFromT0(t, 12, 3))
+	if got := h.actions(); got != 1 {
+		t.Fatalf("in-window qualifying event must fire once, got %d actions", got)
+	}
+}
+
+func TestArmedHours_OutOfWindowSkips(t *testing.T) {
+	h := newHarnessRules(t, func() config.MQTTEventRule {
+		r := thresholdRule("armed-night", "gt", 100, 0, "queue")
+		r.ArmedFrom, r.ArmedTo = "11:00", "13:00"
+		return r
+	}())
+	// Same qualifying pattern as the in-window test, but every event sits
+	// outside the window: nothing may fire and nothing may be dispatched.
+	h.feed("50", offsetFromT0(t, 5, 50))
+	h.feed("200", offsetFromT0(t, 5, 55))
+	h.feed("200", offsetFromT0(t, 5, 56))
+	if got := h.actions(); got != 0 {
+		t.Fatalf("out-of-window rule must never fire, got %d actions", got)
+	}
+	if got := h.e.Stats().DisarmedEvents; got != 3 {
+		t.Fatalf("DisarmedEvents = %d, want 3", got)
+	}
+	if got := h.e.Stats().Queued; got != 0 {
+		t.Fatalf("out-of-window events must not reach the dispatch path, queued=%d", got)
+	}
+}
+
+func TestArmedHours_MidnightSpanning(t *testing.T) {
+	// Window 23:30→06:00 local spans midnight. Qualifying events before and
+	// after local midnight both fire; one after the window closes does not.
+	mk := func() config.MQTTEventRule {
+		r := thresholdRule("armed-span", "gt", 100, 0, "queue")
+		r.ArmedFrom, r.ArmedTo = "23:30", "06:00"
+		return r
+	}
+	h := newHarnessRules(t, mk())
+	h.feed("200", offsetFromT0(t, 23, 40)) // before midnight, inside window
+	if got := h.actions(); got != 1 {
+		t.Fatalf("late-evening side of a midnight-spanning window must fire, got %d", got)
+	}
+	h2 := newHarnessRules(t, mk())
+	h2.feed("200", offsetFromT0(t, 3, 30)) // after midnight, inside window
+	if got := h2.actions(); got != 1 {
+		t.Fatalf("early-morning side of a midnight-spanning window must fire, got %d", got)
+	}
+	h3 := newHarnessRules(t, mk())
+	h3.feed("200", offsetFromT0(t, 7, 0)) // 07:00 local, window closed at 06:00
+	if got := h3.actions(); got != 0 {
+		t.Fatalf("event after window close must be skipped, got %d actions", got)
+	}
+	if got := h3.e.Stats().DisarmedEvents; got != 1 {
+		t.Fatalf("DisarmedEvents = %d, want 1", got)
+	}
+}
+
+func TestArmedHours_DisabledRuleStaysDisabled(t *testing.T) {
+	f := false
+	r := thresholdRule("armed-disabled", "gt", 100, 0, "queue")
+	r.ArmedFrom, r.ArmedTo, r.Enabled = "00:00", "23:59", &f
+	h := newHarnessRules(t, r)
+	h.feed("200", offsetFromT0(t, 12, 0))
+	if got := h.actions(); got != 0 {
+		t.Fatalf("disabled rule must not fire even inside its armed window, got %d", got)
+	}
+	if got := h.e.Stats().DisarmedEvents; got != 0 {
+		t.Fatalf("disarmed counter must not tick for disabled rules, got %d", got)
+	}
+}
+
+func TestArmedHours_UnsetLeavesBehaviorUnchanged(t *testing.T) {
+	h := newHarnessRules(t, thresholdRule("plain", "gt", 100, 0, "queue"))
+	h.feed("50", 0)
+	h.feed("200", time.Minute)
+	if got := h.actions(); got != 1 {
+		t.Fatalf("rule without armed fields must behave as before, got %d actions", got)
+	}
+	if got := h.e.Stats().DisarmedEvents; got != 0 {
+		t.Fatalf("DisarmedEvents must stay zero without armed fields, got %d", got)
+	}
+}
+
+// A consolidation rule (bd-e9o8 twin path) must honor the same gate: outside
+// the window its evaluation never runs, so no alert publishes and no notice
+// queues.
+func TestArmedHours_ConsolidationRuleDisarmed(t *testing.T) {
+	h := newConsHarness(t, func() config.MQTTEventRule {
+		r := anomalyRule("cons-armed")
+		r.ArmedFrom, r.ArmedTo = "11:00", "13:00"
+		return r
+	}())
+	h.e.HandleEvent(runEvent("synth.sensor.two", map[string]any{"tool": "notify", "duration_ms": 500, "error": "acme broker refused"}, t0.Add(offsetFromT0(t, 9, 0))))
+	h.drain()
+	if n := len(h.pub.pubsOn(consAlertTopic)); n != 0 {
+		t.Fatalf("out-of-window consolidation rule must not publish alerts, got %d", n)
+	}
+	if n := h.q.count(); n != 0 {
+		t.Fatalf("out-of-window consolidation rule must not queue notices, got %d", n)
+	}
+	if got := h.e.Stats().DisarmedEvents; got != 1 {
+		t.Fatalf("DisarmedEvents = %d, want 1 (consolidation path)", got)
+	}
+}

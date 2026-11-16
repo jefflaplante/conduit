@@ -248,3 +248,55 @@ func TestMQTTEventRule_IsEnabledDefaultsTrue(t *testing.T) {
 		t.Fatal("explicit false must disable")
 	}
 }
+
+// --- armed-hours window (bd-q0ez) -----------------------------------------
+
+func TestMQTTEventRule_ArmedHoursValidation(t *testing.T) {
+	base := validEventRule()
+	tests := []struct {
+		name    string
+		from    string
+		to      string
+		wantErr string // empty = valid
+	}{
+		{"both missing", "", "", ""},
+		{"plain window", "07:00", "19:00", ""},
+		{"midnight spanning", "20:00", "08:00", ""},
+		{"same as midnight span", "00:00", "23:59", ""},
+		{"only from", "07:00", "", "armed_from and armed_to must be set together"},
+		{"only to", "", "19:00", "armed_from and armed_to must be set together"},
+		{"equal values", "09:30", "09:30", "zero length"},
+		{"bad from format", "7am", "19:00", "must be HH:MM"},
+		{"bad to format", "07:00", "24:00", "must be HH:MM"},
+		{"hour out of range", "25:00", "08:00", "must be HH:MM"},
+		{"minute out of range", "07:00", "08:99", "must be HH:MM"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := base
+			r.ArmedFrom, r.ArmedTo = tc.from, tc.to
+			err := (&r).validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected valid, got error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got none", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q must contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestMQTTEvents_ValidateRejectsBadArmedHours(t *testing.T) {
+	r := validEventRule()
+	r.ArmedFrom = "20:00" // armed_to missing: exactly one set
+	m := baseMQTTWithEvents(&MQTTEventsConfig{Enabled: true, Rules: []MQTTEventRule{r}})
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "armed_from") {
+		t.Fatalf("full-config Validate must surface the armed-hours error, got %v", err)
+	}
+}
