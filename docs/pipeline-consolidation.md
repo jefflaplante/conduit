@@ -19,14 +19,14 @@ not something the gateway loads. `scripts/test-event-rules.py` implements the
 same semantics as a reference actor whose constants are loaded **from the
 rule YAML files**, and remains the regression target for the Go engine.
 
-Not done yet (tracked in **conduit-1v8i**):
+The gateway passes its MQTT service to the engine as the publisher, so
+`publish`, `alert` and the noise-floor heartbeat go out through the same
+path as the MQTT tool: every publish is refused unless `mqtt.publish_allowed`
+is set.
 
-- The gateway builds the engine without an MQTT publisher
-  (`internal/gateway/mqtt_events.go`), so `publish`, `alert` and the
-  noise-floor heartbeat are **disabled** in a running gateway: rules evaluate
-  and count, but nothing is published.
-- The three rules are not in the live config, and the Tier-1 HA bridge
-  automations do not publish `pipeline-run` events yet.
+Not done yet (tracked in **conduit-1v8i**): the three rules are not in the
+live config, and the Tier-1 HA bridge automations do not publish
+`pipeline-run` events yet.
 
 ## Topic layout
 
@@ -140,8 +140,8 @@ python3 scripts/test-event-rules.py --case suppression-10min
   (`MQTT_BROKER_URL`, `MQTT_USERNAME`, `MQTT_PASSWORD`) passed through a
   mode-0600 temp config file so they never hit a process list. Skipped with
   an explicit `SKIP` line (never a failure) when env or binaries are absent.
-  Live mode asserts connectivity only: the gateway publishes no
-  consolidation output until its publisher is wired (conduit-1v8i).
+  Live mode asserts connectivity only; it does not wait for consolidation
+  output from the gateway.
 
 Cases (10): single-run passthrough; 7-run/3-entity burst summary; window
 boundary straddle; error-attrs escalation; slow-run (45 s) escalation; 25-

@@ -19,11 +19,11 @@ const mqttEventAlertSource = "mqtt-events"
 // mqtt config. It returns (nil, nil) when MQTT or its events block is off.
 // The caller registers engine.HandleEvent as an mqtt.Service observer and
 // owns Start/Stop.
-func newMQTTEventsEngine(cfg config.MQTTConfig, sp mqttevents.Spawner, q mqttevents.Queuer, h mqttevents.HistorySource) (*mqttevents.Engine, error) {
+func newMQTTEventsEngine(cfg config.MQTTConfig, sp mqttevents.Spawner, q mqttevents.Queuer, h mqttevents.HistorySource, pub mqttevents.MQTTEventPublisher) (*mqttevents.Engine, error) {
 	if !cfg.Enabled || cfg.Events == nil || !cfg.Events.Enabled {
 		return nil, nil
 	}
-	eng, err := mqttevents.NewEngine(*cfg.Events, mqttevents.Deps{Spawner: sp, Queuer: q, History: h})
+	eng, err := mqttevents.NewEngine(*cfg.Events, mqttevents.Deps{Spawner: sp, Queuer: q, History: h, Publisher: pub})
 	if err != nil {
 		return nil, fmt.Errorf("mqtt events: %w", err)
 	}
@@ -93,6 +93,10 @@ func (g *Gateway) initMQTTEvents(cfg *config.Config, workspaceDir string) {
 	eng, err := newMQTTEventsEngine(cfg.MQTT,
 		&mqttEventSpawner{g: g, ownerTarget: ownerAlertTarget(cfg.AgentHeartbeat)},
 		newMQTTEventQueuer(queuePath),
+		g.mqttService,
+		// conduit-1v8i: consolidation publish/alert/heartbeat outputs go
+		// out through the MQTT service, which still refuses every publish
+		// unless mqtt.publish_allowed is set.
 		g.mqttService)
 	if err != nil {
 		g.logger.Error("MQTT event rules disabled", "error", err)
