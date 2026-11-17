@@ -63,7 +63,9 @@ func (g *Gateway) RestartGateway(ctx context.Context) error {
 	return g.shutdownMgr.BeginShutdown("gateway tool restart", 30*time.Second)
 }
 
-// GetChannelStatus returns channel adapter status
+// GetChannelStatus returns channel adapter status. Configured channels whose
+// adapter failed to start are included (status "error", details
+// retry_pending) by channels.Manager.GetStatus.
 func (g *Gateway) GetChannelStatus() (map[string]interface{}, error) {
 	status := g.channelManager.GetStatus()
 	result := make(map[string]interface{})
@@ -73,14 +75,23 @@ func (g *Gateway) GetChannelStatus() (map[string]interface{}, error) {
 	return result, nil
 }
 
-// EnableChannel enables a channel
+// EnableChannel brings a configured channel up: no-op when it is healthy,
+// restart when its adapter is unhealthy, create it when it failed to start
+// or was disabled (bd-twb0). The logic lives in channels.Manager.
 func (g *Gateway) EnableChannel(ctx context.Context, channelID string) error {
-	return fmt.Errorf("enable channel not yet implemented")
+	if g.channelManager == nil {
+		return fmt.Errorf("channel manager not initialized")
+	}
+	return g.channelManager.EnsureAdapter(channelID)
 }
 
-// DisableChannel disables a channel
+// DisableChannel stops a channel's adapter (or drops it from the start
+// retry queue) until EnableChannel or a gateway restart.
 func (g *Gateway) DisableChannel(ctx context.Context, channelID string) error {
-	return fmt.Errorf("disable channel not yet implemented")
+	if g.channelManager == nil {
+		return fmt.Errorf("channel manager not initialized")
+	}
+	return g.channelManager.RemoveAdapter(channelID)
 }
 
 // GetConfiguration returns the AI and workspace configuration for the

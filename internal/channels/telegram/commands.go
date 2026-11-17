@@ -87,8 +87,10 @@ func (a *Adapter) IsPairingEnabled() bool {
 	return a.pairingMgr != nil
 }
 
-// registerCommands registers slash commands with Telegram's BotFather
-func (a *Adapter) registerCommands(ctx context.Context) {
+// registerCommands registers slash commands with Telegram's BotFather. It
+// runs on the run goroutine before b is published to a.bot, so it takes the
+// client as an argument (conduit-31jg.73).
+func (a *Adapter) registerCommands(ctx context.Context, b botAPI) {
 	commands := []models.BotCommand{
 		{Command: "reset", Description: "Clear conversation history and start fresh"},
 		{Command: "status", Description: "Show session status and model info"},
@@ -102,7 +104,7 @@ func (a *Adapter) registerCommands(ctx context.Context) {
 		{Command: "home", Description: "Back to the main session (alias: /topic home)"},
 	}
 
-	_, err := a.bot.SetMyCommands(ctx, &bot.SetMyCommandsParams{
+	_, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
 		Commands: commands,
 	})
 	if err != nil {

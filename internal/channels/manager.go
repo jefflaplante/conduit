@@ -25,6 +25,20 @@ var flushTimeout = 5 * time.Second
 // flushPoll is how often Flush re-checks the pending count.
 const flushPoll = 10 * time.Millisecond
 
+// retryInterval is how often the retry watchdog re-attempts channels whose
+// adapter could not be created or started (bd-twb0). A var so tests can
+// shorten it.
+var retryInterval = 30 * time.Second
+
+// retryEntry is a configured channel whose adapter failed to create or
+// start; the watchdog keeps retrying it until it comes up.
+type retryEntry struct {
+	config   ChannelConfig
+	lastErr  string
+	attempts int
+	since    time.Time
+}
+
 // Manager manages all channel adapters (native Go)
 type Manager struct {
 	adapters     map[string]ChannelAdapter
@@ -49,6 +63,14 @@ type Manager struct {
 	// handed to (and returned from) their adapter, so Flush can wait for
 	// delivery before adapters are stopped (conduit-25o4).
 	pending atomic.Int64
+
+	// bd-twb0: a channel whose adapter failed at Start used to be logged
+	// and forgotten, leaving it down until a process restart. configs keeps
+	// every enabled channel config passed to Start (so EnsureAdapter can
+	// bring back a removed channel); retryConfigs holds the ones that
+	// failed, which the retry watchdog re-attempts. Both guarded by mutex.
+	configs      map[string]ChannelConfig
+	retryConfigs map[string]*retryEntry
 }
 
 // NewManager creates a new channel manager
@@ -60,6 +82,8 @@ func NewManager() *Manager {
 		outgoing:     make(chan *protocol.OutgoingMessage, 1000),
 		messageStats: make(map[string]int64),
 		forwarders:   make(map[string]context.CancelFunc),
+		configs:      make(map[string]ChannelConfig),
+		retryConfigs: make(map[string]*retryEntry),
 	}
 }
 
@@ -80,7 +104,9 @@ func (m *Manager) Start(ctx context.Context, configs []ChannelConfig) error {
 	m.ctx, m.cancel = context.WithCancel(ctx)
 	m.stopped = false
 	m.pending.Store(int64(len(m.outgoing))) // left over from a previous run; the new router sends them
-	m.wg.Add(1)
+	m.configs = make(map[string]ChannelConfig)
+	m.retryConfigs = make(map[string]*retryEntry)
+	m.wg.Add(2) // routeMessages + retryWatchdog
 	m.mutex.Unlock()
 
 	// Create adapters from configurations
@@ -90,8 +116,13 @@ func (m *Manager) Start(ctx context.Context, configs []ChannelConfig) error {
 			continue
 		}
 
+		m.mutex.Lock()
+		m.configs[config.ID] = config
+		m.mutex.Unlock()
+
 		if err := m.CreateAdapter(config); err != nil {
-			log.Printf("[ChannelManager] Failed to create adapter %s: %v", config.ID, err)
+			log.Printf("[ChannelManager] Failed to create adapter %s, will retry every %v: %v", config.ID, retryInterval, err)
+			m.recordRetry(config, err)
 			continue
 		}
 	}
@@ -100,6 +131,12 @@ func (m *Manager) Start(ctx context.Context, configs []ChannelConfig) error {
 	go func() {
 		defer m.wg.Done()
 		m.routeMessages()
+	}()
+
+	// Keep retrying channels that failed to come up.
+	go func() {
+		defer m.wg.Done()
+		m.retryWatchdog()
 	}()
 
 	log.Printf("[ChannelManager] Started with %d adapters", len(m.adapters))
@@ -174,6 +211,12 @@ func (m *Manager) CreateAdapter(config ChannelConfig) error {
 		return fmt.Errorf("channel manager is not running")
 	}
 
+	// Never replace a registered adapter: the old one would keep running
+	// unreachable (EnsureAdapter and the retry watchdog may race here).
+	if _, exists := m.adapters[config.ID]; exists {
+		return fmt.Errorf("adapter already exists: %s", config.ID)
+	}
+
 	adapter, err := factory.CreateAdapter(config)
 	if err != nil {
 		return fmt.Errorf("failed to create adapter: %w", err)
@@ -186,6 +229,7 @@ func (m *Manager) CreateAdapter(config ChannelConfig) error {
 
 	m.adapters[config.ID] = adapter
 	m.messageStats[config.ID] = 0
+	delete(m.retryConfigs, config.ID)
 
 	// Start message forwarding from this adapter
 	m.startForwarderLocked(config.ID, adapter)
@@ -194,13 +238,20 @@ func (m *Manager) CreateAdapter(config ChannelConfig) error {
 	return nil
 }
 
-// RemoveAdapter removes and stops an adapter
+// RemoveAdapter removes and stops an adapter. A channel still waiting on the
+// retry watchdog is dropped from it instead. EnsureAdapter can bring either
+// back from the config given to Start.
 func (m *Manager) RemoveAdapter(id string) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
 	adapter, exists := m.adapters[id]
 	if !exists {
+		if _, pending := m.retryConfigs[id]; pending {
+			delete(m.retryConfigs, id)
+			log.Printf("[ChannelManager] Removed adapter %s from the retry queue", id)
+			return nil
+		}
 		return fmt.Errorf("adapter not found: %s", id)
 	}
 
@@ -350,29 +401,66 @@ func (m *Manager) GetAdapters() map[string]ChannelAdapter {
 	return result
 }
 
-// GetStatus returns the status of all adapters
+// GetStatus returns the status of all adapters, plus configured channels
+// whose adapter failed to start and is waiting on the retry watchdog
+// (bd-twb0: such a channel used to be absent, i.e. invisible).
 func (m *Manager) GetStatus() map[string]ChannelStatus {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
-	result := make(map[string]ChannelStatus)
+	result := m.retryPendingStatusesLocked()
 	for id, adapter := range m.adapters {
 		status := adapter.Status()
+		if status.Details == nil {
+			status.Details = make(map[string]interface{})
+		}
 		status.Details["message_count"] = m.messageStats[id]
 		result[id] = status
 	}
 	return result
 }
 
-// GetStatusMap returns adapter status as a simple string map for error context
+// GetStatusMap returns adapter status as a simple string map for error
+// context, including channels waiting on the retry watchdog.
 func (m *Manager) GetStatusMap() map[string]string {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
 	result := make(map[string]string)
+	for id, st := range m.retryPendingStatusesLocked() {
+		result[id] = string(st.Status)
+	}
 	for id, adapter := range m.adapters {
 		status := adapter.Status()
 		result[id] = string(status.Status)
+	}
+	return result
+}
+
+// RetryPendingStatuses returns a status for each configured channel whose
+// adapter failed to create or start and is waiting on the retry watchdog.
+func (m *Manager) RetryPendingStatuses() map[string]ChannelStatus {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	return m.retryPendingStatusesLocked()
+}
+
+// retryPendingStatusesLocked builds RetryPendingStatuses. Caller holds
+// m.mutex (read or write).
+func (m *Manager) retryPendingStatusesLocked() map[string]ChannelStatus {
+	result := make(map[string]ChannelStatus, len(m.retryConfigs))
+	for id, e := range m.retryConfigs {
+		result[id] = ChannelStatus{
+			Status:  StatusError,
+			Message: fmt.Sprintf("Failed to start, retrying every %v: %s", retryInterval, e.lastErr),
+			Details: map[string]interface{}{
+				"type":          e.config.Type,
+				"retry_pending": true,
+				"attempts":      e.attempts,
+				"pending_since": e.since,
+			},
+			Timestamp: time.Now(),
+		}
 	}
 	return result
 }
@@ -582,6 +670,109 @@ func (m *Manager) RestartAdapter(id string) error {
 
 	log.Printf("[ChannelManager] Successfully restarted adapter: %s", id)
 	return nil
+}
+
+// EnsureAdapter makes sure the channel id is running:
+//   - registered and healthy: nothing to do;
+//   - registered but unhealthy: RestartAdapter;
+//   - not registered (start failed and is awaiting retry, or it was removed):
+//     create it from the config given to Start.
+//
+// It is the recovery lever behind the Gateway tool's enable_channel
+// (bd-twb0).
+func (m *Manager) EnsureAdapter(id string) error {
+	m.mutex.RLock()
+	adapter, registered := m.adapters[id]
+	config, known := m.configs[id]
+	if e, pending := m.retryConfigs[id]; pending {
+		config, known = e.config, true
+	}
+	m.mutex.RUnlock()
+
+	if registered {
+		if adapter.IsHealthy() {
+			return nil
+		}
+		return m.RestartAdapter(id)
+	}
+	if !known {
+		return fmt.Errorf("adapter not found: %s", id)
+	}
+	if err := m.CreateAdapter(config); err != nil {
+		m.recordRetry(config, err)
+		return err
+	}
+	return nil
+}
+
+// recordRetry queues config for the retry watchdog, or updates its entry.
+// A channel that has meanwhile come up (registered) is left alone.
+func (m *Manager) recordRetry(config ChannelConfig, err error) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if _, registered := m.adapters[config.ID]; registered {
+		return
+	}
+	e, ok := m.retryConfigs[config.ID]
+	if !ok {
+		e = &retryEntry{config: config, since: time.Now()}
+		m.retryConfigs[config.ID] = e
+	}
+	e.attempts++
+	e.lastErr = err.Error()
+}
+
+// retryWatchdog re-attempts every channel in retryConfigs each
+// retryInterval until the manager is stopped.
+func (m *Manager) retryWatchdog() {
+	m.mutex.RLock()
+	ctx := m.ctx
+	m.mutex.RUnlock()
+
+	ticker := time.NewTicker(retryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.retryPending(ctx)
+		}
+	}
+}
+
+// retryPending makes one CreateAdapter attempt per retry-pending channel.
+func (m *Manager) retryPending(ctx context.Context) {
+	m.mutex.RLock()
+	pending := make([]ChannelConfig, 0, len(m.retryConfigs))
+	for _, e := range m.retryConfigs {
+		pending = append(pending, e.config)
+	}
+	m.mutex.RUnlock()
+
+	for _, config := range pending {
+		if ctx.Err() != nil {
+			return
+		}
+		// Skip entries removed or recovered since the snapshot.
+		m.mutex.RLock()
+		_, still := m.retryConfigs[config.ID]
+		m.mutex.RUnlock()
+		if !still {
+			continue
+		}
+		if err := m.CreateAdapter(config); err != nil {
+			m.mutex.Lock()
+			if e, ok := m.retryConfigs[config.ID]; ok {
+				e.attempts++
+				e.lastErr = err.Error()
+				log.Printf("[ChannelManager] Retry %d for adapter %s failed: %v", e.attempts, config.ID, err)
+			}
+			m.mutex.Unlock()
+			continue
+		}
+		log.Printf("[ChannelManager] Adapter %s recovered by retry watchdog", config.ID)
+	}
 }
 
 // GetMessageStats returns message statistics for all adapters

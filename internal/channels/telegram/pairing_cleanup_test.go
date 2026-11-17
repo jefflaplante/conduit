@@ -2,13 +2,12 @@ package telegram
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/go-telegram/bot"
 
+	"conduit/internal/channels"
 	"conduit/internal/database"
 )
 
@@ -29,25 +28,23 @@ func TestAdapterStart_CleansUpExpiredPairingCodes(t *testing.T) {
 	insert("pending", "u2", now.Add(time.Hour), true, PairingStatusPending)
 	insert("paired", "u3", now.Add(-time.Hour), false, PairingStatusApproved)
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"result":[]}`))
-	}))
-	defer srv.Close()
+	// getMe must succeed: Start verifies the token on the run goroutine and
+	// cleans up only once the bot is accepted (bd-twb0).
+	fake := newFakeBotAPI(t, nil)
 
 	a := &Adapter{
 		name:       "tg",
 		config:     TelegramConfig{BotToken: fakeBotToken},
 		pairingMgr: pm,
 		extraBotOptions: []bot.Option{
-			bot.WithSkipGetMe(),
-			bot.WithServerURL(srv.URL),
+			bot.WithServerURL(fake.srv.URL),
 		},
 	}
 	if err := a.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = a.Stop() }()
+	waitForStatus(t, a, channels.StatusOnline, 5*time.Second)
 
 	var codes []string
 	rows, err := db.Query(`SELECT code FROM telegram_pairings ORDER BY code`)

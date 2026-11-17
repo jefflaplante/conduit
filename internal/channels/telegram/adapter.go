@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -166,31 +167,34 @@ func (a *Adapter) Type() string {
 	return "telegram"
 }
 
-// Start initializes and starts the Telegram bot
+// Start initializes the Telegram bot and returns once the run goroutine is
+// spawned. Verifying the token (getMe) happens in that goroutine with retry
+// and backoff (bd-twb0): a transient network error at boot used to
+// fail Start, and the channel manager never retried it, so the bot stayed
+// deaf until a manual restart. The status goes Initializing → Reconnecting
+// (between attempts) → Online, or Error when Telegram rejects the token.
+// Start fails synchronously only when the bot client cannot be built at all
+// (e.g. an empty token).
 func (a *Adapter) Start(ctx context.Context) error {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
 
-	runCtx, cancel := context.WithCancel(ctx)
-	a.ctx, a.cancel = runCtx, cancel
-	a.status = channels.StatusInitializing
-	a.statusMsg = "Starting Telegram bot"
-	a.startTime = time.Now()
-
 	// Create bot options. conduit-31jg.83: botLoggingOptions replaces the
 	// library's raw log.Printf error/debug handlers and scrubs the token out
 	// of request errors; WithDefaultHandler also replaces its log.Printf
-	// update dump.
+	// update dump. WithSkipGetMe: bot.New's own getMe is a single
+	// uncancellable attempt; awaitBotReady runs it with retry instead.
 	opts := append([]bot.Option{
 		bot.WithDefaultHandler(a.handleUpdate),
 	}, botLoggingOptions()...)
+	opts = append(opts, bot.WithSkipGetMe())
 
 	if a.config.Debug {
 		opts = append(opts, bot.WithDebug())
 	}
 	opts = append(opts, a.extraBotOptions...)
 
-	// Create bot instance
+	// Create bot instance (no network call).
 	telegramBot, err := bot.New(a.config.BotToken, opts...)
 	if err != nil {
 		err = redact.Error(err)
@@ -199,51 +203,140 @@ func (a *Adapter) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create Telegram bot: %w", err)
 	}
 
-	a.bot = telegramBot
+	runCtx, cancel := context.WithCancel(ctx)
+	a.ctx, a.cancel = runCtx, cancel
+	a.status = channels.StatusInitializing
+	a.statusMsg = "Starting Telegram bot"
+	a.startTime = time.Now()
+
+	// Start bot in background. The goroutine uses the locals captured here,
+	// never a.bot/a.ctx: a concurrent Stop+Start (Manager.RestartAdapter)
+	// rewrites those fields under a.mutex (conduit-31jg.73). runDone doubles
+	// as the run's identity: a goroutine only writes adapter state while
+	// a.runDone is still its own, so a run outliving Stop (bounded wait) or
+	// replaced by a later Start cannot clobber the newer state.
+	webhookMode := a.config.WebhookMode
+	runDone := make(chan struct{})
+	a.runDone = runDone
+	go a.run(runCtx, runDone, telegramBot, webhookMode)
+
+	return nil
+}
+
+// bootRetryDelay returns how long to wait after the attempt-th failed getMe
+// (1-based): 1s, 2s, 4s, 8s, 16s, then 30s for as long as it keeps failing.
+// A var so tests can shorten it.
+var bootRetryDelay = func(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	if attempt > 5 {
+		return 30 * time.Second
+	}
+	return time.Second << (attempt - 1)
+}
+
+// getMeTimeout bounds each boot getMe attempt (the library's own default
+// check-init timeout). A var so tests can shorten it.
+var getMeTimeout = 5 * time.Second
+
+// run is the adapter's run goroutine: wait until Telegram accepts the bot,
+// then poll (or serve the webhook) until ctx is cancelled.
+func (a *Adapter) run(ctx context.Context, runDone chan struct{}, telegramBot *bot.Bot, webhookMode bool) {
+	defer close(runDone)
+
+	if !a.awaitBotReady(ctx, runDone, telegramBot) {
+		return
+	}
 
 	// Register slash commands with Telegram
-	a.registerCommands(ctx)
+	a.registerCommands(ctx, telegramBot)
 
 	// Drop pairing codes that expired while the adapter was down
 	// (conduit-3kgo). Hygiene only: lookups already ignore expired codes,
 	// so a failure is logged and never blocks the start.
 	a.cleanupExpiredPairingCodesOnStart()
 
-	// Start bot in background. The goroutine uses the locals captured here,
-	// never a.bot/a.ctx: a concurrent Stop+Start (Manager.RestartAdapter)
-	// rewrites those fields under a.mutex (conduit-31jg.73).
-	webhookMode := a.config.WebhookMode
-	runDone := make(chan struct{})
-	a.runDone = runDone
-	go func() {
-		defer close(runDone)
-		defer func() {
-			a.mutex.Lock()
-			a.status = channels.StatusOffline
-			a.statusMsg = "Bot stopped"
-			a.mutex.Unlock()
-		}()
-
-		a.mutex.Lock()
-		a.status = channels.StatusOnline
-		a.statusMsg = "Bot is running"
+	a.mutex.Lock()
+	if a.runDone != runDone {
+		// Stopped (or restarted) while connecting.
 		a.mutex.Unlock()
+		return
+	}
+	a.bot = telegramBot
+	a.status = channels.StatusOnline
+	a.statusMsg = "Bot is running"
+	a.mutex.Unlock()
 
-		log.Printf("[Telegram] Bot started: %s", a.Name())
+	defer a.setRunStatus(runDone, channels.StatusOffline, "Bot stopped")
 
-		if webhookMode {
-			// Webhook mode (for production)
-			log.Printf("[Telegram] Starting webhook mode")
-			telegramBot.StartWebhook(runCtx)
-		} else {
-			// Polling mode (for development)
-			log.Printf("[Telegram] Starting polling mode...")
-			telegramBot.Start(runCtx)
-			log.Printf("[Telegram] Polling mode started")
+	log.Printf("[Telegram] Bot started: %s", a.Name())
+
+	if webhookMode {
+		// Webhook mode (for production)
+		log.Printf("[Telegram] Starting webhook mode")
+		telegramBot.StartWebhook(ctx)
+	} else {
+		// Polling mode (for development)
+		log.Printf("[Telegram] Starting polling mode...")
+		telegramBot.Start(ctx)
+		log.Printf("[Telegram] Polling mode started")
+	}
+}
+
+// awaitBotReady calls getMe until it succeeds, backing off per
+// bootRetryDelay. It reports false when ctx is cancelled (Stop) or when
+// Telegram rejects the token (401/403): a revoked token or blocked bot will
+// not heal by retrying, so that case is terminal StatusError. Once polling
+// runs, the library's poller rides out network errors by itself; boot is
+// the only step that needs this.
+func (a *Adapter) awaitBotReady(ctx context.Context, runDone chan struct{}, telegramBot *bot.Bot) bool {
+	for attempt := 1; ; attempt++ {
+		callCtx, cancel := context.WithTimeout(ctx, getMeTimeout)
+		_, err := telegramBot.GetMe(callCtx)
+		cancel()
+		if err == nil {
+			if attempt > 1 {
+				log.Printf("[Telegram] Adapter %s: connected after %d attempts", a.Name(), attempt)
+			}
+			return true
 		}
-	}()
+		if ctx.Err() != nil {
+			return false
+		}
 
-	return nil
+		if errors.Is(err, bot.ErrorUnauthorized) || errors.Is(err, bot.ErrorForbidden) {
+			msg := fmt.Sprintf("Telegram rejected the bot token, not retrying: %v", redact.Error(err))
+			log.Printf("[Telegram] Adapter %s: %s", a.Name(), msg)
+			a.setRunStatus(runDone, channels.StatusError, msg)
+			return false
+		}
+
+		delay := bootRetryDelay(attempt)
+		msg := fmt.Sprintf("Telegram API unreachable (attempt %d), retrying in %v: %v", attempt, delay, redact.Error(err))
+		log.Printf("[Telegram] Adapter %s: %s", a.Name(), msg)
+		a.setRunStatus(runDone, channels.StatusReconnecting, msg)
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
+}
+
+// setRunStatus sets the adapter status if runDone still identifies the
+// current run (see Start).
+func (a *Adapter) setRunStatus(runDone chan struct{}, status channels.StatusCode, msg string) {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	if a.runDone != runDone {
+		return
+	}
+	a.status = status
+	a.statusMsg = msg
 }
 
 // session returns the current bot client and run context under the adapter
