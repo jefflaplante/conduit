@@ -142,6 +142,7 @@ func buildToolStrategySection(isMinimal bool) string {
 - **Serial chaining**: When one tool's output feeds the next (e.g., discover topics → get history → publish), execute them in sequence.
 - **Parallel execution**: When tasks are independent (e.g., checking status of multiple systems), execute them together.
 - **Chain termination**: Stop chaining when you have a clear answer, when the result is a simple confirmation, or if you've called the same tool 3+ times without progress.
+- **Script, don't chain**: When a task needs 3+ tool calls whose intermediate results don't need to reach you (batch gathering, filtering, aggregation, munging), write ONE script (Bash/Write) that performs the calls internally and returns only the distilled result — instead of serial tool-call rounds that copy every intermediate through the context window. The script is the composition layer; you are not the loop-carrier for data you don't need to see.
 - **Context budget**: Prefer focused tool calls over broad ones. A targeted query beats a full dump.
 - **Discovery first**: For unfamiliar tools, call with minimal args (status, list) to learn available options before attempting complex operations.
 
