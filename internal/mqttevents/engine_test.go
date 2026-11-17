@@ -1000,3 +1000,102 @@ func TestArmedHours_ConsolidationRuleDisarmed(t *testing.T) {
 		t.Fatalf("DisarmedEvents = %d, want 1 (consolidation path)", got)
 	}
 }
+
+// withLocal pins time.Local for one test (no test in this package runs in
+// parallel) so armed-hours checks do not depend on the host's zone.
+func withLocal(t *testing.T, name string) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		t.Skipf("zone %s unavailable: %v", name, err)
+	}
+	old := time.Local
+	time.Local = loc
+	t.Cleanup(func() { time.Local = old })
+	return loc
+}
+
+func armedRule(t *testing.T, from, to string) *Rule {
+	t.Helper()
+	rc := thresholdRule("armed", "gt", 100, 0, "queue")
+	rc.ArmedFrom, rc.ArmedTo = from, to
+	r, err := newRule(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// The window is wall-clock in the server's zone whatever that zone is. A
+// regression here once shifted it by the zone's year-0 LMT offset (~8h in
+// America/Los_Angeles), which only UTC hosts could not see.
+func TestArmedHours_WallClockInAnyZone(t *testing.T) {
+	for _, zone := range []string{"UTC", "America/Los_Angeles", "Europe/Berlin", "Asia/Kolkata", "Australia/Lord_Howe"} {
+		t.Run(zone, func(t *testing.T) {
+			loc := withLocal(t, zone)
+			span := armedRule(t, "20:00", "08:00")
+			day := armedRule(t, "11:30", "13:00")
+			for _, c := range []struct {
+				r    *Rule
+				h, m int
+				want bool
+			}{
+				{span, 19, 59, false}, {span, 20, 0, true}, {span, 23, 59, true},
+				{span, 0, 0, true}, {span, 7, 59, true}, {span, 8, 0, false}, {span, 13, 0, false},
+				{day, 11, 29, false}, {day, 11, 30, true}, {day, 12, 59, true}, {day, 13, 0, false},
+			} {
+				at := time.Date(2026, 6, 10, c.h, c.m, 0, 0, loc)
+				if got := c.r.armed(at); got != c.want {
+					t.Errorf("window %d-%d at %02d:%02d: armed=%v, want %v", c.r.armedFrom, c.r.armedTo, c.h, c.m, got, c.want)
+				}
+				// The event timestamp's own zone must not matter.
+				if got := c.r.armed(at.UTC()); got != c.want {
+					t.Errorf("UTC-zoned event at local %02d:%02d: armed=%v, want %v", c.h, c.m, got, c.want)
+				}
+			}
+		})
+	}
+}
+
+// DST transition days keep the wall-clock window (no one-hour drift).
+func TestArmedHours_DSTDays(t *testing.T) {
+	loc := withLocal(t, "America/Los_Angeles")
+	r := armedRule(t, "20:00", "08:00")
+	for _, c := range []struct {
+		at   time.Time
+		want bool
+	}{
+		{time.Date(2026, 3, 8, 19, 30, 0, 0, loc), false}, // spring forward
+		{time.Date(2026, 3, 8, 20, 30, 0, 0, loc), true},
+		{time.Date(2026, 3, 8, 7, 30, 0, 0, loc), true},
+		{time.Date(2026, 11, 1, 19, 30, 0, 0, loc), false}, // fall back
+		{time.Date(2026, 11, 1, 20, 30, 0, 0, loc), true},
+		{time.Date(2026, 11, 1, 8, 30, 0, 0, loc), false},
+	} {
+		if got := r.armed(c.at); got != c.want {
+			t.Errorf("%s: armed=%v, want %v", c.at.Format("2006-01-02 15:04 MST"), got, c.want)
+		}
+	}
+}
+
+// A threshold run started before the window closes must not complete on
+// the first event of the next window: disarmed time is not duration.
+func TestArmedHours_ThresholdRunResetsWhileDisarmed(t *testing.T) {
+	withLocal(t, "America/Los_Angeles")
+	h := newHarnessRules(t, func() config.MQTTEventRule {
+		r := thresholdRule("armed-carry", "gt", 100, 300, "queue")
+		r.ArmedFrom, r.ArmedTo = "11:00", "13:00"
+		return r
+	}())
+	h.feed("200", offsetFromT0(t, 12, 58)) // run starts just before close
+	h.feed("200", offsetFromT0(t, 14, 0))  // disarmed
+	next := offsetFromT0(t, 11, 0) + 24*time.Hour
+	h.feed("200", next) // first reading of the next window
+	if got := h.actions(); got != 0 {
+		t.Fatalf("run must restart in the new window, got %d actions", got)
+	}
+	h.feed("200", next+5*time.Minute) // sustained 5 min inside the window
+	if got := h.actions(); got != 1 {
+		t.Fatalf("sustained in-window run must fire once, got %d actions", got)
+	}
+}

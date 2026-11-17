@@ -16,10 +16,11 @@ type Rule struct {
 	cooldown time.Duration
 	duration time.Duration
 
-	// Armed-hours window (bd-q0ez), parsed once from ArmedFrom/ArmedTo.
-	// hasArmed is false when the fields are unset and armed always returns
-	// true; times are server-local by design (see armed).
-	armedFrom, armedTo time.Time
+	// Armed-hours window (bd-q0ez), parsed once from ArmedFrom/ArmedTo as
+	// minutes since local midnight. hasArmed is false when the fields are
+	// unset and armed always returns true; times are server-local by design
+	// (see armed).
+	armedFrom, armedTo int
 	hasArmed           bool
 
 	// bd-e9o8 phase 2: consolidation knobs compiled once, state, and output
@@ -67,7 +68,7 @@ func newRule(rc config.MQTTEventRule) (*Rule, error) {
 		if err != nil {
 			return nil, fmt.Errorf("rule %q: armed_to: %w", rc.ID, err)
 		}
-		x.armedFrom, x.armedTo, x.hasArmed = from, to, true
+		x.armedFrom, x.armedTo, x.hasArmed = minuteOfDay(from), minuteOfDay(to), true
 	}
 	// Only a consolidation CONDITION gets a twin; a v1 rule with one would
 	// never reach the v1 evaluation path (HandleEvent branches on twin),
@@ -97,28 +98,30 @@ func (r *Rule) inCooldown(now time.Time) bool {
 // owner's rules target local-day patterns (overnight EV charging) and the
 // deployment host never leaves one timezone. Unarmed rules return true.
 //
-// A window that spans midnight (from > to) matches two ranges on any given
-// day: [day+from, next-day+to) and [prev-day+from, day+to).
+// The check compares wall-clock minutes of day, so it is independent of the
+// zone's offset and of DST transitions: [from, to) for a same-day window,
+// and "at or after from, or before to" for one that spans midnight
+// (from > to).
 func (r *Rule) armed(t time.Time) bool {
 	if !r.hasArmed {
 		return true
 	}
-	t = t.In(time.Local)
-	day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
-	// r.armedFrom/armedTo carry only a wall clock on Go's zero date; derive
-	// their offset from the zero date's own midnight (small duration, no
-	// overflow) and project onto today.
-	zero := time.Date(0, 1, 1, 0, 0, 0, 0, time.Local)
-	from := day.Add(r.armedFrom.Sub(zero))
-	to := day.Add(r.armedTo.Sub(zero))
-	if !r.armedTo.Before(r.armedFrom) { // plain same-day window: [from, to)
-		return !t.Before(from) && t.Before(to)
+	m := minuteOfDay(t.In(time.Local))
+	if r.armedFrom < r.armedTo {
+		return m >= r.armedFrom && m < r.armedTo
 	}
-	// Midnight-spanning: inside iff now >= today's from OR now < today's to.
-	nextTo := to.AddDate(0, 0, 1)
-	prevFrom := from.AddDate(0, 0, -1)
-	return (!t.Before(from) && t.Before(nextTo)) || (!t.Before(prevFrom) && t.Before(to))
+	return m >= r.armedFrom || m < r.armedTo
 }
+
+// disarmed is called for every event skipped by the armed-hours gate. It
+// clears the threshold run so a run started before the window closed cannot
+// complete its duration on the first event of the next window (bd-q0ez:
+// no duration accumulation while disarmed).
+func (r *Rule) disarmed() {
+	r.since = time.Time{}
+}
+
+func minuteOfDay(t time.Time) int { return t.Hour()*60 + t.Minute() }
 
 func (r *Rule) markFired(now time.Time) {
 	r.hasFired = true

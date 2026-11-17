@@ -337,6 +337,7 @@ func (e *Engine) HandleEvent(ev mqtt.Event) {
 		// clock as evaluation.
 		if !r.armed(ev.Timestamp) {
 			e.stats.disarmed.Add(1)
+			r.disarmed()
 			continue
 		}
 		out, value := r.evaluate(ev)
