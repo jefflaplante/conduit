@@ -38,6 +38,7 @@ type Config struct {
 	Vector         VectorConfig                 `json:"vector,omitempty"`
 	RemoteSSH      RemoteSSHConfig              `json:"remote_ssh,omitempty"`
 	MQTT           MQTTConfig                   `json:"mqtt,omitempty"`
+	AgentBus       AgentBusConfig               `json:"agentbus,omitempty"`
 	Kubernetes     KubernetesConfig             `json:"kubernetes,omitempty"`
 	PagerDuty      PagerDutyConfig              `json:"pagerduty,omitempty"`
 	Datadog        DatadogConfig                `json:"datadog,omitempty"`

@@ -170,7 +170,6 @@ func bodyString(body any) string {
 // verify topic helpers stay consistent with the a2a contract (compile-time).
 var _ = a2a.InboxTopic
 
-
 // runResult unwraps a gated run's (result, error) pair into the result the
 // model sees; the error text becomes the result's error (the gate already
 // logged it via the approval manager).
