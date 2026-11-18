@@ -1099,3 +1099,91 @@ func TestArmedHours_ThresholdRunResetsWhileDisarmed(t *testing.T) {
 		t.Fatalf("sustained in-window run must fire once, got %d actions", got)
 	}
 }
+
+// ruleArmedWindow builds a zero-duration threshold rule (fires on the first
+// in-region event) with an armed window, for engine-level gating tests.
+func ruleArmedWindow(from, to string) config.MQTTEventRule {
+	r := thresholdRule("armed-gate", "gt", 100, 0, "queue")
+	r.ArmedFrom, r.ArmedTo = from, to
+	return r
+}
+
+// offsetNextDay returns the offset from t0 of local hh:mm on the day AFTER
+// t0's local date, for crossing an armed window's day boundary.
+func offsetNextDay(t *testing.T, hh, mm int) time.Duration {
+	t.Helper()
+	day := t0.In(time.Local).Add(24 * time.Hour)
+	local := time.Date(day.Year(), day.Month(), day.Day(), hh, mm, 0, 0, time.Local)
+	return local.Sub(t0)
+}
+
+// A fire just before the window closes still honors its cooldown after
+// re-arming (bd-q0ez): the gate clears threshold-run state but never touches
+// hasFired/lastFired, so cooldowns survive armed/disarmed transitions.
+func TestArmedHours_CooldownSurvivesReArm(t *testing.T) {
+	withLocal(t, "America/Los_Angeles")
+	rc := thresholdRule("armed-cool", "gt", 100, 0, "queue")
+	rc.CooldownS = 43200 // 12h
+	rc.ArmedFrom, rc.ArmedTo = "06:00", "20:00"
+	h := newHarnessRules(t, rc)
+
+	// Fire at 19:50, ten minutes before the window closes.
+	h.feed("200", offsetFromT0(t, 19, 50))
+	if got := h.actions(); got != 1 {
+		t.Fatalf("in-window event must fire once, got %d actions", got)
+	}
+
+	// Window is closed for the next event: it must be skipped without
+	// touching the cooldown (no swallow, no reset, no extension).
+	h.feed("200", offsetFromT0(t, 20, 10))
+	if got := h.actions(); got != 1 {
+		t.Fatalf("disarmed event must not fire, got %d actions", got)
+	}
+	if got := h.e.Stats().CooldownSwallowed; got != 0 {
+		t.Fatalf("disarmed event must not bookkeep cooldown, swallowed=%d", got)
+	}
+
+	// Re-armed the next morning, 10h15m after the fire and still inside the
+	// 12h cooldown: the surviving cooldown swallows the event.
+	h.feed("200", offsetNextDay(t, 6, 5))
+	if got := h.actions(); got != 1 {
+		t.Fatalf("in-cooldown event after re-arm must be swallowed, got %d actions", got)
+	}
+	if got := h.e.Stats().CooldownSwallowed; got != 1 {
+		t.Fatalf("re-armed event inside surviving cooldown must book one swallow, got %d", got)
+	}
+
+	// 16h15m after the fire: cooldown expired, the rule fires again.
+	h.feed("200", offsetNextDay(t, 12, 5))
+	if got := h.actions(); got != 2 {
+		t.Fatalf("event after cooldown expiry must fire again, got %d actions", got)
+	}
+}
+
+// The gate is minute-precise at the window edges (bd-q0ez); shipped semantics
+// are half-open [from, to): the first minute fires, the to-minute does not.
+func TestArmedHours_WindowBoundaries(t *testing.T) {
+	withLocal(t, "America/Los_Angeles")
+	at := func(hh, mm int) time.Duration { return offsetFromT0(t, hh, mm) }
+
+	open := newHarnessRules(t, ruleArmedWindow("11:00", "13:00"))
+	open.feed("200", at(11, 0))
+	if got := open.actions(); got != 1 {
+		t.Fatalf("event at the window's first minute (from, inclusive) must fire, got %d actions", got)
+	}
+
+	last := newHarnessRules(t, ruleArmedWindow("11:00", "13:00"))
+	last.feed("200", at(12, 59))
+	if got := last.actions(); got != 1 {
+		t.Fatalf("event in the window's last minute (to-1) must fire, got %d actions", got)
+	}
+
+	closed := newHarnessRules(t, ruleArmedWindow("11:00", "13:00"))
+	closed.feed("200", at(13, 0))
+	if got := closed.actions(); got != 0 {
+		t.Fatalf("event at the to boundary (exclusive) must be skipped, got %d actions", got)
+	}
+	if got := closed.e.Stats().DisarmedEvents; got != 1 {
+		t.Fatalf("to-boundary event must count as disarmed, got %d", got)
+	}
+}

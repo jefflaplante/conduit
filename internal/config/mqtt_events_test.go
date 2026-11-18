@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -270,6 +271,8 @@ func TestMQTTEventRule_ArmedHoursValidation(t *testing.T) {
 		{"bad to format", "07:00", "24:00", "must be HH:MM"},
 		{"hour out of range", "25:00", "08:00", "must be HH:MM"},
 		{"minute out of range", "07:00", "08:99", "must be HH:MM"},
+		{"dash in from field", "20:00-08:00", "08:00", "must be HH:MM"},
+		{"dash in to field", "20:00", "08:00-12:00", "must be HH:MM"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -298,5 +301,40 @@ func TestMQTTEvents_ValidateRejectsBadArmedHours(t *testing.T) {
 	m := baseMQTTWithEvents(&MQTTEventsConfig{Enabled: true, Rules: []MQTTEventRule{r}})
 	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "armed_from") {
 		t.Fatalf("full-config Validate must surface the armed-hours error, got %v", err)
+	}
+}
+
+// A rule carrying an armed window must survive a config JSON round-trip with
+// its window intact, and rules without one must not grow armed_* keys
+// (omitempty keeps existing serialized configs byte-stable, bd-q0ez).
+func TestMQTTEventRule_ArmedHoursJSONRoundTrip(t *testing.T) {
+	armed := validEventRule()
+	armed.ArmedFrom, armed.ArmedTo = "20:00", "08:00"
+
+	raw, err := json.Marshal(armed)
+	if err != nil {
+		t.Fatalf("marshal armed rule: %v", err)
+	}
+	if !strings.Contains(string(raw), `"armed_from":"20:00"`) || !strings.Contains(string(raw), `"armed_to":"08:00"`) {
+		t.Fatalf("marshaled rule must carry armed_* fields, got %s", raw)
+	}
+	var back MQTTEventRule
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("unmarshal armed rule: %v", err)
+	}
+	if back.ArmedFrom != "20:00" || back.ArmedTo != "08:00" {
+		t.Fatalf("round-trip lost the window: armed_from=%q armed_to=%q", back.ArmedFrom, back.ArmedTo)
+	}
+	if err := (&back).validate(); err != nil {
+		t.Fatalf("round-tripped rule must still validate: %v", err)
+	}
+
+	plain := validEventRule()
+	rawPlain, err := json.Marshal(plain)
+	if err != nil {
+		t.Fatalf("marshal plain rule: %v", err)
+	}
+	if strings.Contains(string(rawPlain), "armed_") {
+		t.Fatalf("rule without a window must not serialize armed_* keys, got %s", rawPlain)
 	}
 }
