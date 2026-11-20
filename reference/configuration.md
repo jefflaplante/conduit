@@ -528,7 +528,7 @@ Optional email identity configuration for the agent. When configured, the agent'
 }
 ```
 
-Available tools: Read, Write, Edit, Bash, Glob, MemorySearch, Find, Facts, WebSearch, WebFetch, Message, Tts, Cron, Chain, Gateway, Context, Image, Brain, SessionsList, SessionsSend, SessionsSpawn, SessionsCancel (auto-enabled with SessionsSpawn), SessionStatus, google_workspace
+Available tools: Read, Write, Edit, Bash, Glob, MemorySearch, Find, Facts, WebSearch, WebFetch, Message, Tts, Cron, Chain, Gateway, Context, Image, Brain, SessionsList, SessionsSend, SessionsSpawn, SessionsCancel (auto-enabled with SessionsSpawn), SessionStatus, google_workspace, Code (experimental code mode, off unless listed; see [CONFIG.md](../CONFIG.md#code-mode))
 
 #### Bash Command Denylist
 

@@ -102,6 +102,7 @@ func (e *ExecutionEngine) executeSingle(ctx context.Context, call ai.ToolCall) (
 	// remaining shutdown drain budget once draining (conduit-31jg.88).
 	timeout, draining := drainCappedTimeout(ctx, e.callTimeout(call))
 	callCtx, cancelCall := context.WithTimeout(ctx, timeout)
+	callCtx = withCodeEngine(callCtx, e) // the Code tool runs its inner calls through this engine
 	result, err := e.registry.ExecuteTool(callCtx, call.Name, call.Args)
 	cancelCall()
 	toolRan = true

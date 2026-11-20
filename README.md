@@ -93,6 +93,7 @@ See [Getting Started](reference/getting-started.md) for detailed setup instructi
 
 ### Automation
 - **Chain Workflows** — Multi-tool sequences with dependencies and variables
+- **[Code Mode](reference/tools-reference.md#code)** (experimental, off by default) — The model writes one Starlark script that calls other tools and returns only the result; enable with `"Code"` in `tools.enabled_tools`
 - **Cron Scheduling** — Recurring task execution
 - **[Agent Heartbeat](reference/agent-heartbeat.md)** — Automated HEARTBEAT.md task processing with quiet-hours deferral and audited, circuit-broken alert delivery
 - **Skills System** — Extensible AI capabilities via SKILL.md files

@@ -205,6 +205,9 @@ func (r *Registry) registerAllTools() {
 		core.NewFactsTool(r.services, r.sandboxCfg),
 		// Chain tool (multi-tool workflow execution)
 		core.NewChainTool(r.services, r.sandboxCfg, r),
+		// Code mode (prototype): Starlark scripts that call other tools.
+		// Off unless "Code" is in enabled_tools.
+		&CodeTool{registry: r},
 	}...)
 
 	// Topic switcher tools (conduit-43vk)
