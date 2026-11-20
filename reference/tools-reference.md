@@ -81,6 +81,45 @@ Execute shell commands in the sandbox environment.
 {"command": "go test ./...", "cwd": "/project"}
 ```
 
+### Code
+
+**Experimental, off by default.** Runs a short [Starlark](https://github.com/google/starlark-go) (Python-like) script that calls other tools and returns only the value the model needs. A task that would take several tool-call rounds (batch reads, search-then-filter, the same change across many files) becomes one call, and the intermediate results never enter the context window.
+
+**Enable it** by adding `"Code"` to `tools.enabled_tools` (see [CONFIG.md](../CONFIG.md#code-mode)). Until it is listed, the tool is not shown to the model and calls to it return `tool_disabled`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `code` | string | Yes | Starlark source. Assign the global `result` to the value to return |
+| `timeout` | integer | No | Seconds before the script is stopped (default 120, max 600) |
+
+Inside the script:
+
+| Name | Description |
+|------|-------------|
+| `tools.<Name>(param=value, ...)` | Calls an enabled tool with its normal parameters (or one positional dict). Returns `{"ok", "content", "error", "data"}`. A failed call returns `ok=False`; it does not stop the script |
+| `call("Name", param=value, ...)` | Builds a pending call for `parallel` |
+| `parallel([call(...), ...])` | Runs the calls concurrently and returns their results in order |
+| `json.encode` / `json.decode` / `json.encode_indent` | JSON helpers |
+| `print(...)` | Writes to stdout, which is returned (capped at 64 KiB) |
+| `dir(tools)` | Lists the tools the script may call |
+
+```python
+hits = tools.MemorySearch(query="retry policy")
+paths = [l.split(":")[0] for l in hits["content"].splitlines() if l.endswith(".md")][:5]
+reads = parallel([call("Read", file_path=p) for p in paths])
+result = {p: r["content"][:300] for p, r in zip(paths, reads) if r["ok"]}
+```
+
+The model receives the rendered `result` (strings as-is, other values as indented JSON), any stdout, the error and backtrace if the script failed, and a summary such as `tool calls: 6 (MemorySearch×1, Read×5), 0 failed`. Calls already made are reported even when the script fails, so side-effecting work is not repeated blindly.
+
+How it is contained:
+
+- Starlark has no file, network or process access of its own. Every side effect is a tool call.
+- Each inner call goes through the same execution pipeline as a model tool call, under the tool's own name: per-call timeout, middleware, tool policy logging, approval origin, reflection, tool events (the TUI and WebSocket clients show each call) and per-turn failure tracking. Only enabled tools can be called.
+- A script cannot call `Code`, `Chain` or `SessionsSpawn`, makes at most 50 tool calls, and is stopped at its timeout or after a fixed execution-step budget.
+- If a script called `WebFetch`, `WebSearch`, `Image` or `google_workspace`, its whole output is wrapped in the untrusted-content envelope (`[UNTRUSTED EXTERNAL CONTENT from Code via WebFetch: ...]`).
+- `Code` only runs through the execution engine (agent turns and the MCP server). Called any other way, it returns `code_engine_unavailable`.
+
 ## Web Operations
 
 ### WebSearch

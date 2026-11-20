@@ -103,6 +103,7 @@ The binary is `bin/conduit`. Default behavior (no subcommand) starts the server.
   - execution*.go, execution_adapter.go — Tool execution engine and adapter (dispatch, parallel/same-path grouping, loop, format, timeout/drain, middleware, events). HandleToolCallFlow is a for-loop over rounds with an explicit turnState (runToolLoop/roundTrip/advance); golden trace in testdata/toolloop_golden.json
   - chain_state.go, failure_tracker.go, pattern_tracker.go, watchdog.go — Per-turn chain state, failure/pattern tracking, stall watchdog
   - exec.go (Bash; bash_policy.go + shell_lexer.go denylist), fileops*.go (Read/Write/Glob/List), google_workspace.go — Top-level tool implementations
+  - code_tool.go — Code tool (experimental code mode, enabled only via `"Code"` in enabled_tools): runs a Starlark (go.starlark.net) script whose `tools.<Name>(...)`/`parallel([call(...)])` calls go through ExecutionEngine.executeSingle (executeSingle puts the engine on the call context, withCodeEngine). Cannot call Code/Chain/SessionsSpawn; 50 calls, 120s/600s timeout; output enveloped as untrusted when a script used an untrustedOutputTools tool (envelopeUntrusted)
   - Tool subdirectories:
     - core/ — Context management, file editing, find, facts, gateway control, memory search, session management, chain, debug log, brain (tiered cognitive memory)
     - web/ — Web search (Brave), web fetch with HTML parsing

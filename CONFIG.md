@@ -665,6 +665,7 @@ The `enabled_tools` values must match the internal tool names exactly:
 | `Cron` | scheduling | Create and manage cron jobs |
 | `Image` | vision | Image analysis |
 | `UniFi` | infrastructure | UniFi Network/Protect device and camera management |
+| `Code` | core | Experimental code mode: a Starlark script that calls other tools (off unless listed; see [Code mode](#code-mode)) |
 
 ### Sandbox
 
@@ -685,6 +686,22 @@ The `services` map provides tool-specific configuration. Each key is a service n
 | `tts` | `provider`, `voice` | Tts tool — TTS engine and voice selection |
 
 **UniFi tool** does not use `services` — it reads `UNVR_URL` and `UNVR_API_KEY` environment variables directly.
+
+### Code mode
+
+Code mode is experimental and off by default. It adds the `Code` tool: the model writes a short Starlark script that calls other tools and returns only the result, instead of making one tool call per round. To turn it on, add `"Code"` to `enabled_tools` alongside the tools the scripts should be able to call:
+
+```json
+{
+  "tools": {
+    "enabled_tools": ["Read", "Glob", "MemorySearch", "Bash", "Code"]
+  }
+}
+```
+
+A script can call only enabled tools, never `Code`, `Chain` or `SessionsSpawn`. Each inner call runs through the normal tool pipeline under its own name, so sandbox, policy and approval rules apply to it as to a direct call. There are no other settings yet: the limits (50 calls per script, 120 s default timeout, 600 s maximum) are fixed. After editing a live config, run `conduit config accept` before restarting. See [Code in the tools reference](reference/tools-reference.md#code) for the script API.
+
+To turn it off, remove `"Code"` from `enabled_tools`.
 
 ### Tool chain limit
 

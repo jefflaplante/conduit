@@ -40,6 +40,13 @@ func wrapUntrusted(tool, s string) string {
 	if !untrustedOutputTools[tool] {
 		return s
 	}
+	return envelopeUntrusted(tool, s)
+}
+
+// envelopeUntrusted wraps s in the untrusted-content envelope naming source
+// (a tool name, or "Code via WebFetch, WebSearch" for a Code script that
+// read third-party content).
+func envelopeUntrusted(tool, s string) string {
 	s = untrustedMarkerRe.ReplaceAllString(s, "($1")
 	var b strings.Builder
 	b.Grow(len(s) + 128)
