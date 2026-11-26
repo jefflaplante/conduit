@@ -30,6 +30,20 @@ func IsEmptyModelResponse(resp *GenerateResponse) bool {
 	return strings.TrimSpace(resp.Content) == ""
 }
 
+// isLengthTruncatedEmpty reports whether resp is a raw-empty response that the
+// provider severed at max_tokens (finish_reason=length / stop_reason
+// max_tokens): glm-5.4-style mid-reasoning exhaustion. The model burned its
+// whole output budget on invisible reasoning tokens — zero content, zero tool
+// calls. Re-rolling the SAME model deterministically re-exhausts (measured
+// 0/1 content in the 2026-11-26 incident), so the guard skips its retry for
+// this signature; a load-induced empty (no length marker) keeps it.
+func isLengthTruncatedEmpty(resp *GenerateResponse) bool {
+	if resp == nil || !IsEmptyModelResponse(resp) {
+		return false
+	}
+	return resp.FinishReason == "length" || resp.StopReason == "max_tokens"
+}
+
 // EmptyFailoverRouter is the optional hook the empty guard uses for one final
 // cross-model attempt after the same-model retry also dies (conduit-1z0g).
 //
@@ -163,32 +177,42 @@ func GuardEmptyResponse(
 		}
 		return failover
 	}
-	reserve := time.Duration(0)
-	if _, hasDeadline := ctx.Deadline(); hasDeadline && resolveFailover() != nil {
-		reserve = recoveryFailoverReserve
-	}
 
-	retryCtx, cancelRetry, retryOK := retryBudget(ctx, reserve)
-	if retryOK {
-		log.Printf("[EmptyGuard] (%s) raw-empty response: 0 content bytes, %d tool calls — retrying once (conduit-18vj)",
-			label, len(resp.ToolCalls))
-		retryStart := time.Now()
-		retryResp, retryErr := provider.GenerateResponse(withEmptyGuardCall(retryCtx), req)
-		cancelRetry()
-		log.Printf("[EmptyGuard] (%s) retry completed in %s: empty=%v err=%v",
-			label, time.Since(retryStart).Round(time.Millisecond), IsEmptyModelResponse(retryResp), retryErr)
-
-		if retryErr == nil && !IsEmptyModelResponse(retryResp) {
-			return withSpentUsage(retryResp, spent), nil
-		}
-		if retryErr == nil && retryResp != nil {
-			spent.Add(retryResp.Usage)
-		}
+	// sd-glm54-stallcap: a length-truncated raw-empty is deterministic
+	// reasoning exhaustion, not load-induced emptiness — the same-model retry
+	// is proven futile (content 0/1 in the 2026-11-26 incident), so skip
+	// straight to the cross-model failover, which produced content 3/3.
+	if isLengthTruncatedEmpty(resp) {
+		log.Printf("[EmptyGuard] (%s) raw-empty response severed at max_tokens (finish_reason=%q stop_reason=%q) — deterministic reasoning exhaustion, skipping the same-model retry, going straight to failover (sd-glm54-stallcap)",
+			label, resp.FinishReason, resp.StopReason)
 	} else {
-		cancelRetry()
-		left, _ := timeLeft(ctx)
-		log.Printf("[EmptyGuard] (%s) raw-empty response with %s left before the deadline — skipping the same-model retry, keeping %s for failover (conduit-10ip)",
-			label, left.Round(time.Millisecond), reserve)
+		reserve := time.Duration(0)
+		if _, hasDeadline := ctx.Deadline(); hasDeadline && resolveFailover() != nil {
+			reserve = recoveryFailoverReserve
+		}
+
+		retryCtx, cancelRetry, retryOK := retryBudget(ctx, reserve)
+		if retryOK {
+			log.Printf("[EmptyGuard] (%s) raw-empty response: 0 content bytes, %d tool calls — retrying once (conduit-18vj)",
+				label, len(resp.ToolCalls))
+			retryStart := time.Now()
+			retryResp, retryErr := provider.GenerateResponse(withEmptyGuardCall(retryCtx), req)
+			cancelRetry()
+			log.Printf("[EmptyGuard] (%s) retry completed in %s: empty=%v err=%v",
+				label, time.Since(retryStart).Round(time.Millisecond), IsEmptyModelResponse(retryResp), retryErr)
+
+			if retryErr == nil && !IsEmptyModelResponse(retryResp) {
+				return withSpentUsage(retryResp, spent), nil
+			}
+			if retryErr == nil && retryResp != nil {
+				spent.Add(retryResp.Usage)
+			}
+		} else {
+			cancelRetry()
+			left, _ := timeLeft(ctx)
+			log.Printf("[EmptyGuard] (%s) raw-empty response with %s left before the deadline — skipping the same-model retry, keeping %s for failover (conduit-10ip)",
+				label, left.Round(time.Millisecond), reserve)
+		}
 	}
 
 	// conduit-1z0g: same-model retry died too (or was skipped). One final
@@ -209,6 +233,11 @@ func GuardEmptyResponse(
 		}
 		failoverResp, failoverErr := route.attempt(ctx, req, label)
 		if failoverErr == nil && failoverResp != nil && !IsEmptyModelResponse(failoverResp) {
+			// sd-glm54-stallcap: stamp the model that actually produced this
+			// content so downstream continuation (ContinueLengthTruncated)
+			// stays on the failover model instead of re-igniting the stall
+			// spiral on the original model.
+			failoverResp.ServedBy = route.model
 			return withSpentUsage(failoverResp, spent), nil
 		}
 		if failoverErr == nil && failoverResp != nil {
@@ -272,8 +301,11 @@ func resolveEmptyFailoverRoute(router EmptyFailoverRouter, failedProvider Provid
 }
 
 // attempt executes the failover call on a copy of req carrying the route's
-// model. Called only after the same-model retry returned empty/failed or
-// was skipped for lack of budget.
+// model. Called only after the same-model retry returned empty/failed, or was
+// skipped (deadline budget, or the length-truncated-empty fast path). On
+// success the response is stamped with the failover model (ServedBy) so the
+// length auto-continue continues on the model that produced the content
+// (sd-glm54-stallcap).
 func (fo *emptyFailoverRoute) attempt(ctx context.Context, req *GenerateRequest, label string) (*GenerateResponse, error) {
 	failoverReq := *req // shallow copy — Messages/Tools shared, model differs
 	failoverReq.Model = fo.model
