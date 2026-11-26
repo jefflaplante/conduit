@@ -123,3 +123,159 @@ func TestGuardEmptyResponse_EmptyWithoutLengthStillRetries(t *testing.T) {
 		t.Fatalf("expected exactly 1 provider call (the retry), got %d", calls)
 	}
 }
+
+// --- Change 2: sticky continuation model ---
+
+func TestContinueLengthTruncated_StickyToFragmentModel(t *testing.T) {
+	// A failover-produced fragment (served by glm-5.3) must be continued on
+	// glm-5.3, not the request's original model glm-5.4.
+	p := NewMockProvider("z-ai")
+	p.SetResponses([]MockResponse{
+		{Content: " continued", FinishReason: "stop"},
+	})
+	req := &GenerateRequest{
+		Model:    "glm-5.4",
+		Messages: []ChatMessage{{Role: "user", Content: "question"}},
+	}
+	resp := &GenerateResponse{
+		Content:      "partial fragment",
+		FinishReason: "length",
+		ServedBy:     "glm-5.3",
+	}
+
+	out := ContinueLengthTruncated(context.Background(), p, req, resp, "test")
+	if !strings.Contains(out.Content, "partial fragment") || !strings.Contains(out.Content, " continued") {
+		t.Fatalf("expected concatenated fragments, got %q", out.Content)
+	}
+	calls := p.GetCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly 1 continuation call, got %d", len(calls))
+	}
+	if got := calls[0].Request.Model; got != "glm-5.3" {
+		t.Fatalf("continuation must go to the fragment's model (sticky), got %q", got)
+	}
+	if calls[0].Request.Messages[len(calls[0].Request.Messages)-1].Content != "continue" {
+		t.Fatal("expected the synthetic continue prompt as the last message")
+	}
+}
+
+func TestContinueLengthTruncated_NoServedByUsesRequestModel(t *testing.T) {
+	// No ServedBy (in-process provider call, the common path) — behavior
+	// unchanged: continuation on req.Model.
+	p := NewMockProvider("z-ai")
+	p.SetResponses([]MockResponse{
+		{Content: " continued", FinishReason: "stop"},
+	})
+	req := &GenerateRequest{
+		Model:    "glm-5.4",
+		Messages: []ChatMessage{{Role: "user", Content: "question"}},
+	}
+	resp := &GenerateResponse{
+		Content:      "partial fragment",
+		FinishReason: "length",
+	}
+
+	out := ContinueLengthTruncated(context.Background(), p, req, resp, "test")
+	if !strings.Contains(out.Content, "partial fragment") || !strings.Contains(out.Content, " continued") {
+		t.Fatalf("expected concatenated fragments, got %q", out.Content)
+	}
+	calls := p.GetCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly 1 continuation call, got %d", len(calls))
+	}
+	if got := calls[0].Request.Model; got != "glm-5.4" {
+		t.Fatalf("continuation without ServedBy must use req.Model, got %q", got)
+	}
+}
+
+func TestContinueLengthTruncated_StickyPersistsAcrossContinues(t *testing.T) {
+	// Every continuation in the loop stays on the fragment's model.
+	p := NewMockProvider("z-ai")
+	p.SetResponses([]MockResponse{
+		{Content: " more1", FinishReason: "length", ServedBy: "glm-5.3"},
+		{Content: " more2", FinishReason: "stop", ServedBy: "glm-5.3"},
+	})
+	req := &GenerateRequest{
+		Model:    "glm-5.4",
+		Messages: []ChatMessage{{Role: "user", Content: "question"}},
+	}
+	resp := &GenerateResponse{
+		Content:      "fragment0",
+		FinishReason: "length",
+		ServedBy:     "glm-5.3",
+	}
+
+	out := ContinueLengthTruncated(context.Background(), p, req, resp, "test")
+	if !strings.Contains(out.Content, "fragment0") || !strings.Contains(out.Content, " more1") || !strings.Contains(out.Content, " more2") {
+		t.Fatalf("expected all fragments concatenated, got %q", out.Content)
+	}
+	calls := p.GetCalls()
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 continuation calls, got %d", len(calls))
+	}
+	for i, c := range calls {
+		if got := c.Request.Model; got != "glm-5.3" {
+			t.Fatalf("continuation %d must stay on the fragment model, got %q", i+1, got)
+		}
+	}
+}
+
+func TestContinueLengthTruncated_GuardFailoverCarriesServedBy(t *testing.T) {
+	// A raw-empty continuation handed to GuardEmptyResponse: the guard must
+	// receive the STICKY continuation request (fragment model), not the
+	// original request. Discriminator: the stub's fallback model equals the
+	// ORIGINAL request model. Same-model refusal compares against the guard's
+	// req.Model — old behavior (guard sees glm-5.4) would refuse the
+	// "failover" to glm-5.4; sticky behavior (guard sees glm-5.3) proceeds.
+	// req.Model must also stay untouched for the caller's bookkeeping.
+	sameModel := NewMockProvider("z-ai")
+	sameModel.SetResponses([]MockResponse{
+		{Content: "", FinishReason: "length"}, // continuation raw-empty + length -> guard skips retry
+	})
+	failover := NewMockProvider("anthropic")
+	failover.SetResponses([]MockResponse{
+		{Content: "failover continued fragment", FinishReason: "stop"},
+	})
+	stub := &failoverRouterStub{model: "glm-5.4", provider: failover, ok: true}
+	SetEmptyFailoverRouter(stub)
+	defer SetEmptyFailoverRouter(nil)
+
+	req := &GenerateRequest{
+		Model:    "glm-5.4",
+		Messages: []ChatMessage{{Role: "user", Content: "question"}},
+	}
+	resp := &GenerateResponse{
+		Content:      "fragment0",
+		FinishReason: "length",
+		ServedBy:     "glm-5.3",
+	}
+
+	out := ContinueLengthTruncated(context.Background(), sameModel, req, resp, "test")
+	// Raw continuation ran on the fragment's model (sticky).
+	rawCalls := sameModel.GetCalls()
+	if len(rawCalls) != 1 {
+		t.Fatalf("expected 1 raw continuation call, got %d", len(rawCalls))
+	}
+	if got := rawCalls[0].Request.Model; got != "glm-5.3" {
+		t.Fatalf("raw continuation must carry the fragment's model, got %q", got)
+	}
+	// The guard proceeded to failover — only possible because it saw the
+	// sticky glm-5.3 as its req.Model (refusal would have suppressed it).
+	failoverCalls := failover.GetCalls()
+	if len(failoverCalls) != 1 {
+		t.Fatalf("expected 1 guard failover call (same-model refusal must NOT fire), got %d", len(failoverCalls))
+	}
+	if got := failoverCalls[0].Request.Model; got != "glm-5.4" {
+		t.Fatalf("failover attempt must carry the route's fallback model, got %q", got)
+	}
+	if req.Model != "glm-5.4" {
+		t.Fatalf("req.Model must not be mutated, got %q", req.Model)
+	}
+	// Final assembly: fragment0 + failover continuation, complete (no marker).
+	if !strings.Contains(out.Content, "fragment0") || !strings.Contains(out.Content, "failover continued fragment") {
+		t.Fatalf("expected fragments joined, got %q", out.Content)
+	}
+	if strings.Contains(out.Content, lengthTruncatedMarker) {
+		t.Fatalf("failover continuation ended the turn (finish_reason=stop) — no marker expected, got %q", out.Content)
+	}
+}

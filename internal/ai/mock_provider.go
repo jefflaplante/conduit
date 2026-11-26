@@ -21,6 +21,7 @@ type MockResponse struct {
 	Usage        Usage
 	Error        error
 	FinishReason string // bd-1k3o: provider-reported stop condition
+	ServedBy     string // sd-glm54-stallcap: model that produced the response
 }
 
 // MockCall records information about a call to GenerateResponse
@@ -64,6 +65,7 @@ func (m *MockProvider) GenerateResponse(ctx context.Context, req *GenerateReques
 			ToolCalls:    resp.ToolCalls,
 			Usage:        resp.Usage,
 			FinishReason: resp.FinishReason,
+			ServedBy:     resp.ServedBy,
 		}, nil
 	}
 

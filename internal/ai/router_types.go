@@ -79,6 +79,12 @@ type GenerateResponse struct {
 	// vocabulary from FinishReason (Anthropic stop_reason: "end_turn",
 	// "max_tokens", "tool_use", "refusal", "pause_turn", ...). conduit-31jg.11.
 	StopReason string `json:"stop_reason,omitempty"`
+	// ServedBy is the model that actually PRODUCED this response when it
+	// differs from the request's model — set by the EmptyGuard on cross-model
+	// failover successes (sd-glm54-stallcap). In-memory only; providers never
+	// send it. ContinueLengthTruncated reads it to keep continuations on the
+	// fragment's model (sticky) instead of the request's original model.
+	ServedBy string `json:"-"`
 }
 
 // ChatMessage represents a message in a conversation
