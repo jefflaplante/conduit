@@ -37,6 +37,11 @@ bootstrap-marker: first run
 ## MEMORY.md
 memory-marker: long-term facts
 
+## Memory Map (on-demand: Read / MemorySearch; never assume)
+- TOOLS.md: credentials and endpoints quick reference (details: reference/tools-detail.md)
+- reference/*.md: technical deep-dives, load as needed (index: reference/README.md)
+- memory/YYYY-MM-DD.md: daily logs; MemorySearch before answering "what did we do"
+
 ## Memory Recall
 Before answering anything about prior work, decisions, dates, people, preferences, or todos: run MemorySearch to find relevant content across MEMORY.md, memory/*.md, and session history.
 If you need the full file content (e.g., before modifying), use Read instead — MemorySearch is for finding, Read is for reading.

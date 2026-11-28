@@ -520,6 +520,7 @@ Controls workspace context files — the agent's personality, memory, and knowle
 | `files.state_file` | string | `"memory/jules-state.json"` | Session state JSON rendered as the "Session State" prompt section. Must be relative to `context_dir`, stay inside the workspace (no `..`), and end in `.json` |
 | `files.state_inject` | bool | `true` | Inject the Session State section (readable from every session type) |
 | `files.memory_md_inject` | bool | `true` | Inject `MEMORY.md` into Project Context (main sessions only) |
+| `files.memory_map` | bool | `true` | Render the "Memory Map" pointer block in Project Context (all session types). The block lists the on-demand memory sources (`MEMORY.md`, `TOOLS.md`, `reference/`, daily logs) and how to reach them; the `MEMORY.md` line is omitted when that file itself is injected |
 
 ### Context files and their roles
 

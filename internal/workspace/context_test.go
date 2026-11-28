@@ -503,3 +503,17 @@ func TestLoadStateFile(t *testing.T) {
 	_, ok = empty.LoadStateFile(SecurityContext{SessionType: "main"})
 	assert.False(t, ok, "missing state file reports not found")
 }
+
+// bd-3ia phase 2: the Memory Map pointer-block flag rides Options like the
+// other workspace.files booleans, default on.
+func TestOptions_MemoryMap(t *testing.T) {
+	assert.True(t, DefaultOptions().MemoryMap, "MemoryMap should default to true")
+
+	dir := t.TempDir()
+	writeWS(t, dir, map[string]string{"SOUL.md": "soul"})
+	assert.True(t, NewWorkspaceContextWithOptions(dir, DefaultOptions()).MemoryMap())
+
+	opts := DefaultOptions()
+	opts.MemoryMap = false
+	assert.False(t, NewWorkspaceContextWithOptions(dir, opts).MemoryMap())
+}

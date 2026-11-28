@@ -39,6 +39,8 @@ type Options struct {
 	StateInject bool
 	// MemoryMDInject injects MEMORY.md into Project Context.
 	MemoryMDInject bool
+	// MemoryMap renders the Memory Map pointer block in Project Context.
+	MemoryMap bool
 }
 
 // DefaultOptions returns the options matching the config defaults.
@@ -48,6 +50,7 @@ func DefaultOptions() Options {
 		StateFile:         DefaultStateFile,
 		StateInject:       true,
 		MemoryMDInject:    true,
+		MemoryMap:         true,
 	}
 }
 
@@ -58,6 +61,7 @@ type WorkspaceContext struct {
 	coreFiles         []string
 	stateFile         string // "" = state injection off
 	memoryMDInject    bool
+	memoryMap         bool
 	files             map[string]*ContextFile
 	security          *SecurityManager
 	cache             *FileCache
@@ -122,6 +126,7 @@ func NewWorkspaceContextWithOptions(workspaceDir string, opts Options) *Workspac
 		cache:             NewFileCache(5*time.Minute, 50*1024*1024), // 5min TTL, 50MB max
 		dailyLookbackDays: opts.DailyLookbackDays,
 		memoryMDInject:    opts.MemoryMDInject,
+		memoryMap:         opts.MemoryMap,
 	}
 	for _, name := range coreFiles {
 		if rel, ok := wc.relativeName(name); ok {
@@ -172,6 +177,12 @@ func (wc *WorkspaceContext) StateFile() string {
 // MemoryMDInject reports whether MEMORY.md is injected into the prompt.
 func (wc *WorkspaceContext) MemoryMDInject() bool {
 	return wc.memoryMDInject
+}
+
+// MemoryMap reports whether the Memory Map pointer block is rendered in
+// Project Context.
+func (wc *WorkspaceContext) MemoryMap() bool {
+	return wc.memoryMap
 }
 
 // LoadStateFile returns the state file's content when state injection is on,

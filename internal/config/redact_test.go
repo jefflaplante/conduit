@@ -118,6 +118,7 @@ var reviewedNonSecretFields = map[string]bool{
 	".workspace.files.state_file":                       true,
 	".workspace.files.state_inject":                     true,
 	".workspace.files.memory_md_inject":                 true,
+	".workspace.files.memory_map":                       true,
 	".workspace.security.default_policy":                true,
 	".workspace.summary.cache_dir":                      true,
 	".workspace.summary.file_configs{}.preserve_keys[]": true,

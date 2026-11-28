@@ -167,13 +167,44 @@ func (pb *PromptBuilder) buildWorkspaceContextSection(ctx context.Context, sessi
 
 	// MEMORY.md only in main sessions, and only while memory_md_inject is on
 	// (bd-3ia: default true; the state file is meant to replace it).
+	memoryMDInjected := false
 	if sessionType == "main" && !skip["MEMORY.MD"] && pb.workspaceContext.MemoryMDInject() {
 		if content, exists := files["MEMORY.md"]; exists {
 			builder.WriteString(fmt.Sprintf("## MEMORY.md\n%s\n", content))
+			memoryMDInjected = true
 		}
 	}
 
+	// bd-3ia phase 2: pointer block to the on-demand memory sources, rendered
+	// for every session type (the gateway is the only party that reliably
+	// knows what exists). Static text only, so the cache-carrying block stays
+	// byte-stable within a session.
+	if pb.workspaceContext.MemoryMap() {
+		builder.WriteString(buildMemoryMapBlock(memoryMDInjected))
+	}
+
 	return builder.String()
+}
+
+// memoryMapHeader opens the Memory Map block.
+const memoryMapHeader = "## Memory Map"
+
+// buildMemoryMapBlock returns the Memory Map pointer block. It is a curated
+// static list, never an enumeration of the workspace: what is on disk varies
+// per install and would make the static system block change under the prompt
+// cache. memoryMDInjected says whether MEMORY.md's own content is already in
+// Project Context this session; when it is, its pointer line is dropped.
+func buildMemoryMapBlock(memoryMDInjected bool) string {
+	var b strings.Builder
+	b.WriteString(memoryMapHeader)
+	b.WriteString(" (on-demand: Read / MemorySearch; never assume)\n")
+	b.WriteString("- TOOLS.md: credentials and endpoints quick reference (details: reference/tools-detail.md)\n")
+	b.WriteString("- reference/*.md: technical deep-dives, load as needed (index: reference/README.md)\n")
+	b.WriteString("- memory/YYYY-MM-DD.md: daily logs; MemorySearch before answering \"what did we do\"\n")
+	if !memoryMDInjected {
+		b.WriteString("- MEMORY.md: curated long-term memory (people, preferences, history)\n")
+	}
+	return b.String()
 }
 
 // workspaceSecurityContext derives the workspace access context for a

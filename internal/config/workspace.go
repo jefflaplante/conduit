@@ -60,6 +60,11 @@ type WorkspaceFilesConfig struct {
 	// MemoryMDInject controls MEMORY.md injection into Project Context
 	// (default: true).
 	MemoryMDInject *bool `json:"memory_md_inject,omitempty"`
+
+	// MemoryMap controls the "Memory Map" pointer block in Project Context
+	// (default: true). The block lists the on-demand memory sources
+	// (MEMORY.md, TOOLS.md, reference/, daily logs) and how to reach them.
+	MemoryMap *bool `json:"memory_map,omitempty"`
 }
 
 // StateFilePath returns the configured state file or the default.
@@ -79,6 +84,12 @@ func (f WorkspaceFilesConfig) StateInjectEnabled() bool {
 // MemoryMDInjectEnabled reports whether MEMORY.md is injected (nil = true).
 func (f WorkspaceFilesConfig) MemoryMDInjectEnabled() bool {
 	return f.MemoryMDInject == nil || *f.MemoryMDInject
+}
+
+// MemoryMapEnabled reports whether the Memory Map pointer block is rendered
+// (nil = true).
+func (f WorkspaceFilesConfig) MemoryMapEnabled() bool {
+	return f.MemoryMap == nil || *f.MemoryMap
 }
 
 // WorkspaceMemoryConfig defines memory file handling

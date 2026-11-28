@@ -179,6 +179,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 			StateFile:         files.StateFilePath(),
 			StateInject:       files.StateInjectEnabled(),
 			MemoryMDInject:    files.MemoryMDInjectEnabled(),
+			MemoryMap:         files.MemoryMapEnabled(),
 		})
 	} else {
 		logger.Warn("no workspace context directory configured")

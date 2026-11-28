@@ -50,6 +50,9 @@ func TestParse_WorkspaceFilesDefaultsOmitted(t *testing.T) {
 	if !cfg.Workspace.Files.MemoryMDInjectEnabled() {
 		t.Error("memory_md_inject default should be true")
 	}
+	if !cfg.Workspace.Files.MemoryMapEnabled() {
+		t.Error("memory_map default should be true")
+	}
 }
 
 // TestParse_WorkspaceFilesExplicitValues: explicit values round-trip through
@@ -59,6 +62,7 @@ func TestParse_WorkspaceFilesExplicitValues(t *testing.T) {
 		"files": map[string]interface{}{
 			"state_file":       "memory/custom.json",
 			"memory_md_inject": false,
+			"memory_map":       false,
 		},
 	}))
 	if err != nil {
@@ -69,6 +73,9 @@ func TestParse_WorkspaceFilesExplicitValues(t *testing.T) {
 	}
 	if cfg.Workspace.Files.MemoryMDInjectEnabled() {
 		t.Error("memory_md_inject=false should parse to disabled")
+	}
+	if cfg.Workspace.Files.MemoryMapEnabled() {
+		t.Error("memory_map=false should parse to disabled")
 	}
 }
 
@@ -101,6 +108,9 @@ func TestWorkspaceFilesConfig_Defaults(t *testing.T) {
 	if !f.MemoryMDInjectEnabled() {
 		t.Error("MemoryMDInjectEnabled() should default to true")
 	}
+	if !f.MemoryMapEnabled() {
+		t.Error("MemoryMapEnabled() should default to true")
+	}
 }
 
 func TestWorkspaceFilesConfig_Overrides(t *testing.T) {
@@ -115,6 +125,12 @@ func TestWorkspaceFilesConfig_Overrides(t *testing.T) {
 	on := true
 	if !(WorkspaceFilesConfig{MemoryMDInject: &on}).MemoryMDInjectEnabled() {
 		t.Error("MemoryMDInjectEnabled() should honor explicit true")
+	}
+	if (WorkspaceFilesConfig{MemoryMap: &off}).MemoryMapEnabled() {
+		t.Error("MemoryMapEnabled() should honor explicit false")
+	}
+	if !(WorkspaceFilesConfig{MemoryMap: &on}).MemoryMapEnabled() {
+		t.Error("MemoryMapEnabled() should honor explicit true")
 	}
 }
 
@@ -167,6 +183,18 @@ func TestValidateSemantic_WorkspaceMemoryMDInject(t *testing.T) {
 		cfg.Workspace = WorkspaceConfig{Files: WorkspaceFilesConfig{MemoryMDInject: inject}}
 		if err := cfg.ValidateSemantic(); err != nil {
 			t.Errorf("memory_md_inject=%v should be valid, got: %v", derefBool(inject), err)
+		}
+	}
+}
+
+// TestValidateSemantic_WorkspaceMemoryMap: a bool needs no value checks —
+// nil, true and false must all pass (bd-3ia phase 2).
+func TestValidateSemantic_WorkspaceMemoryMap(t *testing.T) {
+	for _, v := range []*bool{nil, wsTestBoolPtr(true), wsTestBoolPtr(false)} {
+		cfg := minimalValidConfig()
+		cfg.Workspace = WorkspaceConfig{Files: WorkspaceFilesConfig{MemoryMap: v}}
+		if err := cfg.ValidateSemantic(); err != nil {
+			t.Errorf("memory_map=%v should be valid, got: %v", derefBool(v), err)
 		}
 	}
 }
